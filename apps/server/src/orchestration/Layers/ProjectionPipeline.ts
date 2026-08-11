@@ -28,6 +28,7 @@ import {
   type ProjectionThreadProposedPlan,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
+import { ProjectionThreadReportRepository } from "../../persistence/Services/ProjectionThreadReports.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import {
   type ProjectionTurn,
@@ -40,6 +41,7 @@ import { ProjectionStateRepositoryLive } from "../../persistence/Layers/Projecti
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
+import { ProjectionThreadReportRepositoryLive } from "../../persistence/Layers/ProjectionThreadReports.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
@@ -60,6 +62,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threads: "projection.threads",
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
+  threadReports: "projection.thread-reports",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
   threadTurns: "projection.thread-turns",
@@ -476,6 +479,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadRepository = yield* ProjectionThreadRepository;
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
+    const projectionThreadReportRepository = yield* ProjectionThreadReportRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
@@ -611,6 +615,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             interactionMode: event.payload.interactionMode,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
+            spawnedByThreadId: event.payload.spawnedByThreadId ?? null,
             latestTurnId: null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -1069,6 +1074,27 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }).pipe(Effect.asVoid);
           return;
         }
+
+        default:
+          return;
+      }
+    });
+
+    const applyThreadReportsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyThreadReportsProjection",
+    )(function* (event, _attachmentSideEffects) {
+      switch (event.type) {
+        case "thread.report-posted":
+          yield* projectionThreadReportRepository.upsert({
+            reportId: event.payload.report.reportId,
+            threadId: event.payload.threadId,
+            status: event.payload.report.status,
+            title: event.payload.report.title,
+            summary: event.payload.report.summary,
+            artifacts: event.payload.report.artifacts,
+            createdAt: event.payload.report.createdAt,
+          });
+          return;
 
         default:
           return;
@@ -1620,6 +1646,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         apply: applyThreadProposedPlansProjection,
       },
       {
+        name: ORCHESTRATION_PROJECTOR_NAMES.threadReports,
+        apply: applyThreadReportsProjection,
+      },
+      {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
         apply: applyThreadActivitiesProjection,
       },
@@ -1741,6 +1771,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
+  Layer.provideMerge(ProjectionThreadReportRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),

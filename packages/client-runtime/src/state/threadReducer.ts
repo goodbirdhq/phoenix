@@ -97,6 +97,7 @@ export function applyThreadDetailEvent(
           deletedAt: null,
           messages: [],
           proposedPlans: [],
+          reports: [],
           activities: [],
           checkpoints: [],
           session: null,
@@ -457,6 +458,21 @@ export function applyThreadDetailEvent(
       return {
         kind: "updated",
         thread: { ...thread, proposedPlans, updatedAt: event.occurredAt },
+      };
+    }
+
+    case "thread.report-posted": {
+      const report = event.payload.report;
+
+      const reports = pipe(
+        thread.reports,
+        Arr.filter((entry) => entry.reportId !== report.reportId),
+        Arr.append(report),
+      );
+
+      return {
+        kind: "updated",
+        thread: { ...thread, reports, updatedAt: event.occurredAt },
       };
     }
 

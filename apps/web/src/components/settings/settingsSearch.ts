@@ -119,6 +119,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "session-orchestration",
+    title: "Session orchestration",
+    to: "/settings/general",
+  },
+  {
     id: "new-threads",
     title: "New threads",
     to: "/settings/general",
