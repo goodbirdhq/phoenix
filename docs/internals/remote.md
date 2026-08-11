@@ -1,6 +1,6 @@
 # Remote Architecture
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Phoenix? See [docs/user](../user/).
 
 Remote environments are shipped, not planned. Direct, bearer-paired, relay-tunneled, Tailscale, and
 desktop-managed SSH access all exist today. This document describes the model they share and where
@@ -106,7 +106,7 @@ Endpoint identifiers are synthesized in `apps/desktop/src/backend/tailscaleEndpo
 A hosted pairing request is a bootstrap URL for the static web app, not a transport:
 
 ```text
-https://app.t3.codes/pair?host=https://backend.example.com:3773#token=PAIRCODE
+https://app.t3.codes/pair?host=https://backend.example.com:3873#token=PAIRCODE
 ```
 
 The hosted app reads `host`, takes the token from the URL hash, exchanges it directly with that
@@ -136,7 +136,7 @@ how the server got started or who manages the process.
 
 ### Direct WebSocket access
 
-`wss://t3.example.com` or `ws://10.0.0.15:3773`, paired as a bearer target. This is the base model.
+`wss://t3.example.com` or `ws://10.0.0.15:3873`, paired as a bearer target. This is the base model.
 It works for desktop, mobile, and web with no client-side process management. Browser security rules
 are part of it: a hosted HTTPS client cannot connect to plain `ws://` or `http://` LAN backends.
 
@@ -187,7 +187,7 @@ it separate from access.
   came from SSH launch for reconnect and lifecycle UX only; that metadata never changes the protocol
   or the identity model.
 - **Client-managed local publish.** A local server is published through the relay with
-  `t3 connect link`, exposing a desktop-hosted environment to mobile without router or firewall
+  `phoenix connect link`, exposing a desktop-hosted environment to mobile without router or firewall
   changes.
 
 The same `ExecutionEnvironment` can be reached several of these ways. Only the launch and access

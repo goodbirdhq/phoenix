@@ -29,55 +29,55 @@ const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 const baseState = {
   version: 1,
   pid: 123,
-  port: 3_773,
-  origin: "http://127.0.0.1:3773",
+  port: 3_873,
+  origin: "http://127.0.0.1:3873",
   startedAt: "2026-06-20T00:00:00.000Z",
 } as const satisfies PersistedServerRuntimeState;
 
 describe("pair base URL selection", () => {
   it("pairs through the dev web origin when the server fronts a dev server", () => {
-    expect(resolveDirectPairingBaseUrl({ ...baseState, devUrl: "http://localhost:5733/" })).toBe(
-      "http://localhost:5733/",
+    expect(resolveDirectPairingBaseUrl({ ...baseState, devUrl: "http://localhost:5833/" })).toBe(
+      "http://localhost:5833/",
     );
   });
 
   it("pairs through the bound host when there is no dev server", () => {
     expect(resolveDirectPairingBaseUrl({ ...baseState, host: "100.64.0.7" })).toBe(
-      "http://100.64.0.7:3773",
+      "http://100.64.0.7:3873",
     );
-    expect(resolveDirectPairingBaseUrl(baseState)).toBe("http://localhost:3773");
+    expect(resolveDirectPairingBaseUrl(baseState)).toBe("http://localhost:3873");
   });
 });
 
 describe("pair tailscale local target", () => {
   it("proxies the dev web port for dev servers", () => {
-    expect(resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://localhost:5733/" })).toEqual(
-      { localPort: 5_733 },
+    expect(resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://localhost:5833/" })).toEqual(
+      { localPort: 5_833 },
     );
     // A dev server on a non-loopback interface must be proxied at that
     // interface; tailscale serve defaults to 127.0.0.1 otherwise.
     expect(
-      resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://192.168.1.10:5733/" }),
-    ).toEqual({ localPort: 5_733, localHost: "192.168.1.10" });
+      resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://192.168.1.10:5833/" }),
+    ).toEqual({ localPort: 5_833, localHost: "192.168.1.10" });
     // URL.hostname keeps IPv6 brackets, so the serve target stays valid.
     expect(
-      resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://[fd7a:115c::1]:5733/" }),
-    ).toEqual({ localPort: 5_733, localHost: "[fd7a:115c::1]" });
+      resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://[fd7a:115c::1]:5833/" }),
+    ).toEqual({ localPort: 5_833, localHost: "[fd7a:115c::1]" });
   });
 
   it("rejects HTTPS dev URLs, which tailscale serve cannot proxy", () => {
     expect(
-      resolveTailscaleLocalTarget({ ...baseState, devUrl: "https://localhost:5733/" }),
+      resolveTailscaleLocalTarget({ ...baseState, devUrl: "https://localhost:5833/" }),
     ).toBeInstanceOf(DevServerNotProxiableError);
   });
 
   it("proxies the backend port directly otherwise", () => {
-    expect(resolveTailscaleLocalTarget(baseState)).toEqual({ localPort: 3_773 });
+    expect(resolveTailscaleLocalTarget(baseState)).toEqual({ localPort: 3_873 });
     expect(resolveTailscaleLocalTarget({ ...baseState, host: "0.0.0.0" })).toEqual({
-      localPort: 3_773,
+      localPort: 3_873,
     });
     expect(resolveTailscaleLocalTarget({ ...baseState, host: "192.168.1.42" })).toEqual({
-      localPort: 3_773,
+      localPort: 3_873,
       localHost: "192.168.1.42",
     });
   });
@@ -182,14 +182,14 @@ describe("t3 pair", () => {
         yield* persistServerRuntimeState({
           path: statePath,
           state: yield* makePersistedServerRuntimeState({
-            config: { host: undefined, devUrl: new URL("http://localhost:5733") },
+            config: { host: undefined, devUrl: new URL("http://localhost:5833") },
             port,
           }),
         });
 
         const output = yield* captureStdout(runCli(["pair", "--base-dir", baseDir]));
 
-        assert.include(output, "Pairing URL: http://localhost:5733/pair#token=");
+        assert.include(output, "Pairing URL: http://localhost:5833/pair#token=");
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -205,9 +205,9 @@ describe("t3 pair", () => {
       const rendered = String(
         typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
       );
-      assert.include(rendered, "No running T3 Code server found.");
-      assert.include(rendered, "npx t3 serve");
-      assert.include(rendered, "npx t3 connect");
+      assert.include(rendered, "No running Phoenix server found.");
+      assert.include(rendered, "phoenix serve");
+      assert.include(rendered, "phoenix connect");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -236,7 +236,7 @@ describe("t3 pair", () => {
         const rendered = String(
           typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
         );
-        assert.include(rendered, "No running T3 Code server found.");
+        assert.include(rendered, "No running Phoenix server found.");
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -262,7 +262,7 @@ describe("t3 pair", () => {
       const rendered = String(
         typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
       );
-      assert.include(rendered, "No running T3 Code server found.");
+      assert.include(rendered, "No running Phoenix server found.");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

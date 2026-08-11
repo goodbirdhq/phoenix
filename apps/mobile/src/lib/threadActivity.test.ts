@@ -46,6 +46,7 @@ function makeThread(
     deletedAt: null,
     messages: [],
     proposedPlans: [],
+    reports: [],
     activities: [],
     checkpoints: [],
     session: null,

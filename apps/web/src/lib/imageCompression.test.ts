@@ -122,15 +122,23 @@ describe("compressImageForStash", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  // Nothing fits the budget here, so this is the only case that runs the give-up
+  // path in full: 3 dimension scales x (probe + 4 quality steps) = 15 encodes,
+  // each one a base64 round-trip through jsdom's FileReader. That takes ~8s alone
+  // and considerably longer once the rest of the suite is competing for CPU, so
+  // it needs a timeout well above the 15s default. The stub is also kept just
+  // clear of MAX_STASH_IMAGE_DATA_URL_CHARS (1_300_000) rather than arbitrarily
+  // large - 2MB encodes to ~2.7M chars, still double the budget - so the work is
+  // no heavier than the assertion requires.
   it("reports too-large when even the smallest encoding overflows the budget", async () => {
-    const { close } = stubCanvasPipeline(() => 8_000_000);
+    const { close } = stubCanvasPipeline(() => 2_000_000);
 
     const result = await compressImageForStash(makeFile(9_000_000));
 
     expect(result).toEqual({ ok: false, reason: "too-large" });
     // The bitmap must still be released on the give-up path.
     expect(close).toHaveBeenCalled();
-  });
+  }, 90_000);
 
   it("reports too-large for an oversized image when the browser cannot re-encode", async () => {
     vi.stubGlobal("createImageBitmap", undefined);

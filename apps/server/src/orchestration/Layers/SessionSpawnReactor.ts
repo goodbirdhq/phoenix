@@ -39,11 +39,11 @@ const formatReportMessage = (childTitle: string, report: SessionReport): string 
               : `- ${artifact.kind}: ${artifact.value}`,
           )
           .join("\n")}`;
-  return `[T3 Code] Spawned session "${childTitle}" posted a ${report.status} report: ${report.title}\n\n${report.summary}${artifactLines}\n\n(spawned thread: ${report.threadId})`;
+  return `[Phoenix] Spawned session "${childTitle}" posted a ${report.status} report: ${report.title}\n\n${report.summary}${artifactLines}\n\n(spawned thread: ${report.threadId})`;
 };
 
 const formatErrorMessage = (childTitle: string, threadId: string, lastError: string | null) =>
-  `[T3 Code] Spawned session "${childTitle}" hit a provider error${
+  `[Phoenix] Spawned session "${childTitle}" hit a provider error${
     lastError ? `: ${lastError}` : "."
   } It has not posted a report. Use read_session to inspect it, send_to_session to retry, or stop_session to give up.\n\n(spawned thread: ${threadId})`;
 

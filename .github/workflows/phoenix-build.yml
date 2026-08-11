@@ -1,0 +1,161 @@
+# Phoenix-only workflow. Upstream T3 Code does not have this file, so it never
+# conflicts on merge. Upstream's own `Release` workflow is disabled GitHub-side
+# (see docs/internals/ci.md) because it needs ~29 secrets we do not have.
+name: Phoenix Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish a GitHub pre-release with the artifact"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: phoenix-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build_macos:
+    name: Build macOS (unsigned)
+    runs-on: macos-15
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact: ${{ steps.locate.outputs.artifact }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Resolve version
+        id: version
+        run: |
+          base="$(node -p "require('./apps/desktop/package.json').version")"
+          version="${base}+${GITHUB_SHA::7}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Building Phoenix ${version}"
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Build desktop pipeline
+        run: vp run build:desktop
+
+      # T3CODE_DESKTOP_SIGNED defaults to false, and the build script clears
+      # CSC_LINK / disables identity auto-discovery when unsigned. Passing it
+      # explicitly documents the intent rather than relying on the default.
+      - name: Build unsigned arm64 DMG
+        env:
+          T3CODE_DESKTOP_SIGNED: "false"
+          T3CODE_DESKTOP_OUTPUT_DIR: ${{ runner.temp }}/phoenix-dist
+        run: node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64
+
+      - name: Locate artifact
+        id: locate
+        run: |
+          dmg="$(find "${{ runner.temp }}/phoenix-dist" -name '*.dmg' -maxdepth 2 | head -1)"
+          if [ -z "$dmg" ]; then
+            echo "No DMG produced. Contents:" >&2
+            ls -R "${{ runner.temp }}/phoenix-dist" >&2 || true
+            exit 1
+          fi
+          echo "artifact=$(basename "$dmg")" >> "$GITHUB_OUTPUT"
+          echo "path=${dmg}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: phoenix-macos-arm64
+          path: ${{ runner.temp }}/phoenix-dist/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish pre-release
+        if: github.event_name == 'push' || inputs.publish_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="build-${VERSION}"
+          # printf rather than a heredoc: a quoted heredoc terminator cannot be
+          # indented, and everything here lives inside an indented YAML block.
+          printf '%s\n' \
+            'Unsigned Phoenix build for macOS (Apple silicon).' \
+            '' \
+            '**This build is not code-signed or notarised**, so macOS Gatekeeper will' \
+            'refuse to open it until you clear the quarantine attribute:' \
+            '' \
+            '```bash' \
+            '# Drag Phoenix.app from the DMG into /Applications, then:' \
+            'xattr -dr com.apple.quarantine /Applications/Phoenix.app' \
+            '```' \
+            '' \
+            'If you skip that step you will see "Phoenix is damaged and can'"'"'t be opened".' \
+            'That is Gatekeeper'"'"'s generic response to a missing signature, not a corrupted' \
+            'download.' \
+            '' \
+            'Phoenix installs alongside T3 Code: separate app bundle, separate state in' \
+            '`~/.phoenix`, its own `phoenix://` URL scheme and port 3873. Your existing' \
+            'T3 Code install is untouched.' \
+            > notes.md
+          gh release create "$tag" "${{ steps.locate.outputs.path }}" \
+            --title "Phoenix ${VERSION}" \
+            --notes-file notes.md \
+            --prerelease
+
+  notify_slack:
+    name: Notify Slack
+    needs: build_macos
+    if: always() && needs.build_macos.result != 'cancelled'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # No-ops when the secret is absent so forks and first-time setup do not
+      # fail the run on a missing webhook.
+      - name: Post to Slack
+        env:
+          WEBHOOK: ${{ secrets.SLACK_RELEASE_WEBHOOK_URL }}
+          RESULT: ${{ needs.build_macos.result }}
+          VERSION: ${{ needs.build_macos.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASES_URL: ${{ github.server_url }}/${{ github.repository }}/releases
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "SLACK_RELEASE_WEBHOOK_URL is not set; skipping notification."
+            exit 0
+          fi
+
+          if [ "$RESULT" != "success" ]; then
+            text=$(printf ':x: *Phoenix build failed*\n<%s|View run>' "$RUN_URL")
+          else
+            text=$(printf ':fire: *Phoenix %s is ready*\n<%s|Download the DMG>\n\n*This build is unsigned*, so macOS will block it until you clear quarantine:\n```\nxattr -dr com.apple.quarantine /Applications/Phoenix.app\n```\nDrag the app to /Applications first, then run that. "Phoenix is damaged" means you skipped it.\n\nInstalls alongside T3 Code - separate state in `~/.phoenix`, port 3873.' "$VERSION" "$RELEASES_URL")
+          fi
+
+          jq -n --arg t "$text" '{text: $t}' > payload.json
+          code=$(curl -sS -o response.txt -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            --data @payload.json "$WEBHOOK")
+          if [ "$code" != "200" ]; then
+            echo "Slack rejected the notification (HTTP $code): $(cat response.txt)" >&2
+            exit 1
+          fi
+          echo "Slack notified."

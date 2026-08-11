@@ -32,7 +32,7 @@ export const hostFlag = Flag.string("host").pipe(
 );
 export const baseDirFlag = Flag.string("base-dir").pipe(
   Flag.withDescription(
-    "Explicit T3 Code data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
+    "Explicit Phoenix data directory; runtime state is stored under userdata (equivalent to PHOENIX_HOME).",
   ),
   Flag.optional,
 );
@@ -102,9 +102,16 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  port: Config.port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  port: Config.all([
+    Config.port("PHOENIX_PORT").pipe(Config.option),
+    Config.port("T3CODE_PORT").pipe(Config.option),
+  ]).pipe(
+    Config.map(([phoenix, upstream]) =>
+      Option.getOrUndefined(Option.orElse(phoenix, () => upstream)),
+    ),
+  ),
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  t3Home: Config.string("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  t3Home: Config.string("PHOENIX_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devAllowedOrigins: Config.string("T3CODE_DEV_ALLOWED_ORIGINS").pipe(
     Config.withDefault(""),
