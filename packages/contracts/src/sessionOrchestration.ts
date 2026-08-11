@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 
 import { IsoDateTime, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ProviderOptionDescriptor, ProviderOptionSelection } from "./model.ts";
 import {
   ModelSelection,
   OrchestrationSessionStatus,
@@ -32,6 +33,10 @@ export const SpawnSessionInput = Schema.Struct({
   providerInstanceId: Schema.optional(ProviderInstanceId),
   // Model id from list_session_providers. Omit for the provider's default.
   model: Schema.optional(TrimmedNonEmptyString),
+  // Provider option selections for the chosen model, e.g.
+  // [{ "id": "reasoningEffort", "value": "high" }]. Valid ids and choice
+  // values come from the model's options in list_session_providers.
+  options: Schema.optional(Schema.Array(ProviderOptionSelection)),
   // First user message the spawned session starts working on.
   prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(65_536)),
   title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
@@ -63,6 +68,9 @@ export const SessionProviderModel = Schema.Struct({
   id: TrimmedNonEmptyString,
   displayName: Schema.optional(TrimmedNonEmptyString),
   isDefault: Schema.Boolean,
+  // Tunable options this model accepts (reasoning effort, context size, …),
+  // each with its valid choices. Selections go in spawn_session `options`.
+  options: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
 });
 
 export const SessionProviderDescriptor = Schema.Struct({

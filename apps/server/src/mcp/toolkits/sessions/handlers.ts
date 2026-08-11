@@ -169,6 +169,9 @@ const make = Effect.gen(function* () {
           id: model.slug,
           displayName: model.name,
           isDefault: model.isDefault === true,
+          ...(model.capabilities?.optionDescriptors
+            ? { options: model.capabilities.optionDescriptors }
+            : {}),
         })),
       })),
     };
@@ -249,7 +252,42 @@ const make = Effect.gen(function* () {
         message: `Model "${input.model}" is not offered by provider instance "${instanceId}".`,
       });
     }
-    const modelSelection: ModelSelection = { instanceId: provider.instanceId, model };
+    if (input.options !== undefined) {
+      const descriptors =
+        provider.models.find((entry) => entry.slug === model)?.capabilities?.optionDescriptors ??
+        [];
+      for (const selection of input.options) {
+        const descriptor = descriptors.find((entry) => entry.id === selection.id);
+        if (!descriptor) {
+          return yield* new SessionOrchestrationInvalidInputError({
+            message: `Model "${model}" has no option "${selection.id}". Valid options: ${
+              descriptors.map((entry) => entry.id).join(", ") || "none"
+            }.`,
+          });
+        }
+        if (descriptor.type === "select") {
+          if (
+            typeof selection.value !== "string" ||
+            !descriptor.options.some((choice) => choice.id === selection.value)
+          ) {
+            return yield* new SessionOrchestrationInvalidInputError({
+              message: `Option "${selection.id}" accepts: ${descriptor.options
+                .map((choice) => choice.id)
+                .join(", ")}.`,
+            });
+          }
+        } else if (typeof selection.value !== "boolean") {
+          return yield* new SessionOrchestrationInvalidInputError({
+            message: `Option "${selection.id}" is a boolean.`,
+          });
+        }
+      }
+    }
+    const modelSelection: ModelSelection = {
+      instanceId: provider.instanceId,
+      model,
+      ...(input.options !== undefined ? { options: input.options } : {}),
+    };
 
     // Worktree isolation is the default, but only meaningful inside a git
     // repository; a non-repo project falls back to sharing the project root
