@@ -65,7 +65,7 @@ const devServerInput = {
   autoBootstrapProjectFromCwd: undefined,
   logWebSocketEvents: undefined,
   host: undefined,
-  port: 13_773,
+  port: 13_873,
   devUrl: undefined,
   dryRun: false,
   share: false,
@@ -153,7 +153,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_HOME, undefined);
+        assert.equal(env.PHOENIX_HOME, undefined);
         assert.equal(env.T3CODE_NO_BROWSER, "1");
       }),
     );
@@ -215,8 +215,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: new URL("http://localhost:7331"),
         });
 
-        assert.equal(env.T3CODE_HOME, path.resolve("/tmp/custom-t3"));
-        assert.equal(env.T3CODE_PORT, "4222");
+        assert.equal(env.PHOENIX_HOME, path.resolve("/tmp/custom-t3"));
+        assert.equal(env.PHOENIX_PORT, "4222");
         assert.equal(env.VITE_HTTP_URL, "http://localhost:4222");
         assert.equal(env.VITE_WS_URL, "ws://localhost:4222");
         assert.equal(env.T3CODE_NO_BROWSER, "1");
@@ -313,7 +313,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_HOME, path.resolve("/tmp/my-t3"));
+        assert.equal(env.PHOENIX_HOME, path.resolve("/tmp/my-t3"));
       }),
     );
 
@@ -323,12 +323,12 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         const env = yield* createDevRunnerEnv({
           mode: "dev:desktop",
           baseEnv: {
-            T3CODE_PORT: "13773",
+            PHOENIX_PORT: "13873",
             T3CODE_MODE: "web",
             T3CODE_NO_BROWSER: "0",
             T3CODE_HOST: "0.0.0.0",
             VITE_DEV_SERVER_URL: "http://127.0.0.1:8526",
-            VITE_WS_URL: "ws://localhost:13773",
+            VITE_WS_URL: "ws://localhost:13873",
           },
           serverOffset: 0,
           webOffset: 0,
@@ -341,11 +341,11 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_HOME, path.resolve("/tmp/my-t3"));
-        assert.equal(env.PORT, "5733");
-        assert.equal(env.VITE_DEV_SERVER_URL, "http://127.0.0.1:5733");
+        assert.equal(env.PHOENIX_HOME, path.resolve("/tmp/my-t3"));
+        assert.equal(env.PORT, "5833");
+        assert.equal(env.VITE_DEV_SERVER_URL, "http://127.0.0.1:5833");
         assert.equal(env.HOST, "127.0.0.1");
-        assert.equal(env.T3CODE_PORT, "4222");
+        assert.equal(env.PHOENIX_PORT, "4222");
         assert.equal(env.VITE_HTTP_URL, "http://127.0.0.1:4222");
         assert.equal(env.T3CODE_MODE, undefined);
         assert.equal(env.T3CODE_NO_BROWSER, undefined);
@@ -370,8 +370,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_PORT, "13773");
-        assert.equal(env.PORT, "5733");
+        assert.equal(env.PHOENIX_PORT, "13873");
+        assert.equal(env.PORT, "5833");
       }),
     );
 
@@ -400,7 +400,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
           assert.equal(env.VITE_HTTP_URL, undefined);
           assert.equal(env.VITE_WS_URL, undefined);
-          assert.equal(env.T3CODE_PORT, "13773");
+          assert.equal(env.PHOENIX_PORT, "13873");
           // Deleting the keys is not sufficient — vite.config.ts merges
           // `.env`/`.env.local` underneath this env and would revive them, so
           // the intent has to be stated positively.
@@ -428,7 +428,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.T3CODE_SINGLE_ORIGIN_DEV, undefined);
-        assert.equal(env.VITE_HTTP_URL, "http://127.0.0.1:13773");
+        assert.equal(env.VITE_HTTP_URL, "http://127.0.0.1:13873");
       }),
     );
 
@@ -449,7 +449,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.T3CODE_SINGLE_ORIGIN_DEV, undefined);
-        assert.equal(env.VITE_HTTP_URL, "http://localhost:13773");
+        assert.equal(env.VITE_HTTP_URL, "http://localhost:13873");
       }),
     );
 
@@ -538,8 +538,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.VITE_HTTP_URL, "http://127.0.0.1:13773");
-        assert.equal(env.VITE_WS_URL, "ws://127.0.0.1:13773");
+        assert.equal(env.VITE_HTTP_URL, "http://127.0.0.1:13873");
+        assert.equal(env.VITE_WS_URL, "ws://127.0.0.1:13873");
       }),
     );
   });
@@ -560,7 +560,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
     it.effect("advances until all required ports are available", () =>
       Effect.gen(function* () {
-        const taken = new Set([13773, 5733, 13774, 5734]);
+        const taken = new Set([13873, 5833, 13874, 5834]);
         const offset = yield* findFirstAvailableOffset({
           startOffset: 0,
           requireServerPort: true,
@@ -576,8 +576,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       Effect.gen(function* () {
         const probed: Array<{ port: number; role: string | undefined }> = [];
         const offset = yield* findFirstAvailableOffset({
-          // 5733 + 833 = 6566, which browsers block as sane-port.
-          startOffset: 833,
+          // 5833 + 733 = 6566, which browsers block as sane-port.
+          startOffset: 733,
           requireServerPort: true,
           requireWebPort: true,
           checkPortAvailability: (port, role) => {
@@ -586,7 +586,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           },
         });
 
-        assert.equal(offset, 834);
+        assert.equal(offset, 734);
         assert.deepStrictEqual(probed, [
           { port: 14_607, role: "server" },
           { port: 6567, role: "web" },
@@ -610,13 +610,15 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     it.effect("allows offsets where the non-required server port exceeds max", () =>
       Effect.gen(function* () {
         const offset = yield* findFirstAvailableOffset({
-          startOffset: 59_802,
+          // 5833 + 59_702 = 65_535, the last usable web port; the server port at this
+          // offset is past the max but is not required here.
+          startOffset: 59_702,
           requireServerPort: false,
           requireWebPort: true,
           checkPortAvailability: () => Effect.succeed(true),
         });
 
-        assert.equal(offset, 59_802);
+        assert.equal(offset, 59_702);
       }),
     );
 
@@ -635,8 +637,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(error.startOffset, 51_763);
         assert.equal(error.requireServerPort, true);
         assert.equal(error.requireWebPort, false);
-        assert.equal(error.baseServerPort, 13_773);
-        assert.equal(error.baseWebPort, 5_733);
+        assert.equal(error.baseServerPort, 13_873);
+        assert.equal(error.baseWebPort, 5_833);
         assert.equal(error.maximumPort, 65_535);
         assert.ok(!("cause" in error));
       }),
@@ -651,7 +653,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       },
     );
 
-    it.each([5733, 5900, 6567, 6670, 8733])("allows browser-safe web port %s", (port) => {
+    it.each([5833, 5900, 6567, 6670, 8733])("allows browser-safe web port %s", (port) => {
       assert.equal(isBrowserAllowedPort(port), true);
     });
   });
@@ -663,7 +665,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         const calls: Array<[number, string]> = [];
 
         const available = yield* checkPortAvailabilityOnHosts(
-          13_773,
+          13_873,
           ["127.0.0.1", "0.0.0.0", "::"],
           (port, host) =>
             Effect.promise(async () => {
@@ -678,9 +680,9 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
         assert.equal(available, true);
         assert.deepStrictEqual(calls, [
-          [13_773, "127.0.0.1"],
-          [13_773, "0.0.0.0"],
-          [13_773, "::"],
+          [13_873, "127.0.0.1"],
+          [13_873, "0.0.0.0"],
+          [13_873, "::"],
         ]);
       }),
     );
@@ -732,8 +734,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.deepStrictEqual(probed, [
-          { port: 13_773, role: "server" },
-          { port: 5733, role: "web" },
+          { port: 13_873, role: "server" },
+          { port: 5833, role: "web" },
         ]);
       }),
     );
@@ -742,7 +744,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
   describe("resolveModePortOffsets", () => {
     it.effect("uses a shared fallback offset for dev mode", () =>
       Effect.gen(function* () {
-        const taken = new Set([13773, 5733]);
+        const taken = new Set([13873, 5833]);
         const offsets = yield* resolveModePortOffsets({
           mode: "dev",
           startOffset: 0,
@@ -757,7 +759,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
     it.effect("keeps server offset stable for dev:web and only shifts web offset", () =>
       Effect.gen(function* () {
-        const taken = new Set([5733]);
+        const taken = new Set([5833]);
         const offsets = yield* resolveModePortOffsets({
           mode: "dev:web",
           startOffset: 0,
@@ -772,7 +774,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
     it.effect("shifts only server offset for dev:server", () =>
       Effect.gen(function* () {
-        const taken = new Set([13773]);
+        const taken = new Set([13873]);
         const offsets = yield* resolveModePortOffsets({
           mode: "dev:server",
           startOffset: 0,
@@ -874,15 +876,15 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
     // `tailscale serve` config outlives the process, so a dry run that shared
     // would replace and then tear down whatever mapping the port already had.
-    // Base-dir precedence (--home-dir > worktree .t3 > ambient T3CODE_HOME)
+    // Base-dir precedence (--home-dir > worktree .t3 > ambient PHOENIX_HOME)
     // lives in runDevRunnerWithInput; the env builder must not consult the
     // ambient variable on its own, or it would silently outrank the worktree
     // default and land dev state on the user's real database.
-    it.effect("ignores an ambient T3CODE_HOME when no home is resolved", () =>
+    it.effect("ignores an ambient PHOENIX_HOME when no home is resolved", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
           mode: "dev",
-          baseEnv: { T3CODE_HOME: "/home/user/.t3" },
+          baseEnv: { PHOENIX_HOME: "/home/user/.phoenix" },
           serverOffset: 0,
           webOffset: 0,
           t3Home: undefined,
@@ -894,7 +896,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_HOME, undefined);
+        assert.equal(env.PHOENIX_HOME, undefined);
       }),
     );
 
@@ -1244,11 +1246,11 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             Effect.provideService(HostProcessWorkingDirectory, input.cwd),
             Effect.provideService(
               HostProcessEnvironment,
-              input.ambientHome === undefined ? {} : { T3CODE_HOME: input.ambientHome },
+              input.ambientHome === undefined ? {} : { PHOENIX_HOME: input.ambientHome },
             ),
           );
 
-          return captured?.T3CODE_HOME;
+          return captured?.PHOENIX_HOME;
         });
 
       it.effect("prefers an explicit --home-dir over the worktree default", () =>
@@ -1258,7 +1260,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           const home = yield* spawnedHome({
             t3Home: "/tmp/explicit-home",
             cwd: root,
-            ambientHome: "/home/user/.t3",
+            ambientHome: "/home/user/.phoenix",
           });
           assert.equal(home, path.resolve("/tmp/explicit-home"));
         }).pipe(Effect.scoped),
@@ -1271,34 +1273,34 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           const home = yield* spawnedHome({
             t3Home: "   ",
             cwd: root,
-            ambientHome: "/home/user/.t3",
+            ambientHome: "/home/user/.phoenix",
           });
-          assert.equal(home, path.join(path.resolve(root), ".t3"));
+          assert.equal(home, path.join(path.resolve(root), ".phoenix"));
         }).pipe(Effect.scoped),
       );
 
-      it.effect("prefers the worktree .t3 over an ambient T3CODE_HOME", () =>
+      it.effect("prefers the worktree .phoenix over an ambient PHOENIX_HOME", () =>
         Effect.gen(function* () {
           const path = yield* Path.Path;
           const root = yield* makeWorktree;
           const home = yield* spawnedHome({
             t3Home: undefined,
             cwd: root,
-            ambientHome: "/home/user/.t3",
+            ambientHome: "/home/user/.phoenix",
           });
-          assert.equal(home, path.join(path.resolve(root), ".t3"));
+          assert.equal(home, path.join(path.resolve(root), ".phoenix"));
         }).pipe(Effect.scoped),
       );
 
-      it.effect("falls back to an ambient T3CODE_HOME outside a worktree", () =>
+      it.effect("falls back to an ambient PHOENIX_HOME outside a worktree", () =>
         Effect.gen(function* () {
           const path = yield* Path.Path;
           const home = yield* spawnedHome({
             t3Home: undefined,
             cwd: NodeOS.tmpdir(),
-            ambientHome: "/home/user/.t3",
+            ambientHome: "/home/user/.phoenix",
           });
-          assert.equal(home, path.resolve("/home/user/.t3"));
+          assert.equal(home, path.resolve("/home/user/.phoenix"));
         }),
       );
 

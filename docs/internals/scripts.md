@@ -1,10 +1,10 @@
 # Scripts
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Phoenix? See [docs/user](../user/).
 
 ## First checkout
 
-T3 Code uses [Vite+](https://viteplus.dev/guide/). Install the global `vp` command, install
+Phoenix uses [Vite+](https://viteplus.dev/guide/). Install the global `vp` command, install
 dependencies, then start the dev stack:
 
 ```bash
@@ -40,12 +40,12 @@ authenticated.
 
 ### Dev state directories
 
-- Dev commands run from a linked **git worktree** default to that worktree's gitignored `.t3`, even
-  when `T3CODE_HOME` is set, storing state in `<worktree>/.t3/userdata`. Pass `--home-dir <path>` to
+- Dev commands run from a linked **git worktree** default to that worktree's gitignored `.phoenix`, even
+  when `PHOENIX_HOME` is set, storing state in `<worktree>/.t3/userdata`. Pass `--home-dir <path>` to
   choose another isolated directory explicitly. Submodules are not worktrees and keep the normal
   precedence.
-- From the **main checkout**, dev commands implicitly use `~/.t3/dev`, keeping development state
-  separate from `~/.t3/userdata`. An explicit `--home-dir <path>` stores state under
+- From the **main checkout**, dev commands implicitly use `~/.phoenix/dev`, keeping development state
+  separate from `~/.phoenix/userdata`. An explicit `--home-dir <path>` stores state under
   `<path>/userdata`; the base directory remains available for caches, worktrees, and other shared
   data.
 
@@ -105,7 +105,7 @@ server, allowing the same bundle to work from localhost or a tailnet hostname.
 
 Worktrees derive a preferred port offset from their path.
 
-- Default ports: server `13773`, web `5733`
+- Default ports: server `13873`, web `5833`
 - Shifted ports: `base + offset`
 - Example: `T3CODE_DEV_INSTANCE=branch-a vp run dev:desktop`
 

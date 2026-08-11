@@ -74,6 +74,10 @@ const emptyBackendObservabilitySettings: BackendObservabilitySettings = {
 };
 
 const DESKTOP_BACKEND_ENV_NAMES = [
+  // Cleared alongside T3CODE_PORT: the server prefers PHOENIX_PORT, so an ambient
+  // value (the dev runner exports one) would otherwise outrank the port this
+  // backend was actually configured with.
+  "PHOENIX_PORT",
   "T3CODE_PORT",
   "T3CODE_MODE",
   "T3CODE_NO_BROWSER",
@@ -403,7 +407,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         ...backendChildEnvPatch(),
         ELECTRON_RUN_AS_NODE: "1",
       },
-      // Primary wants process.env (PATH, dev-runner's T3CODE_HOME, etc.).
+      // Primary wants process.env (PATH, dev-runner's PHOENIX_HOME, etc.).
       extendEnv: true,
       bootstrap,
       bootstrapDelivery: "fd3",
@@ -520,14 +524,15 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     }
   }
 
-  // Build an explicit copy of process.env minus T3CODE_HOME (dev-runner
-  // exports the Windows-side base dir for the primary; if it leaks into
-  // the WSL backend the Linux side ends up sharing C:\Users\...\.t3 via
-  // /mnt/c, which means both backends read/write the same database and
-  // their env-ids collide).
+  // Build an explicit copy of process.env minus the base-dir variables
+  // (dev-runner exports the Windows-side base dir for the primary; if it leaks
+  // into the WSL backend the Linux side ends up sharing C:\Users\...\.phoenix
+  // via /mnt/c, which means both backends read/write the same database and
+  // their env-ids collide). T3CODE_HOME is stripped too so an ambient upstream
+  // value cannot reach the WSL backend either.
   const parentEnvWithoutT3Home: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (key === "T3CODE_HOME") continue;
+    if (key === "PHOENIX_HOME" || key === "T3CODE_HOME") continue;
     parentEnvWithoutT3Home[key] = value;
   }
   const wslEnv = mergeWslEnv(parentEnvWithoutT3Home.WSLENV, forwardedEnvNames);
@@ -542,7 +547,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       ...forwardedEnv,
       ...(wslEnv !== undefined ? { WSLENV: wslEnv } : {}),
     },
-    // env is already a complete process.env minus T3CODE_HOME; pass it
+    // env is already a complete process.env minus the base-dir variables; pass it
     // verbatim instead of letting the spawner re-merge process.env on top.
     extendEnv: false,
     bootstrap,

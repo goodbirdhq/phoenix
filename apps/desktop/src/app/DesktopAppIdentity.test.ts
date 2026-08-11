@@ -20,9 +20,9 @@ const defaultEnvironmentInput = {
   platform: "darwin",
   processArch: "arm64",
   appVersion: "1.2.3",
-  appPath: "/Applications/T3 Code.app/Contents/Resources/app.asar",
+  appPath: "/Applications/Phoenix.app/Contents/Resources/app.asar",
   isPackaged: true,
-  resourcesPath: "/Applications/T3 Code.app/Contents/Resources",
+  resourcesPath: "/Applications/Phoenix.app/Contents/Resources",
   runningUnderArm64Translation: false,
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
@@ -39,7 +39,7 @@ interface ElectronAppCalls {
 const makeElectronAppLayer = (calls: ElectronAppCalls) =>
   Layer.succeed(ElectronApp.ElectronApp, {
     metadata: Effect.die("unexpected metadata read"),
-    name: Effect.succeed("T3 Code"),
+    name: Effect.succeed("Phoenix"),
     whenReady: Effect.void,
     quit: Effect.void,
     exit: () => Effect.void,
@@ -143,44 +143,31 @@ const withIdentity = <A, E, R>(
 };
 
 describe("DesktopAppIdentity", () => {
-  it.effect("keeps using the legacy userData path when it already exists", () =>
+  it.effect("resolves userData to Phoenix's own directory", () =>
     withIdentity(
       Effect.gen(function* () {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         const userDataPath = yield* identity.resolveUserDataPath;
 
-        assert.equal(userDataPath, "/Users/alice/Library/Application Support/T3 Code (Alpha)");
+        assert.equal(userDataPath, "/Users/alice/Library/Application Support/phoenix");
+      }),
+    ),
+  );
+
+  // Phoenix is designed to run alongside upstream T3 Code. If it ever adopted an
+  // existing T3 Code userData directory, both apps would write the same state.
+  it.effect("never adopts an existing T3 Code userData directory", () =>
+    withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        const userDataPath = yield* identity.resolveUserDataPath;
+
+        assert.notInclude(userDataPath, "T3 Code");
+        assert.equal(userDataPath, "/Users/alice/Library/Application Support/phoenix");
       }),
       { legacyPathExists: true },
     ),
   );
-
-  it.effect("preserves failures while inspecting the legacy userData path", () => {
-    const legacyPath = "/Users/alice/Library/Application Support/T3 Code (Alpha)";
-    const cause = PlatformError.systemError({
-      _tag: "PermissionDenied",
-      module: "FileSystem",
-      method: "exists",
-      description: "permission denied",
-      pathOrDescriptor: legacyPath,
-    });
-
-    return withIdentity(
-      Effect.gen(function* () {
-        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        const error = yield* identity.resolveUserDataPath.pipe(Effect.flip);
-
-        assert.instanceOf(error, DesktopAppIdentity.DesktopUserDataPathResolutionError);
-        assert.equal(error.legacyPath, legacyPath);
-        assert.strictEqual(error.cause, cause);
-        assert.equal(
-          error.message,
-          `Failed to inspect legacy desktop user-data path at "${legacyPath}".`,
-        );
-      }),
-      { legacyPathProbeError: cause },
-    );
-  });
 
   it.effect("configures app identity from the environment commit override", () => {
     const calls: ElectronAppCalls = {
@@ -194,8 +181,8 @@ describe("DesktopAppIdentity", () => {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         yield* identity.configure;
 
-        assert.deepEqual(calls.setName, ["T3 Code (Alpha)"]);
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "T3 Code (Alpha)");
+        assert.deepEqual(calls.setName, ["Phoenix (Alpha)"]);
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "Phoenix (Alpha)");
         assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
         assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
         assert.deepEqual(calls.setDockIcon, ["/icon.png"]);

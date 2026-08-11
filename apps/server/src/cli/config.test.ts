@@ -98,7 +98,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                   T3CODE_MODE: "desktop",
                   T3CODE_PORT: "4001",
                   T3CODE_HOST: "0.0.0.0",
-                  T3CODE_HOME: baseDir,
+                  PHOENIX_HOME: baseDir,
                   VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
                   T3CODE_DEV_ALLOWED_ORIGINS:
                     "https://host.example.ts.net, https://phone.example.ts.net ",
@@ -171,7 +171,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                   T3CODE_MODE: "desktop",
                   T3CODE_PORT: "4001",
                   T3CODE_HOST: "0.0.0.0",
-                  T3CODE_HOME: join(NodeOS.tmpdir(), "ignored-base"),
+                  PHOENIX_HOME: join(NodeOS.tmpdir(), "ignored-base"),
                   VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
                   T3CODE_NO_BROWSER: "false",
                   T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "false",
@@ -454,7 +454,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                 env: {
                   T3CODE_MODE: "web",
                   T3CODE_BOOTSTRAP_FD: String(fd),
-                  T3CODE_HOME: baseDir,
+                  PHOENIX_HOME: baseDir,
                   T3CODE_NO_BROWSER: "true",
                   T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "true",
                   T3CODE_LOG_WS_EVENTS: "true",
@@ -566,7 +566,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       const resolved = yield* resolveServerConfig(
         {
           mode: Option.some("web"),
-          port: Option.some(3773),
+          port: Option.some(3873),
           host: Option.none(),
           baseDir: Option.some(baseDir),
           cwd: Option.none(),
@@ -602,7 +602,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logLevel: "Info",
         ...defaultObservabilityConfig,
         mode: "web",
-        port: 3773,
+        port: 3873,
         cwd: process.cwd(),
         baseDir,
         ...derivedPaths,

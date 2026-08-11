@@ -14,7 +14,9 @@ import * as LogLevel from "effect/LogLevel";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-export const DEFAULT_PORT = 3773;
+// 3873, not upstream's 3773: Phoenix is expected to run alongside T3 Code, so each
+// app gets a deterministic default port instead of racing for the same one.
+export const DEFAULT_PORT = 3873;
 
 export const RuntimeMode = Schema.Literals(["web", "desktop"]);
 export type RuntimeMode = typeof RuntimeMode.Type;

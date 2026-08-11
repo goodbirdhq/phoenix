@@ -15,8 +15,10 @@ export function resolveDesktopBaseDir(input: {
   readonly joinPath: JoinPath;
   readonly t3Home: Option.Option<string>;
 }): string {
+  // ".phoenix", not ".t3": Phoenix is expected to run alongside upstream T3 Code,
+  // and sharing a base dir would mean sharing one SQLite database and auth state.
   return Option.getOrElse(normalizeConfiguredBaseDir(input.t3Home), () =>
-    input.joinPath(input.homeDirectory, ".t3"),
+    input.joinPath(input.homeDirectory, ".phoenix"),
   );
 }
 

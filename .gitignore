@@ -14,6 +14,9 @@ build/
 .logs/
 release/
 release-mock/
+.phoenix
+# Upstream T3 Code's worktree state dir. Still ignored so a checkout that has run
+# either app (or an upstream merge) never commits local dev state.
 .t3
 .idea/
 apps/web/.playwright

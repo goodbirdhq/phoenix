@@ -217,6 +217,31 @@ function AboutVersionTitle() {
   );
 }
 
+const UPSTREAM_PROJECT_URL = "https://github.com/pingdotgg/t3code";
+
+function UpstreamCreditRow() {
+  const openUpstream = useCallback(() => {
+    void ensureLocalApi()
+      .shell.openExternal(UPSTREAM_PROJECT_URL)
+      .catch(() => {
+        // Opening the credit link is best-effort; failing to open it must not
+        // disrupt the settings panel.
+      });
+  }, []);
+
+  return (
+    <SettingsRow
+      title="Built on T3 Code"
+      description="Phoenix is an unofficial fork of T3 Code by T3 Tools Inc., used under the MIT license. Nearly all of the engineering behind this app is theirs."
+      control={
+        <Button onClick={openUpstream} size="xs" variant="outline">
+          View T3 Code
+        </Button>
+      }
+    />
+  );
+}
+
 function AboutVersionSection() {
   const updateState = useDesktopUpdateState();
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
@@ -2249,6 +2274,7 @@ export function GeneralSettingsPanel() {
             </Button>
           }
         />
+        <UpstreamCreditRow />
       </SettingsSection>
 
       <LegacyFeaturesSection />

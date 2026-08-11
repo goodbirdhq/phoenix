@@ -1,6 +1,6 @@
 # T3 Connect
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Phoenix? See [docs/user](../user/).
 
 T3 Connect uses one Clerk application for web, desktop, and mobile authentication. The relay verifies
 two kinds of bearer credential: template JWTs generated from the `t3-relay` template with the shared
@@ -51,7 +51,7 @@ should set `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`,
 production builds only need the Clerk publishable key, JWT template name, and relay URL in their EAS
 environment.
 
-When any client-facing public value is absent, cloud UI is omitted. The `t3 connect` command group is
+When any client-facing public value is absent, cloud UI is omitted. The `phoenix connect` command group is
 always registered: when the CLI public values are absent, `makeCli` in `apps/server/src/bin.ts`
 registers a hidden fallback `connect` command that reports the missing configuration instead of
 silently vanishing from help. The bundled server still accepts runtime overrides for self-hosted or
@@ -73,7 +73,7 @@ personal developer stage.
 
 ## Headless CLI OAuth Application
 
-The `t3 connect` commands authorize a headless environment with a separate Clerk OAuth application.
+The `phoenix connect` commands authorize a headless environment with a separate Clerk OAuth application.
 This uses an OAuth public client with PKCE, so the CLI stores no client secret.
 
 In **Clerk Dashboard > OAuth applications**:
@@ -106,19 +106,19 @@ t3 connect unlink
 t3 connect logout
 ```
 
-`t3 serve` is a separate top-level command, not a connect subcommand.
+`phoenix serve` is a separate top-level command, not a connect subcommand.
 
-`t3 connect login` opens the Clerk authorization flow and stores the CLI credential without enabling
-cloud exposure. `t3 connect link` installs the pinned managed `cloudflared` binary when needed,
+`phoenix connect login` opens the Clerk authorization flow and stores the CLI credential without enabling
+cloud exposure. `phoenix connect link` installs the pinned managed `cloudflared` binary when needed,
 authorizes when needed, and records durable intent to expose the environment. It works without a
-running T3 server. The next `t3 serve` or `t3 start` reconciles the relay link and launches the
-managed tunnel. `t3 connect unlink` records disabled intent immediately, stops a reachable running
+running T3 server. The next `phoenix serve` or `phoenix start` reconciles the relay link and launches the
+managed tunnel. `phoenix connect unlink` records disabled intent immediately, stops a reachable running
 connector, and attempts to revoke the relay-side environment record. It retains the stored CLI
-authorization so `t3 connect link` can re-enable exposure without another browser flow. `t3 connect
+authorization so `phoenix connect link` can re-enable exposure without another browser flow. `phoenix connect
 logout` performs the same cleanup and removes the stored CLI authorization.
 
 The background service has an independent lifecycle. Connect setup may offer to install it, but
-logout leaves it running; manage it with `t3 service status`, `install`, `update`, and `uninstall`.
+logout leaves it running; manage it with `phoenix service status`, `install`, `update`, and `uninstall`.
 
 ### Headless and SSH authorization
 
@@ -219,9 +219,9 @@ For the default development ports, run `pnpm dev:web` in one terminal and launch
 binary from another:
 
 ```sh
-VITE_DEV_SERVER_URL=http://127.0.0.1:5733 \
-T3CODE_PORT=13773 \
-  "/Applications/T3 Code (Alpha).app/Contents/MacOS/T3 Code (Alpha)"
+VITE_DEV_SERVER_URL=http://127.0.0.1:5833 \
+T3CODE_PORT=13873 \
+  "/Applications/Phoenix (Alpha).app/Contents/MacOS/Phoenix (Alpha)"
 ```
 
 After changing Associated Domains, bump the build version before rebuilding; macOS may otherwise
@@ -230,8 +230,8 @@ reuse stale Shared Web Credentials metadata for the same app/version pair.
 Verify the installed bundle before testing:
 
 ```sh
-codesign --verify --deep --strict "/Applications/T3 Code (Alpha).app"
-codesign -d --entitlements :- "/Applications/T3 Code (Alpha).app"
+codesign --verify --deep --strict "/Applications/Phoenix (Alpha).app"
+codesign -d --entitlements :- "/Applications/Phoenix (Alpha).app"
 ```
 
 The current mobile UI uses Clerk's native authentication view. If a future mobile browser OAuth

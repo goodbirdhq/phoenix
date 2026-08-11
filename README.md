@@ -1,19 +1,27 @@
-# T3 Code
+# Phoenix
 
-T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+Phoenix is an "agent harness control surface". It enables control of the agents on your machine from a mobile app, a web app, and an Electron-based desktop app.
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, and OpenCode. If they're set up on your computer, T3 Code can control them.
+Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, and OpenCode. If they're set up on your computer, Phoenix can control them.
 
-## "Wait, what are you selling me?"
+## Built on T3 Code
 
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
+**Phoenix is a fork of [T3 Code](https://github.com/pingdotgg/t3code) by [T3 Tools Inc.](https://t3.codes) — and T3 Code is the nuts.**
 
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
+Essentially all of the hard engineering here — the architecture, the agent harness integrations, the mobile app, the sync layer — is theirs. They built something genuinely excellent and open-sourced it under MIT, which is the only reason this fork can exist. Phoenix tracks their upstream and merges their work continuously; we are downstream consumers of an outstanding project, not competitors with it.
+
+If you want the original, supported, first-party product, go get it:
+
+- Desktop / web: <https://t3.codes> · <https://app.t3.codes>
+- iOS: [App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) · Android: [Play Store](https://play.google.com/store/apps/details?id=com.t3tools.t3code)
+- Source: <https://github.com/pingdotgg/t3code> · Community: [Discord](https://discord.gg/jn4EGJjrvv)
+
+Phoenix is an unofficial fork. Please don't take Phoenix bugs to the T3 Code team — file them here instead.
 
 ## Installation
 
 > [!WARNING]
-> T3 Code currently supports Codex, Claude, Cursor, Grok Build and OpenCode. Install and authenticate at least one provider before use:
+> Phoenix currently supports Codex, Claude, Cursor, Grok Build and OpenCode. Install and authenticate at least one provider before use:
 >
 > - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
 > - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
@@ -21,45 +29,39 @@ We wanted something performant, remote-ready, and truly open. If we ever go the 
 > - Grok Build: install [Grok Build CLI](https://x.ai/cli) and run `grok login`
 > - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
 
-### Try it out (install-free)
+### Run the server
 
-The easiest way to test T3 Code is to run the server in your terminal (requires Node.js 22.16+, 23.11+, or 24.10+):
+Phoenix is not published to npm, so there is no `npx` one-liner. Build from source and run the CLI
+(requires Node.js 22.16+, 23.11+, or 24.10+):
 
 ```bash
-npx t3@latest
+vp i && vp run --filter t3 build
+node apps/server/dist/bin.mjs
 ```
 
-This will launch T3 Code's backend on your machine as well as the local web app to control your agents.
+This launches Phoenix's backend on your machine along with the local web app. Installing the package
+globally puts the CLI on your `PATH` as `phoenix` (not `t3`, so it will not collide with an existing
+T3 Code install).
 
-Tip: Use `npx t3@latest --help` for the full CLI reference.
+Tip: `phoenix --help` for the full CLI reference.
+
+> [!NOTE]
+> `npx t3@latest` runs **upstream T3 Code**, not Phoenix.
 
 ### Desktop app
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+Phoenix desktop builds come from this repository's [GitHub Releases](https://github.com/goodbirdhq/t3code/releases), or you can build from source (see [docs/internals/overview.md](./docs/internals/overview.md)).
 
-#### Windows (`winget`)
-
-```bash
-winget install T3Tools.T3Code
-```
-
-#### macOS (Homebrew)
-
-```bash
-brew install --cask t3-code
-```
-
-#### Arch Linux (AUR)
-
-```bash
-yay -S t3code-bin
-```
+> [!NOTE]
+> Phoenix is not published to `winget`, Homebrew, or the AUR. The upstream packages
+> (`T3Tools.T3Code`, `--cask t3-code`, `t3code-bin`) install **T3 Code**, not Phoenix — which is a
+> perfectly good thing to do if you'd rather run the original.
 
 ## Some notes
 
-We are very very early in this project. Expect bugs.
+This is an early-stage fork. Expect bugs, and expect them to be ours rather than upstream's.
 
-We are (mostly) not accepting contributions yet. Small fixes may be considered. Big features will not be.
+Phoenix continuously merges from upstream T3 Code. See [docs/internals/branding.md](./docs/internals/branding.md) for the fork's rebranding policy — it exists specifically to keep those merges clean.
 
 ## Documentation
 
@@ -73,7 +75,7 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - [Keeping app and server in sync](./docs/user/updating.md)
 - [Source control integrations](./docs/user/source-control.md)
 - Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
-- Linux: [run T3 Code as a background service](./docs/user/background-service.md)
+- Linux: [run Phoenix as a background service](./docs/user/background-service.md)
 
 Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
 
@@ -81,7 +83,7 @@ Building from source? Start at [docs/internals/overview.md](./docs/internals/ove
 
 ### Install `vp`
 
-T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
+Phoenix uses Vite+ so you'll need to install the global `vp` command-line tool.
 
 #### macOS / Linux
 
@@ -105,4 +107,8 @@ vp i
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
 
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+Need support with Phoenix? Open an issue on this repository. The [T3 Code Discord](https://discord.gg/jn4EGJjrvv) is for upstream T3 Code — please don't take fork-specific problems there.
+
+## License
+
+Phoenix is MIT licensed and retains the [original T3 Code copyright](./LICENSE) held by T3 Tools Inc.
