@@ -21,7 +21,7 @@ const dependencies = [McpInvocationContext.McpInvocationContext];
 
 export const ListSessionProvidersTool = Tool.make("list_session_providers", {
   description:
-    "List the provider instances and models this T3 Code environment can start a new agent session with. Call before spawn_session to offer real choices instead of guessing.",
+    "List the provider instances and models this Phoenix environment can start a new agent session with. Call before spawn_session to offer real choices instead of guessing.",
   parameters: ListSessionProvidersInput,
   success: ListSessionProvidersResult,
   failure: SessionOrchestrationError,
@@ -34,7 +34,7 @@ export const ListSessionProvidersTool = Tool.make("list_session_providers", {
 
 export const SpawnSessionTool = Tool.make("spawn_session", {
   description:
-    "Spawn a new T3 Code agent session (a new thread) that starts working on the given prompt immediately. Choose provider instance, model, and model options (e.g. reasoning effort) from list_session_providers, or omit them to use this session's own provider with defaults. By default the child gets its own git worktree so it cannot conflict with your working tree. The child appears in the user's sidebar like any other thread. End your prompt with report instructions such as: \"When you are done, call post_report with a summary of what you did.\" — the report is delivered back to this session automatically.",
+    "Spawn a new Phoenix agent session (a new thread) that starts working on the given prompt immediately. Choose provider instance, model, and model options (e.g. reasoning effort) from list_session_providers, or omit them to use this session's own provider with defaults. By default the child gets its own git worktree so it cannot conflict with your working tree. The child appears in the user's sidebar like any other thread. End your prompt with report instructions such as: \"When you are done, call post_report with a summary of what you did.\" — the report is delivered back to this session automatically.",
   parameters: SpawnSessionInput,
   success: SpawnSessionResult,
   failure: SessionOrchestrationError,

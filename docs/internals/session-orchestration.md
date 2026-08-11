@@ -6,7 +6,7 @@ How a running agent session spawns and coordinates sibling threads. User-facing 
 ## Shape
 
 The feature rides the existing MCP ingress and the event-sourced command path; no new protocol or
-transport. A session calls tools on the per-thread `t3-code` MCP server, the handlers dispatch
+transport. A session calls tools on the per-thread `phoenix` MCP server, the handlers dispatch
 ordinary orchestration commands, and the provider adapters do what they always do.
 
 ```

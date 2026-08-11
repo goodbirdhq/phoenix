@@ -7,7 +7,7 @@ threads.
 
 ## How It Works
 
-Every session has tools for orchestration alongside its other T3 Code tools:
+Every session has tools for orchestration alongside its other Phoenix tools:
 
 - **List providers** — enumerate the providers and models this environment can start, so the agent
   offers real choices instead of guessing.

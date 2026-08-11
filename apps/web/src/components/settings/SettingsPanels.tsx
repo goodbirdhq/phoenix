@@ -1951,7 +1951,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("session-orchestration")}
-          description="Let agent sessions spawn and orchestrate other sessions through the t3-code tools. Applies to running sessions immediately."
+          description="Let agent sessions spawn and orchestrate other sessions through the phoenix tools. Applies to running sessions immediately."
           resetAction={
             settings.enableSessionOrchestration !==
             DEFAULT_UNIFIED_SETTINGS.enableSessionOrchestration ? (

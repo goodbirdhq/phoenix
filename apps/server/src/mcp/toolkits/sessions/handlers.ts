@@ -56,7 +56,7 @@ const truncateText = (text: string, maxLength: number) =>
 // contract holds across providers without the parent having to remember to
 // ask for it. post_report is what wakes the parent up.
 const SPAWNED_SESSION_REPORT_INSTRUCTIONS =
-  "\n\n---\nYou were spawned by another T3 Code agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). The report is delivered to the session that spawned you.";
+  "\n\n---\nYou were spawned by another Phoenix agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). The report is delivered to the session that spawned you.";
 
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;

@@ -39,3 +39,6 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+# OMC agent tooling state (session history, project memory)
+.omc/
