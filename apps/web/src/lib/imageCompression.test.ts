@@ -123,7 +123,13 @@ describe("compressImageForStash", () => {
   });
 
   it("reports too-large when even the smallest encoding overflows the budget", async () => {
-    const { close } = stubCanvasPipeline(() => 8_000_000);
+    // Every encode overflows here, so this is the only case that runs the full
+    // 3 dimension scales x (probe + 4 quality steps) = 15 encodes. Keep the
+    // stubbed size just clear of MAX_STASH_IMAGE_DATA_URL_CHARS (1_300_000):
+    // 2MB base64-encodes to ~2.7M chars, still double the budget, but a larger
+    // value multiplies by 15 into enough string churn to time this test out
+    // when the suite runs in parallel.
+    const { close } = stubCanvasPipeline(() => 2_000_000);
 
     const result = await compressImageForStash(makeFile(9_000_000));
 
