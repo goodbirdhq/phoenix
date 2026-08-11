@@ -99,19 +99,22 @@ jobs:
           # printf rather than a heredoc: a quoted heredoc terminator cannot be
           # indented, and everything here lives inside an indented YAML block.
           printf '%s\n' \
-            'Unsigned Phoenix build for macOS (Apple silicon).' \
+            'Phoenix build for macOS (Apple silicon), ad-hoc signed but **not notarised**.' \
             '' \
-            '**This build is not code-signed or notarised**, so macOS Gatekeeper will' \
-            'refuse to open it until you clear the quarantine attribute:' \
+            'Drag `Phoenix (Alpha).app` from the DMG into /Applications. The first launch is' \
+            'blocked by Gatekeeper, because notarisation needs an Apple Developer ID we do' \
+            'not have yet:' \
             '' \
-            '```bash' \
-            '# Drag Phoenix.app from the DMG into /Applications, then:' \
-            'xattr -dr com.apple.quarantine /Applications/Phoenix.app' \
-            '```' \
+            '> "Phoenix (Alpha)" can'"'"'t be opened because Apple cannot check it for' \
+            '> malicious software.' \
             '' \
-            'If you skip that step you will see "Phoenix is damaged and can'"'"'t be opened".' \
-            'That is Gatekeeper'"'"'s generic response to a missing signature, not a corrupted' \
-            'download.' \
+            'To allow it, either right-click the app and choose **Open** (then **Open** again' \
+            'in the dialog), or go to **System Settings -> Privacy & Security** and click' \
+            '**Open Anyway**. You only need to do this once per build.' \
+            '' \
+            'If you instead see *"is damaged and can'"'"'t be opened"*, that is a different' \
+            'fault - a broken signature rather than a missing one - and it is a bug in this' \
+            'build. Please report it rather than working around it.' \
             '' \
             'Phoenix installs alongside T3 Code: separate app bundle, separate state in' \
             '`~/.phoenix`, its own `phoenix://` URL scheme and port 3873. Your existing' \

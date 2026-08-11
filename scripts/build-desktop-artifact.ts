@@ -1568,6 +1568,15 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
+      // Ad-hoc sign unsigned macOS builds. Skipping signing entirely leaves the
+      // bundle carrying Electron's stock linker signature, which claims sealed
+      // resources the modified bundle no longer matches — macOS then refuses to
+      // launch it with "is damaged and can't be opened", which reads like a
+      // corrupt download rather than a signing problem. "-" is codesign's ad-hoc
+      // identity: it needs no certificate and no Apple account, and electron
+      // signs the bundle inside-out (helpers and frameworks before the outer
+      // app), which a post-hoc `codesign --deep` does not do correctly.
+      ...(signed ? {} : { identity: "-" }),
       protocols: [
         {
           name: "Phoenix",
@@ -1994,7 +2003,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }
   }
   if (!options.signed) {
-    buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+    // On macOS the build config supplies the ad-hoc identity ("-") instead, so
+    // auto-discovery must stay on: setting it to false makes electron-builder
+    // skip signing altogether and ship a bundle macOS reports as damaged.
+    // Discovery finds no real certificate here, which is what we want — there
+    // are none to find on CI, and the explicit identity takes precedence.
+    if (options.platform !== "mac") {
+      buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+    }
     delete buildEnv.CSC_LINK;
     delete buildEnv.CSC_KEY_PASSWORD;
     delete buildEnv.APPLE_API_KEY;
