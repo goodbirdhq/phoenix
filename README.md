@@ -50,7 +50,7 @@ Tip: `phoenix --help` for the full CLI reference.
 
 ### Desktop app
 
-Phoenix desktop builds come from this repository's [GitHub Releases](https://github.com/goodbirdhq/t3code/releases), or you can build from source (see [docs/internals/overview.md](./docs/internals/overview.md)).
+Phoenix desktop builds come from this repository's [GitHub Releases](https://github.com/goodbirdhq/phoenix/releases), or you can build from source (see [docs/internals/overview.md](./docs/internals/overview.md)).
 
 > [!NOTE]
 > Phoenix is not published to `winget`, Homebrew, or the AUR. The upstream packages
