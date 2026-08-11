@@ -22,6 +22,8 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+import { SessionsToolkitHandlersLive } from "./toolkits/sessions/handlers.ts";
+import { SessionsToolkit } from "./toolkits/sessions/tools.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -216,6 +218,10 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
+const SessionsToolkitRegistrationLive = McpServer.toolkit(SessionsToolkit).pipe(
+  Layer.provide(SessionsToolkitHandlersLive),
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "Phoenix",
   version: packageJson.version,
@@ -223,4 +229,7 @@ const McpTransportLive = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const layer = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  SessionsToolkitRegistrationLive,
+).pipe(Layer.provideMerge(McpTransportLive));

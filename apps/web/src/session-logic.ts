@@ -18,6 +18,7 @@ import type {
   ChatMessage,
   ProposedPlan,
   SessionPhase,
+  SessionReport,
   Thread,
   ThreadSession,
   TurnDiffSummary,
@@ -162,6 +163,12 @@ export type TimelineEntry =
       kind: "work";
       createdAt: string;
       entry: WorkLogEntry;
+    }
+  | {
+      id: string;
+      kind: "session-report";
+      createdAt: string;
+      report: SessionReport;
     };
 
 export function workLogEntryIsToolLike(entry: WorkLogEntry): boolean {
@@ -1575,6 +1582,7 @@ export function deriveTimelineEntries(
   proposedPlans: ReadonlyArray<ProposedPlan>,
   workEntries: ReadonlyArray<WorkLogEntry>,
   turnPlans: ReadonlyArray<TurnPlanEntry> = [],
+  reports: ReadonlyArray<SessionReport> = [],
 ): TimelineEntry[] {
   const messageRows: TimelineEntry[] = messages.map((message) => ({
     id: message.id,
@@ -1600,9 +1608,19 @@ export function deriveTimelineEntries(
     createdAt: entry.createdAt,
     entry,
   }));
-  return [...messageRows, ...proposedPlanRows, ...turnPlanRows, ...workRows].toSorted((a, b) =>
-    a.createdAt.localeCompare(b.createdAt),
-  );
+  const reportRows: TimelineEntry[] = reports.map((report) => ({
+    id: report.reportId,
+    kind: "session-report",
+    createdAt: report.createdAt,
+    report,
+  }));
+  return [
+    ...messageRows,
+    ...proposedPlanRows,
+    ...turnPlanRows,
+    ...workRows,
+    ...reportRows,
+  ].toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 export function inferCheckpointTurnCountByTurnId(

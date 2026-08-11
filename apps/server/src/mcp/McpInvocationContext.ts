@@ -2,12 +2,13 @@ import {
   type EnvironmentId,
   PreviewAutomationUnavailableError,
   type ProviderInstanceId,
+  SessionOrchestrationDeniedError,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
-export type McpCapability = "preview";
+export type McpCapability = "preview" | "sessions";
 
 export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;
@@ -23,8 +24,10 @@ export class McpInvocationContext extends Context.Service<
   McpInvocationScope
 >()("t3/mcp/McpInvocationContext") {}
 
+// The preview-shaped unavailable error only speaks for the preview
+// capability; sessions tools use requireMcpSessionsCapability below.
 export const requireMcpCapability = Effect.fn("mcp.requireCapability")(function* (
-  capability: McpCapability,
+  capability: Extract<McpCapability, "preview">,
 ) {
   const invocation = yield* McpInvocationContext;
   if (!invocation.capabilities.has(capability)) {
@@ -38,3 +41,16 @@ export const requireMcpCapability = Effect.fn("mcp.requireCapability")(function*
   }
   return invocation;
 });
+
+export const requireMcpSessionsCapability = Effect.fn("mcp.requireSessionsCapability")(
+  function* () {
+    const invocation = yield* McpInvocationContext;
+    if (!invocation.capabilities.has("sessions")) {
+      return yield* new SessionOrchestrationDeniedError({
+        reason: "capability_unavailable",
+        message: "This session's MCP credential does not carry the sessions capability.",
+      });
+    }
+    return invocation;
+  },
+);

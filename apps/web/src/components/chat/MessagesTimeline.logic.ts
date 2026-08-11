@@ -7,7 +7,12 @@ import {
   type TurnPlanEntry,
   type WorkLogEntry,
 } from "../../session-logic";
-import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
+import {
+  type ChatMessage,
+  type ProposedPlan,
+  type SessionReport,
+  type TurnDiffSummary,
+} from "../../types";
 import { type MessageId, type OrchestrationLatestTurn, type TurnId } from "@t3tools/contracts";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
@@ -207,6 +212,12 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string;
       turnPlan: TurnPlanEntry;
+    }
+  | {
+      kind: "session-report";
+      id: string;
+      createdAt: string;
+      report: SessionReport;
     }
   | { kind: "working"; id: string; createdAt: string | null };
 
@@ -593,6 +604,16 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    if (timelineEntry.kind === "session-report") {
+      nextRows.push({
+        kind: "session-report",
+        id: timelineEntry.id,
+        createdAt: timelineEntry.createdAt,
+        report: timelineEntry.report,
+      });
+      continue;
+    }
+
     const assistantTurnStillInProgress =
       timelineEntry.message.role === "assistant" &&
       unsettledTurnId !== null &&
@@ -682,6 +703,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       // unchanged plan keeps its row reference (virtualization stability).
       return a.createdAt === bp.createdAt && a.turnPlan.plan === bp.turnPlan.plan;
     }
+
+    case "session-report":
+      return a.report === (b as typeof a).report;
 
     case "work":
       return Equal.equals(a.groupedEntries, (b as typeof a).groupedEntries);

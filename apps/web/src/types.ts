@@ -9,6 +9,7 @@ import type {
   ProjectScript as ContractProjectScript,
   ProviderInteractionMode,
   RuntimeMode,
+  SessionReport as ContractSessionReport,
 } from "@t3tools/contracts";
 import type {
   EnvironmentProject,
@@ -42,6 +43,7 @@ export interface ChatMessage extends Omit<OrchestrationMessage, "attachments"> {
 }
 
 export type ProposedPlan = OrchestrationProposedPlan;
+export type SessionReport = ContractSessionReport;
 export type TurnDiffFileChange = OrchestrationCheckpointFile;
 export type TurnDiffSummary = OrchestrationCheckpointSummary;
 
