@@ -238,6 +238,32 @@ export type OrchestrationProject = typeof OrchestrationProject.Type;
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
+// A completion report a spawned session posts back to whoever spawned it
+// (sessions MCP toolkit). Also rendered to the user as a summary card.
+export const SessionReportStatus = Schema.Literals(["success", "failure", "partial"]);
+export type SessionReportStatus = typeof SessionReportStatus.Type;
+
+export const SessionReportArtifact = Schema.Struct({
+  kind: Schema.Literals(["file", "branch", "url", "other"]),
+  value: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
+  label: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+});
+export type SessionReportArtifact = typeof SessionReportArtifact.Type;
+
+export const SessionReport = Schema.Struct({
+  reportId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  status: SessionReportStatus,
+  title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  // Markdown body. Bounded so a report stays a summary, not a transcript.
+  summary: Schema.String.check(Schema.isMaxLength(16_384)),
+  artifacts: Schema.Array(SessionReportArtifact).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  createdAt: IsoDateTime,
+});
+export type SessionReport = typeof SessionReport.Type;
+
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
@@ -372,6 +398,9 @@ export const OrchestrationThread = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // Set when another thread's agent session spawned this thread. Optional so
+  // payloads from pre-spawn servers still decode.
+  spawnedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -402,6 +431,7 @@ export const OrchestrationThread = Schema.Struct({
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  reports: Schema.Array(SessionReport).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
@@ -442,6 +472,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // Set when another thread's agent session spawned this thread. Optional so
+  // payloads from pre-spawn servers still decode.
+  spawnedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -663,6 +696,9 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // Set when another thread's agent session spawned this thread (sessions
+  // MCP toolkit). Optional so pre-spawn clients and servers interop.
+  spawnedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
 });
 
@@ -790,6 +826,7 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  spawnedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
 });
 
@@ -1023,6 +1060,20 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
 });
 
+// Posted from the sessions MCP toolkit on behalf of the thread's own agent;
+// never dispatchable by clients.
+const ThreadReportPostCommand = Schema.Struct({
+  type: Schema.Literal("thread.report.post"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  reportId: TrimmedNonEmptyString,
+  status: SessionReportStatus,
+  title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  summary: Schema.String.check(Schema.isMaxLength(16_384)),
+  artifacts: Schema.Array(SessionReportArtifact),
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1032,6 +1083,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  ThreadReportPostCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1071,6 +1123,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "thread.report-posted",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -1119,6 +1172,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  spawnedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1305,6 +1359,12 @@ export const ThreadActivityAppendedPayload = Schema.Struct({
   activity: OrchestrationThreadActivity,
 });
 
+export const ThreadReportPostedPayload = Schema.Struct({
+  threadId: ThreadId,
+  report: SessionReport,
+  updatedAt: IsoDateTime,
+});
+
 export const OrchestrationEventMetadata = Schema.Struct({
   providerTurnId: Schema.optional(TrimmedNonEmptyString),
   providerItemId: Schema.optional(ProviderItemId),
@@ -1471,6 +1531,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.report-posted"),
+    payload: ThreadReportPostedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

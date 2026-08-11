@@ -15,6 +15,7 @@ import {
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
   ThreadActivityAppendedPayload,
+  ThreadReportPostedPayload,
   ThreadArchivedPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
@@ -297,6 +298,7 @@ export function projectEvent(
             interactionMode: payload.interactionMode,
             branch: payload.branch,
             worktreePath: payload.worktreePath,
+            spawnedByThreadId: payload.spawnedByThreadId ?? null,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -307,6 +309,7 @@ export function projectEvent(
             snoozedAt: null,
             deletedAt: null,
             messages: [],
+            reports: [],
             activities: [],
             checkpoints: [],
             session: null,
@@ -766,6 +769,28 @@ export function projectEvent(
               latestTurn,
               updatedAt: event.occurredAt,
             }),
+          };
+        }),
+      );
+
+    case "thread.report-posted":
+      return decodeForEvent(ThreadReportPostedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const reports = [
+            ...thread.reports.filter((entry) => entry.reportId !== payload.report.reportId),
+            payload.report,
+          ];
+          return {
+            ...nextBase,
+            threads: nextBase.threads.map((entry) =>
+              entry.id === payload.threadId
+                ? { ...entry, reports, updatedAt: payload.updatedAt }
+                : entry,
+            ),
           };
         }),
       );

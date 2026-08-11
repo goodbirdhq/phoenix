@@ -377,6 +377,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          spawnedByThreadId: command.spawnedByThreadId ?? null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -1332,6 +1333,36 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+        },
+      };
+    }
+
+    case "thread.report.post": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.report-posted",
+        payload: {
+          threadId: command.threadId,
+          report: {
+            reportId: command.reportId,
+            threadId: command.threadId,
+            status: command.status,
+            title: command.title,
+            summary: command.summary,
+            artifacts: command.artifacts,
+            createdAt: command.createdAt,
+          },
+          updatedAt: command.createdAt,
         },
       };
     }

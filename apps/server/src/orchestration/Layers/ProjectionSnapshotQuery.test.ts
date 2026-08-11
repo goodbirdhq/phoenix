@@ -349,6 +349,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               updatedAt: "2026-02-24T00:00:05.500Z",
             },
           ],
+          reports: [],
           activities: [
             {
               id: asEventId("activity-1"),

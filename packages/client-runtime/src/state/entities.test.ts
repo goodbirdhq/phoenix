@@ -208,6 +208,7 @@ describe("environment entity projections", () => {
       deletedAt: null,
       messages,
       proposedPlans: [],
+      reports: [],
       activities: [],
       checkpoints: [],
     } satisfies OrchestrationThread & { readonly environmentId: EnvironmentId };
@@ -323,6 +324,7 @@ describe("environment entity projections", () => {
       deletedAt: null,
       messages: [],
       proposedPlans: [],
+      reports: [],
       activities: [],
       checkpoints: [],
     } satisfies OrchestrationThread;

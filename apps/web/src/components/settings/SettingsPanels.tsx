@@ -514,6 +514,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks
         ? ["Provider update checks"]
         : []),
+      ...(settings.enableSessionOrchestration !==
+      DEFAULT_UNIFIED_SETTINGS.enableSessionOrchestration
+        ? ["Session orchestration"]
+        : []),
       ...(isBackgroundActivityDirty ? ["Background activity"] : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? ["New thread mode"]
@@ -554,6 +558,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.glassOpacity,
       settings.enableLegacyTokenStreaming,
       settings.enableProviderUpdateChecks,
+      settings.enableSessionOrchestration,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
@@ -638,6 +643,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
+      enableSessionOrchestration: DEFAULT_UNIFIED_SETTINGS.enableSessionOrchestration,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
@@ -1914,6 +1920,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ enableProviderUpdateChecks: Boolean(checked) })
               }
               aria-label="Check provider versions"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("session-orchestration")}
+          description="Let agent sessions spawn and orchestrate other sessions through the t3-code tools. Applies to running sessions immediately."
+          resetAction={
+            settings.enableSessionOrchestration !==
+            DEFAULT_UNIFIED_SETTINGS.enableSessionOrchestration ? (
+              <SettingResetButton
+                label="session orchestration"
+                onClick={() =>
+                  updateSettings({
+                    enableSessionOrchestration: DEFAULT_UNIFIED_SETTINGS.enableSessionOrchestration,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.enableSessionOrchestration}
+              onCheckedChange={(checked) =>
+                updateSettings({ enableSessionOrchestration: Boolean(checked) })
+              }
+              aria-label="Allow sessions to spawn sessions"
             />
           }
         />

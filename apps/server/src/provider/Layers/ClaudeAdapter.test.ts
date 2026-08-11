@@ -3239,6 +3239,7 @@ describe("ClaudeAdapterLive", () => {
             },
           ],
           toolUseID: "tool-use-1",
+          requestId: "req-test",
         },
       );
 
@@ -3315,6 +3316,7 @@ describe("ClaudeAdapterLive", () => {
         {
           signal: new AbortController().signal,
           toolUseID: "tool-agent-1",
+          requestId: "req-test",
         },
       );
 
@@ -3339,6 +3341,7 @@ describe("ClaudeAdapterLive", () => {
         {
           signal: new AbortController().signal,
           toolUseID: "tool-grep-approval-1",
+          requestId: "req-test",
         },
       );
 
@@ -3876,6 +3879,7 @@ describe("ClaudeAdapterLive", () => {
         {
           signal: new AbortController().signal,
           toolUseID: "tool-exit-1",
+          requestId: "req-test",
         },
       );
 
@@ -4042,6 +4046,7 @@ describe("ClaudeAdapterLive", () => {
       const permissionPromise = canUseTool("AskUserQuestion", askInput, {
         signal: new AbortController().signal,
         toolUseID: "tool-ask-1",
+        requestId: "req-test",
       });
 
       // The adapter should emit a user-input.requested event.
@@ -4168,6 +4173,7 @@ describe("ClaudeAdapterLive", () => {
       const permissionPromise = canUseTool("AskUserQuestion", askInput, {
         signal: new AbortController().signal,
         toolUseID: "tool-ask-2",
+        requestId: "req-test",
       });
 
       // Should still get user-input.requested even in full-access mode.
@@ -4233,6 +4239,7 @@ describe("ClaudeAdapterLive", () => {
         {
           signal: controller.signal,
           toolUseID: "tool-ask-abort",
+          requestId: "req-test",
         },
       );
 

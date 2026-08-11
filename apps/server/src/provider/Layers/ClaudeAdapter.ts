@@ -3387,6 +3387,20 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           message,
         );
         return;
+      // New in SDK 0.3.2xx: progress/housekeeping chatter with no T3
+      // surface; consumed deliberately.
+      case "background_tasks_changed":
+      case "control_request_progress":
+      case "informational":
+      case "worker_shutting_down":
+        return;
+      case "model_refusal_no_fallback":
+        yield* emitRuntimeWarning(
+          context,
+          "Claude refused the request and no fallback model is configured.",
+          message,
+        );
+        return;
       default: {
         // Exhaustiveness guard: every subtype in the SDK's typed union is
         // handled above, so `message` narrows to never here — a new SDK
@@ -3514,6 +3528,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return;
       // Composer prompt suggestions have no T3 surface; consumed deliberately.
       case "prompt_suggestion":
+        return;
+      // New in SDK 0.3.2xx: the CLI resets its own conversation state; T3
+      // keeps thread history in the event log, so nothing to mirror.
+      case "conversation_reset":
         return;
       default: {
         // Exhaustiveness guard (see handleSystemMessage): new SDK top-level

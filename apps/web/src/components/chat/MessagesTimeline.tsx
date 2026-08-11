@@ -68,6 +68,7 @@ import {
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+import { SessionReportCard } from "./SessionReportCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
 import { MessageCopyButton } from "./MessageCopyButton";
@@ -953,6 +954,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "turn-plan" ? <TurnPlanTimelineRow row={row} /> : null}
+      {row.kind === "session-report" ? <SessionReportTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
     </div>
   );
@@ -1178,6 +1180,24 @@ function ProposedPlanTimelineRow({
         threadRef={ctx.threadRef ?? undefined}
         cwd={ctx.markdownCwd}
         workspaceRoot={ctx.workspaceRoot}
+      />
+    </div>
+  );
+}
+
+function SessionReportTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "session-report" }>;
+}) {
+  const ctx = use(TimelineRowCtx);
+
+  return (
+    <div className="min-w-0 px-1 py-0.5">
+      <SessionReportCard
+        report={row.report}
+        cwd={ctx.markdownCwd}
+        threadRef={ctx.threadRef ?? undefined}
       />
     </div>
   );
