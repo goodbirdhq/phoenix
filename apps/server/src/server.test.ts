@@ -113,6 +113,10 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import { ProjectionThreadReportRepository } from "./persistence/Services/ProjectionThreadReports.ts";
+import {
+  ProjectionTurnRepository,
+  type ProjectionTurnRepositoryShape,
+} from "./persistence/Services/ProjectionTurns.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDirectory.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
@@ -956,6 +960,13 @@ const buildAppUnderTest = (options?: {
             ...options?.layers?.cloudManagedEndpointRuntime,
           }),
         ),
+      ),
+      Layer.provide(
+        Layer.succeed(ProjectionTurnRepository, {
+          listQueuedTurnStarts: Effect.succeed([]),
+          listQueuedDeliveryReceipts: () => Effect.succeed([]),
+          requeueStaleReleasingTurns: () => Effect.void,
+        } as unknown as ProjectionTurnRepositoryShape),
       ),
       Layer.provide(
         Layer.succeed(

@@ -202,7 +202,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   } as unknown as ProjectionSnapshotQuery["Service"]);
   const turns = ProjectionTurnRepository.of({
     listQueuedTurnStarts: Ref.get(queuedRows),
-    requeueStaleReleasingTurns: ({ staleBefore }) =>
+    requeueStaleReleasingTurns: ({ staleBefore }: { readonly staleBefore: string }) =>
       input.requeueStale === true
         ? Ref.update(queuedRows, (rows) =>
             rows.map((row) =>

@@ -2054,7 +2054,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               for (const row of queuedTurnStartRows) {
                 const rows = queuedTurnStartsByThread.get(row.threadId) ?? [];
                 rows.push({
-                  threadId: row.threadId,
                   messageId: row.messageId,
                   mode: row.mode,
                   requestedAt: row.requestedAt,

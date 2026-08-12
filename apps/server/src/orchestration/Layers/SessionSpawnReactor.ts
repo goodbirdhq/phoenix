@@ -493,10 +493,11 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         (entry) => entry.threadId === input.threadId,
       );
       yield* Effect.forEach(queuedForThread, forkInterruptTimeout);
-      const recoveryNow = yield* nowIso;
-      const staleBefore = new Date(
-        Date.parse(recoveryNow) - Duration.toMillis(RELEASING_RECOVERY_AGE),
-      ).toISOString();
+      const staleBefore = DateTime.formatIso(
+        DateTime.add(yield* DateTime.now, {
+          milliseconds: -Duration.toMillis(RELEASING_RECOVERY_AGE),
+        }),
+      );
       yield* projectionTurnRepository.requeueStaleReleasingTurns({
         threadId: input.threadId,
         staleBefore,

@@ -1207,6 +1207,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             mode: event.payload.mode,
             state: "queued",
             requestedAt: event.payload.createdAt,
+            releasingAt: null,
           });
           return;
         }

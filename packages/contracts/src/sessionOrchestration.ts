@@ -174,6 +174,17 @@ export const ReadSessionMessage = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const QueuedDeliveryReceipt = Schema.Struct({
+  messageId: MessageId,
+  state: Schema.Literals(["queued", "releasing", "consumed", "cancelled"]),
+  requestedAt: IsoDateTime,
+  consumedByTurnId: Schema.NullOr(TurnId),
+  consumedAt: Schema.NullOr(IsoDateTime),
+  cancelledAt: Schema.NullOr(IsoDateTime),
+  cancelledReason: Schema.NullOr(Schema.Literals(["session_terminal", "interrupt_timeout"])),
+});
+export type QueuedDeliveryReceipt = typeof QueuedDeliveryReceipt.Type;
+
 // Compact form a report travels in when delivered to another session: the
 // digest plus enough addressing (reportId, threadId, size) to fetch the full
 // body with read_report. Small reports carry their whole summary as the

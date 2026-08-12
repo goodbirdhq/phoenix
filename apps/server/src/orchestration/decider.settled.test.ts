@@ -25,6 +25,7 @@ function makeReadModel(
   session: OrchestrationSession | null = null,
   activities: OrchestrationThread["activities"] = [],
   messages: OrchestrationThread["messages"] = [],
+  queuedTurnStarts: OrchestrationThread["queuedTurnStarts"] = [],
 ): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
@@ -52,6 +53,7 @@ function makeReadModel(
         activities,
         checkpoints: [],
         session,
+        queuedTurnStarts,
       },
     ],
     updatedAt: NOW,
@@ -81,23 +83,27 @@ it.layer(NodeServices.layer)("queued delivery receipt attribution", (it) => {
         activeTurnId,
         queuedDeliveryMessageId: releasedMessageId,
       };
-      const readModel = makeReadModel(null, null, session);
-      const thread = readModel.threads[0];
-      if (thread === undefined) throw new Error("missing test thread");
-      thread.queuedTurnStarts = [
-        {
-          messageId: firstMessageId,
-          mode: "queue",
-          requestedAt: NOW,
-          releasingAt: NOW,
-        },
-        {
-          messageId: releasedMessageId,
-          mode: "queue",
-          requestedAt: NOW,
-          releasingAt: NOW,
-        },
-      ];
+      const readModel = makeReadModel(
+        null,
+        null,
+        session,
+        [],
+        [],
+        [
+          {
+            messageId: firstMessageId,
+            mode: "queue",
+            requestedAt: NOW,
+            releasingAt: NOW,
+          },
+          {
+            messageId: releasedMessageId,
+            mode: "queue",
+            requestedAt: NOW,
+            releasingAt: NOW,
+          },
+        ],
+      );
 
       const decided = yield* decideOrchestrationCommand({
         command: {

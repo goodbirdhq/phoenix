@@ -190,12 +190,12 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           INSERT INTO projection_turns (
             thread_id, turn_id, pending_message_id, source_proposed_plan_thread_id,
             source_proposed_plan_id, assistant_message_id, state, requested_at,
-            started_at, completed_at, checkpoint_turn_count, checkpoint_ref,
+            releasing_at, started_at, completed_at, checkpoint_turn_count, checkpoint_ref,
             checkpoint_status, checkpoint_files_json
           ) VALUES (
             ${row.threadId}, NULL, ${row.messageId}, NULL,
             NULL, NULL, ${row.mode === "interrupt" ? "interrupting" : "queued"}, ${row.requestedAt},
-            NULL, NULL, NULL, NULL, NULL, '[]'
+            NULL, NULL, NULL, NULL, NULL, NULL, '[]'
           )
         `),
       ),
@@ -203,7 +203,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
 
   const markQueuedProjectionTurnReleasing = SqlSchema.void({
     Request: MarkProjectionQueuedTurnReleasingInput,
-    execute: ({ threadId, messageId }) =>
+    execute: ({ threadId, messageId, releasingAt }) =>
       sql`
         UPDATE projection_turns
         SET state = 'releasing', releasing_at = ${releasingAt}

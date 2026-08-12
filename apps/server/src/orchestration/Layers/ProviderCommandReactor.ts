@@ -1211,7 +1211,7 @@ const make = Effect.gen(function* () {
         ? { modelSelection: event.payload.modelSelection }
         : {}),
       interactionMode: event.payload.interactionMode,
-      queuedDeliveryMessageId: event.payload.queuedDeliveryMessageId,
+      queuedDeliveryMessageId: event.payload.queuedDeliveryMessageId ?? null,
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.map(Option.some),
