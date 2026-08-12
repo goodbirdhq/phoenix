@@ -17,6 +17,9 @@ Every session has tools for orchestration alongside its other Phoenix tools:
   "Spawned by" banner that links back to the thread that created them.
 - **Message, read, and stop** — a session can send follow-ups to sessions it spawned, check their
   progress, and stop them. It cannot touch threads it did not spawn.
+- **Ping without disturbing** — a session can peek at a spawned session's live progress (status,
+  current activity, plan step, whether a report has landed) without starting a turn or interrupting
+  it, for a cheap check between messages.
 - **Post a report** — when a spawned session finishes, it posts a completion report: a status, a
   summary, and any artifacts (files, branches, PR links). The report shows as a card in the thread,
   and the session that spawned it is woken automatically with the result — no polling.

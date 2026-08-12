@@ -5,6 +5,7 @@ import {
   type ModelSelection,
   type OrchestrationSessionStatus,
   type OrchestrationThreadShell,
+  type PingSessionResult,
   type PostReportInput,
   READ_REPORT_MAX_CHARS,
   type ReadReportInput,
@@ -42,6 +43,7 @@ import {
   type ProjectionThreadReport,
   ProjectionThreadReportRepository,
 } from "../../../persistence/Services/ProjectionThreadReports.ts";
+import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
@@ -179,6 +181,27 @@ export const sliceReportBody = (
   return { body, offset: start, totalChars, hasMore: end < totalChars };
 };
 
+// Pure so it's cheap to unit test independent of the Effect layers: builds
+// the ping_session response from data already resolved by the caller (the
+// child's shell, and its hasReport/lastAssistantMessage from purpose-built,
+// turn-independent queries — not a turn-windowed detail read, so this never
+// has to reconcile "which turn" the snippet came from).
+export const buildPingSessionSnapshot = (input: {
+  readonly shell: OrchestrationThreadShell;
+  readonly lastActivityAt: string | null;
+  readonly hasReport: boolean;
+  readonly lastAssistantMessage: string | null;
+}): Omit<PingSessionResult, "threadId"> => ({
+  sessionStatus: input.shell.session?.status ?? null,
+  settled: input.shell.settledAt !== null,
+  lastActivityAt: input.lastActivityAt,
+  currentActivity: input.shell.backgroundLiveness ?? null,
+  planProgress: input.shell.planProgress ?? null,
+  hasReport: input.hasReport,
+  lastAssistantMessage:
+    input.lastAssistantMessage !== null ? truncateText(input.lastAssistantMessage, 500) : null,
+});
+
 // Appended to every spawned session's first message so the completion
 // contract holds across providers without the parent having to remember to
 // ask for it. post_report is what wakes the parent up.
@@ -286,6 +309,7 @@ export const make = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const reportRepository = yield* ProjectionThreadReportRepository;
+  const providerSessionDirectory = yield* ProviderSessionDirectory;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const path = yield* Path.Path;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
@@ -323,6 +347,23 @@ export const make = Effect.gen(function* () {
     snapshotQuery
       .getThreadShellById(threadId)
       .pipe(Effect.mapError(operationError("Failed to read thread state")));
+
+  // The provider session directory tracks activity for every session this
+  // server runs, keyed by thread; there is no by-thread lookup with the
+  // lastSeenAt metadata, so scan the (small) live binding list. Follow-up:
+  // a dedicated by-thread lookup would avoid this scan if the binding list
+  // ever stops being small.
+  //
+  // Best-effort: this is optional enrichment on a read path (read_session,
+  // ping_session), so a directory failure must never keep the caller from
+  // seeing the child's shell-derived status.
+  const getLastActivityAt = (threadId: ThreadId) =>
+    providerSessionDirectory.listBindings().pipe(
+      Effect.map(
+        (bindings) => bindings.find((binding) => binding.threadId === threadId)?.lastSeenAt ?? null,
+      ),
+      Effect.catch(() => Effect.succeed(null)),
+    );
 
   const requireShell = (threadId: ThreadId) =>
     getShell(threadId).pipe(
@@ -676,11 +717,14 @@ export const make = Effect.gen(function* () {
     const checkout = yield* worktreePath
       ? resolveSessionCheckout(gitWorkflow, worktreePath)
       : Effect.succeed(null);
+    const lastActivityAt = yield* getLastActivityAt(child.id);
     return {
       threadId: child.id,
       title: child.title,
       sessionStatus: child.session?.status ?? null,
       settled: child.settledAt !== null,
+      lastActivityAt,
+      currentActivity: child.backgroundLiveness ?? null,
       // Null once settle_session reclaimed the worktree; a path means the
       // directory is still on disk and nothing else will clean it up.
       worktreePath: child.worktreePath,
@@ -917,6 +961,36 @@ export const make = Effect.gen(function* () {
     return { threadId: child.id, settled: true, worktree };
   });
 
+  const pingSession = Effect.fn("SessionsToolkit.pingSession")(function* (input: {
+    readonly threadId: ThreadId;
+  }) {
+    const scope = yield* requireSessionsCapability;
+    const child = yield* requireSpawnedChild(scope.threadId, input.threadId);
+    // Purpose-built, bounded reads instead of a thread detail snapshot: each
+    // is a single-row query independent of turn boundaries — a windowed
+    // detail read would wrongly report no assistant message when the newest
+    // turn happens to be user-only — and each degrades to a safe default on
+    // failure for the same reason as getLastActivityAt: optional enrichment
+    // must never fail the ping.
+    const hasReport = yield* snapshotQuery
+      .getThreadHasReport(child.id)
+      .pipe(Effect.catch(() => Effect.succeed(false)));
+    const lastAssistantMessage = yield* snapshotQuery.getLastAssistantMessage(child.id).pipe(
+      Effect.map(Option.map((message) => message.text)),
+      Effect.catch(() => Effect.succeed(Option.none())),
+    );
+    const lastActivityAt = yield* getLastActivityAt(child.id);
+    return {
+      threadId: child.id,
+      ...buildPingSessionSnapshot({
+        shell: child,
+        lastActivityAt,
+        hasReport,
+        lastAssistantMessage: Option.getOrNull(lastAssistantMessage),
+      }),
+    };
+  });
+
   const postReport = Effect.fn("SessionsToolkit.postReport")(function* (input: PostReportInput) {
     const scope = yield* requireSessionsCapability;
     yield* requireShell(scope.threadId);
@@ -1087,6 +1161,7 @@ export const make = Effect.gen(function* () {
     send_to_session: (input) => sendToSession(input),
     read_session: (input) => readSession(input),
     read_report: (input) => readReport(input ?? {}),
+    ping_session: (input) => pingSession(input),
     stop_session: (input) => stopSession(input),
     settle_session: (input) => settleSession(input),
     post_report: (input) => postReport(input),

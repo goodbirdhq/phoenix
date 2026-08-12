@@ -240,11 +240,29 @@ export const toSessionReportEnvelope = (report: SessionReport): SessionReportEnv
   return { ...base, abstract, truncated: true };
 };
 
+// Native background work still alive after the turn settles (subagent
+// fleets, workflow runs, Monitor watch loops) — same vocabulary as
+// OrchestrationThreadShell.backgroundLiveness.
+export const SessionActivity = Schema.Literals(["working", "monitoring"]);
+export type SessionActivity = typeof SessionActivity.Type;
+
+export const SessionPlanProgress = Schema.Struct({
+  step: TrimmedNonEmptyString,
+  completedSteps: NonNegativeInt,
+  totalSteps: NonNegativeInt,
+});
+export type SessionPlanProgress = typeof SessionPlanProgress.Type;
+
 export const ReadSessionResult = Schema.Struct({
   threadId: ThreadId,
   title: TrimmedNonEmptyString,
   sessionStatus: Schema.NullOr(OrchestrationSessionStatus),
   settled: Schema.Boolean,
+  // Additive fields (optional): when the child's session last did anything
+  // (provider activity timestamp) and what native background work, if any,
+  // is still alive. Absent on payloads from pre-ping servers.
+  lastActivityAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  currentActivity: Schema.optional(Schema.NullOr(SessionActivity)),
   // Latest report as a compact envelope; fetch the full body (and full
   // findings/validation arrays) via read_report.
   report: Schema.NullOr(SessionReportEnvelope),
@@ -314,6 +332,34 @@ export const ReadReportResult = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type ReadReportResult = typeof ReadReportResult.Type;
+
+export const PingSessionInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type PingSessionInput = typeof PingSessionInput.Type;
+
+export const PingSessionResult = Schema.Struct({
+  threadId: ThreadId,
+  sessionStatus: Schema.NullOr(OrchestrationSessionStatus),
+  settled: Schema.Boolean,
+  // When the child's session last did anything, per the provider session
+  // directory's activity tracking — not a turn boundary, so this moves
+  // during a long-running turn too.
+  lastActivityAt: Schema.NullOr(IsoDateTime),
+  // Native background work alive right now (subagent fleets, workflow runs,
+  // watch loops); null when the child is idle or mid-turn with no such work.
+  currentActivity: Schema.NullOr(SessionActivity),
+  // Current plan step while a turn runs; null when the child has no active
+  // plan (including once every step completes).
+  planProgress: Schema.NullOr(SessionPlanProgress),
+  // Whether the child has posted at least one completion report. Does not
+  // start a turn or otherwise disturb the child.
+  hasReport: Schema.Boolean,
+  // Trailing snippet of the child's last assistant message, truncated to
+  // ~500 characters; null if it has not said anything yet.
+  lastAssistantMessage: Schema.NullOr(BoundedText(500)),
+});
+export type PingSessionResult = typeof PingSessionResult.Type;
 
 export const StopSessionInput = Schema.Struct({
   threadId: ThreadId,

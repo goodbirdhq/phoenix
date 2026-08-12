@@ -109,6 +109,10 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
             searchThreads: () => Effect.succeed({ matches: [] }),
+            getThreadHasReport: () =>
+              Effect.die("CheckpointDiffQuery should not request report existence"),
+            getLastAssistantMessage: () =>
+              Effect.die("CheckpointDiffQuery should not request the last assistant message"),
           }),
         ),
       );
@@ -203,6 +207,10 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
             searchThreads: () => Effect.succeed({ matches: [] }),
+            getThreadHasReport: () =>
+              Effect.die("CheckpointDiffQuery should not request report existence"),
+            getLastAssistantMessage: () =>
+              Effect.die("CheckpointDiffQuery should not request the last assistant message"),
           }),
         ),
       );
@@ -287,6 +295,10 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
             searchThreads: () => Effect.succeed({ matches: [] }),
+            getThreadHasReport: () =>
+              Effect.die("CheckpointDiffQuery should not request report existence"),
+            getLastAssistantMessage: () =>
+              Effect.die("CheckpointDiffQuery should not request the last assistant message"),
           }),
         ),
       );
@@ -356,6 +368,10 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
             searchThreads: () => Effect.succeed({ matches: [] }),
+            getThreadHasReport: () =>
+              Effect.die("CheckpointDiffQuery should not request report existence"),
+            getLastAssistantMessage: () =>
+              Effect.die("CheckpointDiffQuery should not request the last assistant message"),
           }),
         ),
       );
@@ -410,6 +426,10 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
             searchThreads: () => Effect.succeed({ matches: [] }),
+            getThreadHasReport: () =>
+              Effect.die("CheckpointDiffQuery should not request report existence"),
+            getLastAssistantMessage: () =>
+              Effect.die("CheckpointDiffQuery should not request the last assistant message"),
           }),
         ),
       );

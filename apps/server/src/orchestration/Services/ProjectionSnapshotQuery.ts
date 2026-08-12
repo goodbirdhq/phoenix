@@ -186,6 +186,31 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
     window?: OrchestrationThreadDetailWindow,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
+
+  /**
+   * Whether a thread has ever had a completion report posted.
+   *
+   * A dedicated existence check so a caller that only needs "has this
+   * thread reported yet" (e.g. a cheap progress poll) never has to
+   * materialize the report rows, let alone the rest of the thread detail.
+   */
+  readonly getThreadHasReport: (
+    threadId: ThreadId,
+  ) => Effect.Effect<boolean, ProjectionRepositoryError>;
+
+  /**
+   * The most recent assistant-authored message for a thread.
+   *
+   * Independent of turn boundaries — correct even when the thread's newest
+   * turn has no assistant message of its own yet — and bounded to one row,
+   * so it stays cheap on a long-running thread.
+   */
+  readonly getLastAssistantMessage: (
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    Option.Option<{ readonly text: string; readonly createdAt: string }>,
+    ProjectionRepositoryError
+  >;
 }
 
 /**

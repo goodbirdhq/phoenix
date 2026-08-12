@@ -1143,6 +1143,38 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // Existence-only: a cheap poll asking "has this thread reported yet" must
+  // not pay for the report rows themselves, let alone the rest of the
+  // thread detail.
+  const getThreadHasReportRow = SqlSchema.findOneOption({
+    Request: ThreadIdLookupInput,
+    Result: Schema.Struct({ found: Schema.Number }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT 1 AS "found"
+        FROM projection_thread_reports
+        WHERE thread_id = ${threadId}
+        LIMIT 1
+      `,
+  });
+
+  // Independent of turn boundaries: the newest turn can be user-only (no
+  // assistant reply yet), so scoping this to "the latest turn's messages"
+  // would wrongly report no assistant message even when an earlier one
+  // exists. Bounded to one row regardless of thread length.
+  const getLastAssistantMessageRow = SqlSchema.findOneOption({
+    Request: ThreadIdLookupInput,
+    Result: Schema.Struct({ text: Schema.String, createdAt: IsoDateTime }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT text, created_at AS "createdAt"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId} AND role = 'assistant'
+        ORDER BY created_at DESC, message_id DESC
+        LIMIT 1
+      `,
+  });
+
   const listThreadActivityRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadActivityDbRowSchema,
@@ -2901,6 +2933,29 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ),
       );
 
+  const getThreadHasReport: ProjectionSnapshotQueryShape["getThreadHasReport"] = (threadId) =>
+    getThreadHasReportRow({ threadId }).pipe(
+      Effect.map(Option.isSome),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getThreadHasReport:query",
+          "ProjectionSnapshotQuery.getThreadHasReport:decodeRow",
+        ),
+      ),
+    );
+
+  const getLastAssistantMessage: ProjectionSnapshotQueryShape["getLastAssistantMessage"] = (
+    threadId,
+  ) =>
+    getLastAssistantMessageRow({ threadId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getLastAssistantMessage:query",
+          "ProjectionSnapshotQuery.getLastAssistantMessage:decodeRow",
+        ),
+      ),
+    );
+
   return {
     getCommandReadModel,
     getSnapshot,
@@ -2917,6 +2972,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadShellById,
     getThreadDetailById,
     getThreadDetailSnapshot,
+    getThreadHasReport,
+    getLastAssistantMessage,
   } satisfies ProjectionSnapshotQueryShape;
 });
 

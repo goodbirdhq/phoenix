@@ -1,6 +1,8 @@
 import {
   ListSessionProvidersInput,
   ListSessionProvidersResult,
+  PingSessionInput,
+  PingSessionResult,
   PostReportInput,
   ReadReportInput,
   ReadReportResult,
@@ -75,6 +77,19 @@ export const ReadSessionTool = Tool.make("read_session", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
+export const PingSessionTool = Tool.make("ping_session", {
+  description:
+    "Get a lightweight progress snapshot of a session this session spawned, WITHOUT starting a model turn or interrupting it: session status, whether it has settled, when it last did anything, its current background activity (working/monitoring, from native subagent/workflow/watch-loop work), plan progress if it's mid-plan, whether it has posted a report, and a snippet of its last assistant message. Cheap enough to poll; prefer this over read_session for a quick liveness check, and read_session when you want the full report or message history.",
+  parameters: PingSessionInput,
+  success: PingSessionResult,
+  failure: SessionOrchestrationError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Ping spawned session")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
 export const StopSessionTool = Tool.make("stop_session", {
   description:
     "Stop the live agent session of a thread this session spawned. Set gracePeriodMs to deliver a stop notice first, allowing the child to finish its current tool call and optionally post a partial report before Phoenix hard-stops it at the deadline. The thread and its history remain (and still count toward the spawn limit).",
@@ -133,6 +148,7 @@ export const SessionsToolkit = Toolkit.make(
   SendToSessionTool,
   ReadSessionTool,
   ReadReportTool,
+  PingSessionTool,
   StopSessionTool,
   SettleSessionTool,
   PostReportTool,

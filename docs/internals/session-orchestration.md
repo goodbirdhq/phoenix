@@ -15,7 +15,7 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
                                       ├─ spawn_session ──> ThreadTurnBootstrap.bootstrapTurnStart
                                       │     (thread.create with spawnedByThreadId → worktree →
                                       │      setup script → first turn; rollback on failure)
-                                      ├─ send_to_session / read_session / stop_session
+                                      ├─ send_to_session / read_session / ping_session / stop_session
                                       ├─ settle_session ──> thread.settle (+ worktree cleanup)
                                       ├─ read_report ──> projection_thread_reports (paginated body)
                                       └─ post_report ──> thread.report.post (internal command)
@@ -37,7 +37,10 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   dispatch path and the MCP handlers share one implementation.
 - **Toolkit** — `apps/server/src/mcp/toolkits/sessions/`. Handlers resolve services once at layer
   build and check the `sessions` capability plus the `enableSessionOrchestration` setting per
-  call, so the settings toggle applies to running sessions immediately.
+  call, so the settings toggle applies to running sessions immediately. `ping_session` (and the
+  `lastActivityAt`/`currentActivity` fields on `read_session`) is pull-based, read-only visibility
+  into a child's progress — `ThreadBackgroundLiveness`, `ThreadPlanProgress`, and the provider
+  session directory's `lastSeenAt` — without starting a turn or otherwise touching the child.
 - **Delivery modes** — `send_to_session` defaults to `queue`. Busy children persist FIFO queued
   turn starts in the turn projection and release one at each terminal/ready session boundary;
   idle children start immediately. `interrupt` uses the same queue after requesting the existing
