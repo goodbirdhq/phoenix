@@ -147,8 +147,8 @@ export const ReadSessionResult = Schema.Struct({
   settled: Schema.Boolean,
   report: Schema.NullOr(SessionReport),
   messages: Schema.Array(ReadSessionMessage),
-  // Present when the spawned session has a git worktree. These are resolved
-  // live so callers can verify the revision a session actually inspected.
+  // Present when the spawned session has a git worktree. branch and dirty use
+  // cached status; sha is resolved live so callers can verify the revision.
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   sha: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

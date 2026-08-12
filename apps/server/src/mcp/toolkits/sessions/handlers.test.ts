@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
+import { GitCommandError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import { resolveSessionCheckout, validateSpawnCheckoutInput } from "./handlers.ts";
+
+const gitError = (detail: string) =>
+  new GitCommandError({ operation: "test", command: "git", cwd: "/repo", detail });
 
 describe("validateSpawnCheckoutInput", () => {
   it("accepts independent checkout specifications in git repositories", () => {
@@ -37,8 +41,16 @@ describe("resolveSessionCheckout", () => {
     const checkout = await Effect.runPromise(
       resolveSessionCheckout(
         {
-          localStatus: () => Effect.succeed({ refName: "review", hasWorkingTreeChanges: false }),
-          resolveCommit: () => Effect.fail(new Error("worktree no longer exists")),
+          localStatus: () =>
+            Effect.succeed({
+              isRepo: true,
+              hasPrimaryRemote: true,
+              isDefaultRef: false,
+              refName: "review",
+              hasWorkingTreeChanges: false,
+              workingTree: { files: [], insertions: 0, deletions: 0 },
+            }),
+          resolveCommit: () => Effect.fail(gitError("worktree no longer exists")),
         },
         "/missing-worktree",
       ),

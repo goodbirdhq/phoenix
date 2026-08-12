@@ -90,7 +90,13 @@ export const resolveSessionCheckout = (gitWorkflow: SessionCheckoutGitWorkflow, 
   Effect.all({
     status: gitWorkflow.localStatus({ cwd }),
     commit: gitWorkflow.resolveCommit({ cwd, revision: "HEAD" }),
-  }).pipe(Effect.catch(() => Effect.succeed(null)));
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logDebug("spawned session checkout metadata unavailable", { cwd, error }).pipe(
+        Effect.as(null),
+      ),
+    ),
+  );
 
 // Appended to every spawned session's first message so the completion
 // contract holds across providers without the parent having to remember to
