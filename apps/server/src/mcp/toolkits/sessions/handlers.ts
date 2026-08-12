@@ -22,6 +22,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -52,6 +53,51 @@ const operationError = (message: string) => (cause: unknown) =>
 const truncateText = (text: string, maxLength: number) =>
   text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`;
 
+type SpawnCheckoutInput = Pick<
+  SpawnSessionInput,
+  "isolation" | "gitRef" | "baseRef" | "branchName" | "checkoutPr"
+>;
+
+// Kept separate from the handler's service graph so the invalid combinations
+// stay easy to audit and cannot start a thread before they are rejected.
+export const validateSpawnCheckoutInput = (
+  input: SpawnCheckoutInput,
+  isGitRepository: boolean,
+): string | null => {
+  if (input.checkoutPr !== undefined && input.gitRef !== undefined) {
+    return "checkoutPr cannot be combined with gitRef; choose either a pull request or a git ref.";
+  }
+  const requestedCheckout =
+    input.gitRef !== undefined ||
+    input.baseRef !== undefined ||
+    input.branchName !== undefined ||
+    input.checkoutPr !== undefined;
+  if (requestedCheckout && input.isolation === "project-root") {
+    return 'gitRef, baseRef, branchName, and checkoutPr require isolation: "worktree".';
+  }
+  if (requestedCheckout && !isGitRepository) {
+    return "A git checkout was requested, but this project is not a git repository with a current branch.";
+  }
+  return null;
+};
+
+type SessionCheckoutGitWorkflow = Pick<
+  GitWorkflowService.GitWorkflowService["Service"],
+  "localStatus" | "resolveCommit"
+>;
+
+export const resolveSessionCheckout = (gitWorkflow: SessionCheckoutGitWorkflow, cwd: string) =>
+  Effect.all({
+    status: gitWorkflow.localStatus({ cwd }),
+    commit: gitWorkflow.resolveCommit({ cwd, revision: "HEAD" }),
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logDebug("spawned session checkout metadata unavailable", { cwd, error }).pipe(
+        Effect.as(null),
+      ),
+    ),
+  );
+
 // Appended to every spawned session's first message so the completion
 // contract holds across providers without the parent having to remember to
 // ask for it. post_report is what wakes the parent up.
@@ -65,6 +111,7 @@ const make = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+  const path = yield* Path.Path;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
 
@@ -294,9 +341,13 @@ const make = Effect.gen(function* () {
     // unless the caller explicitly demanded a worktree.
     const localStatus = yield* gitWorkflow
       .localStatus({ cwd: workspaceRoot })
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+      .pipe(Effect.orElseSucceed(() => null));
     const repoBranch = localStatus?.isRepo === true ? (localStatus.refName ?? null) : null;
     const requestedIsolation = input.isolation ?? "worktree";
+    const checkoutValidationError = validateSpawnCheckoutInput(input, repoBranch !== null);
+    if (checkoutValidationError !== null) {
+      return yield* new SessionOrchestrationInvalidInputError({ message: checkoutValidationError });
+    }
     if (
       requestedIsolation === "worktree" &&
       repoBranch === null &&
@@ -346,10 +397,13 @@ const make = Effect.gen(function* () {
             ? {
                 prepareWorktree: {
                   projectCwd: workspaceRoot,
-                  baseBranch: repoBranch,
+                  baseBranch: input.baseRef ?? repoBranch,
+                  ...(input.gitRef !== undefined ? { checkoutRef: input.gitRef } : {}),
+                  ...(input.checkoutPr !== undefined ? { checkoutPr: input.checkoutPr } : {}),
                   // Without a fresh branch name, `git worktree add` would try
                   // to check out the base branch a second time and fail.
-                  branch: buildTemporaryWorktreeBranchName(() => worktreeBranchToken),
+                  branch:
+                    input.branchName ?? buildTemporaryWorktreeBranchName(() => worktreeBranchToken),
                 },
                 runSetupScript: true,
               }
@@ -360,14 +414,20 @@ const make = Effect.gen(function* () {
     );
 
     const spawned = yield* requireShell(threadId);
+    const worktreePath = spawned.worktreePath ? path.resolve(spawned.worktreePath) : null;
+    const checkout = yield* worktreePath
+      ? resolveSessionCheckout(gitWorkflow, worktreePath)
+      : Effect.succeed(null);
     return {
       threadId,
       title: spawned.title,
       projectId: spawned.projectId,
       modelSelection: spawned.modelSelection,
       runtimeMode: spawned.runtimeMode,
-      branch: spawned.branch,
-      worktreePath: spawned.worktreePath,
+      branch: checkout?.status.refName ?? spawned.branch,
+      worktreePath,
+      sha: checkout?.commit.commitSha ?? null,
+      dirty: checkout?.status.hasWorkingTreeChanges ?? null,
     };
   });
 
@@ -422,6 +482,10 @@ const make = Effect.gen(function* () {
           }));
       }
     }
+    const worktreePath = child.worktreePath ? path.resolve(child.worktreePath) : null;
+    const checkout = yield* worktreePath
+      ? resolveSessionCheckout(gitWorkflow, worktreePath)
+      : Effect.succeed(null);
     return {
       threadId: child.id,
       title: child.title,
@@ -429,6 +493,14 @@ const make = Effect.gen(function* () {
       settled: child.settledAt !== null,
       report,
       messages,
+      ...(worktreePath
+        ? {
+            branch: checkout?.status.refName ?? child.branch,
+            worktreePath,
+            sha: checkout?.commit.commitSha ?? null,
+            dirty: checkout?.status.hasWorkingTreeChanges ?? null,
+          }
+        : {}),
     };
   });
 
