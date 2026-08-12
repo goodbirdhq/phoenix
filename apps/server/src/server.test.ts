@@ -965,7 +965,6 @@ const buildAppUnderTest = (options?: {
         Layer.succeed(ProjectionTurnRepository, {
           listQueuedTurnStarts: Effect.succeed([]),
           listQueuedDeliveryReceipts: () => Effect.succeed([]),
-          requeueStaleReleasingTurns: () => Effect.void,
         } as unknown as ProjectionTurnRepositoryShape),
       ),
       Layer.provide(

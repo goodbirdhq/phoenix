@@ -24,7 +24,6 @@ import {
   ProjectionQueuedTurnStart,
   ProjectionTurn,
   RequeueProjectionQueuedTurnInput,
-  RequeueStaleReleasingTurnsInput,
   ProjectionTurnById,
   ProjectionTurnRepository,
   type ProjectionTurnRepositoryShape,
@@ -235,19 +234,6 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         WHERE thread_id = ${threadId}
           AND pending_message_id = ${messageId}
           AND state IN ('queued', 'interrupting')
-      `,
-  });
-
-  const requeueStaleReleasingProjectionTurns = SqlSchema.void({
-    Request: RequeueStaleReleasingTurnsInput,
-    execute: ({ threadId, staleBefore }) =>
-      sql`
-        UPDATE projection_turns
-        SET state = 'queued', releasing_at = NULL, consumed_by_turn_id = NULL, consumed_at = NULL,
-            cancelled_at = NULL, cancel_reason = NULL
-        WHERE thread_id = ${threadId}
-          AND state = 'releasing'
-          AND releasing_at <= ${staleBefore}
       `,
   });
 
@@ -476,15 +462,6 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       ),
     );
 
-  const requeueStaleReleasingTurns: ProjectionTurnRepositoryShape["requeueStaleReleasingTurns"] = (
-    input,
-  ) =>
-    requeueStaleReleasingProjectionTurns(input).pipe(
-      Effect.mapError(
-        toPersistenceSqlError("ProjectionTurnRepository.requeueStaleReleasingTurns:query"),
-      ),
-    );
-
   const requeueQueuedTurnStart: ProjectionTurnRepositoryShape["requeueQueuedTurnStart"] = (input) =>
     requeueQueuedProjectionTurn(input).pipe(
       Effect.mapError(
@@ -571,7 +548,6 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     markQueuedTurnStartReleasing,
     consumeQueuedTurnStart,
     cancelQueuedTurnStart,
-    requeueStaleReleasingTurns,
     requeueQueuedTurnStart,
     deleteQueuedTurnStart,
     listQueuedTurnStarts,

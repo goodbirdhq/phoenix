@@ -391,7 +391,6 @@ const makeHarness = (options: HarnessOptions) => {
     Layer.succeed(ProjectionTurnRepository, {
       listQueuedTurnStarts: Effect.succeed([]),
       listQueuedDeliveryReceipts: () => Effect.succeed([]),
-      requeueStaleReleasingTurns: () => Effect.void,
     } as unknown as ProjectionTurnRepositoryShape),
     NodeServices.layer,
   );

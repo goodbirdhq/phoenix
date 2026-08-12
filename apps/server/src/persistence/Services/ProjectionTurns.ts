@@ -120,11 +120,6 @@ export const CancelProjectionQueuedTurnInput = Schema.Struct({
   cancelledAt: IsoDateTime,
 });
 
-export const RequeueStaleReleasingTurnsInput = Schema.Struct({
-  threadId: ThreadId,
-  staleBefore: IsoDateTime,
-});
-
 export const RequeueProjectionQueuedTurnInput = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
@@ -211,10 +206,6 @@ export interface ProjectionTurnRepositoryShape {
 
   readonly cancelQueuedTurnStart: (
     input: typeof CancelProjectionQueuedTurnInput.Type,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
-
-  readonly requeueStaleReleasingTurns: (
-    input: typeof RequeueStaleReleasingTurnsInput.Type,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   readonly requeueQueuedTurnStart: (

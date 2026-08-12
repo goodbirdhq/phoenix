@@ -154,7 +154,6 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   readonly live?: boolean;
   readonly updatedAt?: string;
   readonly boundaryEvents?: ReadonlyArray<OrchestrationEvent>;
-  readonly requeueStale?: boolean;
   readonly queuedRowsRef?: Ref.Ref<Array<ProjectionQueuedTurnStart>>;
 }) {
   const commands = yield* Ref.make<Array<OrchestrationCommand>>([]);
@@ -176,6 +175,15 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
         if (command.type === "thread.turn.queue.cancel") {
           yield* Ref.update(queuedRows, (entries) =>
             entries.filter((entry) => entry.messageId !== command.messageId),
+          );
+        }
+        if (command.type === "thread.turn.queue.requeue") {
+          yield* Ref.update(queuedRows, (entries) =>
+            entries.map((entry) =>
+              entry.messageId === command.messageId && entry.state === "releasing"
+                ? { ...entry, state: "queued", releasingAt: null }
+                : entry,
+            ),
           );
         }
         if (command.type === "thread.session.set") {
@@ -202,18 +210,6 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   } as unknown as ProjectionSnapshotQuery["Service"]);
   const turns = ProjectionTurnRepository.of({
     listQueuedTurnStarts: Ref.get(queuedRows),
-    requeueStaleReleasingTurns: ({ staleBefore }: { readonly staleBefore: string }) =>
-      input.requeueStale === true
-        ? Ref.update(queuedRows, (rows) =>
-            rows.map((row) =>
-              row.state === "releasing" &&
-              row.releasingAt !== null &&
-              row.releasingAt <= staleBefore
-                ? { ...row, state: "queued", releasingAt: null }
-                : row,
-            ),
-          )
-        : Effect.void,
   } as unknown as ProjectionTurnRepositoryShape);
   const provider = ProviderService.of({
     listSessions: () =>
@@ -303,7 +299,6 @@ describe("SessionSpawnReactor queued delivery", () => {
           status: "ready",
           queued: [],
           queuedRowsRef: first.queuedRowsRef,
-          requeueStale: true,
         });
         expect(
           restarted.commands.filter((command) => command.type === "thread.turn.start.queued"),
