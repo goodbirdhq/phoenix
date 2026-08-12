@@ -102,14 +102,7 @@ export const resolveSessionCheckout = (gitWorkflow: SessionCheckoutGitWorkflow, 
 export const resolveSendToSessionDelivery = (eventType: string | undefined) => {
   if (eventType === "thread.turn-start-queued") return Effect.succeed("queued" as const);
   if (eventType === "thread.turn-start-requested") return Effect.succeed("immediate" as const);
-  return Effect.fail(
-    new SessionOrchestrationOperationError({
-      message:
-        eventType === undefined
-          ? "Message delivery acknowledgement was not found."
-          : `Unexpected message delivery acknowledgement '${eventType}'.`,
-    }),
-  );
+  return Effect.succeed("unknown" as const);
 };
 
 // Appended to every spawned session's first message so the completion
@@ -470,12 +463,10 @@ const make = Effect.gen(function* () {
         createdAt,
       }),
     );
-    const acknowledgedEvent = yield* engine
-      .readEvents(result.sequence - 1, 1)
-      .pipe(
-        Stream.runHead,
-        Effect.mapError(operationError("Failed to resolve message delivery status")),
-      );
+    const acknowledgedEvent = yield* engine.readEvents(result.sequence - 1, 1).pipe(
+      Stream.runHead,
+      Effect.catch(() => Effect.succeed(Option.none())),
+    );
     const delivery = yield* resolveSendToSessionDelivery(
       Option.isSome(acknowledgedEvent) ? acknowledgedEvent.value.type : undefined,
     );

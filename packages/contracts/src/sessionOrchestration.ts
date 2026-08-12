@@ -125,7 +125,7 @@ export type SendToSessionInput = typeof SendToSessionInput.Type;
 
 export const SendToSessionResult = Schema.Struct({
   threadId: ThreadId,
-  delivery: Schema.Literals(["immediate", "queued"]),
+  delivery: Schema.Literals(["immediate", "queued", "unknown"]),
 });
 export type SendToSessionResult = typeof SendToSessionResult.Type;
 

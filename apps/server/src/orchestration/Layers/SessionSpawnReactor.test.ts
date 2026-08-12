@@ -147,7 +147,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
     latestSequence: Effect.sync(() => sequence),
   });
   const snapshot = ProjectionSnapshotQuery.of({
-    getThreadShellById: (threadId) =>
+    getThreadShellById: (threadId: string) =>
       threadId === CHILD_ID
         ? Ref.get(childShell).pipe(Effect.map(Option.some))
         : threadId === PARENT_ID
@@ -242,6 +242,23 @@ describe("SessionSpawnReactor queued delivery", () => {
         expect(commands.some((command) => command.type === "thread.session.set")).toBe(true);
         expect(commands.some((command) => command.type === "thread.turn.start.queued")).toBe(true);
         expect(queuedRows).toHaveLength(0);
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("does not recover a stale running session with a live provider binding", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(NOW).getTime());
+        const { commands, queuedRows } = yield* createHarness({
+          status: "running",
+          queued: [queued("live")],
+          updatedAt: STALE,
+          live: true,
+        });
+        expect(commands.some((command) => command.type === "thread.session.set")).toBe(false);
+        expect(commands.some((command) => command.type === "thread.turn.start.queued")).toBe(false);
+        expect(queuedRows).toHaveLength(1);
       }).pipe(Effect.provide(NodeServices.layer)),
     ),
   );

@@ -33,7 +33,7 @@ type TurnQueuedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-qu
 type WatchedEvent = ReportPostedEvent | SessionSetEvent | TurnQueuedEvent;
 type WorkerInput =
   | { readonly type: "event"; readonly event: WatchedEvent }
-  | { readonly type: "recover"; readonly threadId: ThreadId; readonly live: boolean }
+  | { readonly type: "recover"; readonly threadId: ThreadId }
   | {
       readonly type: "interrupt-timeout";
       readonly threadId: ThreadId;
@@ -210,6 +210,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   });
 
   let worker!: DrainableWorker<WorkerInput>;
+  const scheduledInterruptTimeouts = new Set<string>();
 
   const scheduleInterruptTimeout = Effect.fn("SessionSpawnReactor.scheduleInterruptTimeout")(
     function* (queued: {
@@ -219,19 +220,41 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       readonly requestedAt: string;
     }) {
       if (queued.mode !== "interrupt") return;
-      const elapsed = Math.max(
-        0,
-        (yield* Clock.currentTimeMillis) - Date.parse(queued.requestedAt),
-      );
+      const key = `${queued.threadId}:${queued.messageId}`;
+      const requestedAtMs = Date.parse(queued.requestedAt);
+      if (!Number.isFinite(requestedAtMs)) {
+        scheduledInterruptTimeouts.delete(key);
+        yield* Effect.logWarning("session spawn reactor ignored invalid interrupt deadline", {
+          threadId: queued.threadId,
+          messageId: queued.messageId,
+          requestedAt: queued.requestedAt,
+        });
+        return;
+      }
+      const elapsed = Math.max(0, (yield* Clock.currentTimeMillis) - requestedAtMs);
       const remaining = Math.max(0, Duration.toMillis(INTERRUPT_FALLBACK_TIMEOUT) - elapsed);
-      yield* Effect.sleep(Duration.millis(remaining));
-      yield* worker.enqueue({
-        type: "interrupt-timeout",
-        threadId: queued.threadId,
-        messageId: queued.messageId,
-      });
+      yield* Effect.sleep(Duration.millis(remaining)).pipe(
+        Effect.andThen(
+          worker.enqueue({
+            type: "interrupt-timeout",
+            threadId: queued.threadId,
+            messageId: queued.messageId,
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => scheduledInterruptTimeouts.delete(key))),
+      );
     },
   );
+
+  const forkInterruptTimeout = Effect.fn("SessionSpawnReactor.forkInterruptTimeout")(function* (
+    queued: Parameters<typeof scheduleInterruptTimeout>[0],
+  ) {
+    if (queued.mode !== "interrupt") return;
+    const key = `${queued.threadId}:${queued.messageId}`;
+    if (scheduledInterruptTimeouts.has(key)) return;
+    scheduledInterruptTimeouts.add(key);
+    yield* scheduleInterruptTimeout(queued).pipe(Effect.forkScoped);
+  });
 
   const processInput = Effect.fn("SessionSpawnReactor.processInput")(function* (
     input: WorkerInput,
@@ -239,12 +262,12 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     if (input.type === "event") {
       yield* processEvent(input.event);
       if (input.event.type === "thread.turn-start-queued") {
-        yield* scheduleInterruptTimeout({
+        yield* forkInterruptTimeout({
           threadId: input.event.payload.threadId,
           messageId: input.event.payload.messageId,
           mode: input.event.payload.mode,
           requestedAt: input.event.payload.createdAt,
-        }).pipe(Effect.forkScoped);
+        });
       }
       return;
     }
@@ -252,21 +275,20 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       const queuedForThread = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
         (entry) => entry.threadId === input.threadId,
       );
-      yield* Effect.forEach(queuedForThread, (entry) =>
-        scheduleInterruptTimeout(entry).pipe(Effect.forkScoped),
-      );
+      yield* Effect.forEach(queuedForThread, forkInterruptTimeout);
       const shell = yield* snapshotQuery.getThreadShellById(input.threadId);
       if (Option.isNone(shell)) return;
       const session = shell.value.session;
+      const live = (yield* providerService.listSessions()).some(
+        (entry) => entry.threadId === input.threadId,
+      );
+      const sessionUpdatedAtMs = session === null ? Number.NaN : Date.parse(session.updatedAt);
       const stale =
         session !== null &&
-        (yield* Clock.currentTimeMillis) - Date.parse(session.updatedAt) >=
+        Number.isFinite(sessionUpdatedAtMs) &&
+        (yield* Clock.currentTimeMillis) - sessionUpdatedAtMs >=
           Duration.toMillis(RECOVERY_INTERVAL);
-      if (
-        (session?.status === "starting" || session?.status === "running") &&
-        !input.live &&
-        stale
-      ) {
+      if ((session?.status === "starting" || session?.status === "running") && !live && stale) {
         yield* engine.dispatch({
           type: "thread.session.set",
           commandId: yield* serverCommandId("queued-turn-recover-session"),
@@ -331,7 +353,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     processInput(input).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
+          return Effect.interrupt;
         }
         return Effect.logWarning("session spawn reactor failed to process event", {
           inputType: input.type,
@@ -358,16 +380,12 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     );
     const enqueueRecovery = Effect.fn("SessionSpawnReactor.enqueueRecovery")(
       function* () {
-        const liveThreadIds = new Set(
-          (yield* providerService.listSessions()).map((entry) => entry.threadId),
-        );
         const queuedThreadIds = new Set(
           (yield* projectionTurnRepository.listQueuedTurnStarts).map((entry) => entry.threadId),
         );
         yield* Effect.forEach(
           queuedThreadIds,
-          (threadId) =>
-            worker.enqueue({ type: "recover", threadId, live: liveThreadIds.has(threadId) }),
+          (threadId) => worker.enqueue({ type: "recover", threadId }),
           { concurrency: 1 },
         );
       },

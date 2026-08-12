@@ -71,14 +71,10 @@ describe("send_to_session delivery acknowledgement", () => {
     }),
   );
 
-  it.effect("rejects missing and unexpected acknowledgements", () =>
+  it.effect("reports unknown when acknowledgement readback is missing or unexpected", () =>
     Effect.gen(function* () {
-      const missing = yield* resolveSendToSessionDelivery(undefined).pipe(Effect.flip);
-      expect(missing.message).toContain("was not found");
-      const unexpected = yield* resolveSendToSessionDelivery("thread.message-sent").pipe(
-        Effect.flip,
-      );
-      expect(unexpected.message).toContain("Unexpected");
+      expect(yield* resolveSendToSessionDelivery(undefined)).toBe("unknown");
+      expect(yield* resolveSendToSessionDelivery("thread.message-sent")).toBe("unknown");
     }),
   );
 });

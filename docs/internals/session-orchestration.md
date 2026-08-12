@@ -78,3 +78,7 @@ contract before it can promise tool-boundary guidance without accidentally start
 Queued-row cleanup for deleted/archived threads and replacing the global recovery scan with a
 thread-indexed query remain persistence follow-ups; terminal session transitions are cleaned up
 by this delivery workflow.
+
+The web client currently renders the queued user message but does not surface a queued-delivery
+indicator because its reducer intentionally ignores the new event. That affordance is a separate
+web-app follow-up; the server contract and delivery behavior do not depend on it.
