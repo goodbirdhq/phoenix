@@ -22,7 +22,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as NodePath from "node:path";
+import * as Path from "effect/Path";
 
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -111,6 +111,7 @@ const make = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+  const path = yield* Path.Path;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
 
@@ -340,7 +341,7 @@ const make = Effect.gen(function* () {
     // unless the caller explicitly demanded a worktree.
     const localStatus = yield* gitWorkflow
       .localStatus({ cwd: workspaceRoot })
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+      .pipe(Effect.orElseSucceed(() => null));
     const repoBranch = localStatus?.isRepo === true ? (localStatus.refName ?? null) : null;
     const requestedIsolation = input.isolation ?? "worktree";
     const checkoutValidationError = validateSpawnCheckoutInput(input, repoBranch !== null);
@@ -413,7 +414,7 @@ const make = Effect.gen(function* () {
     );
 
     const spawned = yield* requireShell(threadId);
-    const worktreePath = spawned.worktreePath ? NodePath.resolve(spawned.worktreePath) : null;
+    const worktreePath = spawned.worktreePath ? path.resolve(spawned.worktreePath) : null;
     const checkout = yield* worktreePath
       ? resolveSessionCheckout(gitWorkflow, worktreePath)
       : Effect.succeed(null);
@@ -481,7 +482,7 @@ const make = Effect.gen(function* () {
           }));
       }
     }
-    const worktreePath = child.worktreePath ? NodePath.resolve(child.worktreePath) : null;
+    const worktreePath = child.worktreePath ? path.resolve(child.worktreePath) : null;
     const checkout = yield* worktreePath
       ? resolveSessionCheckout(gitWorkflow, worktreePath)
       : Effect.succeed(null);

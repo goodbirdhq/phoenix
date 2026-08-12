@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import {
   CommandId,
   EventId,
+  GitCommandError,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
   type ThreadId,
@@ -70,6 +71,15 @@ type WorktreeCheckoutGitWorkflow = Pick<
 
 const errorDetail = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+const checkoutGitError = (input: { readonly cwd: string }, detail: string, cause?: unknown) =>
+  new GitCommandError({
+    operation: "ThreadTurnBootstrap.resolveWorktreeCheckoutCommit",
+    command: "git",
+    cwd: input.cwd,
+    detail,
+    ...(cause !== undefined ? { cause } : {}),
+  });
+
 export const resolveWorktreeCheckoutCommit = (
   gitWorkflow: WorktreeCheckoutGitWorkflow,
   input: {
@@ -86,33 +96,37 @@ export const resolveWorktreeCheckoutCommit = (
   }
 
   return gitWorkflow.resolveCommit({ cwd: input.cwd, revision: input.checkoutRef }).pipe(
-    Effect.catch(() =>
+    Effect.catch((localResolveError) =>
       gitWorkflow.remoteExists({ cwd: input.cwd, remoteName: "origin" }).pipe(
         Effect.flatMap((hasOrigin) =>
           hasOrigin
             ? gitWorkflow.fetchRemote({ cwd: input.cwd, remoteName: "origin" }).pipe(
-                Effect.mapError(
-                  (error) =>
-                    new Error(
-                      `Failed to fetch origin while resolving git ref "${input.checkoutRef}": ${errorDetail(error)}`,
-                    ),
+                Effect.mapError((error) =>
+                  checkoutGitError(
+                    input,
+                    `Failed to fetch origin while resolving git ref "${input.checkoutRef}": ${errorDetail(error)}`,
+                    error,
+                  ),
                 ),
                 Effect.andThen(
                   gitWorkflow
                     .resolveCommit({ cwd: input.cwd, revision: input.checkoutRef })
                     .pipe(
-                      Effect.mapError(
-                        () =>
-                          new Error(
-                            `Git ref "${input.checkoutRef}" does not exist locally or on origin.`,
-                          ),
+                      Effect.mapError((error) =>
+                        checkoutGitError(
+                          input,
+                          `Git ref "${input.checkoutRef}" does not exist locally or on origin.`,
+                          error,
+                        ),
                       ),
                     ),
                 ),
               )
             : Effect.fail(
-                new Error(
+                checkoutGitError(
+                  input,
                   `Git ref "${input.checkoutRef}" does not exist locally and this project has no origin remote to fetch.`,
+                  localResolveError,
                 ),
               ),
         ),
