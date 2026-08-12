@@ -694,55 +694,22 @@ it.effect("settle_session keeps a proven branch that moved while the cleanup que
   }),
 );
 
-it.effect("settle_session deletes a proven branch only at the commit it proved", () =>
+it.effect("settle_session structures git's own checked-out refusal too", () =>
   Effect.gen(function* () {
-    const harness = makeHarness({
-      sessionStatus: "stopped",
-      branch: "feature/user-work",
-      mergedPullRequests: [mergedPullRequest()],
-    });
-
-    yield* harness.settle({ cleanupWorktree: true, cleanupBranch: true });
-
-    // Compare-and-swap through git: the re-check closes the window against
-    // this process, and this closes it against every other one.
-    expect(harness.deleteRefInputs).toEqual([
-      {
-        cwd: WORKSPACE_ROOT,
-        refName: "feature/user-work",
-        force: true,
-        expectedSha: BRANCH_HEAD_SHA,
-      },
-    ]);
-  }),
-);
-
-it.effect("settle_session deletes a temporary branch without a compare-and-swap", () =>
-  Effect.gen(function* () {
-    const harness = makeHarness({ sessionStatus: "stopped", branch: "t3code/1a2b3c4d" });
-
-    yield* harness.settle({ cleanupWorktree: true });
-
-    // Nothing but this worktree ever pointed at a t3code branch, so there is
-    // no proof to hold git to.
-    expect(harness.deleteRefInputs[0]?.expectedSha).toBeUndefined();
-  }),
-);
-
-it.effect("settle_session keeps a branch git refused to delete at the proven commit", () =>
-  Effect.gen(function* () {
-    // The external-writer race: the ref moved after the in-lock re-check, and
-    // git — the only arbiter that can see that — turned the delete down.
+    // The guard and git race each other: a worktree created after the list was
+    // read still lands on git's refusal, and that has to come back as the same
+    // structured outcome rather than prose.
     const harness = makeHarness({
       sessionStatus: "stopped",
       branch: "feature/user-work",
       mergedPullRequests: [mergedPullRequest()],
       deleteRefError: new GitCommandError({
-        operation: "GitVcsDriver.deleteRef.expected",
+        operation: "GitVcsDriver.deleteRef",
         command: "git",
         cwd: WORKSPACE_ROOT,
-        detail: "git update-ref -d failed: the branch moved since it was checked",
-        stderrExcerpt: `error: cannot lock ref 'refs/heads/feature/user-work': is at 9999999999999999999999999999999999999999 but expected ${BRANCH_HEAD_SHA}`,
+        detail: "git branch delete failed",
+        stderrExcerpt:
+          "error: cannot delete branch 'feature/user-work' used by worktree at '/tmp/late/worktree'",
       }),
     });
 
@@ -752,8 +719,8 @@ it.effect("settle_session keeps a branch git refused to delete at the proven com
     expect(result.worktree.removedBranch).toBeNull();
     expect(result.worktree.branchRefusal).toMatchObject({
       branch: "feature/user-work",
-      reason: "branch_moved_since_proof",
-      expectedSha: BRANCH_HEAD_SHA,
+      reason: "branch_checked_out_elsewhere",
+      conflictingWorktreePath: "/tmp/late/worktree",
     });
   }),
 );
@@ -807,6 +774,7 @@ it.effect(
       yield* run(["worktree", "add", "-b", "feature/held", linkedPath]);
       const head = yield* driver.resolveCommit({ cwd, revision: "feature/held" });
 
+      const deleteAttempts: Array<string> = [];
       const harnessOptions = {
         sessionStatus: "stopped" as const,
         branch: "feature/held",
@@ -817,16 +785,22 @@ it.effect(
         ],
         gitOverrides: {
           listWorktrees: () => driver.listWorktrees({ cwd }),
-          deleteRef: (input: { readonly refName: string; readonly expectedSha?: string }) =>
-            driver.deleteRef({ ...input, cwd }),
+          deleteRef: (input: { readonly refName: string }) =>
+            Effect.suspend(() => {
+              deleteAttempts.push(input.refName);
+              return driver.deleteRef({ ...input, cwd });
+            }),
         },
       };
 
-      const refused = yield* makeHarness(harnessOptions).settle({
+      const refusedHarness = makeHarness(harnessOptions);
+      const refused = yield* refusedHarness.settle({
         cleanupWorktree: true,
         cleanupBranch: true,
       });
 
+      // Refused before git was asked, so the refusal can name the directory.
+      expect(deleteAttempts).toEqual([]);
       expect(refused.worktree.removedBranch).toBeNull();
       expect(refused.worktree.branchRefusal).toMatchObject({
         branch: "feature/held",
@@ -843,10 +817,78 @@ it.effect(
         cleanupBranch: true,
       });
 
+      expect(deleteAttempts).toEqual(["feature/held"]);
       expect(deleted.worktree.removedBranch).toBe("feature/held");
       expect(deleted.worktree.branchRefusal).toBeNull();
       expect(yield* driver.listLocalBranchNames(cwd)).not.toContain("feature/held");
     }).pipe(Effect.provide(GitDriverLayer)),
+);
+
+it.effect("settle_session keeps a TEMPORARY branch another worktree has checked out", () =>
+  Effect.gen(function* () {
+    // The auto-cleanup path, not just cleanupBranch: nothing stops a user
+    // from checking out a t3code/… branch, and Phoenix deleting it would
+    // dangle their worktree exactly the same way.
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "settle-temp-branch-" });
+
+    yield* driver.initRepo({ cwd });
+    const run = (args: ReadonlyArray<string>) =>
+      driver.execute({ operation: "settleSession.test.git", cwd, args, timeoutMs: 10_000 });
+    yield* run(["config", "user.email", "test@test.com"]);
+    yield* run(["config", "user.name", "Test"]);
+    yield* fileSystem.writeFileString(path.join(cwd, "README.md"), "# test\n");
+    yield* run(["add", "."]);
+    yield* run(["commit", "-m", "initial commit"]);
+
+    const linkedPath = path.join(
+      yield* fileSystem.makeTempDirectoryScoped({ prefix: "settle-temp-linked-" }),
+      "linked",
+    );
+    yield* run(["worktree", "add", "-b", "t3code/1a2b3c4d", linkedPath]);
+
+    // Records every delete git is actually asked for, so "the guard
+    // short-circuited" is observable rather than assumed.
+    const deleteAttempts: Array<string> = [];
+    const harnessOptions = {
+      sessionStatus: "stopped" as const,
+      branch: "t3code/1a2b3c4d",
+      gitOverrides: {
+        listWorktrees: () => driver.listWorktrees({ cwd }),
+        deleteRef: (input: { readonly refName: string }) =>
+          Effect.suspend(() => {
+            deleteAttempts.push(input.refName);
+            return driver.deleteRef({ ...input, cwd });
+          }),
+      },
+    };
+
+    // No cleanupBranch: this is the automatic temporary-branch deletion.
+    const refusedHarness = makeHarness(harnessOptions);
+    const refused = yield* refusedHarness.settle({ cleanupWorktree: true });
+
+    // The explicit guard short-circuits: git is never asked to delete, so
+    // the caller gets a named path instead of a raw git error. (git would
+    // also refuse — that backstop is covered separately.)
+    expect(deleteAttempts).toEqual([]);
+    expect(refused.worktree.removedBranch).toBeNull();
+    expect(refused.worktree.branchRefusal).toMatchObject({
+      branch: "t3code/1a2b3c4d",
+      reason: "branch_checked_out_elsewhere",
+    });
+    expect(refused.worktree.branchRefusal?.conflictingWorktreePath ?? "").toContain("linked");
+    expect(yield* driver.listLocalBranchNames(cwd)).toContain("t3code/1a2b3c4d");
+
+    yield* driver.removeWorktree({ cwd, path: linkedPath });
+
+    const deleted = yield* makeHarness(harnessOptions).settle({ cleanupWorktree: true });
+
+    expect(deleteAttempts).toEqual(["t3code/1a2b3c4d"]);
+    expect(deleted.worktree.removedBranch).toBe("t3code/1a2b3c4d");
+    expect(yield* driver.listLocalBranchNames(cwd)).not.toContain("t3code/1a2b3c4d");
+  }).pipe(Effect.provide(GitDriverLayer)),
 );
 
 it.effect("settle_session keeps a branch when the worktree list cannot be read", () =>

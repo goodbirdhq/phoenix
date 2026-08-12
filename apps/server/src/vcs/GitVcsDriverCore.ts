@@ -439,16 +439,6 @@ export function gitStderrExcerpt(stderr: string): string | null {
     : `…${trimmed.slice(trimmed.length - GIT_STDERR_EXCERPT_MAX_CHARS)}`;
 }
 
-/**
- * Full ref name for a branch, for the plumbing commands that demand one.
- *
- * `git branch` takes a short name; `git update-ref` takes `refs/heads/x` and
- * would happily create or delete something else entirely if handed a bare one.
- */
-export function qualifyBranchRefName(refName: string): string {
-  return refName.startsWith("refs/") ? refName : `refs/heads/${refName}`;
-}
-
 function gitCommandContext(
   input: Pick<GitVcsDriver.ExecuteGitInput, "operation" | "cwd" | "args">,
 ) {
@@ -3195,22 +3185,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const deleteRef: GitVcsDriver.GitVcsDriver["Service"]["deleteRef"] = Effect.fn("deleteRef")(
     function* (input) {
-      if (input.expectedSha !== undefined) {
-        // git compares and swaps under its own ref lock, so a ref moved by any
-        // process — in this one or not — makes this fail instead of deleting
-        // whatever the ref happens to point at now.
-        yield* executeGit(
-          "GitVcsDriver.deleteRef.expected",
-          input.cwd,
-          ["update-ref", "-d", qualifyBranchRefName(input.refName), input.expectedSha],
-          {
-            timeoutMs: 10_000,
-            fallbackErrorDetail:
-              "git update-ref -d failed: the branch moved since it was checked, or the ref is locked",
-          },
-        );
-        return;
-      }
       yield* executeGit(
         "GitVcsDriver.deleteRef",
         input.cwd,

@@ -337,19 +337,15 @@ export class GitVcsDriver extends Context.Service<
       // Delete a branch whose commits are not merged anywhere else.
       readonly force?: boolean | undefined;
       /**
-       * Delete only if the ref still points at this commit.
-       *
-       * Compare-and-swap through `git update-ref -d <ref> <old>`, which is the
-       * only layer that can settle a race with a git process outside this
-       * one — another Phoenix, a terminal, an editor. Any check this process
-       * makes beforehand is advisory by the time the delete runs.
-       *
-       * Note this takes the plumbing route, which does not refuse a branch
-       * checked out in another worktree the way `git branch -d` does. Callers
-       * that use it are expected to have removed the worktree already (see
-       * settle_session, which does so inside the same repository lock).
+       * Deliberately `git branch -d/-D` rather than `git update-ref -d`, even
+       * though plumbing could compare-and-swap the ref's commit. A checkout
+       * does not move a branch's OID, so a compare-and-swap sees nothing when
+       * another worktree takes the branch, and deleting it would leave that
+       * worktree's HEAD dangling — an unrecoverable corruption of someone
+       * else's directory. `git branch -D` refuses that atomically at delete
+       * time. It cannot detect a concurrent ref move, which costs at most a
+       * ref pointer the reflog still holds.
        */
-      readonly expectedSha?: string | undefined;
     }) => Effect.Effect<void, GitCommandError>;
     readonly switchRef: (
       input: VcsSwitchRefInput,

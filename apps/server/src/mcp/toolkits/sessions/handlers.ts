@@ -368,6 +368,20 @@ export function parseGitLockPath(message: string): string | null {
 const isGitCommandError = Schema.is(GitCommandError);
 
 /**
+ * The worktree path out of git's own checked-out refusal.
+ *
+ *   "error: cannot delete branch 'wt' used by worktree at '/path/to/wt'"
+ *
+ * This is the backstop behind {@link findConflictingWorktree}: git decides at
+ * delete time, so a worktree created after the guard ran still ends up here,
+ * and the caller should get the same structured answer either way.
+ */
+export function parseCheckedOutWorktreePath(message: string): string | null {
+  const match = /used by worktree at '([^']+)'/.exec(message);
+  return match?.[1] ?? null;
+}
+
+/**
  * The linked worktree still holding `branch`, if any.
  *
  * `git branch -d` refuses to delete a branch another worktree has checked out;
@@ -1333,6 +1347,17 @@ export const make = Effect.gen(function* () {
           // moved is kept rather than deleted — the same outcome as never
           // asking for cleanupBranch, and the worktree removal above was
           // authorized by the dirty check, not by this proof.
+          //
+          // Accepted residual, deliberately: an *external* process can still
+          // move the ref in the microseconds between this check and the delete
+          // below, and `git branch -D` will not notice. That loses a ref
+          // pointer, which the reflog can recover. The alternative — deleting
+          // through `update-ref -d <ref> <sha>` to make the ref check atomic —
+          // cannot see worktree checkouts at all (a checkout does not move the
+          // OID, so the compare-and-swap succeeds) and would leave another
+          // worktree's HEAD dangling, which corrupts that worktree and no
+          // reflog undoes it. Worktree safety is absolute; ref-pointer safety
+          // is best-effort plus reflog.
           if (provenBranch !== null) {
             const staleRefusal = yield* revalidateBranchProof({
               workspaceRoot,
@@ -1344,60 +1369,45 @@ export const make = Effect.gen(function* () {
             }
           }
 
-          // The compare-and-swap below goes through plumbing, which does not
-          // refuse a branch another worktree has checked out the way
-          // `git branch -d` does — it would leave that worktree's HEAD
-          // pointing at a deleted ref. Our own worktree is gone by now, so
-          // anything still holding the branch belongs to someone else,
-          // possibly a worktree a user made by hand that this process has
-          // never heard of.
-          if (provenBranch !== null) {
-            const worktrees = yield* Effect.option(
-              gitWorkflow.listWorktrees({ cwd: workspaceRoot }),
-            );
-            if (Option.isNone(worktrees)) {
-              // Fails closed: the guard's whole job is to establish that no
-              // other worktree holds this branch.
-              return keptBranch({
-                refusal: {
-                  branch,
-                  reason: "worktree_check_unavailable",
-                  message: `Worktree removed, but branch "${branch}" was kept: the repository's worktree list could not be read, so Phoenix could not confirm no other worktree still has it checked out.`,
-                  localSha: null,
-                  remoteSha: null,
-                  expectedSha: provenBranch.provenSha,
-                  conflictingWorktreePath: null,
-                },
-              });
-            }
-            const conflict = findConflictingWorktree(worktrees.value, branch);
-            if (conflict !== null) {
-              return keptBranch({
-                refusal: {
-                  branch,
-                  reason: "branch_checked_out_elsewhere",
-                  message: `Worktree removed, but branch "${branch}" was kept: it is still checked out in ${conflict}. Deleting it would leave that worktree on a HEAD pointing at nothing.`,
-                  localSha: null,
-                  remoteSha: null,
-                  expectedSha: provenBranch.provenSha,
-                  conflictingWorktreePath: conflict,
-                },
-              });
-            }
+          // `git branch -D` refuses a branch any worktree has checked out, and
+          // it does so atomically at delete time — that is what actually
+          // closes this race. The explicit check exists so the caller gets a
+          // structured refusal naming the directory instead of a raw git
+          // error, and it covers every deletion, temporary branches included:
+          // a user can check out a t3code/… branch just as easily.
+          const worktrees = yield* Effect.option(gitWorkflow.listWorktrees({ cwd: workspaceRoot }));
+          if (Option.isNone(worktrees)) {
+            // Fails closed: the guard's whole job is to establish that no
+            // other worktree holds this branch.
+            return keptBranch({
+              refusal: {
+                branch,
+                reason: "worktree_check_unavailable",
+                message: `Worktree removed, but branch "${branch}" was kept: the repository's worktree list could not be read, so Phoenix could not confirm no other worktree still has it checked out.`,
+                localSha: null,
+                remoteSha: null,
+                expectedSha: provenBranch?.provenSha ?? null,
+                conflictingWorktreePath: null,
+              },
+            });
+          }
+          const conflict = findConflictingWorktree(worktrees.value, branch);
+          if (conflict !== null) {
+            return keptBranch({
+              refusal: {
+                branch,
+                reason: "branch_checked_out_elsewhere",
+                message: `Worktree removed, but branch "${branch}" was kept: it is still checked out in ${conflict}. Deleting it would leave that worktree on a HEAD pointing at nothing.`,
+                localSha: null,
+                remoteSha: null,
+                expectedSha: provenBranch?.provenSha ?? null,
+                conflictingWorktreePath: conflict,
+              },
+            });
           }
 
-          // The re-check above closes the window against this process; only
-          // git can close it against every other one. With a proven head the
-          // delete is a compare-and-swap, so a ref moved by a terminal or a
-          // second Phoenix between the check and here makes git refuse rather
-          // than destroy commits nothing has seen.
           return yield* gitWorkflow
-            .deleteRef({
-              cwd: workspaceRoot,
-              refName: branch,
-              force: true,
-              ...(provenBranch === null ? {} : { expectedSha: provenBranch.provenSha }),
-            })
+            .deleteRef({ cwd: workspaceRoot, refName: branch, force: true })
             .pipe(
               Effect.as({
                 removedBranch: branch as string | null,
@@ -1420,21 +1430,24 @@ export const make = Effect.gen(function* () {
                   if (described._tag === "SessionOrchestrationGitLockError") {
                     return keptBranch({ lockFailure: described });
                   }
-                  // A compare-and-swap that git turned down means the ref
-                  // moved after the re-check — the same partial success the
-                  // re-check reports, and it deserves the same structure
+                  // git's own checked-out refusal is the backstop the guard
+                  // above races against: a worktree created in between still
+                  // ends here, and lands on the same structured outcome
                   // rather than a prose detail.
-                  return provenBranch === null
+                  const checkedOutPath = parseCheckedOutWorktreePath(
+                    gitFailureDiagnosticText(cause),
+                  );
+                  return checkedOutPath === null
                     ? keptBranch({ detail: described.message })
                     : keptBranch({
                         refusal: {
                           branch,
-                          reason: "branch_moved_since_proof",
-                          message: `Worktree removed, but branch "${branch}" was kept: git refused to delete it at the proven commit ${provenBranch.provenSha}, so the ref moved. Settle again to re-prove it.`,
+                          reason: "branch_checked_out_elsewhere",
+                          message: `Worktree removed, but branch "${branch}" was kept: git refused to delete it because it is checked out in ${checkedOutPath}.`,
                           localSha: null,
                           remoteSha: null,
-                          expectedSha: provenBranch.provenSha,
-                          conflictingWorktreePath: null,
+                          expectedSha: provenBranch?.provenSha ?? null,
+                          conflictingWorktreePath: checkedOutPath,
                         },
                       });
                 }),

@@ -19,7 +19,6 @@ import { ServerConfig } from "../config.ts";
 import {
   gitStderrExcerpt,
   makeGitVcsDriverCore,
-  qualifyBranchRefName,
   redactGitOutput,
   splitNullSeparatedGitStdoutPaths,
 } from "./GitVcsDriverCore.ts";
@@ -1486,63 +1485,6 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
     });
   });
 
-  describe("compare-and-swap ref deletion", () => {
-    it("qualifies a short branch name for plumbing commands", () => {
-      // `git update-ref` would act on something else entirely given a bare
-      // name, so this is not cosmetic.
-      assert.strictEqual(qualifyBranchRefName("feature/x"), "refs/heads/feature/x");
-      assert.strictEqual(qualifyBranchRefName("refs/heads/feature/x"), "refs/heads/feature/x");
-    });
-
-    it.effect("deletes a branch that still points at the expected commit", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        yield* driver.createRef({ cwd, refName: "feature/cas" });
-        const head = yield* driver.resolveCommit({ cwd, revision: "feature/cas" });
-
-        yield* driver.deleteRef({ cwd, refName: "feature/cas", expectedSha: head.commitSha });
-
-        const branches = yield* driver.listLocalBranchNames(cwd);
-        assert.notInclude(branches, "feature/cas");
-      }),
-    );
-
-    it.effect("refuses to delete a branch that moved, and leaves it intact", () =>
-      Effect.gen(function* () {
-        // This is the race the proof cannot win on its own: an external git
-        // moves the ref after Phoenix checked it. Only git can arbitrate, and
-        // it does — the commits survive.
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        yield* driver.createRef({ cwd, refName: "feature/moved" });
-        const staleHead = yield* driver.resolveCommit({ cwd, revision: "feature/moved" });
-
-        yield* writeTextFile(cwd, "moved.md", "# moved\n");
-        yield* git(cwd, ["add", "."]);
-        yield* git(cwd, ["commit", "-m", "second commit"]);
-        yield* git(cwd, ["branch", "--force", "feature/moved", "HEAD"]);
-        const movedHead = yield* driver.resolveCommit({ cwd, revision: "feature/moved" });
-        assert.notStrictEqual(movedHead.commitSha, staleHead.commitSha);
-
-        const error = yield* Effect.flip(
-          driver.deleteRef({
-            cwd,
-            refName: "feature/moved",
-            force: true,
-            expectedSha: staleHead.commitSha,
-          }),
-        );
-
-        assert.strictEqual(error._tag, "GitCommandError");
-        const branches = yield* driver.listLocalBranchNames(cwd);
-        assert.include(branches, "feature/moved");
-      }),
-    );
-  });
-
   describe("worktree enumeration", () => {
     it.effect("reports a linked worktree's branch, and stops once it is removed", () =>
       Effect.gen(function* () {
@@ -1570,11 +1512,13 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
-    it.effect("shows why the caller must check: update-ref deletes a checked-out branch", () =>
+    it.effect("pins why deleteRef uses porcelain: a compare-and-swap cannot see checkouts", () =>
       Effect.gen(function* () {
-        // The hazard in one test. `git branch -d` refuses this; the plumbing
-        // route does not, and the linked worktree is left on a HEAD pointing
-        // at a ref that no longer exists. Hence the guard at the call site.
+        // The reason `deleteRef` is `git branch -D` and not
+        // `git update-ref -d <ref> <sha>`. Checking a branch out does not move
+        // its OID, so a compare-and-swap on the commit succeeds even while a
+        // worktree holds the branch — and leaves that worktree's HEAD pointing
+        // at a ref that no longer exists. Porcelain refuses instead.
         const cwd = yield* makeTmpDir();
         yield* initRepoWithCommit(cwd);
         const pathService = yield* Path.Path;
@@ -1582,22 +1526,29 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         const worktreePath = pathService.join(yield* makeTmpDir("git-dangling-"), "linked");
 
         yield* git(cwd, ["worktree", "add", "-b", "feature/dangling", worktreePath]);
-        const head = yield* driver.resolveCommit({ cwd, revision: "feature/dangling" });
+        const before = yield* driver.resolveCommit({ cwd, revision: "feature/dangling" });
+        const after = yield* driver.resolveCommit({ cwd, revision: "feature/dangling" });
+        // The checkout left the OID untouched, which is exactly why a
+        // commit-based compare-and-swap is blind to it.
+        assert.strictEqual(before.commitSha, after.commitSha);
 
-        // Porcelain protects the worktree...
+        // Porcelain — what deleteRef uses — protects the other worktree.
         const refused = yield* Effect.flip(
           driver.deleteRef({ cwd, refName: "feature/dangling", force: true }),
         );
         assert.strictEqual(refused._tag, "GitCommandError");
+        assert.include(refused.stderrExcerpt ?? "", "used by worktree");
+        assert.include(yield* driver.listLocalBranchNames(cwd), "feature/dangling");
 
-        // ...plumbing does not.
-        yield* driver.deleteRef({
+        // Plumbing, with the very SHA a proof would have carried, does not.
+        const plumbing = yield* driver.execute({
+          operation: "GitVcsDriver.test.plumbingDelete",
           cwd,
-          refName: "feature/dangling",
-          expectedSha: head.commitSha,
+          args: ["update-ref", "-d", "refs/heads/feature/dangling", before.commitSha],
+          timeoutMs: 10_000,
         });
-        const branches = yield* driver.listLocalBranchNames(cwd);
-        assert.notInclude(branches, "feature/dangling");
+        assert.strictEqual(plumbing.exitCode, 0);
+        assert.notInclude(yield* driver.listLocalBranchNames(cwd), "feature/dangling");
       }),
     );
   });

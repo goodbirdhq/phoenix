@@ -292,21 +292,28 @@ So the cheap half is re-read inside the critical section, immediately before the
 moved is kept and reported, not deleted — the same outcome as never passing `cleanupBranch`, since
 the worktree removal was authorized by the dirty check rather than by this proof.
 
-That re-check is only atomic against writers inside this process. The repository lock does not bind
-a terminal, an editor, or a second Phoenix, so any check made before the delete is advisory by the
-time the delete runs. The delete itself therefore carries the proven commit:
-`git update-ref -d refs/heads/<branch> <proven-sha>` is a compare-and-swap under git's own ref lock,
-and git refuses if the ref moved. That is the only layer that can settle the race, which is why the
-driver's `deleteRef` takes an `expectedSha` at all.
+That re-check is only atomic against writers inside this process, and the repository lock does not
+bind a terminal, an editor, or a second Phoenix. There are two races left, and they are not equally
+survivable — which is what decides the deletion mechanism.
 
-Plumbing gives up one protection in exchange: `git update-ref -d` does not refuse a branch another
-worktree has checked out, and deleting it would leave that worktree's HEAD pointing at nothing.
-Removing our own worktree first is not enough, because the other one may be a worktree a user
-created by hand that this process has never heard of and the repository lock does not cover. So
-before the compare-and-swap, inside the critical section, `git worktree list --porcelain` is
-consulted and a branch still held anywhere is kept and reported. An unreadable worktree list is
-treated the same way: the guard exists to establish that nothing else holds the branch, so failing
-to establish it fails closed.
+A **checkout** by another worktree is unrecoverable if we get it wrong: the other worktree's HEAD
+ends up pointing at a ref that no longer exists, and no reflog fixes someone else's broken
+directory. A **ref move** costs a ref pointer, which the reflog still holds.
+
+Compare-and-swap deletion (`git update-ref -d <ref> <sha>`) closes the second and is _blind_ to the
+first: checking a branch out does not move its OID, so the swap succeeds while a worktree holds the
+branch. Porcelain deletion (`git branch -D`) is the reverse: it refuses a checked-out branch
+atomically at delete time, and cannot notice a concurrent ref move. Phoenix takes `git branch -D`,
+because worktree safety is absolute and ref-pointer safety is best-effort-plus-reflog. The in-lock
+re-proof stays as the merged-safety check, with the residual stated where the code makes it:
+between that check and the delete, an external ref move can lose a pointer.
+
+The explicit `git worktree list --porcelain` check still runs first, inside the critical section
+and for **every** branch deletion — temporary `t3code/…` branches included, since nothing stops a
+user checking one out. git would refuse anyway; the check exists so the caller gets a structured
+refusal naming the conflicting directory instead of a raw git error. An unreadable worktree list
+fails closed for the same reason the check exists at all. When a worktree appears in the gap
+between the check and the delete, git's own refusal is parsed back into the same structured answer.
 
 Both refusals are structured per resource rather than folded into prose: a settle that removed the
 worktree but kept the branch reports `worktree.branchRefusal` (branch, reason, the SHAs, and the

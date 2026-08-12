@@ -107,9 +107,6 @@ export class GitWorkflowService extends Context.Service<
       readonly cwd: string;
       readonly refName: string;
       readonly force?: boolean | undefined;
-      // Compare-and-swap: git refuses the delete if the ref has moved. See
-      // GitVcsDriver.deleteRef for why this is the only layer that can.
-      readonly expectedSha?: string | undefined;
     }) => Effect.Effect<void, GitCommandError>;
     readonly switchRef: (
       input: VcsSwitchRefInput,
