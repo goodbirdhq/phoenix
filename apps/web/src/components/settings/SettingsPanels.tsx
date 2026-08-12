@@ -535,6 +535,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.enableSessionOrchestration
         ? ["Session orchestration"]
         : []),
+      ...(settings.sidebarSessionHierarchyEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarSessionHierarchyEnabled
+        ? ["Sidebar session hierarchy"]
+        : []),
       ...(isBackgroundActivityDirty ? ["Background activity"] : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? ["New thread mode"]
@@ -576,6 +580,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableLegacyTokenStreaming,
       settings.enableProviderUpdateChecks,
       settings.enableSessionOrchestration,
+      settings.sidebarSessionHierarchyEnabled,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
@@ -661,6 +666,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       enableSessionOrchestration: DEFAULT_UNIFIED_SETTINGS.enableSessionOrchestration,
+      sidebarSessionHierarchyEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarSessionHierarchyEnabled,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
@@ -2021,6 +2027,40 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+
+        {/* Dependent on the switch above: with orchestration off nothing spawns
+            children, so the mode has nothing to nest and the row would only be
+            a dead end. Existing trees keep rendering if orchestration is later
+            turned off — the nesting is history, not a live permission. */}
+        {settings.enableSessionOrchestration ? (
+          <SettingsRow
+            {...searchableSetting("sidebar-session-hierarchy")}
+            description="Nest spawned sessions under the session that started them in the sidebar. Child rows are indented and drop the branch line to stay compact."
+            resetAction={
+              settings.sidebarSessionHierarchyEnabled !==
+              DEFAULT_UNIFIED_SETTINGS.sidebarSessionHierarchyEnabled ? (
+                <SettingResetButton
+                  label="sidebar session hierarchy"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarSessionHierarchyEnabled:
+                        DEFAULT_UNIFIED_SETTINGS.sidebarSessionHierarchyEnabled,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.sidebarSessionHierarchyEnabled}
+                onCheckedChange={(checked) =>
+                  updateSettings({ sidebarSessionHierarchyEnabled: Boolean(checked) })
+                }
+                aria-label="Nest spawned sessions in the sidebar"
+              />
+            }
+          />
+        ) : null}
 
         <SettingsRow
           title={
