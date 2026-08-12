@@ -10,6 +10,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
@@ -17,6 +18,7 @@ import { decodeStructuredReportFields } from "../decodeStructuredReportFields.ts
 
 import {
   DeleteProjectionThreadReportsInput,
+  FindProjectionThreadReportInput,
   ListProjectionThreadReportsInput,
   ProjectionThreadReport,
   ProjectionThreadReportRepository,
@@ -29,6 +31,7 @@ const ProjectionThreadReportDbRowSchema = Schema.Struct({
   status: SessionReportStatus,
   title: TrimmedNonEmptyString,
   summary: Schema.String,
+  abstract: Schema.NullOr(Schema.String),
   artifacts: Schema.fromJsonString(Schema.Array(SessionReportArtifact)),
   // Optional findings/validation/recommendation/completionPercent, stored
   // together as one JSON column. Decoded leniently (see
@@ -39,6 +42,8 @@ const ProjectionThreadReportDbRowSchema = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Single row→report mapping shared by every read path (list and by-id), so a
+// column added here can never be silently dropped by one of them.
 function mapReportRow(
   row: Schema.Schema.Type<typeof ProjectionThreadReportDbRowSchema>,
 ): ProjectionThreadReport {
@@ -48,6 +53,7 @@ function mapReportRow(
     status: row.status,
     title: row.title,
     summary: row.summary,
+    abstract: row.abstract,
     artifacts: row.artifacts,
     origin: row.origin,
     ...decodeStructuredReportFields(row.structuredJson),
@@ -98,6 +104,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         status,
         title,
         summary,
+        abstract,
         artifacts_json,
         structured_json,
         origin,
@@ -109,6 +116,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         ${row.status},
         ${row.title},
         ${row.summary},
+        ${row.abstract},
         ${JSON.stringify(row.artifacts)},
         ${encodeStructured(row)},
         ${row.origin},
@@ -120,6 +128,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         status = excluded.status,
         title = excluded.title,
         summary = excluded.summary,
+        abstract = excluded.abstract,
         artifacts_json = excluded.artifacts_json,
         structured_json = excluded.structured_json,
         origin = excluded.origin,
@@ -137,6 +146,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         status,
         title,
         summary,
+        abstract,
         artifacts_json AS "artifacts",
         structured_json AS "structuredJson",
         origin,
@@ -144,6 +154,26 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
       FROM projection_thread_reports
       WHERE thread_id = ${threadId}
       ORDER BY created_at ASC, report_id ASC
+    `,
+  });
+
+  const findProjectionThreadReportRow = SqlSchema.findOneOption({
+    Request: FindProjectionThreadReportInput,
+    Result: ProjectionThreadReportDbRowSchema,
+    execute: ({ reportId }) => sql`
+      SELECT
+        report_id AS "reportId",
+        thread_id AS "threadId",
+        status,
+        title,
+        summary,
+        abstract,
+        artifacts_json AS "artifacts",
+        structured_json AS "structuredJson",
+        origin,
+        created_at AS "createdAt"
+      FROM projection_thread_reports
+      WHERE report_id = ${reportId}
     `,
   });
 
@@ -176,6 +206,17 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
       ),
     );
 
+  const findByReportId: ProjectionThreadReportRepositoryShape["findByReportId"] = (input) =>
+    findProjectionThreadReportRow(input).pipe(
+      Effect.map(Option.map(mapReportRow)),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionThreadReportRepository.findByReportId:query",
+          "ProjectionThreadReportRepository.findByReportId:decodeRow",
+        ),
+      ),
+    );
+
   const deleteByThreadId: ProjectionThreadReportRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionThreadReportRows(input).pipe(
       Effect.mapError(
@@ -186,6 +227,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
   return {
     upsert,
     listByThreadId,
+    findByReportId,
     deleteByThreadId,
   } satisfies ProjectionThreadReportRepositoryShape;
 });

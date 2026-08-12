@@ -1091,6 +1091,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             status: event.payload.report.status,
             title: event.payload.report.title,
             summary: event.payload.report.summary,
+            abstract: event.payload.report.abstract ?? null,
             artifacts: event.payload.report.artifacts,
             ...(event.payload.report.findings !== undefined
               ? { findings: event.payload.report.findings }

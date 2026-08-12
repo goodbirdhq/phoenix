@@ -16,6 +16,7 @@ import {
   SessionReport,
   SessionReportArtifact,
   SessionReportFinding,
+  SessionReportOrigin,
   SessionReportStatus,
   SessionReportValidation,
   structuredReportFieldsWithinSizeCap,
@@ -35,6 +36,15 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 // machine with provider processes.
 export const SESSION_SPAWN_MAX_CHILDREN = 8;
 export const SESSION_SPAWN_MAX_DEPTH = 3;
+
+// Reports at or under this size are still delivered inline to the parent;
+// larger ones arrive as a compact envelope pointing at read_report.
+export const SESSION_REPORT_INLINE_MAX_CHARS = 1024;
+// When a large report carries no author abstract, the envelope falls back to
+// this many leading characters of the summary.
+export const SESSION_REPORT_ABSTRACT_FALLBACK_CHARS = 500;
+// Upper bound on one read_report page.
+export const READ_REPORT_MAX_CHARS = 16_384;
 
 const BoundedText = (maxLength: number) => Schema.String.check(Schema.isMaxLength(maxLength));
 
@@ -150,12 +160,94 @@ export const ReadSessionMessage = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Compact form a report travels in when delivered to another session: the
+// digest plus enough addressing (reportId, threadId, size) to fetch the full
+// body with read_report. Small reports carry their whole summary as the
+// abstract (`truncated: false`). Structured report data travels compactly:
+// the recommendation and completionPercent whole (both small by contract),
+// findings/validation as counts only — the full arrays come from read_report.
+export const SessionReportEnvelope = Schema.Struct({
+  reportId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  status: SessionReportStatus,
+  title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  // "agent" wrote it itself; "system" is a Phoenix-synthesized terminal
+  // report for a session that died before reporting.
+  origin: SessionReportOrigin,
+  abstract: Schema.String,
+  summaryChars: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  // True when `abstract` is not the whole summary; read_report has the rest.
+  truncated: Schema.Boolean,
+  recommendation: Schema.optional(Schema.String.check(Schema.isMaxLength(1_024))),
+  completionPercent: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
+  ),
+  findingsCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  validationPerformedCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  validationGapsCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  artifacts: Schema.Array(SessionReportArtifact),
+  createdAt: IsoDateTime,
+});
+export type SessionReportEnvelope = typeof SessionReportEnvelope.Type;
+
+// Head-of-summary fallback for reports posted without an abstract. Keeps the
+// cut markdown-safe: never ends on half a surrogate pair, and never leaves a
+// code fence open (an unterminated ``` would swallow the rest of the parent's
+// message when rendered).
+const truncatedAbstractFromSummary = (summary: string): string => {
+  let head = summary.slice(0, SESSION_REPORT_ABSTRACT_FALLBACK_CHARS - 1);
+  const lastCode = head.charCodeAt(head.length - 1);
+  if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+    head = head.slice(0, -1);
+  }
+  const fenceCount = head.split("```").length - 1;
+  if (fenceCount % 2 === 1) {
+    const lastFence = head.lastIndexOf("```");
+    if (lastFence > 0) {
+      head = head.slice(0, lastFence).trimEnd();
+    } else {
+      return `${head}\n\`\`\`\n…`;
+    }
+  }
+  return `${head}…`;
+};
+
+export const toSessionReportEnvelope = (report: SessionReport): SessionReportEnvelope => {
+  const base = {
+    reportId: report.reportId,
+    threadId: report.threadId,
+    status: report.status,
+    title: report.title,
+    origin: report.origin,
+    summaryChars: report.summary.length,
+    ...(report.recommendation !== undefined ? { recommendation: report.recommendation } : {}),
+    ...(report.completionPercent !== undefined
+      ? { completionPercent: report.completionPercent }
+      : {}),
+    findingsCount: report.findings?.length ?? 0,
+    validationPerformedCount: report.validation?.performed.length ?? 0,
+    validationGapsCount: report.validation?.gaps.length ?? 0,
+    artifacts: report.artifacts,
+    createdAt: report.createdAt,
+  };
+  if (report.summary.length <= SESSION_REPORT_INLINE_MAX_CHARS) {
+    return { ...base, abstract: report.summary, truncated: false };
+  }
+  const abstract =
+    report.abstract !== undefined && report.abstract.length > 0
+      ? report.abstract
+      : truncatedAbstractFromSummary(report.summary);
+  return { ...base, abstract, truncated: true };
+};
+
 export const ReadSessionResult = Schema.Struct({
   threadId: ThreadId,
   title: TrimmedNonEmptyString,
   sessionStatus: Schema.NullOr(OrchestrationSessionStatus),
   settled: Schema.Boolean,
-  report: Schema.NullOr(SessionReport),
+  // Latest report as a compact envelope; fetch the full body (and full
+  // findings/validation arrays) via read_report.
+  report: Schema.NullOr(SessionReportEnvelope),
   stoppedBy: Schema.NullOr(SessionStoppedBy),
   stopRequestedAt: Schema.NullOr(IsoDateTime),
   stopReason: Schema.NullOr(SessionStopReason),
@@ -172,6 +264,56 @@ export const ReadSessionResult = Schema.Struct({
   dirty: Schema.optional(Schema.NullOr(Schema.Boolean)),
 });
 export type ReadSessionResult = typeof ReadSessionResult.Type;
+
+export const ReadReportInput = Schema.Struct({
+  // Report id from a delivery envelope or read_session. When omitted,
+  // threadId must be set and the thread's latest report is returned.
+  reportId: Schema.optional(TrimmedNonEmptyString),
+  // Thread the report belongs to. With reportId it acts as a consistency
+  // check; alone it selects that thread's latest report.
+  threadId: Schema.optional(ThreadId),
+  // Offset into the report summary in UTF-16 code units (same units as
+  // totalChars). Defaults to 0. If it lands inside a surrogate pair the page
+  // starts at the pair instead; use the returned offset + body.length as the
+  // next offset.
+  offset: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  // Page size in UTF-16 code units. Defaults to (and is capped at) 16384.
+  // The page may run one unit short OR one unit long of this to avoid
+  // splitting a surrogate pair (long only when maxChars is too small to hold
+  // a whole pair, so paging always makes progress).
+  maxChars: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(
+      Schema.isLessThanOrEqualTo(READ_REPORT_MAX_CHARS),
+    ),
+  ),
+});
+export type ReadReportInput = typeof ReadReportInput.Type;
+
+export const ReadReportResult = Schema.Struct({
+  reportId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  status: SessionReportStatus,
+  title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  origin: SessionReportOrigin,
+  // The requested slice of the report summary.
+  body: Schema.String,
+  offset: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  totalChars: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  hasMore: Schema.Boolean,
+  // Full structured report data (the envelope carries only counts). Included
+  // on every page rather than behind a flag: they are bounded by the same
+  // 32KB contract cap as the report itself, and a read_report caller is
+  // explicitly asking for the whole report.
+  findings: Schema.optional(Schema.Array(SessionReportFinding).check(Schema.isMaxLength(100))),
+  validation: Schema.optional(SessionReportValidation),
+  recommendation: Schema.optional(Schema.String.check(Schema.isMaxLength(1_024))),
+  completionPercent: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
+  ),
+  artifacts: Schema.Array(SessionReportArtifact),
+  createdAt: IsoDateTime,
+});
+export type ReadReportResult = typeof ReadReportResult.Type;
 
 export const StopSessionInput = Schema.Struct({
   threadId: ThreadId,
@@ -226,6 +368,9 @@ export const PostReportInput = Schema.Struct({
   status: SessionReportStatus,
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   summary: BoundedText(16_384),
+  // Short digest (1–3 sentences) shown to the spawning session when the full
+  // summary is too large to inline. Omit for small reports.
+  abstract: Schema.optional(Schema.String.check(Schema.isMaxLength(1024))),
   artifacts: Schema.optional(Schema.Array(SessionReportArtifact)),
   // Optional machine-readable fields alongside the markdown summary.
   findings: Schema.optional(Schema.Array(SessionReportFinding).check(Schema.isMaxLength(100))),
@@ -250,6 +395,7 @@ export class SessionOrchestrationDeniedError extends Schema.TaggedErrorClass<Ses
       "capability_unavailable",
       "disabled_in_settings",
       "not_spawned_by_this_session",
+      "report_not_accessible",
       "spawn_limit_reached",
       "spawn_depth_exceeded",
       "runtime_mode_exceeds_parent",

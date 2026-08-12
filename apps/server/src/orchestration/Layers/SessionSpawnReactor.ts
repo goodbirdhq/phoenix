@@ -8,6 +8,7 @@ import {
   type SessionReport,
   type SessionReportStatus,
   ThreadId,
+  toSessionReportEnvelope,
 } from "@t3tools/contracts";
 import { makeDrainableWorker, type DrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
@@ -63,6 +64,7 @@ const truncate = (text: string, maxLength: number) =>
   text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`;
 
 export const formatReportMessage = (childTitle: string, report: SessionReport): string => {
+  const envelope = toSessionReportEnvelope(report);
   const artifactLines =
     report.artifacts.length === 0
       ? ""
@@ -79,7 +81,20 @@ export const formatReportMessage = (childTitle: string, report: SessionReport): 
     report.origin === "system"
       ? `[Phoenix] Spawned session "${childTitle}" ended without posting a report. Phoenix generated a ${report.status} report for it: ${report.title}`
       : `[Phoenix] Spawned session "${childTitle}" posted a ${report.status} report: ${report.title}`;
-  return `${lead}\n\n${report.summary}${artifactLines}\n\n(spawned thread: ${report.threadId})`;
+  // Reports at or under the inline threshold are delivered whole — agent and
+  // system reports alike. Larger ones become a compact envelope: abstract
+  // plus addressing, with the body (and full findings/validation) behind
+  // read_report, so a burst of child reports cannot flood this parent.
+  if (!envelope.truncated) {
+    return `${lead}\n\n${report.summary}${artifactLines}\n\n(spawned thread: ${report.threadId})`;
+  }
+  const structuredLine =
+    envelope.findingsCount > 0 || envelope.validationGapsCount > 0
+      ? `\nStructured: ${envelope.findingsCount} finding${envelope.findingsCount === 1 ? "" : "s"}, ${envelope.validationGapsCount} validation gap${envelope.validationGapsCount === 1 ? "" : "s"}.`
+      : "";
+  const recommendationLine =
+    envelope.recommendation !== undefined ? `\nRecommendation: ${envelope.recommendation}` : "";
+  return `${lead}\n\nAbstract:\n${envelope.abstract}\n${recommendationLine}${structuredLine}\n[Full report is ${envelope.summaryChars} chars; this is a compact envelope. Call read_report with reportId "${report.reportId}" to read the rest.]${artifactLines}\n\n(spawned thread: ${report.threadId}, report: ${report.reportId})`;
 };
 
 // A stop is an external decision with unknown progress ("partial"); a provider
