@@ -555,6 +555,7 @@ const buildAppUnderTest = (options?: {
       ...options?.layers?.vcsDriverRegistry,
     });
     const gitVcsDriverLayer = Layer.mock(GitVcsDriver.GitVcsDriver)({
+      resolveCommit: (input) => Effect.succeed({ commitSha: input.revision }),
       ...options?.layers?.gitVcsDriver,
     });
     const gitManagerLayer = Layer.mock(GitManager.GitManager)({
