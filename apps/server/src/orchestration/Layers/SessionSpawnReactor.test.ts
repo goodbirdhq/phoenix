@@ -98,6 +98,12 @@ const queued = (
   releasingAt: null,
 });
 
+const releasing = (suffix: string, releasingAt = STALE): ProjectionQueuedTurnStart => ({
+  ...queued(suffix),
+  state: "releasing",
+  releasingAt,
+});
+
 const sessionSetEvent = (shell: OrchestrationThreadShell): OrchestrationEvent => ({
   sequence: 1,
   eventId: EventId.make(`event-${shell.session?.status ?? "none"}`),
@@ -115,15 +121,44 @@ const sessionSetEvent = (shell: OrchestrationThreadShell): OrchestrationEvent =>
   },
 });
 
+const reportPostedEvent = (): OrchestrationEvent => ({
+  sequence: 1,
+  eventId: EventId.make("event-report-posted"),
+  aggregateKind: "thread",
+  aggregateId: CHILD_ID,
+  occurredAt: NOW,
+  commandId: CommandId.make("command-report-posted"),
+  causationEventId: null,
+  correlationId: null,
+  metadata: {},
+  type: "thread.report-posted",
+  payload: {
+    threadId: CHILD_ID,
+    report: {
+      reportId: "report-queued-warning",
+      threadId: CHILD_ID,
+      status: "success",
+      title: "Done",
+      summary: "The report was written first.",
+      artifacts: [],
+      origin: "agent",
+      createdAt: NOW,
+    },
+    updatedAt: NOW,
+  },
+});
+
 const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (input: {
   readonly status: NonNullable<OrchestrationThreadShell["session"]>["status"];
   readonly queued: ReadonlyArray<ProjectionQueuedTurnStart>;
   readonly live?: boolean;
   readonly updatedAt?: string;
   readonly boundaryEvents?: ReadonlyArray<OrchestrationEvent>;
+  readonly requeueStale?: boolean;
+  readonly queuedRowsRef?: Ref.Ref<Array<ProjectionQueuedTurnStart>>;
 }) {
   const commands = yield* Ref.make<Array<OrchestrationCommand>>([]);
-  const queuedRows = yield* Ref.make([...input.queued]);
+  const queuedRows = input.queuedRowsRef ?? (yield* Ref.make([...input.queued]));
   const childShell = yield* Ref.make(makeShell(CHILD_ID, input.status, input.updatedAt));
   const events = yield* PubSub.unbounded<OrchestrationEvent>();
   let sequence = 0;
@@ -167,7 +202,18 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   } as unknown as ProjectionSnapshotQuery["Service"]);
   const turns = ProjectionTurnRepository.of({
     listQueuedTurnStarts: Ref.get(queuedRows),
-    requeueStaleReleasingTurns: () => Effect.void,
+    requeueStaleReleasingTurns: ({ staleBefore }) =>
+      input.requeueStale === true
+        ? Ref.update(queuedRows, (rows) =>
+            rows.map((row) =>
+              row.state === "releasing" &&
+              row.releasingAt !== null &&
+              row.releasingAt <= staleBefore
+                ? { ...row, state: "queued", releasingAt: null }
+                : row,
+            ),
+          )
+        : Effect.void,
   } as unknown as ProjectionTurnRepositoryShape);
   const provider = ProviderService.of({
     listSessions: () =>
@@ -189,7 +235,11 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   yield* reactor.drain;
   yield* Effect.yieldNow;
   yield* reactor.drain;
-  return { commands: yield* Ref.get(commands), queuedRows: yield* Ref.get(queuedRows) };
+  return {
+    commands: yield* Ref.get(commands),
+    queuedRows: yield* Ref.get(queuedRows),
+    queuedRowsRef: queuedRows,
+  };
 });
 
 describe("SessionSpawnReactor queued delivery", () => {
@@ -222,6 +272,67 @@ describe("SessionSpawnReactor queued delivery", () => {
           }),
         ),
       ).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("cancels queued rows but preserves releasing rows at a terminal boundary", () =>
+    Effect.scoped(
+      createHarness({ status: "stopped", queued: [queued("cancel"), releasing("in-flight")] }).pipe(
+        Effect.map(({ commands, queuedRows }) => {
+          const cancelled = commands.filter(
+            (command) => command.type === "thread.turn.queue.cancel",
+          );
+          expect(cancelled).toHaveLength(1);
+          expect(cancelled[0]?.messageId).toBe(MessageId.make("queued-cancel"));
+          expect(queuedRows).toEqual([releasing("in-flight")]);
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("requeues stale releasing rows after a fresh reactor starts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const first = yield* createHarness({ status: "running", queued: [releasing("stale")] });
+        expect(
+          first.commands.filter((command) => command.type === "thread.turn.start.queued"),
+        ).toHaveLength(0);
+        const restarted = yield* createHarness({
+          status: "ready",
+          queued: [],
+          queuedRowsRef: first.queuedRowsRef,
+          requeueStale: true,
+        });
+        expect(
+          restarted.commands.filter((command) => command.type === "thread.turn.start.queued"),
+        ).toHaveLength(1);
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("adds one warning to the existing report delivery for unconsumed messages", () =>
+    Effect.scoped(
+      createHarness({
+        status: "running",
+        live: true,
+        queued: [queued("waiting"), releasing("releasing", NOW)],
+        boundaryEvents: [reportPostedEvent()],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const parentTurns = commands.filter(
+            (command): command is Extract<OrchestrationCommand, { type: "thread.turn.start" }> =>
+              command.type === "thread.turn.start",
+          );
+          expect(parentTurns).toHaveLength(1);
+          expect(parentTurns[0]?.message.text).toContain(
+            "2 queued messages were not consumed before this report was written",
+          );
+          expect(parentTurns[0]?.message.text).toContain("queued-waiting, queued-releasing");
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
     ),
   );
 

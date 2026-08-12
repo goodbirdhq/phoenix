@@ -470,7 +470,9 @@ export const OrchestrationSession = Schema.Struct({
   graceStopEpisodeId: Schema.optional(Schema.NullOr(EventId)),
   // Correlates a provider turn start to the queued message that released it.
   // Optional/defaulted so historical session events continue to replay.
-  queuedDeliveryMessageId: Schema.optional(Schema.NullOr(MessageId)),
+  queuedDeliveryMessageId: Schema.optional(Schema.NullOr(MessageId)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;

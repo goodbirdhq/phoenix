@@ -70,6 +70,75 @@ function makeSession(status: OrchestrationSession["status"]): OrchestrationSessi
   };
 }
 
+it.layer(NodeServices.layer)("queued delivery receipt attribution", (it) => {
+  it.effect("consumes only the releasing message correlated to the provider turn", () =>
+    Effect.gen(function* () {
+      const firstMessageId = MessageId.make("queued-first");
+      const releasedMessageId = MessageId.make("queued-released");
+      const activeTurnId = TurnId.make("provider-turn-2");
+      const session = {
+        ...makeSession("running"),
+        activeTurnId,
+        queuedDeliveryMessageId: releasedMessageId,
+      };
+      const readModel = makeReadModel(null, null, session);
+      const thread = readModel.threads[0];
+      if (thread === undefined) throw new Error("missing test thread");
+      thread.queuedTurnStarts = [
+        {
+          messageId: firstMessageId,
+          mode: "queue",
+          requestedAt: NOW,
+          releasingAt: NOW,
+        },
+        {
+          messageId: releasedMessageId,
+          mode: "queue",
+          requestedAt: NOW,
+          releasingAt: NOW,
+        },
+      ];
+
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-correlated-consume"),
+          threadId: ThreadId.make("thread-1"),
+          session,
+          createdAt: NOW,
+        },
+        readModel,
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      const consumed = events.find((event) => event.type === "thread.turn-start-consumed");
+      expect(consumed).toBeDefined();
+      if (consumed?.type === "thread.turn-start-consumed") {
+        expect(consumed.payload.messageId).toBe(releasedMessageId);
+        expect(consumed.payload.turnId).toBe(activeTurnId);
+      }
+      const sessionSet = events.find((event) => event.type === "thread.session-set");
+      if (sessionSet?.type === "thread.session-set") {
+        expect(sessionSet.payload.session.queuedDeliveryMessageId).toBeNull();
+      }
+
+      const unmarked = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-unmarked-session-set"),
+          threadId: ThreadId.make("thread-1"),
+          session: { ...session, queuedDeliveryMessageId: null },
+          createdAt: NOW,
+        },
+        readModel,
+      });
+      const unmarkedEvents = Array.isArray(unmarked) ? unmarked : [unmarked];
+      expect(unmarkedEvents.some((event) => event.type === "thread.turn-start-consumed")).toBe(
+        false,
+      );
+    }),
+  );
+});
+
 it.layer(NodeServices.layer)("settled thread decider", (it) => {
   it.effect("settles active threads and re-emits idempotently for settled ones", () =>
     Effect.gen(function* () {
