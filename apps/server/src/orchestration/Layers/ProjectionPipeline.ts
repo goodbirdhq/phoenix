@@ -1109,6 +1109,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ? { usage: event.payload.report.usage }
               : {}),
             origin: event.payload.report.origin,
+            supersedesReportId: event.payload.report.supersedesReportId ?? null,
             createdAt: event.payload.report.createdAt,
           });
           return;

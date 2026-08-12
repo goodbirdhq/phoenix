@@ -1496,6 +1496,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             // post_report never sets an origin: an agent-posted report is the
             // default, and only the reactor claims "system".
             origin: command.origin ?? "agent",
+            // Amendments append: the superseded report keeps its own event,
+            // and only this forward link is recorded. The reverse link is
+            // derived when reports are read back.
+            ...(command.supersedesReportId !== undefined
+              ? { supersedesReportId: command.supersedesReportId }
+              : {}),
             createdAt: command.createdAt,
           },
           updatedAt: command.createdAt,

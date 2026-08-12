@@ -39,8 +39,19 @@ const ProjectionThreadReportDbRowSchema = Schema.Struct({
   // malformed blob can never fail the whole row.
   structuredJson: Schema.NullOr(Schema.String),
   origin: SessionReportOrigin,
+  supersedesReportId: Schema.NullOr(TrimmedNonEmptyString),
+  // Resolved by the reverse-link subquery every read path shares; NULL when
+  // no later report amends this one.
+  supersededByReportId: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 });
+
+// Every read path selects the reverse amendment link with the same
+// correlated subquery (repeated inline because a shared string would become a
+// bound parameter, not SQL): the earliest report naming this one as its
+// predecessor. Two rows could in principle name the same predecessor (a
+// retried amendment), and taking the earliest keeps the chain a caller walks
+// stable instead of scan-order dependent.
 
 // Single row→report mapping shared by every read path (list and by-id), so a
 // column added here can never be silently dropped by one of them.
@@ -56,6 +67,10 @@ function mapReportRow(
     abstract: row.abstract,
     artifacts: row.artifacts,
     origin: row.origin,
+    supersedesReportId: row.supersedesReportId,
+    ...(row.supersededByReportId !== null
+      ? { supersededByReportId: row.supersededByReportId }
+      : {}),
     ...decodeStructuredReportFields(row.structuredJson),
     createdAt: row.createdAt,
   };
@@ -110,6 +125,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         artifacts_json,
         structured_json,
         origin,
+        supersedes_report_id,
         created_at
       )
       VALUES (
@@ -122,6 +138,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         ${JSON.stringify(row.artifacts)},
         ${encodeStructured(row)},
         ${row.origin},
+        ${row.supersedesReportId},
         ${row.createdAt}
       )
       ON CONFLICT (report_id)
@@ -134,6 +151,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         artifacts_json = excluded.artifacts_json,
         structured_json = excluded.structured_json,
         origin = excluded.origin,
+        supersedes_report_id = excluded.supersedes_report_id,
         created_at = excluded.created_at
     `,
   });
@@ -152,6 +170,14 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         artifacts_json AS "artifacts",
         structured_json AS "structuredJson",
         origin,
+        supersedes_report_id AS "supersedesReportId",
+        (
+          SELECT amendment.report_id
+          FROM projection_thread_reports AS amendment
+          WHERE amendment.supersedes_report_id = projection_thread_reports.report_id
+          ORDER BY amendment.created_at ASC, amendment.report_id ASC
+          LIMIT 1
+        ) AS "supersededByReportId",
         created_at AS "createdAt"
       FROM projection_thread_reports
       WHERE thread_id = ${threadId}
@@ -173,6 +199,14 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         artifacts_json AS "artifacts",
         structured_json AS "structuredJson",
         origin,
+        supersedes_report_id AS "supersedesReportId",
+        (
+          SELECT amendment.report_id
+          FROM projection_thread_reports AS amendment
+          WHERE amendment.supersedes_report_id = projection_thread_reports.report_id
+          ORDER BY amendment.created_at ASC, amendment.report_id ASC
+          LIMIT 1
+        ) AS "supersededByReportId",
         created_at AS "createdAt"
       FROM projection_thread_reports
       WHERE report_id = ${reportId}

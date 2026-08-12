@@ -167,6 +167,35 @@ it.layer(NodeServices.layer)("report decider", (it) => {
     }),
   );
 
+  it.effect("carries an amendment link through to the event payload", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.report.post",
+          commandId: CommandId.make("cmd-report-post-amendment"),
+          threadId: ThreadId.make("thread-1"),
+          reportId: "report-amendment",
+          status: "success",
+          title: "Also handled the late instruction",
+          summary: "The queued instruction arrived after the first report; it is done now.",
+          artifacts: [],
+          supersedesReportId: "report-1",
+          createdAt: POSTED_AT,
+        },
+        readModel,
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+
+      expect(event.type).toBe("thread.report-posted");
+      if (event.type === "thread.report-posted") {
+        expect(event.payload.report.supersedesReportId).toBe("report-1");
+        // Only the forward link is recorded: the superseded report keeps its
+        // own event, and the reverse link is derived when reports are read.
+        expect(event.payload.report.supersededByReportId).toBeUndefined();
+      }
+    }),
+  );
+
   it.effect("rejects a report for an unknown thread", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({

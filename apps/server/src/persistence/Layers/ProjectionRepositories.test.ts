@@ -7,17 +7,38 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
+import { ProjectionThreadReportRepositoryLive } from "./ProjectionThreadReports.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
+import {
+  type ProjectionThreadReport,
+  ProjectionThreadReportRepository,
+} from "../Services/ProjectionThreadReports.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionThreadReportRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
+
+const report = (
+  overrides: Partial<ProjectionThreadReport> & Pick<ProjectionThreadReport, "reportId">,
+): ProjectionThreadReport => ({
+  threadId: ThreadId.make("thread-reports"),
+  status: "success",
+  title: "Did the work",
+  summary: "All done.",
+  abstract: null,
+  artifacts: [],
+  origin: "agent",
+  supersedesReportId: null,
+  createdAt: "2026-08-12T00:00:00.000Z",
+  ...overrides,
+});
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
   it.effect("stores SQL NULL for missing project model options", () =>
@@ -201,6 +222,74 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.strictEqual(updated?.snoozedUntil, null);
       assert.strictEqual(updated?.snoozedAt, null);
       assert.strictEqual(updated?.pinnedAt, null);
+    }),
+  );
+
+  it.effect("resolves an amendment chain from both ends", () =>
+    Effect.gen(function* () {
+      const reports = yield* ProjectionThreadReportRepository;
+
+      yield* reports.upsert(
+        report({
+          reportId: "report-original",
+          summary: "Shipped the feature.",
+          createdAt: "2026-08-12T01:00:00.000Z",
+        }),
+      );
+      yield* reports.upsert(
+        report({
+          reportId: "report-amendment",
+          summary: "Shipped the feature, plus the late instruction.",
+          supersedesReportId: "report-original",
+          createdAt: "2026-08-12T02:00:00.000Z",
+        }),
+      );
+
+      // Read from the new end: it names what it replaced, and nothing has
+      // replaced it.
+      const amendment = Option.getOrNull(
+        yield* reports.findByReportId({ reportId: "report-amendment" }),
+      );
+      assert.strictEqual(amendment?.supersedesReportId, "report-original");
+      assert.strictEqual(amendment?.supersededByReportId, undefined);
+
+      // Read from the old end: the reverse link is derived, not stored, so it
+      // appears without the original row ever being rewritten.
+      const original = Option.getOrNull(
+        yield* reports.findByReportId({ reportId: "report-original" }),
+      );
+      assert.strictEqual(original?.supersedesReportId, null);
+      assert.strictEqual(original?.supersededByReportId, "report-amendment");
+      // Append-only: the superseded report keeps its own body.
+      assert.strictEqual(original?.summary, "Shipped the feature.");
+
+      // The amendment is the thread's latest report, and the list carries the
+      // same links as the by-id reads.
+      const listed = yield* reports.listByThreadId({
+        threadId: ThreadId.make("thread-reports"),
+      });
+      assert.deepStrictEqual(
+        listed.map((entry) => entry.reportId),
+        ["report-original", "report-amendment"],
+      );
+      assert.strictEqual(listed.at(-1)?.reportId, "report-amendment");
+      assert.strictEqual(listed[0]?.supersededByReportId, "report-amendment");
+    }),
+  );
+
+  it.effect("leaves an unamended report with no supersession links", () =>
+    Effect.gen(function* () {
+      const reports = yield* ProjectionThreadReportRepository;
+
+      yield* reports.upsert(
+        report({ reportId: "report-standalone", threadId: ThreadId.make("thread-standalone") }),
+      );
+
+      const persisted = Option.getOrNull(
+        yield* reports.findByReportId({ reportId: "report-standalone" }),
+      );
+      assert.strictEqual(persisted?.supersedesReportId, null);
+      assert.strictEqual(persisted?.supersededByReportId, undefined);
     }),
   );
 });

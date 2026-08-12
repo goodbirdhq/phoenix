@@ -13,6 +13,7 @@ import {
   OrchestrationThreadDetailSnapshot,
   ProjectScript,
   SessionReportArtifact,
+  TrimmedNonEmptyString,
   TurnId,
   type OrchestrationCheckpointSummary,
   type OrchestrationLatestTurn,
@@ -96,10 +97,14 @@ const ProjectionThreadReportDbRowSchema = ProjectionThreadReport.mapFields((fiel
       "summary",
       "abstract",
       "origin",
+      "supersedesReportId",
       "createdAt",
     ]),
     {
       artifacts: Schema.fromJsonString(Schema.Array(SessionReportArtifact)),
+      // Derived reverse amendment link; NULL unless a later report on the
+      // thread names this one.
+      supersededByReportId: Schema.NullOr(TrimmedNonEmptyString),
       // Optional findings/validation/recommendation/completionPercent,
       // stored together as one JSON column. Decoded leniently (see
       // decodeStructuredReportFields) rather than through the schema, so a
@@ -392,6 +397,10 @@ function mapReportRow(
     artifacts: row.artifacts,
     ...decodeStructuredReportFields(row.structuredJson),
     origin: row.origin,
+    ...(row.supersedesReportId !== null ? { supersedesReportId: row.supersedesReportId } : {}),
+    ...(row.supersededByReportId !== null
+      ? { supersededByReportId: row.supersededByReportId }
+      : {}),
     createdAt: row.createdAt,
   };
 }
@@ -631,6 +640,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           artifacts_json AS "artifacts",
           structured_json AS "structuredJson",
           origin,
+          supersedes_report_id AS "supersedesReportId",
+          (
+            SELECT amendment.report_id
+            FROM projection_thread_reports AS amendment
+            WHERE amendment.supersedes_report_id = projection_thread_reports.report_id
+            ORDER BY amendment.created_at ASC, amendment.report_id ASC
+            LIMIT 1
+          ) AS "supersededByReportId",
           created_at AS "createdAt"
         FROM projection_thread_reports
         ORDER BY thread_id ASC, created_at ASC, report_id ASC
@@ -1136,6 +1153,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           artifacts_json AS "artifacts",
           structured_json AS "structuredJson",
           origin,
+          supersedes_report_id AS "supersedesReportId",
+          (
+            SELECT amendment.report_id
+            FROM projection_thread_reports AS amendment
+            WHERE amendment.supersedes_report_id = projection_thread_reports.report_id
+            ORDER BY amendment.created_at ASC, amendment.report_id ASC
+            LIMIT 1
+          ) AS "supersededByReportId",
           created_at AS "createdAt"
         FROM projection_thread_reports
         WHERE thread_id = ${threadId}
