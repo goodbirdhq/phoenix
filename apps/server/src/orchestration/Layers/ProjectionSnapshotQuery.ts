@@ -1175,6 +1175,38 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // Latest token-usage snapshot for a thread. Same shape ping_session's
+  // other reads use: bounded to one row via LIMIT 1, served by the
+  // (thread_id, sequence, created_at, activity_id) index (migration 008/029)
+  // filtering kind within that scan. Payload decodes as Schema.Unknown, same
+  // as every other activity payload — callers extract fields defensively.
+  const getLatestUsageActivityRow = SqlSchema.findOneOption({
+    Request: ThreadIdLookupInput,
+    Result: Schema.Struct({ payload: Schema.fromJsonString(Schema.Unknown) }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT payload_json AS "payload"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId} AND kind = 'context-window.updated'
+        ORDER BY sequence DESC, created_at DESC, activity_id DESC
+        LIMIT 1
+      `,
+  });
+
+  // Aggregate count, not a row load: served by the (thread_id, requested_at,
+  // turn_id) index from migration 037, so this stays cheap regardless of
+  // thread length.
+  const getThreadTurnCountRow = SqlSchema.findOne({
+    Request: ThreadIdLookupInput,
+    Result: Schema.Struct({ turnCount: Schema.Number }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT COUNT(*) AS "turnCount"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+      `,
+  });
+
   const listThreadActivityRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadActivityDbRowSchema,
@@ -2956,6 +2988,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ),
     );
 
+  const getLatestUsageActivity: ProjectionSnapshotQueryShape["getLatestUsageActivity"] = (
+    threadId,
+  ) =>
+    getLatestUsageActivityRow({ threadId }).pipe(
+      Effect.map(Option.map((row) => row.payload)),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getLatestUsageActivity:query",
+          "ProjectionSnapshotQuery.getLatestUsageActivity:decodeRow",
+        ),
+      ),
+    );
+
+  const getThreadTurnCount: ProjectionSnapshotQueryShape["getThreadTurnCount"] = (threadId) =>
+    getThreadTurnCountRow({ threadId }).pipe(
+      Effect.map((row) => row.turnCount),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getThreadTurnCount:query",
+          "ProjectionSnapshotQuery.getThreadTurnCount:decodeRow",
+        ),
+      ),
+    );
+
   return {
     getCommandReadModel,
     getSnapshot,
@@ -2974,6 +3030,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadDetailSnapshot,
     getThreadHasReport,
     getLastAssistantMessage,
+    getLatestUsageActivity,
+    getThreadTurnCount,
   } satisfies ProjectionSnapshotQueryShape;
 });
 

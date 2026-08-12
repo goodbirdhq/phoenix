@@ -1105,6 +1105,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.report.completionPercent !== undefined
               ? { completionPercent: event.payload.report.completionPercent }
               : {}),
+            ...(event.payload.report.usage !== undefined
+              ? { usage: event.payload.report.usage }
+              : {}),
             origin: event.payload.report.origin,
             createdAt: event.payload.report.createdAt,
           });

@@ -28,6 +28,7 @@ import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts"
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { resolveSessionUsageSnapshot } from "../sessionUsage.ts";
 import {
   SessionSpawnReactor,
   type SessionSpawnReactorShape,
@@ -297,6 +298,13 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       if (detail.value.reports.length > 0) return true;
 
       const createdAt = yield* nowIso;
+      // What the child cost before it died, so the parent is not left
+      // guessing along with the "unverified" warning below.
+      const usage = yield* resolveSessionUsageSnapshot(snapshotQuery, {
+        threadId: input.threadId,
+        createdAt: detail.value.createdAt,
+        latestTurn: detail.value.latestTurn,
+      });
       yield* engine
         .dispatch({
           type: "thread.report.post",
@@ -312,6 +320,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
             detail,
           }),
           artifacts: [],
+          usage,
           // Structured fields carry the same warning in machine-readable form,
           // so a parent that reads `validation.gaps` rather than the markdown
           // still learns nothing here was checked. completionPercent is left

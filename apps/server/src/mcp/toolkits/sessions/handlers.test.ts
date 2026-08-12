@@ -10,6 +10,7 @@ import {
   SESSION_REPORT_INLINE_MAX_CHARS,
   SessionOrchestrationDeniedError,
   type SessionReport,
+  type SessionUsageSnapshot,
   ThreadId,
   toSessionReportEnvelope,
 } from "@t3tools/contracts";
@@ -523,6 +524,8 @@ const baseShell = {
   hasActionableProposedPlan: false,
 } satisfies OrchestrationThreadShell;
 
+const zeroUsage = { elapsedMs: 0 } satisfies SessionUsageSnapshot;
+
 describe("buildPingSessionSnapshot", () => {
   it("reports idle status with no activity when nothing else is known", () => {
     expect(
@@ -531,6 +534,7 @@ describe("buildPingSessionSnapshot", () => {
         lastActivityAt: null,
         hasReport: false,
         lastAssistantMessage: null,
+        usage: zeroUsage,
       }),
     ).toEqual({
       sessionStatus: "running",
@@ -540,6 +544,7 @@ describe("buildPingSessionSnapshot", () => {
       planProgress: null,
       hasReport: false,
       lastAssistantMessage: null,
+      usage: zeroUsage,
     });
   });
 
@@ -556,6 +561,7 @@ describe("buildPingSessionSnapshot", () => {
       lastActivityAt: "2026-08-12T00:05:00.000Z",
       hasReport: false,
       lastAssistantMessage: null,
+      usage: zeroUsage,
     });
 
     expect(result.settled).toBe(true);
@@ -574,6 +580,7 @@ describe("buildPingSessionSnapshot", () => {
       lastActivityAt: null,
       hasReport: true,
       lastAssistantMessage: "a".repeat(600),
+      usage: zeroUsage,
     });
 
     expect(result.hasReport).toBe(true);
@@ -587,9 +594,31 @@ describe("buildPingSessionSnapshot", () => {
       lastActivityAt: null,
       hasReport: false,
       lastAssistantMessage: "on it",
+      usage: zeroUsage,
     });
 
     expect(result.lastAssistantMessage).toBe("on it");
+  });
+
+  it("passes the resolved usage snapshot through unchanged", () => {
+    const usage = {
+      inputTokens: 1200,
+      outputTokens: 340,
+      totalTokens: 1540,
+      turnCount: 3,
+      elapsedMs: 45_000,
+      lastTurnDurationMs: 12_000,
+    } satisfies SessionUsageSnapshot;
+
+    const result = buildPingSessionSnapshot({
+      shell: baseShell,
+      lastActivityAt: null,
+      hasReport: false,
+      lastAssistantMessage: null,
+      usage,
+    });
+
+    expect(result.usage).toEqual(usage);
   });
 });
 
@@ -622,6 +651,8 @@ const runHandler = <A, E, R>(
     getThreadShellById?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadShellById"];
     getThreadHasReport?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadHasReport"];
     getLastAssistantMessage?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getLastAssistantMessage"];
+    getLatestUsageActivity?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getLatestUsageActivity"];
+    getThreadTurnCount?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadTurnCount"];
     listBindings?: ProviderSessionDirectory["Service"]["listBindings"];
   } = {},
 ) =>
@@ -649,6 +680,9 @@ const runHandler = <A, E, R>(
           getThreadHasReport: overrides.getThreadHasReport ?? (() => Effect.succeed(false)),
           getLastAssistantMessage:
             overrides.getLastAssistantMessage ?? (() => Effect.succeed(Option.none())),
+          getLatestUsageActivity:
+            overrides.getLatestUsageActivity ?? (() => Effect.succeed(Option.none())),
+          getThreadTurnCount: overrides.getThreadTurnCount ?? (() => Effect.succeed(0)),
           // read_session's pre-existing report/messages fetch; not under test
           // here, so a fixed empty response is enough to keep it from dying.
           getThreadDetailById: () => Effect.succeed(Option.none()),
@@ -718,6 +752,20 @@ describe("ping_session (handler)", () => {
                   detail: "directory unavailable",
                 }),
               ),
+            getLatestUsageActivity: () =>
+              Effect.fail(
+                new PersistenceSqlError({
+                  operation: "test",
+                  detail: "projection unavailable",
+                }),
+              ),
+            getThreadTurnCount: () =>
+              Effect.fail(
+                new PersistenceSqlError({
+                  operation: "test",
+                  detail: "projection unavailable",
+                }),
+              ),
           },
         );
 
@@ -729,7 +777,33 @@ describe("ping_session (handler)", () => {
         expect(result.lastActivityAt).toBeNull();
         expect(result.hasReport).toBe(false);
         expect(result.lastAssistantMessage).toBeNull();
+        // Token/turn fields are omitted rather than failing the whole ping;
+        // elapsedMs is server-computed and always present regardless.
+        expect(result.usage).toEqual({ elapsedMs: expect.any(Number) });
       }),
+  );
+
+  it.effect("populates usage from the latest context-window activity and turn count", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler(
+        (handlers) => handlers.ping_session({ threadId: childThreadId }),
+        {
+          getLatestUsageActivity: () =>
+            Effect.succeed(
+              Option.some({ inputTokens: 1000, outputTokens: 250, totalProcessedTokens: 4000 }),
+            ),
+          getThreadTurnCount: () => Effect.succeed(3),
+        },
+      );
+
+      expect(result.usage?.inputTokens).toBe(1000);
+      expect(result.usage?.outputTokens).toBe(250);
+      // Prefers the cumulative totalProcessedTokens over the context-fill
+      // usedTokens when the provider reports both.
+      expect(result.usage?.totalTokens).toBe(4000);
+      expect(result.usage?.turnCount).toBe(3);
+      expect(result.usage?.elapsedMs).toBeGreaterThanOrEqual(0);
+    }),
   );
 
   it.effect("never dispatches a command or starts a turn", () =>

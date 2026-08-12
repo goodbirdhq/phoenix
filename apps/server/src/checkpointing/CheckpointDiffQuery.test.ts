@@ -113,6 +113,10 @@ describe("CheckpointDiffQuery.layer", () => {
               Effect.die("CheckpointDiffQuery should not request report existence"),
             getLastAssistantMessage: () =>
               Effect.die("CheckpointDiffQuery should not request the last assistant message"),
+            getLatestUsageActivity: () =>
+              Effect.die("CheckpointDiffQuery should not request usage activity"),
+            getThreadTurnCount: () =>
+              Effect.die("CheckpointDiffQuery should not request turn count"),
           }),
         ),
       );
@@ -211,6 +215,10 @@ describe("CheckpointDiffQuery.layer", () => {
               Effect.die("CheckpointDiffQuery should not request report existence"),
             getLastAssistantMessage: () =>
               Effect.die("CheckpointDiffQuery should not request the last assistant message"),
+            getLatestUsageActivity: () =>
+              Effect.die("CheckpointDiffQuery should not request usage activity"),
+            getThreadTurnCount: () =>
+              Effect.die("CheckpointDiffQuery should not request turn count"),
           }),
         ),
       );
@@ -299,6 +307,10 @@ describe("CheckpointDiffQuery.layer", () => {
               Effect.die("CheckpointDiffQuery should not request report existence"),
             getLastAssistantMessage: () =>
               Effect.die("CheckpointDiffQuery should not request the last assistant message"),
+            getLatestUsageActivity: () =>
+              Effect.die("CheckpointDiffQuery should not request usage activity"),
+            getThreadTurnCount: () =>
+              Effect.die("CheckpointDiffQuery should not request turn count"),
           }),
         ),
       );
@@ -372,6 +384,10 @@ describe("CheckpointDiffQuery.layer", () => {
               Effect.die("CheckpointDiffQuery should not request report existence"),
             getLastAssistantMessage: () =>
               Effect.die("CheckpointDiffQuery should not request the last assistant message"),
+            getLatestUsageActivity: () =>
+              Effect.die("CheckpointDiffQuery should not request usage activity"),
+            getThreadTurnCount: () =>
+              Effect.die("CheckpointDiffQuery should not request turn count"),
           }),
         ),
       );
@@ -430,6 +446,10 @@ describe("CheckpointDiffQuery.layer", () => {
               Effect.die("CheckpointDiffQuery should not request report existence"),
             getLastAssistantMessage: () =>
               Effect.die("CheckpointDiffQuery should not request the last assistant message"),
+            getLatestUsageActivity: () =>
+              Effect.die("CheckpointDiffQuery should not request usage activity"),
+            getThreadTurnCount: () =>
+              Effect.die("CheckpointDiffQuery should not request turn count"),
           }),
         ),
       );

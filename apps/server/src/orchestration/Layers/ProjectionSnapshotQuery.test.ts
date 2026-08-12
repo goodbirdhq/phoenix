@@ -2390,4 +2390,73 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       }
     }),
   );
+
+  it.effect(
+    "getLatestUsageActivity returns the most recent context-window.updated payload, ignoring other activity kinds",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const threadId = ThreadId.make("thread-usage-1");
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES
+            ('activity-usage-1', ${threadId}, NULL, 'info', 'context-window.updated',
+             'Context window updated', '{"usedTokens":1000,"inputTokens":10,"outputTokens":5}',
+             1, '2026-03-02T00:00:01.000Z'),
+            ('activity-usage-2', ${threadId}, NULL, 'info', 'context-window.updated',
+             'Context window updated',
+             '{"usedTokens":2000,"inputTokens":20,"outputTokens":15,"totalProcessedTokens":9000}',
+             2, '2026-03-02T00:00:02.000Z'),
+            ('activity-usage-other', ${threadId}, NULL, 'tool', 'tool.completed', 'Some tool',
+             '{"unrelated":true}', 3, '2026-03-02T00:00:03.000Z')
+        `;
+
+        const result = yield* snapshotQuery.getLatestUsageActivity(threadId);
+        assert.equal(result._tag, "Some");
+        if (result._tag === "Some") {
+          assert.deepEqual(result.value, {
+            usedTokens: 2000,
+            inputTokens: 20,
+            outputTokens: 15,
+            totalProcessedTokens: 9000,
+          });
+        }
+
+        const none = yield* snapshotQuery.getLatestUsageActivity(
+          ThreadId.make("thread-with-no-usage-activity"),
+        );
+        assert.equal(none._tag, "None");
+      }),
+  );
+
+  it.effect("getThreadTurnCount counts a thread's turns without loading their rows", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const threadId = ThreadId.make("thread-usage-turns");
+
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, started_at, completed_at, checkpoint_files_json
+        )
+        VALUES
+          (${threadId}, 'turn-a', 'completed', '2026-03-02T00:00:00.000Z',
+           '2026-03-02T00:00:00.000Z', '2026-03-02T00:00:01.000Z', '[]'),
+          (${threadId}, 'turn-b', 'completed', '2026-03-02T00:01:00.000Z',
+           '2026-03-02T00:01:00.000Z', '2026-03-02T00:01:02.000Z', '[]')
+      `;
+
+      const count = yield* snapshotQuery.getThreadTurnCount(threadId);
+      assert.equal(count, 2);
+
+      const zero = yield* snapshotQuery.getThreadTurnCount(
+        ThreadId.make("thread-with-no-turns-at-all"),
+      );
+      assert.equal(zero, 0);
+    }),
+  );
 });
