@@ -80,9 +80,9 @@ describe("validateSpawnCheckoutInput", () => {
 });
 
 describe("resolveSessionCheckout", () => {
-  it("returns null when optional checkout metadata cannot be read", async () => {
-    const checkout = await Effect.runPromise(
-      resolveSessionCheckout(
+  it.effect("returns null when optional checkout metadata cannot be read", () =>
+    Effect.gen(function* () {
+      const checkout = yield* resolveSessionCheckout(
         {
           localStatus: () =>
             Effect.succeed({
@@ -96,11 +96,11 @@ describe("resolveSessionCheckout", () => {
           resolveCommit: () => Effect.fail(gitError("worktree no longer exists")),
         },
         "/missing-worktree",
-      ),
-    );
+      );
 
-    expect(checkout).toBeNull();
-  });
+      expect(checkout).toBeNull();
+    }),
+  );
 });
 describe("send_to_session delivery acknowledgement", () => {
   it.effect("maps persisted acknowledgement branches to delivery status", () =>
