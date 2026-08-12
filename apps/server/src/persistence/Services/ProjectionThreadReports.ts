@@ -34,6 +34,13 @@ export const ProjectionThreadReport = Schema.Struct({
   // as the contract-level SessionReport/PostReportInput.
   ...SessionReportStructured.fields,
   origin: SessionReportOrigin,
+  // Stored forward link: the earlier report on this thread that this row
+  // amends.
+  supersedesReportId: Schema.NullOr(TrimmedNonEmptyString),
+  // Reverse link, derived on read (the row that points back at this one) and
+  // never written — hence optional, so writers cannot be asked to supply a
+  // value only the read path knows.
+  supersededByReportId: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 });
 export type ProjectionThreadReport = typeof ProjectionThreadReport.Type;

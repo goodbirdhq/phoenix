@@ -2,10 +2,87 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import {
+  checkReportSupersession,
   ReadSessionResult,
+  reportAlreadySupersededMessage,
   SpawnSessionInput,
   SpawnSessionResult,
 } from "./sessionOrchestration.ts";
+
+describe("checkReportSupersession", () => {
+  it("accepts amending the newest report in a chain", () => {
+    expect(
+      checkReportSupersession([{ reportId: "a" }, { reportId: "b", supersedesReportId: "a" }], "b"),
+    ).toEqual({ _tag: "ok" });
+  });
+
+  it("accepts amending an unsuperseded report that is not the newest row", () => {
+    // The rule bans forks, not amending an older independent report: `b` here
+    // supersedes nothing, so `a` still has a single, unambiguous successor.
+    expect(checkReportSupersession([{ reportId: "a" }, { reportId: "b" }], "a")).toEqual({
+      _tag: "ok",
+    });
+  });
+
+  it("rejects a fork and names the chain head", () => {
+    expect(
+      checkReportSupersession(
+        [
+          { reportId: "a" },
+          { reportId: "b", supersedesReportId: "a" },
+          { reportId: "c", supersedesReportId: "b" },
+        ],
+        "a",
+      ),
+    ).toEqual({
+      _tag: "already-superseded",
+      supersededByReportId: "b",
+      chainHeadReportId: "c",
+    });
+  });
+
+  it("reports an unknown report id", () => {
+    expect(checkReportSupersession([{ reportId: "a" }], "missing")).toEqual({
+      _tag: "unknown-report",
+    });
+  });
+
+  it("terminates on cyclic links instead of walking forever", () => {
+    // Unreachable through the decider's invariant, but this data comes back
+    // across a persistence boundary and a hang here would wedge command
+    // processing for the whole server.
+    const result = checkReportSupersession(
+      [
+        { reportId: "a", supersedesReportId: "b" },
+        { reportId: "b", supersedesReportId: "a" },
+      ],
+      "a",
+    );
+    expect(result._tag).toBe("already-superseded");
+  });
+});
+
+describe("reportAlreadySupersededMessage", () => {
+  it("names one report when the chain head is the direct superseder", () => {
+    const message = reportAlreadySupersededMessage({
+      reportId: "a",
+      supersededByReportId: "b",
+      chainHeadReportId: "b",
+    });
+    expect(message).toContain("a is already superseded by b");
+    expect(message).toContain("supersede b instead");
+  });
+
+  it("distinguishes the direct superseder from a further chain head", () => {
+    const message = reportAlreadySupersededMessage({
+      reportId: "a",
+      supersededByReportId: "b",
+      chainHeadReportId: "c",
+    });
+    expect(message).toContain("current head of that chain is c");
+    expect(message).toContain("supersede c instead");
+  });
+});
 
 describe("SpawnSessionInput", () => {
   it("decodes the git checkout specification", () => {

@@ -76,12 +76,19 @@ export const formatReportMessage = (childTitle: string, report: SessionReport): 
               : `- ${artifact.kind}: ${artifact.value}`,
           )
           .join("\n")}`;
+  // An amendment leads with the fact that it replaces an earlier report: a
+  // parent that already acted on the superseded one has to see that first,
+  // before it reads a summary it thinks it has seen.
+  const amendment =
+    report.supersedesReportId !== undefined
+      ? `AMENDED report (supersedes ${report.supersedesReportId}). `
+      : "";
   // A synthesized report must never read as if the child wrote it: the parent
   // decides what to do next based on who is claiming the work is over.
   const lead =
     report.origin === "system"
-      ? `[Phoenix] Spawned session "${childTitle}" ended without posting a report. Phoenix generated a ${report.status} report for it: ${report.title}`
-      : `[Phoenix] Spawned session "${childTitle}" posted a ${report.status} report: ${report.title}`;
+      ? `[Phoenix] ${amendment}Spawned session "${childTitle}" ended without posting a report. Phoenix generated a ${report.status} report for it: ${report.title}`
+      : `[Phoenix] ${amendment}Spawned session "${childTitle}" posted a ${report.status} report: ${report.title}`;
   // Reports at or under the inline threshold are delivered whole — agent and
   // system reports alike. Larger ones become a compact envelope: abstract
   // plus addressing, with the body (and full findings/validation) behind

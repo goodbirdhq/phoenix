@@ -357,6 +357,34 @@ describe("formatReportMessage", () => {
     expect(text).toContain("Phoenix generated a partial report");
   });
 
+  it("leads an amending report with what it supersedes", () => {
+    const text = formatReportMessage(
+      "Spawned worker",
+      report({
+        supersedesReportId: "report-original",
+        title: "Also handled the late instruction",
+      }),
+    );
+    // The parent may already have acted on the superseded report, so the
+    // amendment has to announce itself before the summary it looks like.
+    expect(text).toContain("AMENDED report (supersedes report-original)");
+    expect(text.indexOf("AMENDED report")).toBeLessThan(text.indexOf("posted a success report"));
+  });
+
+  it("keeps the amendment lead on an envelope-sized report", () => {
+    const summary = "s".repeat(SESSION_REPORT_INLINE_MAX_CHARS + 1);
+    const text = formatReportMessage(
+      "Spawned worker",
+      report({ summary, abstract: "The short version.", supersedesReportId: "report-original" }),
+    );
+    expect(text).toContain("AMENDED report (supersedes report-original)");
+    expect(text).toContain('read_report with reportId "report-1"');
+  });
+
+  it("says nothing about amendment for an ordinary report", () => {
+    expect(formatReportMessage("Spawned worker", report())).not.toContain("AMENDED");
+  });
+
   it("lists artifacts with their labels", () => {
     const text = formatReportMessage(
       "Spawned worker",
@@ -413,6 +441,90 @@ describe("formatReportMessage", () => {
     expect(text).toContain("Recommendation: Merge after CI.");
     expect(text).toContain("1 finding, 2 validation gaps");
   });
+});
+
+const reportPostedEvent = (
+  posted: ReturnType<typeof report>,
+  sequence: number,
+): OrchestrationEvent => ({
+  sequence,
+  eventId: EventId.make(`event-report-${posted.reportId}`),
+  aggregateKind: "thread",
+  aggregateId: CHILD_ID,
+  occurredAt: CREATED_AT,
+  commandId: CommandId.make(`command-report-${posted.reportId}`),
+  causationEventId: null,
+  correlationId: null,
+  metadata: {},
+  type: "thread.report-posted",
+  payload: {
+    threadId: CHILD_ID,
+    report: { ...posted, threadId: CHILD_ID },
+    updatedAt: CREATED_AT,
+  },
+});
+
+// Drives the real reactor over a real thread.report-posted event, rather than
+// calling the formatter directly: what a parent actually receives depends on
+// the reactor resolving the child, finding its spawner, and dispatching a turn
+// start — none of which formatter tests exercise.
+describe("SessionSpawnReactor amended report delivery", () => {
+  const deliveredToParent = (commands: ReadonlyArray<OrchestrationCommand>) =>
+    commands
+      .filter((command) => command.type === "thread.turn.start")
+      .filter((command) => command.threadId === PARENT_ID)
+      .map((command) => (command.type === "thread.turn.start" ? command.message.text : ""));
+
+  it.effect("delivers an amending report to the parent led by what it supersedes", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        boundaryEvents: [
+          reportPostedEvent(
+            report({
+              reportId: "report-amendment",
+              title: "Also handled the late instruction",
+              summary: "The queued instruction arrived after the first report; it is done now.",
+              supersedesReportId: "report-original",
+            }),
+            2,
+          ),
+        ],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const delivered = deliveredToParent(commands);
+          expect(delivered).toHaveLength(1);
+          const text = delivered[0] ?? "";
+          expect(text).toContain("AMENDED report (supersedes report-original)");
+          // The amendment marker precedes the summary the parent may think it
+          // has already read.
+          expect(text.indexOf("AMENDED report")).toBeLessThan(
+            text.indexOf("The queued instruction arrived"),
+          );
+          expect(text).toContain("(spawned thread: child-thread)");
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("delivers an ordinary report with no amendment marker", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        boundaryEvents: [reportPostedEvent(report({ reportId: "report-original" }), 2)],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const delivered = deliveredToParent(commands);
+          expect(delivered).toHaveLength(1);
+          expect(delivered[0]).not.toContain("AMENDED");
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
 });
 
 describe("buildTerminalReportSummary", () => {

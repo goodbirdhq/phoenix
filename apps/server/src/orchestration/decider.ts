@@ -1,8 +1,10 @@
 import {
+  checkReportSupersession,
   EventId,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  reportAlreadySupersededMessage,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -1461,11 +1463,41 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.report.post": {
-      yield* requireThread({
+      const reportThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      // Authoritative supersession check. The toolkit runs the same check
+      // first for a friendlier error, but only this one is serialized with
+      // command processing: two amendments of the same report racing through
+      // the toolkit both pass their pre-checks, and this is where the second
+      // loses. It also covers internally dispatched thread.report.post
+      // commands, which never pass through the toolkit at all.
+      //
+      // Correctness here depends on `reports` being the thread's COMPLETE
+      // list. The projector caps messages/checkpoints/activities but
+      // deliberately does not cap reports; capping them would start rejecting
+      // legitimate amendments of reports that had aged out, as "unknown".
+      if (command.supersedesReportId !== undefined) {
+        const check = checkReportSupersession(reportThread.reports, command.supersedesReportId);
+        if (check._tag === "unknown-report") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Report '${command.supersedesReportId}' does not exist on thread '${command.threadId}', so it cannot be superseded.`,
+          });
+        }
+        if (check._tag === "already-superseded") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: reportAlreadySupersededMessage({
+              reportId: command.supersedesReportId,
+              supersededByReportId: check.supersededByReportId,
+              chainHeadReportId: check.chainHeadReportId,
+            }),
+          });
+        }
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1496,6 +1528,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             // post_report never sets an origin: an agent-posted report is the
             // default, and only the reactor claims "system".
             origin: command.origin ?? "agent",
+            // Amendments append: the superseded report keeps its own event,
+            // and only this forward link is recorded. The reverse link is
+            // derived when reports are read back.
+            ...(command.supersedesReportId !== undefined
+              ? { supersedesReportId: command.supersedesReportId }
+              : {}),
             createdAt: command.createdAt,
           },
           updatedAt: command.createdAt,

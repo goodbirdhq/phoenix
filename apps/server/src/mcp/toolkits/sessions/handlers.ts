@@ -1,4 +1,5 @@
 import {
+  checkReportSupersession,
   CommandId,
   isProviderAvailable,
   MessageId,
@@ -10,16 +11,19 @@ import {
   READ_REPORT_MAX_CHARS,
   type ReadReportInput,
   type ReadSessionResult,
+  reportAlreadySupersededMessage,
   type RuntimeMode,
   SESSION_SPAWN_MAX_CHILDREN,
   SESSION_SPAWN_MAX_DEPTH,
   SessionOrchestrationDeniedError,
   SessionOrchestrationInvalidInputError,
   SessionOrchestrationOperationError,
+  SessionOrchestrationReportAlreadySupersededError,
   SessionOrchestrationUnavailableError,
   SessionOrchestrationWorktreeNotEmptyError,
   type ServerProvider,
   type SessionUsageSnapshot,
+  supersededReportNotice,
   type SettleSessionInput,
   type SettleSessionWorktreeOutcome,
   type SpawnSessionInput,
@@ -144,6 +148,15 @@ export const canReadThreadReports = (input: {
 export const REPORT_NOT_ACCESSIBLE_MESSAGE =
   "Report not accessible: it does not exist, has not been posted yet, or belongs to a session outside this session's read scope (own spawned sessions and their siblings).";
 
+// One message for both ways a supersedesReportId can fail to resolve — no
+// such report, or a report on another thread. Amending another session's
+// report is not a weaker version of amending your own: a report is a
+// session's account of its own work, so only the thread that posted one may
+// replace it. Saying which of the two went wrong would also turn post_report
+// into a probe for which report ids exist elsewhere.
+export const SUPERSEDES_REPORT_NOT_FOUND_MESSAGE =
+  "supersedesReportId does not name a report posted by this session. Pass the reportId returned by your own earlier post_report call on this thread; a report can only be amended by the session that posted it.";
+
 const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 
@@ -210,7 +223,7 @@ export const buildPingSessionSnapshot = (input: {
 // contract holds across providers without the parent having to remember to
 // ask for it. post_report is what wakes the parent up.
 const SPAWNED_SESSION_REPORT_INSTRUCTIONS =
-  "\n\n---\nYou were spawned by another Phoenix agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). If the summary is long, also pass a 1-3 sentence `abstract`. The report is delivered to the session that spawned you.";
+  "\n\n---\nYou were spawned by another Phoenix agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). If the summary is long, also pass a 1-3 sentence `abstract`. The report is delivered to the session that spawned you.\n\nIf you receive a further instruction AFTER you have already posted your report, do the new work and then post an AMENDING report: call `post_report` again with `supersedesReportId` set to the reportId of the report you are replacing. The amended report becomes the record. Never claim in a report that you did something you had not yet done when that report was written — describe what the late instruction was and what you did about it.";
 
 // Enough to tell the caller what is at stake without turning a refusal into a
 // transcript of a large working tree.
@@ -1004,6 +1017,86 @@ export const make = Effect.gen(function* () {
   const postReport = Effect.fn("SessionsToolkit.postReport")(function* (input: PostReportInput) {
     const scope = yield* requireSessionsCapability;
     const caller = yield* requireShell(scope.threadId);
+
+    // Friendly pre-check. The decider runs the same check against the folded
+    // read model and is the authority — this one exists so the common case
+    // fails with a specific, structured error instead of a dispatch failure.
+    // Reading the whole thread's reports (rather than one row) is what makes
+    // the chain-head answer available.
+    const supersedesReportId = input.supersedesReportId;
+    if (supersedesReportId !== undefined) {
+      const reports = yield* reportRepository
+        .listByThreadId({ threadId: scope.threadId })
+        .pipe(Effect.mapError(operationError("Failed to read this session's reports")));
+      const check = checkReportSupersession(reports, supersedesReportId);
+      if (check._tag === "unknown-report") {
+        return yield* new SessionOrchestrationInvalidInputError({
+          message: SUPERSEDES_REPORT_NOT_FOUND_MESSAGE,
+        });
+      }
+      if (check._tag === "already-superseded") {
+        return yield* new SessionOrchestrationReportAlreadySupersededError({
+          message: reportAlreadySupersededMessage({
+            reportId: supersedesReportId,
+            supersededByReportId: check.supersededByReportId,
+            chainHeadReportId: check.chainHeadReportId,
+          }),
+          reportId: supersedesReportId,
+          supersededByReportId: check.supersededByReportId,
+          chainHeadReportId: check.chainHeadReportId,
+        });
+      }
+    }
+
+    /**
+     * Turn a lost amendment race into the same actionable error the pre-check
+     * would have given.
+     *
+     * Between the pre-check and the decider, another amendment can take the
+     * chain head. The decider rejects this command — correctly — but through
+     * dispatch that surfaces as a generic operation failure, which tells the
+     * caller nothing about where to re-attach. So on failure, re-read the
+     * chain: if it moved, report that; otherwise the dispatch failed for some
+     * other reason and that error stands.
+     */
+    const withSupersessionRaceDetail = (
+      effect: Effect.Effect<{ readonly sequence: number }, SessionOrchestrationOperationError>,
+    ): Effect.Effect<
+      { readonly sequence: number },
+      SessionOrchestrationOperationError | SessionOrchestrationReportAlreadySupersededError
+    > =>
+      supersedesReportId === undefined
+        ? effect
+        : effect.pipe(
+            Effect.catch((dispatchError) =>
+              reportRepository.listByThreadId({ threadId: scope.threadId }).pipe(
+                // The recheck is diagnostic only; if it fails, the original
+                // dispatch error is still the truthful thing to report.
+                Effect.catch(() => Effect.succeed<ReadonlyArray<ProjectionThreadReport>>([])),
+                Effect.flatMap((reports) => {
+                  const check = checkReportSupersession(reports, supersedesReportId);
+                  return check._tag === "already-superseded"
+                    ? Effect.fail<
+                        | SessionOrchestrationOperationError
+                        | SessionOrchestrationReportAlreadySupersededError
+                      >(
+                        new SessionOrchestrationReportAlreadySupersededError({
+                          message: reportAlreadySupersededMessage({
+                            reportId: supersedesReportId,
+                            supersededByReportId: check.supersededByReportId,
+                            chainHeadReportId: check.chainHeadReportId,
+                          }),
+                          reportId: supersedesReportId,
+                          supersededByReportId: check.supersededByReportId,
+                          chainHeadReportId: check.chainHeadReportId,
+                        }),
+                      )
+                    : Effect.fail(dispatchError);
+                }),
+              ),
+            ),
+          );
+
     const createdAt = yield* nowIso;
     const reportId = yield* randomUUID;
     // Captured now, not agent-supplied: what this session cost by the time
@@ -1013,26 +1106,31 @@ export const make = Effect.gen(function* () {
       createdAt: caller.createdAt,
       latestTurn: caller.latestTurn,
     });
-    yield* enqueue(
-      engine.dispatch({
-        type: "thread.report.post",
-        commandId: yield* serverCommandId("mcp-post-report"),
-        threadId: scope.threadId,
-        reportId,
-        status: input.status,
-        title: input.title,
-        summary: input.summary,
-        ...(input.abstract !== undefined ? { abstract: input.abstract } : {}),
-        artifacts: input.artifacts ?? [],
-        ...(input.findings !== undefined ? { findings: input.findings } : {}),
-        ...(input.validation !== undefined ? { validation: input.validation } : {}),
-        ...(input.recommendation !== undefined ? { recommendation: input.recommendation } : {}),
-        ...(input.completionPercent !== undefined
-          ? { completionPercent: input.completionPercent }
-          : {}),
-        usage,
-        createdAt,
-      }),
+    yield* withSupersessionRaceDetail(
+      enqueue(
+        engine.dispatch({
+          type: "thread.report.post",
+          commandId: yield* serverCommandId("mcp-post-report"),
+          threadId: scope.threadId,
+          reportId,
+          status: input.status,
+          title: input.title,
+          summary: input.summary,
+          ...(input.abstract !== undefined ? { abstract: input.abstract } : {}),
+          artifacts: input.artifacts ?? [],
+          ...(input.findings !== undefined ? { findings: input.findings } : {}),
+          ...(input.validation !== undefined ? { validation: input.validation } : {}),
+          ...(input.recommendation !== undefined ? { recommendation: input.recommendation } : {}),
+          ...(input.completionPercent !== undefined
+            ? { completionPercent: input.completionPercent }
+            : {}),
+          usage,
+          ...(input.supersedesReportId !== undefined
+            ? { supersedesReportId: input.supersedesReportId }
+            : {}),
+          createdAt,
+        }),
+      ),
     );
     return {
       reportId,
@@ -1049,6 +1147,9 @@ export const make = Effect.gen(function* () {
         ? { completionPercent: input.completionPercent }
         : {}),
       usage,
+      ...(input.supersedesReportId !== undefined
+        ? { supersedesReportId: input.supersedesReportId }
+        : {}),
       // post_report is by definition the agent speaking for itself; only the
       // reactor's terminal reports are system-origin.
       origin: "agent" as const,
@@ -1149,6 +1250,17 @@ export const make = Effect.gen(function* () {
         : {}),
       artifacts: report.artifacts,
       ...(report.usage !== undefined ? { usage: report.usage } : {}),
+      ...(report.supersedesReportId !== null
+        ? { supersedesReportId: report.supersedesReportId }
+        : {}),
+      // A caller paging an old body must learn a newer account exists — both
+      // as an id it can follow and as prose it cannot skim past.
+      ...(report.supersededByReportId !== undefined
+        ? {
+            supersededByReportId: report.supersededByReportId,
+            supersededNotice: supersededReportNotice(report.supersededByReportId),
+          }
+        : {}),
       createdAt: report.createdAt,
     };
   });

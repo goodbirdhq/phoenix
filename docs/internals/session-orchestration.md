@@ -51,8 +51,9 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   after confirming there is no live provider binding.
 - **Persistence** — migrations 041 (`projection_threads.spawned_by_thread_id`), 042
   (`projection_thread_reports`), 043 (structured report fields), 044 (session stop audit), 045
-  (`projection_thread_reports.origin`), and 046 (`projection_thread_reports.abstract`), with
-  hydration through `ProjectionPipeline` and `ProjectionSnapshotQuery`.
+  (`projection_thread_reports.origin`), 046 (`projection_thread_reports.abstract`), and 048
+  (`projection_thread_reports.supersedes_report_id`), with hydration through `ProjectionPipeline`
+  and `ProjectionSnapshotQuery`.
 - **Reactor** — `apps/server/src/orchestration/Layers/SessionSpawnReactor.ts` watches
   `thread.report-posted` and `thread.session-set` domain events. A report on a thread with
   `spawnedByThreadId` starts a turn on the parent carrying the report. Turn injection is the wake
@@ -119,6 +120,65 @@ rides along automatically to `SessionReportEnvelope` and `read_report`.
 
 Deliberately no cost estimate anywhere in this: provider price tables go stale, so tokens are the
 stable currency and converting to cost, if a caller wants that, is a client-side concern.
+
+## Amending a report
+
+A report is a claim about work, and a queued instruction can arrive after the child already made
+it. Left alone, the stale report stays the record — and the incident that motivated this was worse
+than stale: the child, having reported, then claimed compliance with an instruction it had never
+acted on. So `post_report` takes an optional `supersedesReportId`, and the amendment — not the
+original — becomes the session's current account.
+
+Nothing is rewritten. The projection is append-only: the amendment stores a forward link
+(`supersedes_report_id`), the superseded report keeps its own row, its own event, and its own body,
+and the reverse link (`supersededByReportId`) is _derived_ on every read path by asking which later
+report points back at this one. That is why there is no "superseded" flag column to keep in sync,
+and why a report can be read from either end of the chain.
+
+Chains are **linear, never forked**: superseding a report that is already superseded is refused.
+Two reports both amending A would leave "which is current" ambiguous — reverse navigation from A
+could reach either, while latest-report selection picks by recency, and the two answers need not
+agree. Rather than teach every reader a merge rule, the loser is refused and handed the head of the
+chain (`SessionOrchestrationReportAlreadySupersededError` carries `supersededByReportId` and
+`chainHeadReportId`, because the caller's next move is mechanical: re-post against the head).
+
+The **decider** is where that check is authoritative, not the toolkit. Handler-level validation
+alone cannot prevent a fork: two amendments of the same report can both pass their pre-checks
+before either is dispatched. The decider runs against the folded read model _serialized with
+command processing_, so the second one loses deterministically — and it also covers
+`thread.report.post` commands dispatched internally, which never pass through the toolkit at all.
+The toolkit keeps a pre-check purely for error quality: the common case fails with a structured
+error instead of a dispatch failure, and a caller that loses the race gets that same structured
+error because post_report re-reads the chain before surfacing the rejection. Both sides share one
+implementation (`checkReportSupersession`) and one wording, so they cannot disagree.
+
+The reference must also name a report on the _calling thread_. A report is a session's account of
+its own work, so amending another session's report is not a weaker case of amending your own — it
+is refused, with the same message as an unknown id so the denial cannot double as a probe for which
+report ids exist elsewhere. A dangling link would be worse than a rejection: no reader could follow
+it.
+
+A Phoenix-synthesized terminal report is amendable like any other, which is what makes resurrection
+work: a session that was stopped, had a report synthesized for it, then resumed and finished can
+supersede the stand-in with its own account. The superseded row keeps `origin: "system"`, so the
+history still shows that Phoenix stood in.
+
+Both ends travel outward. Envelopes and `read_session` carry `supersedesReportId` /
+`supersededByReportId`; the parent notification for an amending report leads with
+`AMENDED report (supersedes …)` before the summary, because a parent that already acted on the
+superseded report has to see that first. `read_report` on a superseded report returns the body it
+always did — the record is append-only — plus `supersededByReportId` and a `supersededNotice`
+sentence: a caller paging an old report must learn a newer one exists, and cannot be relied on to
+notice a field it was not looking for.
+
+`SPAWNED_SESSION_REPORT_INSTRUCTIONS` (force-appended to every spawned prompt) tells children the
+rule directly: an instruction arriving after you reported means post an amending report — never
+claim retroactive compliance.
+
+The event payload change follows the event-sourcing rule: `supersedesReportId` is optional on both
+the `thread.report.post` command and the `thread.report-posted` payload, so every already-persisted
+report event replays unchanged. `supersededByReportId` is deliberately _not_ in the payload — at
+post time no such report exists yet, and inventing one would make the event a lie.
 
 ## Settling a child
 
