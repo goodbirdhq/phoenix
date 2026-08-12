@@ -511,6 +511,83 @@ it.effect("decodes thread settled and unsettled events", () =>
   }),
 );
 
+it.effect("replays a thread.report-posted event persisted before amendments existed", () =>
+  Effect.gen(function* () {
+    // Exactly the payload shape the server wrote before supersession: no
+    // amendment fields at all. An already-persisted event must keep decoding.
+    const replayed = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-report-1",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.report-posted",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-report-1",
+      causationEventId: null,
+      correlationId: "cmd-report-1",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        report: {
+          reportId: "report-1",
+          threadId: "thread-1",
+          status: "success",
+          title: "Did the work",
+          summary: "All done.",
+          artifacts: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+
+    if (replayed.type !== "thread.report-posted") {
+      assert.fail(`Expected thread.report-posted event, received ${replayed.type}.`);
+    }
+    assert.strictEqual(replayed.payload.report.supersedesReportId, undefined);
+    assert.strictEqual(replayed.payload.report.supersededByReportId, undefined);
+    // The pre-existing decoding default still applies alongside the new
+    // optional fields.
+    assert.strictEqual(replayed.payload.report.origin, "agent");
+  }),
+);
+
+it.effect("decodes an amending thread.report-posted event", () =>
+  Effect.gen(function* () {
+    const amended = yield* decodeOrchestrationEvent({
+      sequence: 2,
+      eventId: "event-report-2",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.report-posted",
+      occurredAt: "2026-01-01T01:00:00.000Z",
+      commandId: "cmd-report-2",
+      causationEventId: null,
+      correlationId: "cmd-report-2",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        report: {
+          reportId: "report-2",
+          threadId: "thread-1",
+          status: "success",
+          title: "Also handled the late instruction",
+          summary: "Amended.",
+          artifacts: [],
+          supersedesReportId: "report-1",
+          createdAt: "2026-01-01T01:00:00.000Z",
+        },
+        updatedAt: "2026-01-01T01:00:00.000Z",
+      },
+    });
+
+    if (amended.type !== "thread.report-posted") {
+      assert.fail(`Expected thread.report-posted event, received ${amended.type}.`);
+    }
+    assert.strictEqual(amended.payload.report.supersedesReportId, "report-1");
+  }),
+);
+
 it.effect("accepts provider-scoped model options in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({

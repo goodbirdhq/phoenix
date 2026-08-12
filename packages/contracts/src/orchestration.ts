@@ -380,6 +380,16 @@ export const SessionReport = Schema.Struct({
   // Defaulted so reports stored before synthesized reports existed — all of
   // them agent-posted — keep decoding.
   origin: SessionReportOrigin.pipe(Schema.withDecodingDefault(Effect.succeed("agent" as const))),
+  // Amendment chain. `supersedesReportId` is written by the author (an agent
+  // whose account changed after it already reported, e.g. because a queued
+  // instruction arrived late) and travels in the persisted event; it always
+  // names an earlier report on the SAME thread. `supersededByReportId` is the
+  // other end of the same link, derived on read paths from whichever later
+  // report points back here — never written into an event, because at post
+  // time no such report exists yet. Both optional, so every report persisted
+  // before amendments existed keeps decoding.
+  supersedesReportId: Schema.optional(TrimmedNonEmptyString),
+  supersededByReportId: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 }).check(structuredReportFieldsWithinSizeCap);
 export type SessionReport = typeof SessionReport.Type;
@@ -1256,6 +1266,10 @@ const ThreadReportPostCommand = Schema.Struct({
   // Omitted by the post_report tool; only the reactor's synthesized terminal
   // reports set "system".
   origin: Schema.optional(SessionReportOrigin),
+  // An earlier report on this same thread that this one amends. The toolkit
+  // validates the reference before dispatching; nothing here rewrites the
+  // superseded report — the record stays append-only.
+  supersedesReportId: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 }).check(structuredReportFieldsWithinSizeCap);
 

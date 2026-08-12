@@ -189,6 +189,11 @@ export const SessionReportEnvelope = Schema.Struct({
   artifacts: Schema.Array(SessionReportArtifact),
   // What the child cost, captured at report-post time.
   usage: Schema.optional(SessionUsageSnapshot),
+  // Both ends of an amendment chain, so a parent holding one envelope can
+  // walk to the other with read_report: the earlier report this one amends,
+  // and the later report that amended this one.
+  supersedesReportId: Schema.optional(TrimmedNonEmptyString),
+  supersededByReportId: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 });
 export type SessionReportEnvelope = typeof SessionReportEnvelope.Type;
@@ -232,6 +237,12 @@ export const toSessionReportEnvelope = (report: SessionReport): SessionReportEnv
     validationGapsCount: report.validation?.gaps.length ?? 0,
     artifacts: report.artifacts,
     ...(report.usage !== undefined ? { usage: report.usage } : {}),
+    ...(report.supersedesReportId !== undefined
+      ? { supersedesReportId: report.supersedesReportId }
+      : {}),
+    ...(report.supersededByReportId !== undefined
+      ? { supersededByReportId: report.supersededByReportId }
+      : {}),
     createdAt: report.createdAt,
   };
   if (report.summary.length <= SESSION_REPORT_INLINE_MAX_CHARS) {
@@ -334,9 +345,21 @@ export const ReadReportResult = Schema.Struct({
   ),
   artifacts: Schema.Array(SessionReportArtifact),
   usage: Schema.optional(SessionUsageSnapshot),
+  // Amendment chain, both directions.
+  supersedesReportId: Schema.optional(TrimmedNonEmptyString),
+  supersededByReportId: Schema.optional(TrimmedNonEmptyString),
+  // Present only when this report has been superseded. A caller paging an old
+  // body must not have to notice an id field to learn the record moved on, so
+  // the fact is also stated in prose it cannot miss.
+  supersededNotice: Schema.optional(Schema.String),
   createdAt: IsoDateTime,
 });
 export type ReadReportResult = typeof ReadReportResult.Type;
+
+// The prose half of the marker above. One builder so read_report has a single
+// wording, and tests assert against the same string the caller sees.
+export const supersededReportNotice = (supersededByReportId: string): string =>
+  `SUPERSEDED: this report was amended by a newer report on the same session. Read reportId "${supersededByReportId}" for the current account of the work; treat anything below as out of date.`;
 
 export const PingSessionInput = Schema.Struct({
   threadId: ThreadId,
@@ -434,6 +457,11 @@ export const PostReportInput = Schema.Struct({
   completionPercent: Schema.optional(
     Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
   ),
+  // reportId of an earlier report by THIS session that this one amends and
+  // replaces as the session's current account. Must name a report on this
+  // same thread. The superseded report is kept and stays readable, flagged as
+  // superseded; this one becomes the latest.
+  supersedesReportId: Schema.optional(TrimmedNonEmptyString),
 }).check(structuredReportFieldsWithinSizeCap);
 export type PostReportInput = typeof PostReportInput.Type;
 
