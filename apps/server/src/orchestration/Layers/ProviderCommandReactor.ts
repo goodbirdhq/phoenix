@@ -18,6 +18,7 @@ import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -1343,7 +1344,7 @@ const make = Effect.gen(function* () {
       return;
     }
     yield* providerService.stopSession({ threadId: current.id });
-    const now = new Date(yield* Clock.currentTimeMillis).toISOString();
+    const now = DateTime.formatIso(yield* DateTime.now);
     yield* setThreadSession({
       threadId: current.id,
       session: {
@@ -1483,7 +1484,9 @@ const make = Effect.gen(function* () {
     }
 
     const episodeId = event.eventId;
-    const deadlineAt = new Date(Date.parse(now) + event.payload.gracePeriodMs).toISOString();
+    const deadlineAt = DateTime.formatIso(
+      DateTime.add(DateTime.makeUnsafe(now), { milliseconds: event.payload.gracePeriodMs }),
+    );
 
     // Provider adapters treat a send while a real turn is running as a steer,
     // so this notice is queued after the in-flight tool work instead of
@@ -1588,11 +1591,9 @@ const make = Effect.gen(function* () {
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
     yield* rearmGraceStopDeadlines().pipe(
       Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("provider command reactor failed to re-arm graceful stop deadlines", {
-              cause: Cause.pretty(cause),
-            }),
+        Effect.logWarning("provider command reactor failed to re-arm graceful stop deadlines", {
+          cause: Cause.pretty(cause),
+        }),
       ),
     );
     const interruptedTitleRegenerations = yield* findInterruptedThreadTitleRegenerations().pipe(

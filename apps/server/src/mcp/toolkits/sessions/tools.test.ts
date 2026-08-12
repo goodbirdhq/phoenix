@@ -1,4 +1,4 @@
-import { PostReportInput, ReadSessionInput, StopSessionInput } from "@t3tools/contracts";
+import { PostReportInput, ReadSessionInput, StopSessionInput, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -9,14 +9,22 @@ const decodeStopSessionInput = Schema.decodeUnknownSync(StopSessionInput);
 
 it("stop_session keeps the backward-compatible immediate-stop shape", () => {
   assert.deepStrictEqual(decodeStopSessionInput({ threadId: "thread-1" }), {
-    threadId: "thread-1",
+    threadId: ThreadId.make("thread-1"),
   });
 });
 
 it("stop_session accepts a bounded grace period and partial-report request", () => {
   assert.deepStrictEqual(
-    decodeStopSessionInput({ threadId: "thread-1", gracePeriodMs: 120_000, requestPartialReport: true }),
-    { threadId: "thread-1", gracePeriodMs: 120_000, requestPartialReport: true },
+    decodeStopSessionInput({
+      threadId: ThreadId.make("thread-1"),
+      gracePeriodMs: 120_000,
+      requestPartialReport: true,
+    }),
+    {
+      threadId: ThreadId.make("thread-1"),
+      gracePeriodMs: 120_000,
+      requestPartialReport: true,
+    },
   );
 });
 
