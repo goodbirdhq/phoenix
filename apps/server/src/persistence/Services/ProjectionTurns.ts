@@ -82,9 +82,42 @@ export const ProjectionQueuedTurnStart = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   mode: Schema.Literals(["queue", "interrupt"]),
+  state: Schema.Literals(["queued", "releasing"]),
   requestedAt: IsoDateTime,
 });
 export type ProjectionQueuedTurnStart = typeof ProjectionQueuedTurnStart.Type;
+
+export const ProjectionQueuedDeliveryReceipt = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  state: Schema.Literals(["queued", "consumed", "cancelled"]),
+  requestedAt: IsoDateTime,
+  consumedByTurnId: Schema.NullOr(TurnId),
+  consumedAt: Schema.NullOr(IsoDateTime),
+  cancelledAt: Schema.NullOr(IsoDateTime),
+  cancelledReason: Schema.NullOr(Schema.Literals(["session_terminal", "interrupt_timeout"])),
+});
+export type ProjectionQueuedDeliveryReceipt = typeof ProjectionQueuedDeliveryReceipt.Type;
+
+export const MarkProjectionQueuedTurnReleasingInput = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  releasingAt: IsoDateTime,
+});
+
+export const ConsumeProjectionQueuedTurnInput = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  turnId: TurnId,
+  consumedAt: IsoDateTime,
+});
+
+export const CancelProjectionQueuedTurnInput = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  reason: Schema.Literals(["session_terminal", "interrupt_timeout"]),
+  cancelledAt: IsoDateTime,
+});
 
 export const DeleteProjectionQueuedTurnStartInput = Schema.Struct({
   threadId: ThreadId,
@@ -152,12 +185,30 @@ export interface ProjectionTurnRepositoryShape {
     row: ProjectionQueuedTurnStart,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
+  readonly markQueuedTurnStartReleasing: (
+    input: typeof MarkProjectionQueuedTurnReleasingInput.Type,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  readonly consumeQueuedTurnStart: (
+    input: typeof ConsumeProjectionQueuedTurnInput.Type,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  readonly cancelQueuedTurnStart: (
+    input: typeof CancelProjectionQueuedTurnInput.Type,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /** Compatibility path for events written before queued-delivery receipts. */
   readonly deleteQueuedTurnStart: (
     input: typeof DeleteProjectionQueuedTurnStartInput.Type,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   readonly listQueuedTurnStarts: Effect.Effect<
     ReadonlyArray<ProjectionQueuedTurnStart>,
+    ProjectionRepositoryError
+  >;
+
+  readonly listQueuedDeliveryReceipts: Effect.Effect<
+    ReadonlyArray<ProjectionQueuedDeliveryReceipt>,
     ProjectionRepositoryError
   >;
 

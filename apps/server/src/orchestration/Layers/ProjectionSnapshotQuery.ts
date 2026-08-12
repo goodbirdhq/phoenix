@@ -147,6 +147,7 @@ const ProjectionQueuedTurnStartDbRowSchema = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   mode: Schema.Literals(["queue", "interrupt"]),
+  releasingAt: Schema.NullOr(IsoDateTime),
   requestedAt: IsoDateTime,
 });
 const ProjectionStateDbRowSchema = ProjectionState;
@@ -823,9 +824,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           pending_message_id AS "messageId",
           CASE WHEN state = 'interrupting' THEN 'interrupt' ELSE 'queue' END AS mode,
+          CASE WHEN state = 'releasing' THEN requested_at ELSE NULL END AS "releasingAt",
           requested_at AS "requestedAt"
         FROM projection_turns
-        WHERE state IN ('queued', 'interrupting')
+        WHERE state IN ('queued', 'interrupting', 'releasing')
           AND pending_message_id IS NOT NULL
         ORDER BY requested_at ASC, row_id ASC
       `,
@@ -2039,7 +2041,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               const sessionByThread = new Map<string, OrchestrationSession>();
               const queuedTurnStartsByThread = new Map<
                 string,
-                Array<(typeof queuedTurnStartRows)[number]>
+                Array<NonNullable<OrchestrationThread["queuedTurnStarts"]>[number]>
               >();
 
               for (let index = 0; index < sessionRows.length; index += 1) {
@@ -2051,7 +2053,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               }
               for (const row of queuedTurnStartRows) {
                 const rows = queuedTurnStartsByThread.get(row.threadId) ?? [];
-                rows.push(row);
+                rows.push({
+                  threadId: row.threadId,
+                  messageId: row.messageId,
+                  mode: row.mode,
+                  requestedAt: row.requestedAt,
+                  ...(row.releasingAt !== null ? { releasingAt: row.releasingAt } : {}),
+                });
                 queuedTurnStartsByThread.set(row.threadId, rows);
               }
 

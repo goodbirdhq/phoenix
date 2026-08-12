@@ -92,7 +92,46 @@ const queued = (
   threadId: CHILD_ID,
   messageId: MessageId.make(`queued-${suffix}`),
   mode,
+  state: "queued",
   requestedAt,
+});
+
+const consumedEvent = (messageId = MessageId.make("queued-receipt")): OrchestrationEvent => ({
+  sequence: 1,
+  eventId: EventId.make(`event-consumed-${messageId}`),
+  aggregateKind: "thread",
+  aggregateId: CHILD_ID,
+  occurredAt: NOW,
+  commandId: CommandId.make("command-consumed"),
+  causationEventId: null,
+  correlationId: null,
+  metadata: {},
+  type: "thread.turn-start-consumed",
+  payload: {
+    threadId: CHILD_ID,
+    messageId,
+    turnId: TurnId.make("turn-receipt"),
+    consumedAt: NOW,
+  },
+});
+
+const cancelledEvent = (messageId = MessageId.make("queued-cancelled")): OrchestrationEvent => ({
+  sequence: 1,
+  eventId: EventId.make(`event-cancelled-${messageId}`),
+  aggregateKind: "thread",
+  aggregateId: CHILD_ID,
+  occurredAt: NOW,
+  commandId: CommandId.make("command-cancelled"),
+  causationEventId: null,
+  correlationId: null,
+  metadata: {},
+  type: "thread.turn-start-cancelled",
+  payload: {
+    threadId: CHILD_ID,
+    messageId,
+    reason: "session_terminal",
+    createdAt: NOW,
+  },
 });
 
 const sessionSetEvent = (shell: OrchestrationThreadShell): OrchestrationEvent => ({
@@ -284,6 +323,43 @@ describe("SessionSpawnReactor queued delivery", () => {
         expect(commands.some((command) => command.type === "thread.session.stop")).toBe(true);
         expect(queuedRows).toHaveLength(0);
       }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("acknowledges a consumed queued delivery once under replay", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        boundaryEvents: [consumedEvent(), consumedEvent()],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const acks = commands.filter(
+            (command) =>
+              command.type === "thread.turn.start" &&
+              command.message.text.includes("outcome: consumed"),
+          );
+          expect(acks).toHaveLength(1);
+          expect(acks[0]?.message.text).toContain("consumedByTurnId: turn-receipt");
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("acknowledges a cancelled queued delivery with its reason", () =>
+    Effect.scoped(
+      createHarness({ status: "stopped", queued: [], boundaryEvents: [cancelledEvent()] }).pipe(
+        Effect.map(({ commands }) => {
+          const ack = commands.find(
+            (command) =>
+              command.type === "thread.turn.start" &&
+              command.message.text.includes("outcome: cancelled"),
+          );
+          expect(ack?.message.text).toContain("reason: session_terminal");
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
     ),
   );
 });

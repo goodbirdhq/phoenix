@@ -586,6 +586,10 @@ export const OrchestrationThread = Schema.Struct({
         messageId: MessageId,
         mode: Schema.Literals(["queue", "interrupt"]),
         requestedAt: IsoDateTime,
+        // A queue release remains visible until the provider exposes the
+        // concrete turn id that consumed it. Older snapshots never had this
+        // transitional marker, so they decode as immediately releasable.
+        releasingAt: Schema.optional(IsoDateTime),
       }),
     ),
   ),
@@ -1315,6 +1319,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.message-sent",
   "thread.turn-start-queued",
   "thread.turn-start-cancelled",
+  "thread.turn-start-consumed",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
   "thread.approval-response-requested",
@@ -1498,6 +1503,9 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   graceStopNotice: Schema.optional(Schema.Boolean),
+  // Set only when this request releases a persisted queued delivery. Optional
+  // so events written before delivery receipts retain their old meaning.
+  queuedDelivery: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
 });
 
@@ -1515,6 +1523,13 @@ export const ThreadTurnStartCancelledPayload = Schema.Struct({
   messageId: MessageId,
   reason: Schema.Literals(["session_terminal", "interrupt_timeout"]),
   createdAt: IsoDateTime,
+});
+
+export const ThreadTurnStartConsumedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  turnId: TurnId,
+  consumedAt: IsoDateTime,
 });
 
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
@@ -1711,6 +1726,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-start-cancelled"),
     payload: ThreadTurnStartCancelledPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.turn-start-consumed"),
+    payload: ThreadTurnStartConsumedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
