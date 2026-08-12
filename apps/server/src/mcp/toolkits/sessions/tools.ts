@@ -47,7 +47,7 @@ export const SpawnSessionTool = Tool.make("spawn_session", {
 
 export const SendToSessionTool = Tool.make("send_to_session", {
   description:
-    "Send a follow-up user message to a session this session spawned, starting a new turn there. Fails while the child is mid-turn; prefer waiting for its report.",
+    "Send a follow-up user message to a session this session spawned. mode defaults to queue: idle sessions receive it immediately, while busy sessions receive it after the current turn. interrupt stops the current turn first, then sends the message. The result reports whether delivery was immediate or queued.",
   parameters: SendToSessionInput,
   success: SendToSessionResult,
   failure: SessionOrchestrationError,

@@ -17,6 +17,8 @@ import * as Stream from "effect/Stream";
 import { forkParked } from "../../serverActivation.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import {
   SessionSpawnReactor,
   type SessionSpawnReactorShape,
@@ -51,6 +53,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectionTurnRepository = yield* ProjectionTurnRepository;
 
   const randomUUID = crypto.randomUUIDv4.pipe(Effect.orDie);
   const serverCommandId = (tag: string) =>
@@ -59,6 +62,22 @@ const make = Effect.gen(function* () {
   // A session can bounce through error states repeatedly (retries, restarts).
   // Notify the parent once per error episode; a later healthy state re-arms.
   const errorNotifiedThreads = new Set<string>();
+
+  const releaseNextQueuedTurn = Effect.fn("SessionSpawnReactor.releaseNextQueuedTurn")(function* (
+    threadId: ThreadId,
+  ) {
+    const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).find(
+      (entry) => entry.threadId === threadId,
+    );
+    if (queued === undefined) return;
+    yield* engine.dispatch({
+      type: "thread.turn.start.queued",
+      commandId: yield* serverCommandId("queued-turn-start"),
+      threadId,
+      messageId: queued.messageId,
+      createdAt: yield* nowIso,
+    });
+  });
 
   const notifyParent = Effect.fn("SessionSpawnReactor.notifyParent")(function* (input: {
     readonly childThreadId: ThreadId;
@@ -109,6 +128,9 @@ const make = Effect.gen(function* () {
     }
 
     const { threadId, session } = event.payload;
+    if (session.status !== "starting" && session.status !== "running") {
+      yield* releaseNextQueuedTurn(threadId);
+    }
     if (session.status === "error") {
       if (errorNotifiedThreads.has(threadId)) return;
       errorNotifiedThreads.add(threadId);
@@ -151,6 +173,35 @@ const make = Effect.gen(function* () {
         return worker.enqueue(event);
       }),
     );
+    yield* Effect.gen(function* () {
+      const queuedThreadIds = new Set(
+        (yield* projectionTurnRepository.listQueuedTurnStarts).map((entry) => entry.threadId),
+      );
+      yield* Effect.forEach(
+        queuedThreadIds,
+        (threadId) =>
+          snapshotQuery.getThreadShellById(threadId).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.void,
+                onSome: (thread) =>
+                  thread.session?.status === "starting" || thread.session?.status === "running"
+                    ? Effect.void
+                    : releaseNextQueuedTurn(threadId),
+              }),
+            ),
+          ),
+        { concurrency: 1 },
+      );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("session spawn reactor failed to recover queued turns", {
+              cause: Cause.pretty(cause),
+            }),
+      ),
+    );
   });
 
   return {
@@ -159,4 +210,6 @@ const make = Effect.gen(function* () {
   } satisfies SessionSpawnReactorShape;
 });
 
-export const SessionSpawnReactorLive = Layer.effect(SessionSpawnReactor, make);
+export const SessionSpawnReactorLive = Layer.effect(SessionSpawnReactor, make).pipe(
+  Layer.provide(ProjectionTurnRepositoryLive),
+);

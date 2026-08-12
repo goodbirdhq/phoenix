@@ -78,6 +78,18 @@ export const ProjectionPendingTurnStart = Schema.Struct({
 });
 export type ProjectionPendingTurnStart = typeof ProjectionPendingTurnStart.Type;
 
+export const ProjectionQueuedTurnStart = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  requestedAt: IsoDateTime,
+});
+export type ProjectionQueuedTurnStart = typeof ProjectionQueuedTurnStart.Type;
+
+export const DeleteProjectionQueuedTurnStartInput = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+});
+
 export const ListProjectionTurnsByThreadInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -134,6 +146,19 @@ export interface ProjectionTurnRepositoryShape {
   readonly deletePendingTurnStartByThreadId: (
     input: GetProjectionPendingTurnStartInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  readonly enqueueTurnStart: (
+    row: ProjectionQueuedTurnStart,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  readonly deleteQueuedTurnStart: (
+    input: typeof DeleteProjectionQueuedTurnStartInput.Type,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  readonly listQueuedTurnStarts: Effect.Effect<
+    ReadonlyArray<ProjectionQueuedTurnStart>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Lists all projection rows for a thread, including pending placeholders, with checkpoint rows ordered before non-checkpoint rows.

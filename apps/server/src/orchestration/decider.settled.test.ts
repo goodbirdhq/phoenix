@@ -5,6 +5,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
   type OrchestrationReadModel,
   type OrchestrationSession,
   type OrchestrationThread,
@@ -394,6 +395,85 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       expect(sessionEvents.map((event) => event.type)).toEqual([
         "thread.unsettled",
         "thread.session-set",
+      ]);
+    }),
+  );
+
+  it.effect("queues busy session deliveries and interrupts only when requested", () =>
+    Effect.gen(function* () {
+      const runningSession = {
+        ...makeSession("running"),
+        activeTurnId: TurnId.make("turn-active"),
+      };
+      const makeCommand = (deliveryMode: "queue" | "interrupt") =>
+        ({
+          type: "thread.turn.start" as const,
+          commandId: CommandId.make(`cmd-${deliveryMode}`),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: MessageId.make(`message-${deliveryMode}`),
+            role: "user" as const,
+            text: "Follow up",
+            attachments: [],
+          },
+          runtimeMode: "full-access" as const,
+          interactionMode: "default" as const,
+          deliveryMode,
+          createdAt: NOW,
+        }) as const;
+
+      const queued = yield* decideOrchestrationCommand({
+        command: makeCommand("queue"),
+        readModel: makeReadModel(null, null, runningSession),
+      });
+      expect((Array.isArray(queued) ? queued : [queued]).map((event) => event.type)).toEqual([
+        "thread.message-sent",
+        "thread.turn-start-queued",
+      ]);
+
+      const interrupted = yield* decideOrchestrationCommand({
+        command: makeCommand("interrupt"),
+        readModel: makeReadModel(null, null, runningSession),
+      });
+      const interruptEvents = Array.isArray(interrupted) ? interrupted : [interrupted];
+      expect(interruptEvents.map((event) => event.type)).toEqual([
+        "thread.message-sent",
+        "thread.turn-interrupt-requested",
+        "thread.turn-start-queued",
+      ]);
+      expect(interruptEvents[1]?.type).toBe("thread.turn-interrupt-requested");
+      if (interruptEvents[1]?.type === "thread.turn-interrupt-requested") {
+        expect(interruptEvents[1].payload.turnId).toBe(TurnId.make("turn-active"));
+      }
+
+      const released = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start.queued",
+          commandId: CommandId.make("cmd-release-queued"),
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("message-queue"),
+          createdAt: NOW,
+        },
+        readModel: makeReadModel(
+          null,
+          null,
+          makeSession("ready"),
+          [],
+          [
+            {
+              id: MessageId.make("message-queue"),
+              role: "user",
+              text: "Follow up",
+              turnId: null,
+              streaming: false,
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ],
+        ),
+      });
+      expect((Array.isArray(released) ? released : [released]).map((event) => event.type)).toEqual([
+        "thread.turn-start-requested",
       ]);
     }),
   );

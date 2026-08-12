@@ -1023,7 +1023,95 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         });
       }
+
+      const sessionIsBusy =
+        targetThread.session?.status === "starting" || targetThread.session?.status === "running";
+      if (command.deliveryMode !== undefined && sessionIsBusy) {
+        const queuedEvent: Omit<OrchestrationEvent, "sequence"> = {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          causationEventId: userMessageEvent.eventId,
+          type: "thread.turn-start-queued",
+          payload: {
+            threadId: command.threadId,
+            messageId: command.message.messageId,
+            createdAt: command.createdAt,
+          },
+        };
+        if (command.deliveryMode === "queue") {
+          return [...lifecycleResetEvents, userMessageEvent, queuedEvent];
+        }
+        const interruptEvent: Omit<OrchestrationEvent, "sequence"> = {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          causationEventId: userMessageEvent.eventId,
+          type: "thread.turn-interrupt-requested",
+          payload: {
+            threadId: command.threadId,
+            ...(targetThread.session?.activeTurnId !== null &&
+            targetThread.session?.activeTurnId !== undefined
+              ? { turnId: targetThread.session.activeTurnId }
+              : {}),
+            createdAt: command.createdAt,
+          },
+        };
+        return [...lifecycleResetEvents, userMessageEvent, interruptEvent, queuedEvent];
+      }
       return [...lifecycleResetEvents, userMessageEvent, turnStartRequestedEvent];
+    }
+
+    case "thread.turn.start.queued": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const message = targetThread.messages.find((entry) => entry.id === command.messageId);
+      if (!message || message.role !== "user") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued user message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      const eventBase = yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: command.threadId,
+        occurredAt: command.createdAt,
+        commandId: command.commandId,
+      });
+      if (
+        targetThread.session?.status === "starting" ||
+        targetThread.session?.status === "running"
+      ) {
+        return {
+          ...eventBase,
+          type: "thread.turn-start-queued",
+          payload: {
+            threadId: command.threadId,
+            messageId: command.messageId,
+            createdAt: command.createdAt,
+          },
+        };
+      }
+      return {
+        ...eventBase,
+        type: "thread.turn-start-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          runtimeMode: targetThread.runtimeMode,
+          interactionMode: targetThread.interactionMode,
+          createdAt: command.createdAt,
+        },
+      };
     }
 
     case "thread.turn.interrupt": {

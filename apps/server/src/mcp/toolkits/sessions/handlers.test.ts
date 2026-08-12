@@ -2,7 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { GitCommandError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
-import { resolveSessionCheckout, validateSpawnCheckoutInput } from "./handlers.ts";
+import {
+  deliveryFromAcknowledgedEventType,
+  normalizeSendToSessionMode,
+  resolveSessionCheckout,
+  validateSpawnCheckoutInput,
+} from "./handlers.ts";
 
 const gitError = (detail: string) =>
   new GitCommandError({ operation: "test", command: "git", cwd: "/repo", detail });
@@ -57,5 +62,17 @@ describe("resolveSessionCheckout", () => {
     );
 
     expect(checkout).toBeNull();
+  });
+});
+
+describe("send_to_session delivery modes", () => {
+  it("defaults omitted mode to queue", () => {
+    expect(normalizeSendToSessionMode(undefined)).toBe("queue");
+    expect(normalizeSendToSessionMode("interrupt")).toBe("interrupt");
+  });
+
+  it("reports whether the acknowledged command queued delivery", () => {
+    expect(deliveryFromAcknowledgedEventType("thread.turn-start-queued")).toBe("queued");
+    expect(deliveryFromAcknowledgedEventType("thread.turn-start-requested")).toBe("immediate");
   });
 });

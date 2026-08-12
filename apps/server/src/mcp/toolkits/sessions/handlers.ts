@@ -23,6 +23,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -97,6 +98,12 @@ export const resolveSessionCheckout = (gitWorkflow: SessionCheckoutGitWorkflow, 
       ),
     ),
   );
+
+export const normalizeSendToSessionMode = (mode: "queue" | "interrupt" | undefined) =>
+  mode ?? "queue";
+
+export const deliveryFromAcknowledgedEventType = (eventType: string | undefined) =>
+  eventType === "thread.turn-start-queued" ? ("queued" as const) : ("immediate" as const);
 
 // Appended to every spawned session's first message so the completion
 // contract holds across providers without the parent having to remember to
@@ -434,11 +441,12 @@ const make = Effect.gen(function* () {
   const sendToSession = Effect.fn("SessionsToolkit.sendToSession")(function* (input: {
     readonly threadId: ThreadId;
     readonly message: string;
+    readonly mode?: "queue" | "interrupt" | undefined;
   }) {
     const scope = yield* requireSessionsCapability;
     const child = yield* requireSpawnedChild(scope.threadId, input.threadId);
     const createdAt = yield* nowIso;
-    yield* enqueue(
+    const result = yield* enqueue(
       engine.dispatch({
         type: "thread.turn.start",
         commandId: yield* serverCommandId("mcp-send-to-session"),
@@ -451,10 +459,22 @@ const make = Effect.gen(function* () {
         },
         runtimeMode: child.runtimeMode,
         interactionMode: child.interactionMode,
+        deliveryMode: normalizeSendToSessionMode(input.mode),
         createdAt,
       }),
     );
-    return { threadId: child.id };
+    const acknowledgedEvent = yield* engine
+      .readEvents(result.sequence - 1, 1)
+      .pipe(
+        Stream.runHead,
+        Effect.mapError(operationError("Failed to resolve message delivery status")),
+      );
+    return {
+      threadId: child.id,
+      delivery: deliveryFromAcknowledgedEventType(
+        Option.isSome(acknowledgedEvent) ? acknowledgedEvent.value.type : undefined,
+      ),
+    };
   });
 
   const readSession = Effect.fn("SessionsToolkit.readSession")(function* (input: {
