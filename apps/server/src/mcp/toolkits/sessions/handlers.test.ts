@@ -1,22 +1,45 @@
-import { describe, expect, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  EnvironmentId,
   GitCommandError,
+  type OrchestrationThreadShell,
+  type ProjectId,
+  ProviderInstanceId,
   READ_REPORT_MAX_CHARS,
   ReadReportInput,
   SESSION_REPORT_INLINE_MAX_CHARS,
+  SessionOrchestrationDeniedError,
   type SessionReport,
   ThreadId,
   toSessionReportEnvelope,
 } from "@t3tools/contracts";
+import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
+import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
+import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
+import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ThreadTurnBootstrap from "../../../orchestration/ThreadTurnBootstrap.ts";
+import { PersistenceSqlError } from "../../../persistence/Errors.ts";
+import { ProjectionThreadReportRepository } from "../../../persistence/Services/ProjectionThreadReports.ts";
+import { ProviderSessionDirectoryPersistenceError } from "../../../provider/Errors.ts";
+import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
+import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
+import { layerTest as serverSettingsLayerTest } from "../../../serverSettings.ts";
+import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
   assessWorktreeCleanupRisk,
+  buildPingSessionSnapshot,
   canReadThreadReports,
   decideBranchCleanup,
   isSessionAlive,
   isSessionBusy,
+  make,
   REPORT_NOT_ACCESSIBLE_MESSAGE,
   resolveSendToSessionDelivery,
   resolveSessionCheckout,
@@ -464,4 +487,304 @@ describe("read_report denial shape", () => {
     expect(REPORT_NOT_ACCESSIBLE_MESSAGE).not.toMatch(/report-|thread-|\$\{/);
     expect(REPORT_NOT_ACCESSIBLE_MESSAGE.length).toBeGreaterThan(0);
   });
+});
+
+const pingThreadId = "thread-1" as ThreadId;
+const pingProjectId = "project-1" as ProjectId;
+const now = "2026-08-12T00:00:00.000Z";
+
+const baseShell = {
+  id: pingThreadId,
+  projectId: pingProjectId,
+  title: "Fix the flaky test",
+  modelSelection: { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  latestTurn: null,
+  createdAt: now,
+  updatedAt: now,
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  session: {
+    threadId: pingThreadId,
+    status: "running",
+    providerName: "Claude Agent",
+    runtimeMode: "full-access",
+    activeTurnId: null,
+    lastError: null,
+    updatedAt: now,
+  },
+  latestUserMessageAt: now,
+  hasPendingApprovals: false,
+  hasPendingUserInput: false,
+  hasActionableProposedPlan: false,
+} satisfies OrchestrationThreadShell;
+
+describe("buildPingSessionSnapshot", () => {
+  it("reports idle status with no activity when nothing else is known", () => {
+    expect(
+      buildPingSessionSnapshot({
+        shell: baseShell,
+        lastActivityAt: null,
+        hasReport: false,
+        lastAssistantMessage: null,
+      }),
+    ).toEqual({
+      sessionStatus: "running",
+      settled: false,
+      lastActivityAt: null,
+      currentActivity: null,
+      planProgress: null,
+      hasReport: false,
+      lastAssistantMessage: null,
+    });
+  });
+
+  it("surfaces background liveness, plan progress, and activity timestamp from the shell", () => {
+    const shell = {
+      ...baseShell,
+      settledAt: now,
+      backgroundLiveness: "working",
+      planProgress: { step: "Run the test suite", completedSteps: 2, totalSteps: 5 },
+    } satisfies OrchestrationThreadShell;
+
+    const result = buildPingSessionSnapshot({
+      shell,
+      lastActivityAt: "2026-08-12T00:05:00.000Z",
+      hasReport: false,
+      lastAssistantMessage: null,
+    });
+
+    expect(result.settled).toBe(true);
+    expect(result.currentActivity).toBe("working");
+    expect(result.planProgress).toEqual({
+      step: "Run the test suite",
+      completedSteps: 2,
+      totalSteps: 5,
+    });
+    expect(result.lastActivityAt).toBe("2026-08-12T00:05:00.000Z");
+  });
+
+  it("passes hasReport through as given and truncates a long last assistant message", () => {
+    const result = buildPingSessionSnapshot({
+      shell: baseShell,
+      lastActivityAt: null,
+      hasReport: true,
+      lastAssistantMessage: "a".repeat(600),
+    });
+
+    expect(result.hasReport).toBe(true);
+    expect(result.lastAssistantMessage).toHaveLength(500);
+    expect(result.lastAssistantMessage?.endsWith("…")).toBe(true);
+  });
+
+  it("returns a last assistant message that fits unchanged", () => {
+    const result = buildPingSessionSnapshot({
+      shell: baseShell,
+      lastActivityAt: null,
+      hasReport: false,
+      lastAssistantMessage: "on it",
+    });
+
+    expect(result.lastAssistantMessage).toBe("on it");
+  });
+});
+
+const parentThreadId = "parent-1" as ThreadId;
+const childThreadId = "child-1" as ThreadId;
+
+const childShell = {
+  ...baseShell,
+  id: childThreadId,
+  spawnedByThreadId: parentThreadId,
+} satisfies OrchestrationThreadShell;
+
+const invocationScope = {
+  environmentId: EnvironmentId.make("environment-1"),
+  threadId: parentThreadId,
+  providerSessionId: "provider-session-1",
+  providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+  capabilities: new Set(["sessions"] as const),
+  issuedAt: 1,
+} satisfies McpInvocationContext.McpInvocationScope;
+
+// Every handler-level test builds the toolkit's `make` against mocked
+// services, then runs one handler call with the capability scope provided
+// the way the MCP dispatch path provides it per call. engine.dispatch and
+// startup.enqueueCommand both die if called, so a passing test also proves
+// the tool never dispatches a command or starts a turn.
+const runHandler = <A, E, R>(
+  run: (handlers: Effect.Success<typeof make>) => Effect.Effect<A, E, R>,
+  overrides: {
+    getThreadShellById?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadShellById"];
+    getThreadHasReport?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadHasReport"];
+    getLastAssistantMessage?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getLastAssistantMessage"];
+    listBindings?: ProviderSessionDirectory["Service"]["listBindings"];
+  } = {},
+) =>
+  Effect.gen(function* () {
+    const handlers = yield* make;
+    return yield* run(handlers);
+  }).pipe(
+    Effect.provideService(McpInvocationContext.McpInvocationContext, invocationScope),
+    Effect.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        serverSettingsLayerTest({ enableSessionOrchestration: true }),
+        Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
+          readEvents: () => Stream.empty,
+          dispatch: () => Effect.die("engine.dispatch must not be called by a read-only tool"),
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        }),
+        Layer.mock(ThreadTurnBootstrap.ThreadTurnBootstrap)({}),
+        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+          getThreadShellById:
+            overrides.getThreadShellById ??
+            ((id) =>
+              Effect.succeed(id === childThreadId ? Option.some(childShell) : Option.none())),
+          getThreadHasReport: overrides.getThreadHasReport ?? (() => Effect.succeed(false)),
+          getLastAssistantMessage:
+            overrides.getLastAssistantMessage ?? (() => Effect.succeed(Option.none())),
+          // read_session's pre-existing report/messages fetch; not under test
+          // here, so a fixed empty response is enough to keep it from dying.
+          getThreadDetailById: () => Effect.succeed(Option.none()),
+        }),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+        Layer.mock(ProviderSessionDirectory)({
+          listBindings: overrides.listBindings ?? (() => Effect.succeed([])),
+        }),
+        Layer.mock(GitWorkflowService.GitWorkflowService)({}),
+        // Not exercised by ping_session/read_session (only read_report/post_report
+        // touch it); unused methods die if called.
+        Layer.mock(ProjectionThreadReportRepository)({}),
+        Layer.mock(ServerRuntimeStartup.ServerRuntimeStartup)({
+          enqueueCommand: () =>
+            Effect.die("startup.enqueueCommand must not be called by a read-only tool"),
+        }),
+      ),
+    ),
+  );
+
+describe("ping_session (handler)", () => {
+  it.effect("denies a thread this session did not spawn", () =>
+    Effect.gen(function* () {
+      const strangerThreadId = "stranger-1" as ThreadId;
+      const error = yield* runHandler(
+        (handlers) => handlers.ping_session({ threadId: strangerThreadId }),
+        {
+          getThreadShellById: (id) =>
+            Effect.succeed(
+              id === strangerThreadId
+                ? Option.some({ ...childShell, id: strangerThreadId, spawnedByThreadId: null })
+                : Option.none(),
+            ),
+        },
+      ).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SessionOrchestrationDeniedError);
+      expect(error).toMatchObject({ reason: "not_spawned_by_this_session" });
+    }),
+  );
+
+  it.effect(
+    "degrades to nulls, and still succeeds, when directory/report/message enrichment fails",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* runHandler(
+          (handlers) => handlers.ping_session({ threadId: childThreadId }),
+          {
+            getThreadHasReport: () =>
+              Effect.fail(
+                new PersistenceSqlError({
+                  operation: "test",
+                  detail: "projection unavailable",
+                }),
+              ),
+            getLastAssistantMessage: () =>
+              Effect.fail(
+                new PersistenceSqlError({
+                  operation: "test",
+                  detail: "projection unavailable",
+                }),
+              ),
+            listBindings: () =>
+              Effect.fail(
+                new ProviderSessionDirectoryPersistenceError({
+                  operation: "test",
+                  detail: "directory unavailable",
+                }),
+              ),
+          },
+        );
+
+        // Shell-derived fields still come through even though every
+        // optional enrichment failed.
+        expect(result.sessionStatus).toBe("running");
+        expect(result.settled).toBe(false);
+        // Failed enrichment degrades to nulls/false instead of failing the call.
+        expect(result.lastActivityAt).toBeNull();
+        expect(result.hasReport).toBe(false);
+        expect(result.lastAssistantMessage).toBeNull();
+      }),
+  );
+
+  it.effect("never dispatches a command or starts a turn", () =>
+    Effect.gen(function* () {
+      // engine.dispatch and startup.enqueueCommand both die if called (see
+      // runHandler); reaching a result at all proves ping_session never took
+      // either path.
+      const result = yield* runHandler((handlers) =>
+        handlers.ping_session({ threadId: childThreadId }),
+      );
+      expect(result.threadId).toBe(childThreadId);
+    }),
+  );
+
+  it.effect(
+    "returns the last assistant message independent of turn boundaries, even when the newest turn is user-only",
+    () =>
+      Effect.gen(function* () {
+        // getLastAssistantMessage is a purpose-built query with no notion of
+        // "the current turn" — unlike a turn-windowed detail read, it cannot
+        // miss an earlier assistant message just because the newest turn
+        // happens to hold only a user message.
+        const result = yield* runHandler(
+          (handlers) => handlers.ping_session({ threadId: childThreadId }),
+          {
+            getThreadHasReport: () => Effect.succeed(true),
+            getLastAssistantMessage: () =>
+              Effect.succeed(Option.some({ text: "Finished the refactor.", createdAt: now })),
+          },
+        );
+
+        expect(result.hasReport).toBe(true);
+        expect(result.lastAssistantMessage).toBe("Finished the refactor.");
+      }),
+  );
+});
+
+describe("read_session (handler)", () => {
+  it.effect("degrades lastActivityAt to null when the provider session directory fails", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler(
+        (handlers) => handlers.read_session({ threadId: childThreadId }),
+        {
+          listBindings: () =>
+            Effect.fail(
+              new ProviderSessionDirectoryPersistenceError({
+                operation: "test",
+                detail: "directory unavailable",
+              }),
+            ),
+        },
+      );
+
+      expect(result.sessionStatus).toBe("running");
+      expect(result.lastActivityAt).toBeNull();
+    }),
+  );
 });

@@ -25,6 +25,7 @@ import * as ProjectionSnapshotQuery from "../../../orchestration/Services/Projec
 import * as ThreadTurnBootstrap from "../../../orchestration/ThreadTurnBootstrap.ts";
 import { ProjectionThreadReportRepository } from "../../../persistence/Services/ProjectionThreadReports.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
+import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -141,6 +142,9 @@ const makeHarness = (options: HarnessOptions) => {
       listByThreadId: () => Effect.succeed([]),
       findByReportId: () => Effect.succeed(Option.none()),
     } as unknown as ProjectionThreadReportRepository["Service"]),
+    // Not exercised by settle_session; only ping_session/read_session read
+    // it. Unused, so no methods are needed on the stub.
+    Layer.succeed(ProviderSessionDirectory, {} as unknown as ProviderSessionDirectory["Service"]),
     NodeServices.layer,
   );
 

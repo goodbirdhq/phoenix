@@ -210,6 +210,8 @@ describe("OrchestrationEngine", () => {
           getThreadDetailById: () => Effect.succeed(Option.none()),
           getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
           searchThreads: () => Effect.succeed({ matches: [] }),
+          getThreadHasReport: () => Effect.succeed(false),
+          getLastAssistantMessage: () => Effect.succeed(Option.none()),
         }),
       ),
       Layer.provide(
