@@ -3,6 +3,10 @@ import { GitCommandError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import {
+  assessWorktreeCleanupRisk,
+  decideBranchCleanup,
+  isSessionAlive,
+  isSessionBusy,
   resolveSendToSessionDelivery,
   resolveSessionCheckout,
   validateSpawnCheckoutInput,
@@ -77,4 +81,121 @@ describe("send_to_session delivery acknowledgement", () => {
       expect(yield* resolveSendToSessionDelivery("thread.message-sent")).toBe("unknown");
     }),
   );
+});
+
+const status = (overrides: {
+  files?: ReadonlyArray<string>;
+  hasUpstream?: boolean;
+  aheadCount?: number;
+  aheadOfDefaultCount?: number | undefined;
+}) => ({
+  workingTree: {
+    files: (overrides.files ?? []).map((path) => ({ path, insertions: 1, deletions: 0 })),
+    insertions: 0,
+    deletions: 0,
+  },
+  hasUpstream: overrides.hasUpstream ?? false,
+  aheadCount: overrides.aheadCount ?? 0,
+  ...(overrides.aheadOfDefaultCount === undefined
+    ? {}
+    : { aheadOfDefaultCount: overrides.aheadOfDefaultCount }),
+});
+
+describe("isSessionBusy", () => {
+  it("treats a starting or running session as busy", () => {
+    expect(isSessionBusy("starting")).toBe(true);
+    expect(isSessionBusy("running")).toBe(true);
+  });
+
+  it("treats every settled-eligible session state as idle", () => {
+    expect(isSessionBusy("ready")).toBe(false);
+    expect(isSessionBusy("idle")).toBe(false);
+    expect(isSessionBusy("stopped")).toBe(false);
+    expect(isSessionBusy("interrupted")).toBe(false);
+    expect(isSessionBusy("error")).toBe(false);
+    expect(isSessionBusy(null)).toBe(false);
+    expect(isSessionBusy(undefined)).toBe(false);
+  });
+});
+
+describe("isSessionAlive", () => {
+  it("counts an idle-but-resumable session as alive", () => {
+    // The distinction that matters for settle_session: "ready" is not busy,
+    // but it still holds a provider process that settling must reclaim.
+    expect(isSessionBusy("ready")).toBe(false);
+    expect(isSessionAlive("ready")).toBe(true);
+    expect(isSessionAlive("idle")).toBe(true);
+    expect(isSessionAlive("interrupted")).toBe(true);
+    expect(isSessionAlive("error")).toBe(true);
+  });
+
+  it("counts a stopped or absent session as already gone", () => {
+    expect(isSessionAlive("stopped")).toBe(false);
+    expect(isSessionAlive(null)).toBe(false);
+    expect(isSessionAlive(undefined)).toBe(false);
+  });
+});
+
+describe("assessWorktreeCleanupRisk", () => {
+  it("clears a worktree whose work is committed and pushed", () => {
+    expect(
+      assessWorktreeCleanupRisk(
+        status({ hasUpstream: true, aheadCount: 0, aheadOfDefaultCount: 4 }),
+      ),
+    ).toEqual({
+      dirtyFiles: [],
+      dirtyFileCount: 0,
+      unpushedCommitCount: 0,
+      hasUpstream: true,
+      hasUnsavedWork: false,
+    });
+  });
+
+  it("flags uncommitted files", () => {
+    const risk = assessWorktreeCleanupRisk(
+      status({ files: ["src/a.ts", "src/b.ts"], hasUpstream: true }),
+    );
+    expect(risk.hasUnsavedWork).toBe(true);
+    expect(risk.dirtyFiles).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(risk.dirtyFileCount).toBe(2);
+  });
+
+  it("counts commits ahead of the upstream as unpushed", () => {
+    const risk = assessWorktreeCleanupRisk(
+      status({ hasUpstream: true, aheadCount: 2, aheadOfDefaultCount: 9 }),
+    );
+    expect(risk.unpushedCommitCount).toBe(2);
+    expect(risk.hasUnsavedWork).toBe(true);
+  });
+
+  it("falls back to commits ahead of the default branch when there is no upstream", () => {
+    const risk = assessWorktreeCleanupRisk(
+      status({ hasUpstream: false, aheadCount: 0, aheadOfDefaultCount: 3 }),
+    );
+    expect(risk.unpushedCommitCount).toBe(3);
+    expect(risk.hasUnsavedWork).toBe(true);
+  });
+
+  it("caps the reported file list but keeps the true count", () => {
+    const files = Array.from({ length: 25 }, (_, index) => `src/file-${index}.ts`);
+    const risk = assessWorktreeCleanupRisk(status({ files, hasUpstream: true }));
+    expect(risk.dirtyFiles).toHaveLength(20);
+    expect(risk.dirtyFileCount).toBe(25);
+  });
+});
+
+describe("decideBranchCleanup", () => {
+  it("deletes a Phoenix temporary worktree branch", () => {
+    expect(decideBranchCleanup("t3code/1a2b3c4d")).toEqual({ deleteBranch: true, detail: null });
+  });
+
+  it("keeps a branch Phoenix did not create, and says so", () => {
+    const decision = decideBranchCleanup("feature/user-work");
+    expect(decision.deleteBranch).toBe(false);
+    expect(decision.detail).toContain("feature/user-work");
+  });
+
+  it("has nothing to do when the thread has no branch", () => {
+    expect(decideBranchCleanup(null)).toEqual({ deleteBranch: false, detail: null });
+  });
 });

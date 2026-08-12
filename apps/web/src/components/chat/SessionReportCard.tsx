@@ -46,6 +46,16 @@ export const SessionReportCard = memo(function SessionReportCard({
     <div className="rounded-[24px] border border-border/80 bg-card/70 p-4 sm:p-5">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={STATUS_BADGE_VARIANT[report.status]}>{STATUS_LABEL[report.status]}</Badge>
+        {/* A report Phoenix wrote for a session that died before reporting must
+            never be mistaken for the agent's own account of its work. */}
+        {report.origin === "system" ? (
+          <Badge
+            variant="outline"
+            title="Phoenix wrote this report because the session ended without posting one."
+          >
+            Auto-generated
+          </Badge>
+        ) : null}
         <p className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
           {report.title}
         </p>

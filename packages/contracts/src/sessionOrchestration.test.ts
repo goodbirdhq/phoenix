@@ -56,6 +56,13 @@ describe("session checkout result contracts", () => {
         sessionStatus: null,
         settled: false,
         report: null,
+        // Required since stop auditing shipped; this fixture predates it and
+        // decoding fails without them.
+        stoppedBy: null,
+        stopRequestedAt: null,
+        stopReason: null,
+        interruptedToolCall: false,
+        lastCompletedOperation: null,
         messages: [],
         branch: base.branch,
         worktreePath: base.worktreePath,

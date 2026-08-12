@@ -9,6 +9,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationSession,
+  type OrchestrationThread,
   type OrchestrationThreadShell,
   type ProviderSession,
 } from "@t3tools/contracts";
@@ -29,7 +30,13 @@ import {
   type ProjectionQueuedTurnStart,
   type ProjectionTurnRepositoryShape,
 } from "../../persistence/Services/ProjectionTurns.ts";
-import { makeSessionSpawnReactor } from "./SessionSpawnReactor.ts";
+import {
+  buildTerminalReportSummary,
+  formatReportMessage,
+  makeSessionSpawnReactor,
+  terminalReportStatus,
+  terminalReportTitle,
+} from "./SessionSpawnReactor.ts";
 
 const CHILD_ID = ThreadId.make("child-thread");
 const PARENT_ID = ThreadId.make("parent-thread");
@@ -233,7 +240,7 @@ describe("SessionSpawnReactor queued delivery", () => {
   it.effect("recovers a stranded running session with no live provider binding", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        yield* TestClock.setTime(new Date(NOW).getTime());
+        yield* TestClock.setTime(Date.parse(NOW));
         const { commands, queuedRows } = yield* createHarness({
           status: "running",
           queued: [queued("stranded")],
@@ -249,7 +256,7 @@ describe("SessionSpawnReactor queued delivery", () => {
   it.effect("does not recover a stale running session with a live provider binding", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        yield* TestClock.setTime(new Date(NOW).getTime());
+        yield* TestClock.setTime(Date.parse(NOW));
         const { commands, queuedRows } = yield* createHarness({
           status: "running",
           queued: [queued("live")],
@@ -266,7 +273,7 @@ describe("SessionSpawnReactor queued delivery", () => {
   it.effect("cancels and stops when an interrupt replacement exceeds its deadline", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        yield* TestClock.setTime(new Date(NOW).getTime());
+        yield* TestClock.setTime(Date.parse(NOW));
         const { commands, queuedRows } = yield* createHarness({
           status: "running",
           queued: [queued("interrupt", "interrupt", STALE)],
@@ -278,4 +285,149 @@ describe("SessionSpawnReactor queued delivery", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
     ),
   );
+});
+
+const CREATED_AT = "2026-01-01T00:00:00.000Z";
+
+const report = (overrides: Partial<Parameters<typeof formatReportMessage>[1]> = {}) => ({
+  reportId: "report-1",
+  threadId: ThreadId.make("thread-1"),
+  status: "success" as const,
+  title: "Did the work",
+  summary: "All tasks completed.",
+  artifacts: [],
+  origin: "agent" as const,
+  createdAt: CREATED_AT,
+  ...overrides,
+});
+
+const message = (
+  id: string,
+  role: "assistant" | "user",
+  text: string,
+): OrchestrationThread["messages"][number] => ({
+  id: MessageId.make(id),
+  role,
+  text,
+  turnId: null,
+  streaming: false,
+  createdAt: CREATED_AT,
+  updatedAt: CREATED_AT,
+});
+
+const threadDetail = (overrides: Partial<OrchestrationThread>): OrchestrationThread =>
+  ({
+    id: ThreadId.make("thread-1"),
+    projectId: ProjectId.make("project-1"),
+    title: "Spawned worker",
+    messages: [],
+    activities: [],
+    reports: [],
+    ...overrides,
+  }) as OrchestrationThread;
+
+describe("terminalReportStatus", () => {
+  it("calls a stop partial and a provider error a failure", () => {
+    // A stop is an external decision with unknown progress; an error is the
+    // session failing outright.
+    expect(terminalReportStatus("stopped")).toBe("partial");
+    expect(terminalReportStatus("error")).toBe("failure");
+  });
+
+  it("titles the report after how the session ended", () => {
+    expect(terminalReportTitle("stopped")).toContain("stopped");
+    expect(terminalReportTitle("error")).toContain("failed");
+  });
+});
+
+describe("formatReportMessage", () => {
+  it("attributes an agent-posted report to the child", () => {
+    const text = formatReportMessage("Spawned worker", report());
+    expect(text).toContain('Spawned session "Spawned worker" posted a success report');
+    expect(text).not.toContain("Phoenix generated");
+  });
+
+  it("never lets a synthesized report read as if the child wrote it", () => {
+    const text = formatReportMessage(
+      "Spawned worker",
+      report({ origin: "system", status: "partial", title: "Session stopped before reporting" }),
+    );
+    expect(text).toContain("ended without posting a report");
+    expect(text).toContain("Phoenix generated a partial report");
+  });
+
+  it("lists artifacts with their labels", () => {
+    const text = formatReportMessage(
+      "Spawned worker",
+      report({
+        artifacts: [
+          { kind: "url", value: "https://example.test/pr/1", label: "PR" },
+          { kind: "branch", value: "feature/work" },
+        ],
+      }),
+    );
+    expect(text).toContain("- url: https://example.test/pr/1 (PR)");
+    expect(text).toContain("- branch: feature/work");
+  });
+});
+
+describe("buildTerminalReportSummary", () => {
+  it("says the session was stopped and flags the work as unfinished", () => {
+    const summary = buildTerminalReportSummary({
+      sessionStatus: "stopped",
+      lastError: null,
+      detail: Option.none(),
+    });
+    expect(summary).toContain("generated by Phoenix");
+    expect(summary).toContain("stopped before it posted a report");
+    expect(summary).toContain("Work is likely unfinished");
+  });
+
+  it("carries the provider error into the summary", () => {
+    const summary = buildTerminalReportSummary({
+      sessionStatus: "error",
+      lastError: "provider exited with code 1",
+      detail: Option.none(),
+    });
+    expect(summary).toContain("provider exited with code 1");
+  });
+
+  it("reports the last tool activity and assistant message", () => {
+    const summary = buildTerminalReportSummary({
+      sessionStatus: "stopped",
+      lastError: null,
+      detail: Option.some(
+        threadDetail({
+          messages: [
+            message("message-1", "assistant", "Refactored   the parser\nand ran tests"),
+            message("message-2", "user", "keep going"),
+          ],
+          activities: [
+            {
+              id: "event-1",
+              tone: "tool",
+              kind: "tool.completed",
+              summary: "Ran `pnpm typecheck`",
+              payload: {},
+              turnId: null,
+              createdAt: CREATED_AT,
+            },
+          ] as unknown as OrchestrationThread["activities"],
+        }),
+      ),
+    });
+    expect(summary).toContain("tool.completed: Ran `pnpm typecheck`");
+    // Whitespace is collapsed so a multi-line message stays one summary line.
+    expect(summary).toContain("Last assistant message: Refactored the parser and ran tests");
+  });
+
+  it("is explicit when there is nothing to report rather than silently empty", () => {
+    const summary = buildTerminalReportSummary({
+      sessionStatus: "error",
+      lastError: null,
+      detail: Option.some(threadDetail({})),
+    });
+    expect(summary).toContain("No recorded tool activity.");
+    expect(summary).toContain("No assistant message was produced.");
+  });
 });

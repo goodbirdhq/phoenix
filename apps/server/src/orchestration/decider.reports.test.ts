@@ -77,6 +77,7 @@ it.layer(NodeServices.layer)("report decider", (it) => {
             title: "Did the work",
             summary: "All tasks completed.",
             artifacts: [{ kind: "branch", value: "feature/spawned-work" }],
+            origin: "agent",
             createdAt: POSTED_AT,
           },
           updatedAt: POSTED_AT,
@@ -130,10 +131,38 @@ it.layer(NodeServices.layer)("report decider", (it) => {
             validation: { performed: ["Ran unit tests"], gaps: ["No e2e run"] },
             recommendation: "Add an integration test before merging.",
             completionPercent: 66,
+            origin: "agent",
             createdAt: POSTED_AT,
           },
           updatedAt: POSTED_AT,
         });
+      }
+    }),
+  );
+
+  it.effect("marks a reactor-synthesized terminal report as system-origin", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.report.post",
+          commandId: CommandId.make("cmd-report-post-synthetic"),
+          threadId: ThreadId.make("thread-1"),
+          reportId: "report-synthetic",
+          status: "partial",
+          title: "Session stopped before reporting",
+          summary: "Phoenix generated this report.",
+          artifacts: [],
+          origin: "system",
+          createdAt: POSTED_AT,
+        },
+        readModel,
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+
+      expect(event.type).toBe("thread.report-posted");
+      if (event.type === "thread.report-posted") {
+        expect(event.payload.report.origin).toBe("system");
+        expect(event.payload.report.status).toBe("partial");
       }
     }),
   );

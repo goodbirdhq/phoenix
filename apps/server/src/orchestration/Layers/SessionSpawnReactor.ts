@@ -2,7 +2,11 @@ import {
   CommandId,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationSession,
+  type OrchestrationSessionStatus,
+  type OrchestrationThread,
   type SessionReport,
+  type SessionReportStatus,
   ThreadId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker, type DrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -13,6 +17,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import * as Duration from "effect/Duration";
 
@@ -40,11 +45,24 @@ type WorkerInput =
       readonly messageId: MessageId;
     };
 
+// A session in one of these states is done producing work for this episode.
+// "interrupted" is deliberately absent: an interrupt parks a turn, the session
+// stays alive, and the agent may still report on the next one.
+const TERMINAL_SESSION_STATUSES = new Set<OrchestrationSessionStatus>(["stopped", "error"]);
+
+// A type predicate, not just a boolean: the queue-cancellation path it guards
+// only accepts the terminal statuses.
+const isTerminalStatus = (status: OrchestrationSessionStatus): status is "stopped" | "error" =>
+  TERMINAL_SESSION_STATUSES.has(status);
+
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const INTERRUPT_FALLBACK_TIMEOUT = Duration.seconds(30);
 const RECOVERY_INTERVAL = Duration.seconds(30);
 
-const formatReportMessage = (childTitle: string, report: SessionReport): string => {
+const truncate = (text: string, maxLength: number) =>
+  text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`;
+
+export const formatReportMessage = (childTitle: string, report: SessionReport): string => {
   const artifactLines =
     report.artifacts.length === 0
       ? ""
@@ -55,13 +73,85 @@ const formatReportMessage = (childTitle: string, report: SessionReport): string 
               : `- ${artifact.kind}: ${artifact.value}`,
           )
           .join("\n")}`;
-  return `[Phoenix] Spawned session "${childTitle}" posted a ${report.status} report: ${report.title}\n\n${report.summary}${artifactLines}\n\n(spawned thread: ${report.threadId})`;
+  // A synthesized report must never read as if the child wrote it: the parent
+  // decides what to do next based on who is claiming the work is over.
+  const lead =
+    report.origin === "system"
+      ? `[Phoenix] Spawned session "${childTitle}" ended without posting a report. Phoenix generated a ${report.status} report for it: ${report.title}`
+      : `[Phoenix] Spawned session "${childTitle}" posted a ${report.status} report: ${report.title}`;
+  return `${lead}\n\n${report.summary}${artifactLines}\n\n(spawned thread: ${report.threadId})`;
 };
 
-const formatErrorMessage = (childTitle: string, threadId: string, lastError: string | null) =>
-  `[Phoenix] Spawned session "${childTitle}" hit a provider error${
-    lastError ? `: ${lastError}` : "."
-  } It has not posted a report. Use read_session to inspect it, send_to_session to retry, or stop_session to give up.\n\n(spawned thread: ${threadId})`;
+// A stop is an external decision with unknown progress ("partial"); a provider
+// error is the session failing outright ("failure").
+export const terminalReportStatus = (status: OrchestrationSessionStatus): SessionReportStatus =>
+  status === "stopped" ? "partial" : "failure";
+
+export const terminalReportTitle = (status: OrchestrationSessionStatus) =>
+  status === "stopped" ? "Session stopped before reporting" : "Session failed before reporting";
+
+/**
+ * Build the body of a synthesized terminal report.
+ *
+ * The parent gets the three things it cannot recover on its own once the
+ * session is gone: why it ended, what it was last doing, and an explicit
+ * warning that the work is probably unfinished.
+ */
+export const buildTerminalReportSummary = (input: {
+  readonly sessionStatus: OrchestrationSessionStatus;
+  readonly lastError: string | null;
+  // Stop auditing records who asked, why, and what the child was in the middle
+  // of — exactly the context the parent cannot reconstruct once the session is
+  // gone, so the synthesized report repeats it rather than paraphrasing.
+  readonly session?: Pick<
+    OrchestrationSession,
+    "stopReason" | "stoppedBy" | "interruptedToolCall" | "lastCompletedOperation"
+  >;
+  readonly detail: Option.Option<OrchestrationThread>;
+}): string => {
+  const attribution =
+    input.session?.stoppedBy == null
+      ? ""
+      : ` (stopped by ${input.session.stoppedBy}${
+          input.session.stopReason ? `, reason: ${input.session.stopReason}` : ""
+        })`;
+  const termination =
+    input.sessionStatus === "stopped"
+      ? `The session was stopped before it posted a report${attribution}.`
+      : `The session hit a provider error before it posted a report${
+          input.lastError ? `: ${input.lastError}` : "."
+        }`;
+
+  const thread = Option.getOrUndefined(input.detail);
+  const lastAssistantMessage = thread?.messages.findLast((message) => message.role === "assistant");
+  const lastActivity = thread?.activities.at(-1);
+
+  const lines = [
+    "_This report was generated by Phoenix, not by the session's agent._",
+    "",
+    termination,
+    // A tool call cut off mid-flight is the case most likely to have left the
+    // working tree in a half-written state, so it is called out rather than
+    // buried in the activity line.
+    ...(input.session?.interruptedToolCall === true
+      ? ["", "**A tool call was interrupted mid-execution**, so its effects may be incomplete."]
+      : []),
+    "",
+    "**Last activity**",
+    input.session?.lastCompletedOperation
+      ? `- Last completed operation: ${truncate(input.session.lastCompletedOperation, 400)}`
+      : "- No completed operation was recorded.",
+    lastActivity
+      ? `- ${lastActivity.kind}: ${truncate(lastActivity.summary, 400)}`
+      : "- No recorded tool activity.",
+    lastAssistantMessage
+      ? `- Last assistant message: ${truncate(lastAssistantMessage.text.replace(/\s+/g, " ").trim(), 800)}`
+      : "- No assistant message was produced.",
+    "",
+    "**Work is likely unfinished.** Nothing here was verified by the agent. Use `read_session` to inspect the thread's history before relying on any of it, and re-spawn or re-assign the work if it still needs doing.",
+  ];
+  return truncate(lines.join("\n"), 16_384);
+};
 
 export const makeSessionSpawnReactor = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
@@ -74,9 +164,10 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   const serverCommandId = (tag: string) =>
     randomUUID.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
 
-  // A session can bounce through error states repeatedly (retries, restarts).
-  // Notify the parent once per error episode; a later healthy state re-arms.
-  const errorNotifiedThreads = new Set<string>();
+  // A session can bounce through terminal states repeatedly (retries,
+  // restarts). Synthesize at most one terminal report per episode; a later
+  // healthy state re-arms.
+  const terminalReportedThreads = new Set<string>();
 
   const releaseNextQueuedTurn = Effect.fn("SessionSpawnReactor.releaseNextQueuedTurn")(function* (
     threadId: ThreadId,
@@ -166,6 +257,70 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     });
   });
 
+  /**
+   * Post a report on behalf of a spawned child that terminated silently.
+   *
+   * The report goes through the ordinary `thread.report.post` command, so the
+   * projection, the user-facing report card, and the parent notification
+   * (driven by the resulting `thread.report-posted`) all behave exactly as
+   * they do for an agent-posted report.
+   */
+  const synthesizeTerminalReport = Effect.fn("SessionSpawnReactor.synthesizeTerminalReport")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly sessionStatus: OrchestrationSessionStatus;
+      readonly lastError: string | null;
+      readonly session: OrchestrationSession;
+    }) {
+      const detail = yield* snapshotQuery.getThreadDetailById(input.threadId);
+      // Only spawned children get synthesized reports: a report on a thread
+      // nobody is waiting on is noise in the user's timeline.
+      if (Option.isNone(detail) || (detail.value.spawnedByThreadId ?? null) === null) return false;
+      // The agent already had its say; a synthesized report would only muddy
+      // which one the parent should believe. This persisted check — not the
+      // in-memory episode set — is the real guard against duplicates.
+      if (detail.value.reports.length > 0) return true;
+
+      const createdAt = yield* nowIso;
+      yield* engine
+        .dispatch({
+          type: "thread.report.post",
+          commandId: yield* serverCommandId("spawn-terminal-report"),
+          threadId: input.threadId,
+          reportId: yield* randomUUID,
+          status: terminalReportStatus(input.sessionStatus),
+          title: terminalReportTitle(input.sessionStatus),
+          summary: buildTerminalReportSummary({
+            sessionStatus: input.sessionStatus,
+            lastError: input.lastError,
+            session: input.session,
+            detail,
+          }),
+          artifacts: [],
+          // Structured fields carry the same warning in machine-readable form,
+          // so a parent that reads `validation.gaps` rather than the markdown
+          // still learns nothing here was checked. completionPercent is left
+          // unset on purpose: the truthful answer is "unknown", and 0 would
+          // assert more than Phoenix knows.
+          validation: {
+            performed: [],
+            gaps: [
+              "The session terminated before posting a report; none of its work was verified by its agent.",
+            ],
+          },
+          recommendation:
+            "Inspect the thread with read_session before relying on any of this work, then re-spawn or re-assign it if it still needs doing.",
+          origin: "system",
+          createdAt,
+        })
+        // A terminated session emits no further status transition, so this is
+        // the last chance to reach the parent: a transient dispatch failure
+        // here would otherwise mean permanent silence.
+        .pipe(Effect.retry({ times: 2, schedule: Schedule.exponential(100) }));
+      return true;
+    },
+  );
+
   const processEvent = Effect.fn("SessionSpawnReactor.processEvent")(function* (
     event: WatchedEvent,
   ) {
@@ -189,23 +344,37 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     ) {
       yield* releaseNextQueuedTurn(threadId);
     }
-    if (session.status === "stopped" || session.status === "error") {
+    if (isTerminalStatus(session.status)) {
+      // Two independent reactions to the same terminal event, in this order on
+      // purpose. Cancelling the queue first tells the parent its pending work
+      // was dropped; the synthesized report then explains where the child
+      // actually stopped. Reversing them would deliver the epitaph before the
+      // news that queued messages died with it. Neither depends on the other:
+      // cancellation is a no-op with an empty queue, and a second terminal
+      // event re-runs it harmlessly (nothing left to cancel, so no notice).
       yield* cancelTerminalQueue(threadId, session.status);
-    }
-    if (session.status === "error") {
-      if (errorNotifiedThreads.has(threadId)) return;
-      errorNotifiedThreads.add(threadId);
-      const child = yield* snapshotQuery.getThreadShellById(threadId);
-      const childTitle = Option.isSome(child) ? child.value.title : threadId;
-      yield* notifyParent({
-        childThreadId: threadId,
-        text: formatErrorMessage(childTitle, threadId, session.lastError ?? null),
-        commandTag: "spawn-error-notify",
+      if (terminalReportedThreads.has(threadId)) return;
+      const reported = yield* synthesizeTerminalReport({
+        threadId,
+        sessionStatus: session.status,
+        lastError: session.lastError ?? null,
+        session,
       });
+      // Marked only once the report is actually persisted. Marking up front
+      // would let a failed dispatch — which processInputSafely swallows —
+      // brand the episode "handled" with nothing stored, and a stopped
+      // session has no later transition to re-arm the guard.
+      if (reported) {
+        terminalReportedThreads.add(threadId);
+      }
       return;
     }
-    if (session.status === "running" || session.status === "ready") {
-      errorNotifiedThreads.delete(threadId);
+    if (
+      session.status === "starting" ||
+      session.status === "running" ||
+      session.status === "ready"
+    ) {
+      terminalReportedThreads.delete(threadId);
     }
   });
 

@@ -3,6 +3,7 @@ import {
   isProviderAvailable,
   MessageId,
   type ModelSelection,
+  type OrchestrationSessionStatus,
   type OrchestrationThreadShell,
   type PostReportInput,
   type ReadSessionResult,
@@ -13,13 +14,18 @@ import {
   SessionOrchestrationInvalidInputError,
   SessionOrchestrationOperationError,
   SessionOrchestrationUnavailableError,
+  SessionOrchestrationWorktreeNotEmptyError,
   type ServerProvider,
+  type SettleSessionInput,
+  type SettleSessionWorktreeOutcome,
   type SpawnSessionInput,
   ThreadId,
+  type VcsStatusResult,
 } from "@t3tools/contracts";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { buildTemporaryWorktreeBranchName, isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -111,7 +117,101 @@ export const resolveSendToSessionDelivery = (eventType: string | undefined) => {
 const SPAWNED_SESSION_REPORT_INSTRUCTIONS =
   "\n\n---\nYou were spawned by another Phoenix agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). The report is delivered to the session that spawned you.";
 
-const make = Effect.gen(function* () {
+// Enough to tell the caller what is at stake without turning a refusal into a
+// transcript of a large working tree.
+const MAX_REPORTED_DIRTY_FILES = 20;
+
+// How long settle_session waits for a stopped provider process to actually be
+// gone before it declines to delete anything. Generous enough for a normal
+// shutdown, short enough that an agent is not left hanging on a wedged one.
+const SESSION_STOP_TIMEOUT_MS = 10_000;
+const SESSION_STOP_POLL_INTERVAL_MS = 100;
+
+/**
+ * Whether a turn is actively in flight.
+ *
+ * Mirrors the decider's settle guard (`decider.ts`): these two statuses are
+ * exactly what makes `thread.settle` fail, so settle_session can refuse first
+ * with an actionable message instead of surfacing a raw invariant error.
+ * Live work is never interrupted on the parent's say-so.
+ */
+export function isSessionBusy(status: OrchestrationSessionStatus | null | undefined): boolean {
+  return status === "starting" || status === "running";
+}
+
+/**
+ * Whether a provider process is still up.
+ *
+ * "ready" is idle but alive — the process is sitting there resumable. Settling
+ * such a child without stopping it would leak the process, and deleting its
+ * worktree underneath it would race a `send_to_session` that revives it. So
+ * settle_session stops anything alive before it settles or touches the disk.
+ */
+export function isSessionAlive(status: OrchestrationSessionStatus | null | undefined): boolean {
+  return status !== null && status !== undefined && status !== "stopped";
+}
+
+export interface WorktreeCleanupRisk {
+  readonly dirtyFiles: ReadonlyArray<string>;
+  readonly dirtyFileCount: number;
+  readonly unpushedCommitCount: number;
+  readonly hasUpstream: boolean;
+  readonly hasUnsavedWork: boolean;
+}
+
+/**
+ * Decide whether deleting a worktree would destroy work.
+ *
+ * "Saved" means committed AND reachable from somewhere other than this
+ * worktree's branch. With an upstream, `aheadCount` is what has not been
+ * pushed; without one, every commit past the default branch exists only here,
+ * which is what `aheadOfDefaultCount` measures.
+ */
+export function assessWorktreeCleanupRisk(
+  status: Pick<
+    VcsStatusResult,
+    "workingTree" | "hasUpstream" | "aheadCount" | "aheadOfDefaultCount"
+  >,
+): WorktreeCleanupRisk {
+  const dirtyFiles = status.workingTree.files.map((file) => file.path);
+  const unpushedCommitCount = status.hasUpstream
+    ? status.aheadCount
+    : (status.aheadOfDefaultCount ?? 0);
+  return {
+    dirtyFiles: dirtyFiles.slice(0, MAX_REPORTED_DIRTY_FILES),
+    dirtyFileCount: dirtyFiles.length,
+    unpushedCommitCount,
+    hasUpstream: status.hasUpstream,
+    hasUnsavedWork: dirtyFiles.length > 0 || unpushedCommitCount > 0,
+  };
+}
+
+/**
+ * Decide whether settle_session may delete the child's branch.
+ *
+ * Only the throwaway `t3code/…` branches Phoenix creates for worktree
+ * isolation are ours to delete; anything else (a user branch a spawned session
+ * was pointed at, a renamed branch) is preserved and reported.
+ */
+export function decideBranchCleanup(branch: string | null): {
+  readonly deleteBranch: boolean;
+  readonly detail: string | null;
+} {
+  if (branch === null) {
+    return { deleteBranch: false, detail: null };
+  }
+  return isTemporaryWorktreeBranch(branch)
+    ? { deleteBranch: true, detail: null }
+    : {
+        deleteBranch: false,
+        detail: `Kept branch "${branch}": it is not a Phoenix temporary worktree branch, so it may hold work you still want.`,
+      };
+}
+
+// Exported so tests can drive the real handlers against stub services; the
+// wiring between them (stop → settle → cleanup ordering) is exactly what pure
+// helper tests cannot see.
+export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
   const bootstrap = yield* ThreadTurnBootstrap.ThreadTurnBootstrap;
@@ -510,6 +610,10 @@ const make = Effect.gen(function* () {
       title: child.title,
       sessionStatus: child.session?.status ?? null,
       settled: child.settledAt !== null,
+      // Null once settle_session reclaimed the worktree; a path means the
+      // directory is still on disk and nothing else will clean it up.
+      worktreePath: child.worktreePath,
+      branch: child.branch,
       report,
       stoppedBy: child.session?.stoppedBy ?? null,
       stopRequestedAt: child.session?.stopRequestedAt ?? null,
@@ -526,6 +630,220 @@ const make = Effect.gen(function* () {
           }
         : {}),
     };
+  });
+
+  /**
+   * Stop a child's provider process and wait for it to actually be gone.
+   *
+   * `thread.session.stop` only records the intent — ProviderCommandReactor
+   * kills the process and writes `stopped` afterwards. Returning as soon as the
+   * command lands would leave the caller free to delete a worktree the process
+   * is still writing to, so this waits for the projected status.
+   *
+   * @returns whether the session reached "stopped" before the timeout.
+   */
+  const stopChildSession = Effect.fn("SessionsToolkit.stopChildSession")(function* (
+    child: OrchestrationThreadShell,
+  ) {
+    if (!isSessionAlive(child.session?.status)) {
+      return true;
+    }
+    yield* enqueue(
+      engine.dispatch({
+        type: "thread.session.stop",
+        commandId: yield* serverCommandId("mcp-settle-session-stop"),
+        threadId: child.id,
+        createdAt: yield* nowIso,
+        // Same audit trail stop_session writes, so a settle-driven stop is not
+        // an anonymous one in the record.
+        stopReason: "parent_stopped",
+        stoppedBy: "parent",
+        // Deliberately no gracePeriodMs, and no partial report requested. A
+        // grace period exists to let a working agent wrap up and report before
+        // the axe falls; settle_session has already refused anything
+        // starting/running, so by construction there is no work in flight to
+        // wind down and nothing to report that the child could not have
+        // reported already. Waiting out a grace period here would only delay
+        // the settle — and, with cleanupWorktree, hold the worktree hostage —
+        // for a session that is idle by definition.
+        requestPartialReport: false,
+      }),
+    );
+
+    let waitedMs = 0;
+    while (waitedMs < SESSION_STOP_TIMEOUT_MS) {
+      const shell = yield* getShell(child.id);
+      // A thread that vanished (archived, deleted) has no process left to wait
+      // on, and neither does one whose session is already gone.
+      if (Option.isNone(shell) || !isSessionAlive(shell.value.session?.status)) {
+        return true;
+      }
+      yield* Effect.sleep(Duration.millis(SESSION_STOP_POLL_INTERVAL_MS));
+      waitedMs += SESSION_STOP_POLL_INTERVAL_MS;
+    }
+    return false;
+  });
+
+  /**
+   * Reclaim a settled child's worktree, or explain why it was left alone.
+   *
+   * Spawned worktrees are otherwise never reclaimed — nothing else in the
+   * server deletes them — so this is the one path that keeps a long
+   * orchestration run from filling the disk.
+   */
+  const cleanupChildWorktree = Effect.fn("SessionsToolkit.cleanupChildWorktree")(
+    function* (params: {
+      readonly child: OrchestrationThreadShell;
+      readonly input: SettleSessionInput;
+    }) {
+      const { child, input } = params;
+      const kept = (detail: string | null): SettleSessionWorktreeOutcome => ({
+        removedWorktreePath: null,
+        removedBranch: null,
+        keptWorktreePath: child.worktreePath,
+        keptBranch: child.branch,
+        detail,
+      });
+
+      if (input.cleanupWorktree !== true) {
+        return kept(
+          child.worktreePath === null
+            ? null
+            : "Worktree left in place; pass cleanupWorktree: true to delete it.",
+        );
+      }
+      const worktreePath = child.worktreePath;
+      if (worktreePath === null) {
+        return kept("Thread has no isolated worktree to clean up.");
+      }
+
+      const project = yield* snapshotQuery
+        .getProjectShellById(child.projectId)
+        .pipe(Effect.mapError(operationError("Failed to read project")));
+      if (Option.isNone(project)) {
+        return yield* new SessionOrchestrationInvalidInputError({
+          message: `Project ${child.projectId} was not found, so its worktree cannot be removed.`,
+        });
+      }
+      const workspaceRoot = project.value.workspaceRoot;
+
+      if (input.force !== true) {
+        const status = yield* gitWorkflow
+          .status({ cwd: worktreePath })
+          .pipe(Effect.mapError(operationError(`Failed to inspect worktree ${worktreePath}`)));
+        const risk = assessWorktreeCleanupRisk(status);
+        if (risk.hasUnsavedWork) {
+          return yield* new SessionOrchestrationWorktreeNotEmptyError({
+            message: `Refusing to delete ${worktreePath}: it holds ${risk.dirtyFileCount} uncommitted file(s) and ${risk.unpushedCommitCount} commit(s) that exist nowhere else. Inspect it, or pass force: true to delete it anyway.`,
+            worktreePath,
+            branch: child.branch,
+            dirtyFiles: risk.dirtyFiles,
+            dirtyFileCount: risk.dirtyFileCount,
+            unpushedCommitCount: risk.unpushedCommitCount,
+            hasUpstream: risk.hasUpstream,
+          });
+        }
+      }
+
+      // --force on the git side only covers a dirty tree; the decision to
+      // destroy work was already made (or refused) above.
+      yield* gitWorkflow
+        .removeWorktree({ cwd: workspaceRoot, path: worktreePath, force: true })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new SessionOrchestrationOperationError({
+                message: `Thread ${child.id} was settled, but its worktree at ${worktreePath} could NOT be removed: ${
+                  cause instanceof Error ? cause.message : "unknown git failure"
+                }. The directory is still on disk.`,
+              }),
+          ),
+        );
+
+      const branch = child.branch;
+      const branchDecision = decideBranchCleanup(branch);
+      // A failed branch delete leaves a dangling ref, not lost work, so it is
+      // reported rather than failing a settle whose destructive step is done.
+      const branchRemoval: {
+        readonly removedBranch: string | null;
+        readonly detail: string | null;
+      } =
+        branchDecision.deleteBranch && branch !== null
+          ? yield* gitWorkflow.deleteRef({ cwd: workspaceRoot, refName: branch, force: true }).pipe(
+              Effect.as({ removedBranch: branch, detail: null }),
+              Effect.catch((cause) =>
+                Effect.succeed({
+                  removedBranch: null,
+                  detail: `Worktree removed, but branch "${branch}" could not be deleted: ${cause.message}`,
+                }),
+              ),
+            )
+          : { removedBranch: null, detail: branchDecision.detail };
+
+      // read_session must stop advertising a worktree that no longer exists.
+      yield* enqueue(
+        engine.dispatch({
+          type: "thread.meta.update",
+          commandId: yield* serverCommandId("mcp-settle-session-worktree"),
+          threadId: child.id,
+          worktreePath: null,
+          ...(branchRemoval.removedBranch !== null ? { branch: null } : {}),
+        }),
+      );
+
+      return {
+        removedWorktreePath: worktreePath,
+        removedBranch: branchRemoval.removedBranch,
+        keptWorktreePath: null,
+        keptBranch: branchRemoval.removedBranch === null ? child.branch : null,
+        detail: branchRemoval.detail,
+      };
+    },
+  );
+
+  const settleSession = Effect.fn("SessionsToolkit.settleSession")(function* (
+    input: SettleSessionInput,
+  ) {
+    const scope = yield* requireSessionsCapability;
+    const child = yield* requireSpawnedChild(scope.threadId, input.threadId);
+
+    // A turn in flight is never interrupted on the parent's say-so; that stays
+    // an explicit stop_session. An idle-but-alive session is a different
+    // matter — settling is the parent declaring the child finished, so the
+    // process goes with it.
+    if (isSessionBusy(child.session?.status)) {
+      return yield* new SessionOrchestrationDeniedError({
+        reason: "session_still_running",
+        message: `Thread ${child.id} is still ${child.session?.status}. Call stop_session first, or wait for it to finish, then settle it.`,
+      });
+    }
+
+    const stopped = yield* stopChildSession(child);
+
+    // Settle before touching the filesystem: it is the reversible half, and a
+    // worktree must never be deleted for a thread that turned out to be
+    // unsettleable (open approval, queued turn).
+    yield* startup
+      .enqueueCommand(
+        engine.dispatch({
+          type: "thread.settle",
+          commandId: yield* serverCommandId("mcp-settle-session"),
+          threadId: child.id,
+        }),
+      )
+      .pipe(Effect.mapError(operationError(`Failed to settle thread ${child.id}`)));
+
+    // Deleting files under a process that refused to die is how a "cleanup"
+    // corrupts a live turn. The thread is settled either way; the destructive
+    // half is what gets withheld.
+    if (!stopped && input.cleanupWorktree === true) {
+      return yield* new SessionOrchestrationOperationError({
+        message: `Thread ${child.id} was settled, but its provider session did not reach "stopped" within ${SESSION_STOP_TIMEOUT_MS}ms, so its worktree was left untouched. Retry settle_session once the session has stopped.`,
+      });
+    }
+
+    const worktree = yield* cleanupChildWorktree({ child, input });
+    return { threadId: child.id, settled: true, worktree };
   });
 
   const postReport = Effect.fn("SessionsToolkit.postReport")(function* (input: PostReportInput) {
@@ -565,6 +883,9 @@ const make = Effect.gen(function* () {
       ...(input.completionPercent !== undefined
         ? { completionPercent: input.completionPercent }
         : {}),
+      // post_report is by definition the agent speaking for itself; only the
+      // reactor's terminal reports are system-origin.
+      origin: "agent" as const,
       createdAt,
     };
   });
@@ -597,6 +918,7 @@ const make = Effect.gen(function* () {
     send_to_session: (input) => sendToSession(input),
     read_session: (input) => readSession(input),
     stop_session: (input) => stopSession(input),
+    settle_session: (input) => settleSession(input),
     post_report: (input) => postReport(input),
   } satisfies Parameters<typeof SessionsToolkit.toLayer>[0];
 });

@@ -1,6 +1,7 @@
 import {
   IsoDateTime,
   SessionReportArtifact,
+  SessionReportOrigin,
   SessionReportStatus,
   ThreadId,
   TrimmedNonEmptyString,
@@ -34,6 +35,7 @@ const ProjectionThreadReportDbRowSchema = Schema.Struct({
   // decodeStructuredReportFields) rather than through the schema, so a
   // malformed blob can never fail the whole row.
   structuredJson: Schema.NullOr(Schema.String),
+  origin: SessionReportOrigin,
   createdAt: IsoDateTime,
 });
 
@@ -47,6 +49,7 @@ function mapReportRow(
     title: row.title,
     summary: row.summary,
     artifacts: row.artifacts,
+    origin: row.origin,
     ...decodeStructuredReportFields(row.structuredJson),
     createdAt: row.createdAt,
   };
@@ -97,6 +100,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         summary,
         artifacts_json,
         structured_json,
+        origin,
         created_at
       )
       VALUES (
@@ -107,6 +111,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         ${row.summary},
         ${JSON.stringify(row.artifacts)},
         ${encodeStructured(row)},
+        ${row.origin},
         ${row.createdAt}
       )
       ON CONFLICT (report_id)
@@ -117,6 +122,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         summary = excluded.summary,
         artifacts_json = excluded.artifacts_json,
         structured_json = excluded.structured_json,
+        origin = excluded.origin,
         created_at = excluded.created_at
     `,
   });
@@ -133,6 +139,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         summary,
         artifacts_json AS "artifacts",
         structured_json AS "structuredJson",
+        origin,
         created_at AS "createdAt"
       FROM projection_thread_reports
       WHERE thread_id = ${threadId}
