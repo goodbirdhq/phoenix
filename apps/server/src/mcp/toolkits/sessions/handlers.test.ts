@@ -886,6 +886,9 @@ const runHandler = <A, E, R>(
           ...(overrides.findByReportId ? { findByReportId: overrides.findByReportId } : {}),
           ...(overrides.listByThreadId ? { listByThreadId: overrides.listByThreadId } : {}),
         }),
+        Layer.mock(ProjectionTurnRepository)({
+          listQueuedDeliveryReceipts: () => Effect.succeed([]),
+        }),
         Layer.mock(ServerRuntimeStartup.ServerRuntimeStartup)({
           enqueueCommand:
             overrides.enqueueCommand ??

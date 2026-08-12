@@ -824,7 +824,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           pending_message_id AS "messageId",
           CASE WHEN state = 'interrupting' THEN 'interrupt' ELSE 'queue' END AS mode,
-          CASE WHEN state = 'releasing' THEN requested_at ELSE NULL END AS "releasingAt",
+          CASE WHEN state = 'releasing' THEN releasing_at ELSE NULL END AS "releasingAt",
           requested_at AS "requestedAt"
         FROM projection_turns
         WHERE state IN ('queued', 'interrupting', 'releasing')

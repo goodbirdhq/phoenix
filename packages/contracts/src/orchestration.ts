@@ -468,6 +468,9 @@ export const OrchestrationSession = Schema.Struct({
   // an old deadline from stopping a session that was subsequently restarted.
   graceStopDeadlineAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   graceStopEpisodeId: Schema.optional(Schema.NullOr(EventId)),
+  // Correlates a provider turn start to the queued message that released it.
+  // Optional/defaulted so historical session events continue to replay.
+  queuedDeliveryMessageId: Schema.optional(Schema.NullOr(MessageId)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;
@@ -1506,6 +1509,9 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   // Set only when this request releases a persisted queued delivery. Optional
   // so events written before delivery receipts retain their old meaning.
   queuedDelivery: Schema.optional(Schema.Boolean),
+  queuedDeliveryMessageId: Schema.optional(Schema.NullOr(MessageId)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   createdAt: IsoDateTime,
 });
 

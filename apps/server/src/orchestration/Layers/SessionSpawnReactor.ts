@@ -37,14 +37,7 @@ import {
 type ReportPostedEvent = Extract<OrchestrationEvent, { type: "thread.report-posted" }>;
 type SessionSetEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
 type TurnQueuedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-queued" }>;
-type TurnConsumedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-consumed" }>;
-type TurnCancelledEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-cancelled" }>;
-type WatchedEvent =
-  | ReportPostedEvent
-  | SessionSetEvent
-  | TurnQueuedEvent
-  | TurnConsumedEvent
-  | TurnCancelledEvent;
+type WatchedEvent = ReportPostedEvent | SessionSetEvent | TurnQueuedEvent;
 type WorkerInput =
   | { readonly type: "event"; readonly event: WatchedEvent }
   | { readonly type: "recover"; readonly threadId: ThreadId }
@@ -67,6 +60,7 @@ const isTerminalStatus = (status: OrchestrationSessionStatus): status is "stoppe
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const INTERRUPT_FALLBACK_TIMEOUT = Duration.seconds(30);
 const RECOVERY_INTERVAL = Duration.seconds(30);
+const RELEASING_RECOVERY_AGE = Duration.seconds(30);
 
 const truncate = (text: string, maxLength: number) =>
   text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`;
@@ -110,20 +104,6 @@ export const formatReportMessage = (childTitle: string, report: SessionReport): 
   const recommendationLine =
     envelope.recommendation !== undefined ? `\nRecommendation: ${envelope.recommendation}` : "";
   return `${lead}\n\nAbstract:\n${envelope.abstract}\n${recommendationLine}${structuredLine}\n[Full report is ${envelope.summaryChars} chars; this is a compact envelope. Call read_report with reportId "${report.reportId}" to read the rest.]${artifactLines}\n\n(spawned thread: ${report.threadId}, report: ${report.reportId})`;
-};
-
-export const formatQueuedDeliveryReceiptMessage = (input: {
-  readonly childThreadId: ThreadId;
-  readonly messageId: MessageId;
-  readonly outcome: "consumed" | "cancelled";
-  readonly consumedByTurnId: string | null;
-  readonly timestamp: string;
-  readonly cancelledReason?: "session_terminal" | "interrupt_timeout" | undefined;
-}): string => {
-  const turn =
-    input.consumedByTurnId === null ? "" : `\nconsumedByTurnId: ${input.consumedByTurnId}`;
-  const reason = input.cancelledReason === undefined ? "" : `\nreason: ${input.cancelledReason}`;
-  return `[Phoenix] Queued delivery receipt\nmessageId: ${input.messageId}\noutcome: ${input.outcome}${turn}${reason}\ntimestamp: ${input.timestamp}\n\n(spawned thread: ${input.childThreadId})`;
 };
 
 // A stop is an external decision with unknown progress ("partial"); a provider
@@ -212,10 +192,6 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   // restarts). Synthesize at most one terminal report per episode; a later
   // healthy state re-arms.
   const terminalReportedThreads = new Set<string>();
-  // Domain streams may replay a receipt event while a reactor is recovering.
-  // The projection transition itself is durable/idempotent; this local gate
-  // prevents that same live reactor from waking the parent twice.
-  const deliveredReceiptAcks = new Set<string>();
 
   const releaseNextQueuedTurn = Effect.fn("SessionSpawnReactor.releaseNextQueuedTurn")(function* (
     threadId: ThreadId,
@@ -238,7 +214,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     readonly reason: "session_terminal" | "interrupt_timeout";
   }) {
     const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
-      (entry) => entry.threadId === input.threadId,
+      (entry) => entry.threadId === input.threadId && entry.state === "queued",
     );
     yield* Effect.forEach(
       queued,
@@ -377,51 +353,26 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     event: WatchedEvent,
   ) {
     if (event.type === "thread.turn-start-queued") return;
-    if (event.type === "thread.turn-start-consumed") {
-      const key = `${event.payload.threadId}:${event.payload.messageId}:consumed`;
-      if (deliveredReceiptAcks.has(key)) return;
-      yield* notifyParent({
-        childThreadId: event.payload.threadId,
-        text: formatQueuedDeliveryReceiptMessage({
-          childThreadId: event.payload.threadId,
-          messageId: event.payload.messageId,
-          outcome: "consumed",
-          consumedByTurnId: event.payload.turnId,
-          timestamp: event.payload.consumedAt,
-        }),
-        commandTag: "queued-turn-consumed-receipt",
-        commandId: CommandId.make(`queued-delivery-receipt:${key}`),
-        messageId: MessageId.make(`queued-delivery-receipt:${key}`),
-      });
-      deliveredReceiptAcks.add(key);
-      return;
-    }
-    if (event.type === "thread.turn-start-cancelled") {
-      const key = `${event.payload.threadId}:${event.payload.messageId}:cancelled`;
-      if (deliveredReceiptAcks.has(key)) return;
-      yield* notifyParent({
-        childThreadId: event.payload.threadId,
-        text: formatQueuedDeliveryReceiptMessage({
-          childThreadId: event.payload.threadId,
-          messageId: event.payload.messageId,
-          outcome: "cancelled",
-          consumedByTurnId: null,
-          timestamp: event.payload.createdAt,
-          cancelledReason: event.payload.reason,
-        }),
-        commandTag: "queued-turn-cancelled-receipt",
-        commandId: CommandId.make(`queued-delivery-receipt:${key}`),
-        messageId: MessageId.make(`queued-delivery-receipt:${key}`),
-      });
-      deliveredReceiptAcks.add(key);
-      return;
-    }
     if (event.type === "thread.report-posted") {
       const child = yield* snapshotQuery.getThreadShellById(event.payload.threadId);
       const childTitle = Option.isSome(child) ? child.value.title : event.payload.threadId;
+      const pending = yield* projectionTurnRepository.listQueuedTurnStarts.pipe(
+        Effect.map((rows) =>
+          rows.filter((row) => row.threadId === event.payload.threadId && row.state === "queued"),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("queued delivery report warning lookup failed", { cause }).pipe(
+            Effect.as([]),
+          ),
+        ),
+      );
+      const warning =
+        pending.length === 0
+          ? ""
+          : `\n\n[Phoenix] ${pending.length} queued message${pending.length === 1 ? "" : "s"} were not consumed before this report was written: ${pending.map((row) => row.messageId).join(", ")}.`;
       yield* notifyParent({
         childThreadId: event.payload.threadId,
-        text: formatReportMessage(childTitle, event.payload.report),
+        text: `${formatReportMessage(childTitle, event.payload.report)}${warning}`,
         commandTag: "spawn-report-notify",
       });
       return;
@@ -536,6 +487,14 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         (entry) => entry.threadId === input.threadId,
       );
       yield* Effect.forEach(queuedForThread, forkInterruptTimeout);
+      const recoveryNow = yield* nowIso;
+      const staleBefore = new Date(
+        Date.parse(recoveryNow) - Duration.toMillis(RELEASING_RECOVERY_AGE),
+      ).toISOString();
+      yield* projectionTurnRepository.requeueStaleReleasingTurns({
+        threadId: input.threadId,
+        staleBefore,
+      });
       const shell = yield* snapshotQuery.getThreadShellById(input.threadId);
       if (Option.isNone(shell)) return;
       const session = shell.value.session;
@@ -580,7 +539,10 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       return;
     }
     const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).find(
-      (entry) => entry.threadId === input.threadId && entry.messageId === input.messageId,
+      (entry) =>
+        entry.threadId === input.threadId &&
+        entry.messageId === input.messageId &&
+        entry.state === "queued",
     );
     if (queued === undefined) return;
     const shell = yield* snapshotQuery.getThreadShellById(input.threadId);
@@ -632,9 +594,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         if (
           event.type !== "thread.report-posted" &&
           event.type !== "thread.session-set" &&
-          event.type !== "thread.turn-start-queued" &&
-          event.type !== "thread.turn-start-consumed" &&
-          event.type !== "thread.turn-start-cancelled"
+          event.type !== "thread.turn-start-queued"
         ) {
           return Effect.void;
         }

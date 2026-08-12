@@ -519,6 +519,17 @@ export const make = Effect.gen(function* () {
     return invocationScope;
   });
 
+  const getQueuedDeliveryReceipts = (threadId: ThreadId) =>
+    projectionTurnRepository.listQueuedDeliveryReceipts({ threadId, limit: 20 }).pipe(
+      // Receipts enrich read-only observations. A transient projection read
+      // must not turn a session status lookup into an error.
+      Effect.catch((cause) =>
+        Effect.logWarning("queued delivery receipt lookup failed", { threadId, cause }).pipe(
+          Effect.as([] as ReadonlyArray<QueuedDeliveryReceipt>),
+        ),
+      ),
+    );
+
   const randomUUID = crypto.randomUUIDv4.pipe(
     Effect.mapError(operationError("Failed to generate identifier")),
   );

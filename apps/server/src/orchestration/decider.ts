@@ -1113,6 +1113,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
           queuedDelivery: true,
+          queuedDeliveryMessageId: command.messageId,
           createdAt: command.createdAt,
         },
       };
@@ -1306,12 +1307,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.session-set",
         payload: {
           threadId: command.threadId,
-          session: command.session,
+          session: {
+            ...command.session,
+            // The marker is consumed by this running transition only; keeping
+            // it would let later provider lifecycle updates re-attribute it.
+            queuedDeliveryMessageId: null,
+          },
         },
       };
       const releasedQueuedTurn =
-        command.session.status === "running" && command.session.activeTurnId !== null
-          ? thread.queuedTurnStarts?.find((entry) => entry.releasingAt !== undefined)
+        command.session.status === "running" &&
+        command.session.activeTurnId !== null &&
+        command.session.queuedDeliveryMessageId !== undefined &&
+        command.session.queuedDeliveryMessageId !== null
+          ? thread.queuedTurnStarts?.find(
+              (entry) => entry.messageId === command.session.queuedDeliveryMessageId,
+            )
           : undefined;
       const consumedEvent: Omit<OrchestrationEvent, "sequence"> | undefined =
         releasedQueuedTurn === undefined || command.session.activeTurnId === null

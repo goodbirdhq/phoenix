@@ -84,13 +84,14 @@ export const ProjectionQueuedTurnStart = Schema.Struct({
   mode: Schema.Literals(["queue", "interrupt"]),
   state: Schema.Literals(["queued", "releasing"]),
   requestedAt: IsoDateTime,
+  releasingAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionQueuedTurnStart = typeof ProjectionQueuedTurnStart.Type;
 
 export const ProjectionQueuedDeliveryReceipt = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
-  state: Schema.Literals(["queued", "consumed", "cancelled"]),
+  state: Schema.Literals(["queued", "releasing", "consumed", "cancelled"]),
   requestedAt: IsoDateTime,
   consumedByTurnId: Schema.NullOr(TurnId),
   consumedAt: Schema.NullOr(IsoDateTime),
@@ -119,6 +120,11 @@ export const CancelProjectionQueuedTurnInput = Schema.Struct({
   cancelledAt: IsoDateTime,
 });
 
+export const RequeueStaleReleasingTurnsInput = Schema.Struct({
+  threadId: ThreadId,
+  staleBefore: IsoDateTime,
+});
+
 export const DeleteProjectionQueuedTurnStartInput = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
@@ -126,6 +132,11 @@ export const DeleteProjectionQueuedTurnStartInput = Schema.Struct({
 
 export const ListProjectionTurnsByThreadInput = Schema.Struct({
   threadId: ThreadId,
+});
+
+export const ListQueuedDeliveryReceiptsInput = Schema.Struct({
+  threadId: ThreadId,
+  limit: NonNegativeInt,
 });
 export type ListProjectionTurnsByThreadInput = typeof ListProjectionTurnsByThreadInput.Type;
 
@@ -197,6 +208,10 @@ export interface ProjectionTurnRepositoryShape {
     input: typeof CancelProjectionQueuedTurnInput.Type,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
+  readonly requeueStaleReleasingTurns: (
+    input: typeof RequeueStaleReleasingTurnsInput.Type,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
   /** Compatibility path for events written before queued-delivery receipts. */
   readonly deleteQueuedTurnStart: (
     input: typeof DeleteProjectionQueuedTurnStartInput.Type,
@@ -207,10 +222,9 @@ export interface ProjectionTurnRepositoryShape {
     ProjectionRepositoryError
   >;
 
-  readonly listQueuedDeliveryReceipts: Effect.Effect<
-    ReadonlyArray<ProjectionQueuedDeliveryReceipt>,
-    ProjectionRepositoryError
-  >;
+  readonly listQueuedDeliveryReceipts: (
+    input: typeof ListQueuedDeliveryReceiptsInput.Type,
+  ) => Effect.Effect<ReadonlyArray<ProjectionQueuedDeliveryReceipt>, ProjectionRepositoryError>;
 
   /**
    * Lists all projection rows for a thread, including pending placeholders, with checkpoint rows ordered before non-checkpoint rows.

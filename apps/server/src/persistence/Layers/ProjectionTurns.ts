@@ -17,11 +17,13 @@ import {
   GetProjectionPendingTurnStartInput,
   GetProjectionTurnByTurnIdInput,
   ListProjectionTurnsByThreadInput,
+  ListQueuedDeliveryReceiptsInput,
   MarkProjectionQueuedTurnReleasingInput,
   ProjectionPendingTurnStart,
   ProjectionQueuedDeliveryReceipt,
   ProjectionQueuedTurnStart,
   ProjectionTurn,
+  RequeueStaleReleasingTurnsInput,
   ProjectionTurnById,
   ProjectionTurnRepository,
   type ProjectionTurnRepositoryShape,
@@ -182,7 +184,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         DELETE FROM projection_turns
         WHERE thread_id = ${row.threadId}
           AND pending_message_id = ${row.messageId}
-          AND state IN ('queued', 'interrupting')
+          AND state IN ('queued', 'interrupting', 'releasing')
       `.pipe(
         Effect.andThen(sql`
           INSERT INTO projection_turns (
@@ -204,7 +206,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     execute: ({ threadId, messageId }) =>
       sql`
         UPDATE projection_turns
-        SET state = 'releasing'
+        SET state = 'releasing', releasing_at = ${releasingAt}
         WHERE thread_id = ${threadId}
           AND pending_message_id = ${messageId}
           AND state IN ('queued', 'interrupting')
@@ -231,7 +233,20 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         SET state = 'cancelled', cancelled_at = ${cancelledAt}, cancel_reason = ${reason}
         WHERE thread_id = ${threadId}
           AND pending_message_id = ${messageId}
-          AND state IN ('queued', 'interrupting', 'releasing')
+          AND state IN ('queued', 'interrupting')
+      `,
+  });
+
+  const requeueStaleReleasingProjectionTurns = SqlSchema.void({
+    Request: RequeueStaleReleasingTurnsInput,
+    execute: ({ threadId, staleBefore }) =>
+      sql`
+        UPDATE projection_turns
+        SET state = 'queued', releasing_at = NULL, consumed_by_turn_id = NULL, consumed_at = NULL,
+            cancelled_at = NULL, cancel_reason = NULL
+        WHERE thread_id = ${threadId}
+          AND state = 'releasing'
+          AND releasing_at <= ${staleBefore}
       `,
   });
 
@@ -265,15 +280,16 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
   });
 
   const listQueuedDeliveryReceiptRows = SqlSchema.findAll({
-    Request: Schema.Void,
+    Request: ListQueuedDeliveryReceiptsInput,
     Result: ProjectionQueuedDeliveryReceipt,
-    execute: () =>
+    execute: ({ threadId, limit }) =>
       sql`
         SELECT
           thread_id AS "threadId",
           pending_message_id AS "messageId",
           CASE
-            WHEN state IN ('queued', 'interrupting', 'releasing') THEN 'queued'
+            WHEN state IN ('queued', 'interrupting') THEN 'queued'
+            WHEN state = 'releasing' THEN 'releasing'
             ELSE state
           END AS state,
           requested_at AS "requestedAt",
@@ -282,9 +298,11 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           cancelled_at AS "cancelledAt",
           cancel_reason AS "cancelledReason"
         FROM projection_turns
-        WHERE state IN ('queued', 'interrupting', 'releasing', 'consumed', 'cancelled')
+        WHERE thread_id = ${threadId}
+          AND state IN ('queued', 'interrupting', 'releasing', 'consumed', 'cancelled')
           AND pending_message_id IS NOT NULL
-        ORDER BY COALESCE(cancelled_at, consumed_at, requested_at) ASC, row_id ASC
+        ORDER BY COALESCE(cancelled_at, consumed_at, requested_at) DESC, row_id DESC
+        LIMIT ${limit}
       `,
   });
 
@@ -443,6 +461,15 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       ),
     );
 
+  const requeueStaleReleasingTurns: ProjectionTurnRepositoryShape["requeueStaleReleasingTurns"] = (
+    input,
+  ) =>
+    requeueStaleReleasingProjectionTurns(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionTurnRepository.requeueStaleReleasingTurns:query"),
+      ),
+    );
+
   const deleteQueuedTurnStart: ProjectionTurnRepositoryShape["deleteQueuedTurnStart"] = (input) =>
     deleteQueuedProjectionTurn(input).pipe(
       Effect.mapError(
@@ -460,8 +487,10 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       ),
     );
 
-  const listQueuedDeliveryReceipts: ProjectionTurnRepositoryShape["listQueuedDeliveryReceipts"] =
-    listQueuedDeliveryReceiptRows(undefined).pipe(
+  const listQueuedDeliveryReceipts: ProjectionTurnRepositoryShape["listQueuedDeliveryReceipts"] = (
+    input,
+  ) =>
+    listQueuedDeliveryReceiptRows(input).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "ProjectionTurnRepository.listQueuedDeliveryReceipts:query",
@@ -520,6 +549,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     markQueuedTurnStartReleasing,
     consumeQueuedTurnStart,
     cancelQueuedTurnStart,
+    requeueStaleReleasingTurns,
     deleteQueuedTurnStart,
     listQueuedTurnStarts,
     listQueuedDeliveryReceipts,

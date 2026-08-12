@@ -1641,6 +1641,7 @@ const make = Effect.gen(function* () {
               lastCompletedOperation: thread.session?.lastCompletedOperation ?? null,
               graceStopDeadlineAt: thread.session?.graceStopDeadlineAt ?? null,
               graceStopEpisodeId: thread.session?.graceStopEpisodeId ?? null,
+              queuedDeliveryMessageId: thread.session?.queuedDeliveryMessageId ?? null,
               updatedAt: now,
             },
             createdAt: now,
