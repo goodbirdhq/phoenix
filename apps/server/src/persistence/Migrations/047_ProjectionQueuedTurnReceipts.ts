@@ -29,6 +29,10 @@ export default Effect.gen(function* () {
   `;
   yield* sql`
     CREATE INDEX IF NOT EXISTS idx_projection_turns_receipts_thread_recent
-    ON projection_turns(thread_id, state, consumed_at DESC, cancelled_at DESC, requested_at DESC)
+    ON projection_turns(
+      thread_id,
+      COALESCE(cancelled_at, consumed_at, requested_at) DESC,
+      row_id DESC
+    )
   `;
 });
