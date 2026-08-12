@@ -20,6 +20,7 @@ import {
   SessionOrchestrationWorktreeNotEmptyError,
   type ServerProvider,
   type SessionUsageSnapshot,
+  supersededReportNotice,
   type SettleSessionInput,
   type SettleSessionWorktreeOutcome,
   type SpawnSessionInput,
@@ -144,6 +145,15 @@ export const canReadThreadReports = (input: {
 export const REPORT_NOT_ACCESSIBLE_MESSAGE =
   "Report not accessible: it does not exist, has not been posted yet, or belongs to a session outside this session's read scope (own spawned sessions and their siblings).";
 
+// One message for both ways a supersedesReportId can fail to resolve — no
+// such report, or a report on another thread. Amending another session's
+// report is not a weaker version of amending your own: a report is a
+// session's account of its own work, so only the thread that posted one may
+// replace it. Saying which of the two went wrong would also turn post_report
+// into a probe for which report ids exist elsewhere.
+export const SUPERSEDES_REPORT_NOT_FOUND_MESSAGE =
+  "supersedesReportId does not name a report posted by this session. Pass the reportId returned by your own earlier post_report call on this thread; a report can only be amended by the session that posted it.";
+
 const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 
@@ -210,7 +220,7 @@ export const buildPingSessionSnapshot = (input: {
 // contract holds across providers without the parent having to remember to
 // ask for it. post_report is what wakes the parent up.
 const SPAWNED_SESSION_REPORT_INSTRUCTIONS =
-  "\n\n---\nYou were spawned by another Phoenix agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). If the summary is long, also pass a 1-3 sentence `abstract`. The report is delivered to the session that spawned you.";
+  "\n\n---\nYou were spawned by another Phoenix agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). If the summary is long, also pass a 1-3 sentence `abstract`. The report is delivered to the session that spawned you.\n\nIf you receive a further instruction AFTER you have already posted your report, do the new work and then post an AMENDING report: call `post_report` again with `supersedesReportId` set to the reportId of the report you are replacing. The amended report becomes the record. Never claim in a report that you did something you had not yet done when that report was written — describe what the late instruction was and what you did about it.";
 
 // Enough to tell the caller what is at stake without turning a refusal into a
 // transcript of a large working tree.
@@ -1004,6 +1014,21 @@ export const make = Effect.gen(function* () {
   const postReport = Effect.fn("SessionsToolkit.postReport")(function* (input: PostReportInput) {
     const scope = yield* requireSessionsCapability;
     const caller = yield* requireShell(scope.threadId);
+
+    // Resolved before anything is dispatched: an amendment naming a report
+    // that does not exist (or belongs to another thread) would otherwise
+    // persist a dangling link that no reader could follow.
+    if (input.supersedesReportId !== undefined) {
+      const superseded = yield* reportRepository
+        .findByReportId({ reportId: input.supersedesReportId })
+        .pipe(Effect.mapError(operationError("Failed to read the report being superseded")));
+      if (Option.isNone(superseded) || superseded.value.threadId !== scope.threadId) {
+        return yield* new SessionOrchestrationInvalidInputError({
+          message: SUPERSEDES_REPORT_NOT_FOUND_MESSAGE,
+        });
+      }
+    }
+
     const createdAt = yield* nowIso;
     const reportId = yield* randomUUID;
     // Captured now, not agent-supplied: what this session cost by the time
@@ -1031,6 +1056,9 @@ export const make = Effect.gen(function* () {
           ? { completionPercent: input.completionPercent }
           : {}),
         usage,
+        ...(input.supersedesReportId !== undefined
+          ? { supersedesReportId: input.supersedesReportId }
+          : {}),
         createdAt,
       }),
     );
@@ -1049,6 +1077,9 @@ export const make = Effect.gen(function* () {
         ? { completionPercent: input.completionPercent }
         : {}),
       usage,
+      ...(input.supersedesReportId !== undefined
+        ? { supersedesReportId: input.supersedesReportId }
+        : {}),
       // post_report is by definition the agent speaking for itself; only the
       // reactor's terminal reports are system-origin.
       origin: "agent" as const,
@@ -1149,6 +1180,17 @@ export const make = Effect.gen(function* () {
         : {}),
       artifacts: report.artifacts,
       ...(report.usage !== undefined ? { usage: report.usage } : {}),
+      ...(report.supersedesReportId !== null
+        ? { supersedesReportId: report.supersedesReportId }
+        : {}),
+      // A caller paging an old body must learn a newer account exists — both
+      // as an id it can follow and as prose it cannot skim past.
+      ...(report.supersededByReportId !== undefined
+        ? {
+            supersededByReportId: report.supersededByReportId,
+            supersededNotice: supersededReportNotice(report.supersededByReportId),
+          }
+        : {}),
       createdAt: report.createdAt,
     };
   });

@@ -357,6 +357,34 @@ describe("formatReportMessage", () => {
     expect(text).toContain("Phoenix generated a partial report");
   });
 
+  it("leads an amending report with what it supersedes", () => {
+    const text = formatReportMessage(
+      "Spawned worker",
+      report({
+        supersedesReportId: "report-original",
+        title: "Also handled the late instruction",
+      }),
+    );
+    // The parent may already have acted on the superseded report, so the
+    // amendment has to announce itself before the summary it looks like.
+    expect(text).toContain("AMENDED report (supersedes report-original)");
+    expect(text.indexOf("AMENDED report")).toBeLessThan(text.indexOf("posted a success report"));
+  });
+
+  it("keeps the amendment lead on an envelope-sized report", () => {
+    const summary = "s".repeat(SESSION_REPORT_INLINE_MAX_CHARS + 1);
+    const text = formatReportMessage(
+      "Spawned worker",
+      report({ summary, abstract: "The short version.", supersedesReportId: "report-original" }),
+    );
+    expect(text).toContain("AMENDED report (supersedes report-original)");
+    expect(text).toContain('read_report with reportId "report-1"');
+  });
+
+  it("says nothing about amendment for an ordinary report", () => {
+    expect(formatReportMessage("Spawned worker", report())).not.toContain("AMENDED");
+  });
+
   it("lists artifacts with their labels", () => {
     const text = formatReportMessage(
       "Spawned worker",

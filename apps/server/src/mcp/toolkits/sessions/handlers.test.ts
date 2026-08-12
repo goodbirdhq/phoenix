@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
   GitCommandError,
+  type OrchestrationCommand,
   type OrchestrationThreadShell,
   type ProjectId,
   ProviderInstanceId,
@@ -9,8 +10,10 @@ import {
   ReadReportInput,
   SESSION_REPORT_INLINE_MAX_CHARS,
   SessionOrchestrationDeniedError,
+  SessionOrchestrationInvalidInputError,
   type SessionReport,
   type SessionUsageSnapshot,
+  supersededReportNotice,
   ThreadId,
   toSessionReportEnvelope,
 } from "@t3tools/contracts";
@@ -26,7 +29,11 @@ import * as OrchestrationEngine from "../../../orchestration/Services/Orchestrat
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ThreadTurnBootstrap from "../../../orchestration/ThreadTurnBootstrap.ts";
 import { PersistenceSqlError } from "../../../persistence/Errors.ts";
-import { ProjectionThreadReportRepository } from "../../../persistence/Services/ProjectionThreadReports.ts";
+import {
+  type ProjectionThreadReport,
+  ProjectionThreadReportRepository,
+  type ProjectionThreadReportRepositoryShape,
+} from "../../../persistence/Services/ProjectionThreadReports.ts";
 import { ProviderSessionDirectoryPersistenceError } from "../../../provider/Errors.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
@@ -45,6 +52,7 @@ import {
   resolveSendToSessionDelivery,
   resolveSessionCheckout,
   sliceReportBody,
+  SUPERSEDES_REPORT_NOT_FOUND_MESSAGE,
   validateSpawnCheckoutInput,
 } from "./handlers.ts";
 
@@ -391,6 +399,20 @@ describe("toSessionReportEnvelope", () => {
     expect(envelope.summaryChars).toBe(SESSION_REPORT_INLINE_MAX_CHARS + 1);
   });
 
+  it("carries both ends of an amendment chain so a parent can follow it", () => {
+    const superseded = toSessionReportEnvelope(
+      makeReport({ reportId: "report-original", supersededByReportId: "report-amendment" }),
+    );
+    expect(superseded.supersededByReportId).toBe("report-amendment");
+    expect(superseded.supersedesReportId).toBeUndefined();
+
+    const amendment = toSessionReportEnvelope(
+      makeReport({ reportId: "report-amendment", supersedesReportId: "report-original" }),
+    );
+    expect(amendment.supersedesReportId).toBe("report-original");
+    expect(amendment.supersededByReportId).toBeUndefined();
+  });
+
   it("falls back to a truncated summary head when no abstract was posted", () => {
     const report = makeReport({ summary: "z".repeat(SESSION_REPORT_INLINE_MAX_CHARS + 1) });
     const envelope = toSessionReportEnvelope(report);
@@ -631,6 +653,14 @@ const childShell = {
   spawnedByThreadId: parentThreadId,
 } satisfies OrchestrationThreadShell;
 
+// The calling session itself. post_report and read_report both resolve the
+// caller's own shell before doing anything, so the default lookup has to know
+// about it as well as the child.
+const parentShell = {
+  ...baseShell,
+  id: parentThreadId,
+} satisfies OrchestrationThreadShell;
+
 const invocationScope = {
   environmentId: EnvironmentId.make("environment-1"),
   threadId: parentThreadId,
@@ -654,6 +684,13 @@ const runHandler = <A, E, R>(
     getLatestUsageActivity?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getLatestUsageActivity"];
     getThreadTurnCount?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadTurnCount"];
     listBindings?: ProviderSessionDirectory["Service"]["listBindings"];
+    findByReportId?: ProjectionThreadReportRepositoryShape["findByReportId"];
+    listByThreadId?: ProjectionThreadReportRepositoryShape["listByThreadId"];
+    // Supplied together by the write-path tests (post_report): the default
+    // pair dies on use, which is what proves the read-only tools never
+    // dispatch.
+    dispatch?: OrchestrationEngine.OrchestrationEngineShape["dispatch"];
+    enqueueCommand?: ServerRuntimeStartup.ServerRuntimeStartup["Service"]["enqueueCommand"];
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -667,7 +704,9 @@ const runHandler = <A, E, R>(
         serverSettingsLayerTest({ enableSessionOrchestration: true }),
         Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
           readEvents: () => Stream.empty,
-          dispatch: () => Effect.die("engine.dispatch must not be called by a read-only tool"),
+          dispatch:
+            overrides.dispatch ??
+            (() => Effect.die("engine.dispatch must not be called by a read-only tool")),
           streamDomainEvents: Stream.empty,
           latestSequence: Effect.succeed(0),
         }),
@@ -676,7 +715,13 @@ const runHandler = <A, E, R>(
           getThreadShellById:
             overrides.getThreadShellById ??
             ((id) =>
-              Effect.succeed(id === childThreadId ? Option.some(childShell) : Option.none())),
+              Effect.succeed(
+                id === childThreadId
+                  ? Option.some(childShell)
+                  : id === parentThreadId
+                    ? Option.some(parentShell)
+                    : Option.none(),
+              )),
           getThreadHasReport: overrides.getThreadHasReport ?? (() => Effect.succeed(false)),
           getLastAssistantMessage:
             overrides.getLastAssistantMessage ?? (() => Effect.succeed(Option.none())),
@@ -694,10 +739,14 @@ const runHandler = <A, E, R>(
         Layer.mock(GitWorkflowService.GitWorkflowService)({}),
         // Not exercised by ping_session/read_session (only read_report/post_report
         // touch it); unused methods die if called.
-        Layer.mock(ProjectionThreadReportRepository)({}),
+        Layer.mock(ProjectionThreadReportRepository)({
+          ...(overrides.findByReportId ? { findByReportId: overrides.findByReportId } : {}),
+          ...(overrides.listByThreadId ? { listByThreadId: overrides.listByThreadId } : {}),
+        }),
         Layer.mock(ServerRuntimeStartup.ServerRuntimeStartup)({
-          enqueueCommand: () =>
-            Effect.die("startup.enqueueCommand must not be called by a read-only tool"),
+          enqueueCommand:
+            overrides.enqueueCommand ??
+            (() => Effect.die("startup.enqueueCommand must not be called by a read-only tool")),
         }),
       ),
     ),
@@ -837,6 +886,241 @@ describe("ping_session (handler)", () => {
         expect(result.hasReport).toBe(true);
         expect(result.lastAssistantMessage).toBe("Finished the refactor.");
       }),
+  );
+});
+
+const projectedReport = (
+  overrides: Partial<ProjectionThreadReport> & Pick<ProjectionThreadReport, "reportId">,
+): ProjectionThreadReport => ({
+  // post_report and read_report both run as the calling thread, which in this
+  // harness is the parent.
+  threadId: parentThreadId,
+  status: "success",
+  title: "Did the work",
+  summary: "All done.",
+  abstract: null,
+  artifacts: [],
+  origin: "agent",
+  supersedesReportId: null,
+  createdAt: now,
+  ...overrides,
+});
+
+describe("post_report supersession (handler)", () => {
+  // Captures what post_report dispatched, so the tests can assert the
+  // amendment link reached the command rather than only the tool result.
+  const capturingDispatch = (captured: Array<OrchestrationCommand>) => ({
+    dispatch: (command: OrchestrationCommand) =>
+      Effect.sync(() => {
+        captured.push(command);
+        return { sequence: 1 };
+      }),
+    enqueueCommand: <A, E>(effect: Effect.Effect<A, E>) => effect,
+  });
+
+  it.effect("carries a valid supersedesReportId into the command and the result", () =>
+    Effect.gen(function* () {
+      const captured: Array<OrchestrationCommand> = [];
+      const result = yield* runHandler(
+        (handlers) =>
+          handlers.post_report({
+            status: "success",
+            title: "Amended: also did the late instruction",
+            summary: "The queued instruction arrived after the first report; it is done now.",
+            supersedesReportId: "report-original",
+          }),
+        {
+          ...capturingDispatch(captured),
+          findByReportId: () =>
+            Effect.succeed(Option.some(projectedReport({ reportId: "report-original" }))),
+        },
+      );
+
+      expect(result.supersedesReportId).toBe("report-original");
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({
+        type: "thread.report.post",
+        supersedesReportId: "report-original",
+      });
+    }),
+  );
+
+  it.effect("refuses a supersedesReportId that names no report, without dispatching", () =>
+    Effect.gen(function* () {
+      const captured: Array<OrchestrationCommand> = [];
+      const error = yield* runHandler(
+        (handlers) =>
+          handlers.post_report({
+            status: "success",
+            title: "Amended",
+            summary: "Amending a report that does not exist.",
+            supersedesReportId: "report-nonexistent",
+          }),
+        {
+          ...capturingDispatch(captured),
+          findByReportId: () => Effect.succeed(Option.none()),
+        },
+      ).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SessionOrchestrationInvalidInputError);
+      expect(error.message).toBe(SUPERSEDES_REPORT_NOT_FOUND_MESSAGE);
+      // A dangling amendment link must never reach the event log.
+      expect(captured).toHaveLength(0);
+    }),
+  );
+
+  it.effect("refuses a supersedesReportId belonging to another thread", () =>
+    Effect.gen(function* () {
+      const captured: Array<OrchestrationCommand> = [];
+      const error = yield* runHandler(
+        (handlers) =>
+          handlers.post_report({
+            status: "success",
+            title: "Amended",
+            summary: "Amending someone else's report.",
+            supersedesReportId: "report-of-another-thread",
+          }),
+        {
+          ...capturingDispatch(captured),
+          findByReportId: () =>
+            Effect.succeed(
+              Option.some(
+                projectedReport({
+                  reportId: "report-of-another-thread",
+                  threadId: childThreadId,
+                }),
+              ),
+            ),
+        },
+      ).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SessionOrchestrationInvalidInputError);
+      // Same message as the unknown-id case: a report is a session's account
+      // of its own work, and the denial must not double as a probe for which
+      // report ids exist on other threads.
+      expect(error.message).toBe(SUPERSEDES_REPORT_NOT_FOUND_MESSAGE);
+      expect(captured).toHaveLength(0);
+    }),
+  );
+
+  it.effect("posts an ordinary report without touching the report repository", () =>
+    Effect.gen(function* () {
+      const captured: Array<OrchestrationCommand> = [];
+      // findByReportId is left unmocked here, so it dies if called: a report
+      // with no supersedesReportId must not pay for a lookup.
+      const result = yield* runHandler(
+        (handlers) =>
+          handlers.post_report({
+            status: "success",
+            title: "Did the work",
+            summary: "All done.",
+          }),
+        capturingDispatch(captured),
+      );
+
+      expect(result.supersedesReportId).toBeUndefined();
+      expect(captured[0]).toMatchObject({ type: "thread.report.post" });
+      expect(captured[0]).not.toHaveProperty("supersedesReportId");
+    }),
+  );
+});
+
+describe("read_report supersession (handler)", () => {
+  it.effect("marks a superseded report and points at the report that replaced it", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler(
+        (handlers) => handlers.read_report({ reportId: "report-original" }),
+        {
+          findByReportId: () =>
+            Effect.succeed(
+              Option.some(
+                projectedReport({
+                  reportId: "report-original",
+                  summary: "Shipped the feature.",
+                  supersededByReportId: "report-amendment",
+                }),
+              ),
+            ),
+        },
+      );
+
+      expect(result.supersededByReportId).toBe("report-amendment");
+      // Prose as well as an id: a caller paging an old body cannot be relied
+      // on to notice a field it was not looking for.
+      expect(result.supersededNotice).toBe(supersededReportNotice("report-amendment"));
+      expect(result.supersededNotice).toContain("report-amendment");
+      // Append-only: the superseded body is still served.
+      expect(result.body).toBe("Shipped the feature.");
+    }),
+  );
+
+  it.effect("reads the chain from the new end without a superseded marker", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler(
+        (handlers) => handlers.read_report({ reportId: "report-amendment" }),
+        {
+          findByReportId: () =>
+            Effect.succeed(
+              Option.some(
+                projectedReport({
+                  reportId: "report-amendment",
+                  summary: "Shipped the feature, plus the late instruction.",
+                  supersedesReportId: "report-original",
+                }),
+              ),
+            ),
+        },
+      );
+
+      expect(result.supersedesReportId).toBe("report-original");
+      expect(result.supersededByReportId).toBeUndefined();
+      expect(result.supersededNotice).toBeUndefined();
+    }),
+  );
+
+  it.effect("returns the amendment, unmarked, as the thread's latest report", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler(
+        (handlers) => handlers.read_report({ threadId: parentThreadId }),
+        {
+          listByThreadId: () =>
+            Effect.succeed([
+              projectedReport({
+                reportId: "report-original",
+                summary: "Shipped the feature.",
+                supersededByReportId: "report-amendment",
+                createdAt: "2026-08-12T01:00:00.000Z",
+              }),
+              projectedReport({
+                reportId: "report-amendment",
+                summary: "Shipped the feature, plus the late instruction.",
+                supersedesReportId: "report-original",
+                createdAt: "2026-08-12T02:00:00.000Z",
+              }),
+            ]),
+        },
+      );
+
+      expect(result.reportId).toBe("report-amendment");
+      expect(result.supersedesReportId).toBe("report-original");
+      expect(result.supersededNotice).toBeUndefined();
+    }),
+  );
+
+  it.effect("leaves an unamended report unmarked", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler(
+        (handlers) => handlers.read_report({ reportId: "report-standalone" }),
+        {
+          findByReportId: () =>
+            Effect.succeed(Option.some(projectedReport({ reportId: "report-standalone" }))),
+        },
+      );
+
+      expect(result.supersedesReportId).toBeUndefined();
+      expect(result.supersededByReportId).toBeUndefined();
+      expect(result.supersededNotice).toBeUndefined();
+    }),
   );
 });
 
