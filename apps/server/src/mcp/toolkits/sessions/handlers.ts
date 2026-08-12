@@ -1,6 +1,7 @@
 import {
   checkReportSupersession,
   CommandId,
+  GitCommandError,
   isProviderAvailable,
   MessageId,
   type ModelSelection,
@@ -41,6 +42,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as GitRepositoryLock from "../../../git/GitRepositoryLock.ts";
@@ -339,18 +341,44 @@ export const GIT_LOCK_STALE_AFTER_MS = 60_000;
 /**
  * Pull the lock file path out of a git failure.
  *
- * Both shapes git uses name the file in single quotes:
+ * Keyed on the artifact, not on git's prose: the phrasing around a lock
+ * failure varies by git version, command, and locale, but every one of them
+ * names the file it could not take, and a `.git/…​.lock` path is not something
+ * an unrelated failure mentions.
+ *
  *   "fatal: Unable to create '/repo/.git/index.lock': File exists."
  *   "error: cannot lock ref 'refs/heads/x': Unable to create '/repo/.git/refs/heads/x.lock': File exists"
- * Returns null for any other failure, which is what keeps ordinary git errors
- * out of the lock-specific error path.
+ *   "fatal: could not lock config file /repo/.git/config.lock"
+ *
+ * Quoted paths win when present (they survive spaces in the path); otherwise a
+ * bare path-shaped token ending in `.lock` is taken. A `.lock` mention with no
+ * path separator is not a lock file and is ignored, which is what keeps
+ * ordinary git errors out of the lock-specific error path.
  */
 export function parseGitLockPath(message: string): string | null {
-  if (!/unable to create/i.test(message) || !/file exists/i.test(message)) {
-    return null;
+  const quoted = /'([^']*[/\\][^']*\.lock)'/.exec(message);
+  if (quoted?.[1] !== undefined) {
+    return quoted[1];
   }
-  const match = /'([^']*\.lock)'/.exec(message);
-  return match?.[1] ?? null;
+  const bare = /(?:^|\s)((?:[A-Za-z]:)?[^\s'"]*[/\\][^\s'"]*\.lock)\b/.exec(message);
+  return bare?.[1] ?? null;
+}
+
+const isGitCommandError = Schema.is(GitCommandError);
+
+/**
+ * The text a git failure should be diagnosed from.
+ *
+ * `detail` is a fixed per-call-site string ("git worktree remove failed"), so
+ * the driver's `stderrExcerpt` — what git actually printed — is what carries
+ * the lock path. Falling back to the message keeps non-driver failures (and
+ * plain `Error`s) working.
+ */
+export function gitFailureDiagnosticText(cause: unknown): string {
+  if (isGitCommandError(cause)) {
+    return cause.stderrExcerpt ?? cause.detail;
+  }
+  return cause instanceof Error ? cause.message : "unknown git failure";
 }
 
 /**
@@ -920,8 +948,7 @@ export const make = Effect.gen(function* () {
     readonly cause: unknown;
     readonly fallbackMessage: string;
   }) {
-    const causeMessage =
-      params.cause instanceof Error ? params.cause.message : "unknown git failure";
+    const causeMessage = gitFailureDiagnosticText(params.cause);
     const lockPath = parseGitLockPath(causeMessage);
     if (lockPath === null) {
       return new SessionOrchestrationOperationError({
@@ -1067,8 +1094,56 @@ export const make = Effect.gen(function* () {
         mergedPullRequestHeadSha: closest?.headRefOid ?? null,
       });
     }
-    return `merged pull request #${proven.number} (${proven.url}) was merged from ${localSha}, which is also the local head and ${remote.value.remoteRefName}`;
+    return {
+      provenSha: localSha,
+      remoteRefName: remote.value.remoteRefName,
+      proof: `merged pull request #${proven.number} (${proven.url}) was merged from ${localSha}, which is also the local head and ${remote.value.remoteRefName}`,
+    };
   });
+
+  /**
+   * Confirm the branch has not moved since the proof was taken.
+   *
+   * The expensive half of the proof (the pull-request lookup) runs before the
+   * repository lock, so a branch can be updated while a cleanup waits its turn
+   * behind seven others — and the SHA the merged PR vouches for would no
+   * longer be the SHA about to be deleted. This re-reads only the two heads,
+   * which is two `rev-parse`s, and runs immediately before the delete.
+   *
+   * @returns null when the proof still holds, or why it no longer does.
+   */
+  const revalidateBranchProof = Effect.fn("SessionsToolkit.revalidateBranchProof")(
+    function* (params: {
+      readonly workspaceRoot: string;
+      readonly branch: string;
+      readonly provenSha: string;
+    }) {
+      const { workspaceRoot, branch, provenSha } = params;
+      const localSha = yield* Effect.option(
+        gitWorkflow.resolveCommit({ cwd: workspaceRoot, revision: branch }),
+      );
+      if (Option.isNone(localSha)) {
+        return `its head could not be re-read just before deleting it`;
+      }
+      if (localSha.value.commitSha !== provenSha) {
+        return `its head moved from ${provenSha} to ${localSha.value.commitSha} while the cleanup waited for the repository lock`;
+      }
+      const remote = yield* Effect.option(
+        gitWorkflow.resolveRemoteTrackingCommit({
+          cwd: workspaceRoot,
+          refName: branch,
+          fallbackRemoteName: "origin",
+        }),
+      );
+      if (Option.isNone(remote)) {
+        return `its remote-tracking branch disappeared while the cleanup waited for the repository lock`;
+      }
+      if (remote.value.commitSha !== provenSha) {
+        return `${remote.value.remoteRefName} moved to ${remote.value.commitSha} while the cleanup waited for the repository lock`;
+      }
+      return null;
+    },
+  );
 
   /**
    * Reclaim a settled child's worktree, or explain why it was left alone.
@@ -1144,13 +1219,19 @@ export const make = Effect.gen(function* () {
       });
       // The proof runs before anything is destroyed: a branch that cannot be
       // proven merged refuses the whole cleanup with the worktree still on
-      // disk, rather than leaving the caller with half a job done.
-      const branchProof =
+      // disk, rather than leaving the caller with half a job done. It is also
+      // the expensive half (a pull-request lookup), which is why it happens
+      // outside the repository lock rather than holding it across a network
+      // call — the cheap half is re-checked inside.
+      const provenBranch =
         branchDecision.requiresMergeProof && branch !== null
           ? yield* proveBranchMerged({ workspaceRoot, branch })
-          : branchDecision.deleteBranch && branch !== null
-            ? "it is a Phoenix temporary worktree branch"
-            : null;
+          : null;
+      const initialBranchProof =
+        provenBranch?.proof ??
+        (branchDecision.deleteBranch && branch !== null
+          ? "it is a Phoenix temporary worktree branch"
+          : null);
 
       // One repository, one worktree mutation at a time. Concurrent
       // `git worktree remove` runs on the same repository contend for
@@ -1177,26 +1258,80 @@ export const make = Effect.gen(function* () {
               ),
             );
 
+          if (!branchDecision.deleteBranch || branch === null) {
+            return {
+              removedBranch: null,
+              branchProof: null,
+              detail: branchDecision.detail,
+              lockFailure: null,
+            };
+          }
+
+          // Waiting for the lock is exactly the window in which a branch can
+          // gain commits, so the head the pull request vouched for is
+          // re-confirmed here, immediately before the delete. A branch that
+          // moved is kept rather than deleted — the same outcome as never
+          // asking for cleanupBranch, and the worktree removal above was
+          // authorized by the dirty check, not by this proof.
+          if (provenBranch !== null) {
+            const staleReason = yield* revalidateBranchProof({
+              workspaceRoot,
+              branch,
+              provenSha: provenBranch.provenSha,
+            });
+            if (staleReason !== null) {
+              return {
+                removedBranch: null,
+                branchProof: null,
+                detail: `Worktree removed, but branch "${branch}" was kept: ${staleReason}. Settle again to re-prove it.`,
+                lockFailure: null,
+              };
+            }
+          }
+
           // A failed branch delete leaves a dangling ref, not lost work, so it
           // is reported rather than failing a settle whose destructive step is
-          // already done.
-          return branchDecision.deleteBranch && branch !== null
-            ? yield* gitWorkflow
-                .deleteRef({ cwd: workspaceRoot, refName: branch, force: true })
-                .pipe(
-                  Effect.as({ removedBranch: branch, detail: null as string | null }),
-                  Effect.catch((cause) =>
-                    Effect.succeed({
-                      removedBranch: null,
-                      detail: `Worktree removed, but branch "${branch}" could not be deleted: ${cause.message}`,
-                    }),
-                  ),
-                )
-            : { removedBranch: null, detail: branchDecision.detail };
+          // already done — except when git could not take the ref lock, which
+          // is the same repository-wide problem a failed worktree removal
+          // reports, and needs the same structured answer.
+          return yield* gitWorkflow
+            .deleteRef({ cwd: workspaceRoot, refName: branch, force: true })
+            .pipe(
+              Effect.as({
+                removedBranch: branch as string | null,
+                branchProof: initialBranchProof,
+                detail: null as string | null,
+                lockFailure: null as SessionOrchestrationGitLockError | null,
+              }),
+              Effect.catch((cause) =>
+                Effect.gen(function* () {
+                  const described = yield* describeGitFailure({
+                    cause,
+                    fallbackMessage: `Thread ${child.id} was settled and its worktree at ${worktreePath} was removed, but branch "${branch}" could NOT be deleted`,
+                  });
+                  return described._tag === "SessionOrchestrationGitLockError"
+                    ? {
+                        removedBranch: null,
+                        branchProof: null,
+                        detail: null,
+                        lockFailure: described,
+                      }
+                    : {
+                        removedBranch: null,
+                        branchProof: null,
+                        detail: described.message,
+                        lockFailure: null,
+                      };
+                }),
+              ),
+            );
         }),
       );
 
       // read_session must stop advertising a worktree that no longer exists.
+      // This runs even when the branch delete hit a lock: the worktree really
+      // is gone, and failing before recording that would leave the thread
+      // pointing at a deleted directory forever.
       yield* enqueue(
         engine.dispatch({
           type: "thread.meta.update",
@@ -1207,13 +1342,17 @@ export const make = Effect.gen(function* () {
         }),
       );
 
+      if (branchRemoval.lockFailure !== null) {
+        return yield* branchRemoval.lockFailure;
+      }
+
       return {
         removedWorktreePath: worktreePath,
         removedBranch: branchRemoval.removedBranch,
         keptWorktreePath: null,
         keptBranch: branchRemoval.removedBranch === null ? child.branch : null,
         detail: branchRemoval.detail,
-        branchProof: branchRemoval.removedBranch === null ? null : branchProof,
+        branchProof: branchRemoval.branchProof,
       };
     },
   );

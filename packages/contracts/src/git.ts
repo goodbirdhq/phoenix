@@ -336,6 +336,11 @@ export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()(
   stdoutLength: Schema.optional(Schema.Number),
   stderrLength: Schema.optional(Schema.Number),
   outputLength: Schema.optional(Schema.Number),
+  // Bounded excerpt of what git actually printed. `detail` is a fixed
+  // per-call-site string, so without this the reason a command failed — the
+  // lock file it could not take, the ref it could not update — is lost by the
+  // time a caller sees the error.
+  stderrExcerpt: Schema.optional(Schema.String),
   detail: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {

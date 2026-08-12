@@ -814,7 +814,7 @@ const runHandler = <A, E, R>(
         // Only settle_session's cleanup path touches these two; a read-only
         // tool that reaches them is a bug, so the mocks stay empty.
         Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({}),
-        GitRepositoryLock.layer,
+        GitRepositoryLock.layer.pipe(Layer.provide(NodeServices.layer)),
         // Not exercised by ping_session/read_session (only read_report/post_report
         // touch it); unused methods die if called.
         Layer.mock(ProjectionThreadReportRepository)({

@@ -228,18 +228,32 @@ directory that no longer exists.
 Three failures showed up the first time eight children were settled at once, and all three are
 about git being a single-writer program that Phoenix was treating as a service.
 
-**One cleanup per repository at a time.** `git worktree remove` takes `.git/index.lock`; eight
-concurrent removals on one repository do not queue, they all sit on the lock until Phoenix's own
-15s command timeout kills them, so seven cleanups failed and the one that ran alone succeeded.
+**One cleanup per repository at a time.** Git's worktree and ref mutations take locks under `.git`;
+concurrent cleanups on one repository do not queue, they sit on the lock until Phoenix's own 15s
+command timeout kills them, so seven cleanups failed and the one that ran alone succeeded.
 `GitRepositoryLock` (`apps/server/src/git/GitRepositoryLock.ts`) is one Effect `Semaphore` per
-repository root, and the removal _and_ the branch delete run inside it — the ref delete takes a
-lock in the same repository, so leaving it outside would just move the race. The lock is built once,
-where the sessions toolkit is registered in `McpHttpServer`, because a per-call instance serializes
+repository, and the removal _and_ the branch delete run inside it — the ref delete takes a lock in
+the same repository, so leaving it outside would just move the race. The lock is built once, where
+the sessions toolkit is registered in `McpHttpServer`, because a per-call instance serializes
 nothing. Reads (`status`, `rev-parse`) stay outside: they do not take the lock.
 
+The key is what makes it a mutex rather than a decoration. Keying on the path as handed in gives
+`/tmp/repo`, its symlink `/link/repo`, and a linked worktree of the same repository three different
+semaphores — serializing nothing while looking like it does. So the key is canonical: `realPath`
+first, then the repository's common git directory (a linked worktree's `.git` is a file pointing at
+`…/.git/worktrees/<name>`, and everything above `worktrees/` is what every worktree shares). Each
+step degrades to the best answer so far: a lock keyed on a slightly coarser path is still correct,
+while failing to lock is not.
+
 **A leftover lock is reported, never removed.** A git process killed mid-write leaves its lock file
-behind and every later git command on that repository fails against it. When a git failure names a
-lock path, `settle_session` stats it and answers with `SessionOrchestrationGitLockError`: the path,
+behind and every later git command on that repository fails against it. Reaching that diagnosis
+needs what git actually said, and `GitCommandError.detail` is a fixed per-call-site string
+("git worktree remove failed"), so the driver attaches a bounded `stderrExcerpt` — the tail, since
+git prints progress before the fatal line — to every non-zero exit. Without it the lock path never
+leaves the driver and the structured error below can only ever fire in a test. The excerpt is
+matched on the lock artifact (a `.lock` path) rather than on git's English, which varies by
+version, command, and locale. When a git failure names a lock path, `settle_session` stats it and
+answers with `SessionOrchestrationGitLockError`: the path,
 its age, whether it matches the stale heuristic, and the remedy. The heuristic is deliberately
 conservative — zero bytes (git writes the new index into the lock, so an empty one means the writer
 died before writing) _and_ older than 60s (longer than any command Phoenix could still have
@@ -261,6 +275,17 @@ stale ref can only cause a false refusal, never a wrong deletion, because a loca
 equals a merged PR head holds nothing that is not already published. `ChangeRequest.headRefOid` is
 what carries the merged commit; it is optional on the contract, and only the GitHub provider's
 non-open listing asks `gh` for it today.
+
+The proof is taken outside the repository lock — it makes a network call, and holding a repository
+hostage across one would defeat the point — which leaves a window: a branch can gain commits while
+its cleanup waits behind seven others, and a proof from minutes ago would authorize deleting them.
+So the cheap half is re-read inside the critical section, immediately before the delete: two
+`rev-parse`s confirming both heads are still the commit the pull request vouched for. A branch that
+moved is kept and reported, not deleted — the same outcome as never passing `cleanupBranch`, since
+the worktree removal was authorized by the dirty check rather than by this proof. A branch delete
+that fails on a repository lock surfaces as the same `SessionOrchestrationGitLockError` a failed
+removal does, and the thread's `worktreePath` is still cleared first: the directory really is gone,
+and failing before recording that would leave the thread pointing at it forever.
 
 ## Guardrails
 

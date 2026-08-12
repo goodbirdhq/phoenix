@@ -375,6 +375,27 @@ function deriveLocalBranchNameFromRemoteRef(branchName: string): string | null {
   return localBranch.length > 0 ? localBranch : null;
 }
 
+// Enough for git's own diagnosis (the failing ref, the lock file it could not
+// create), small enough that a runaway hook's output cannot ride along on an
+// error that crosses the wire.
+const GIT_STDERR_EXCERPT_MAX_CHARS = 500;
+
+/**
+ * Bounded, single-block excerpt of a failed git command's stderr.
+ *
+ * Kept to the *last* lines rather than the first: git prints progress and
+ * warnings before the fatal line, and the fatal line is the one that says why.
+ */
+export function gitStderrExcerpt(stderr: string): string | null {
+  const trimmed = stderr.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return trimmed.length <= GIT_STDERR_EXCERPT_MAX_CHARS
+    ? trimmed
+    : `…${trimmed.slice(trimmed.length - GIT_STDERR_EXCERPT_MAX_CHARS)}`;
+}
+
 function gitCommandContext(
   input: Pick<GitVcsDriver.ExecuteGitInput, "operation" | "cwd" | "args">,
 ) {
@@ -874,6 +895,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (options.allowNonZeroExit || result.exitCode === 0) {
           return Effect.succeed(result);
         }
+        // Callers diagnose from what git said, not from the fixed detail
+        // string: settle_session turns "Unable to create '…/index.lock'" into
+        // a structured lock error naming the file to remove.
+        const stderrExcerpt = gitStderrExcerpt(result.stderr);
         return Effect.fail(
           new GitCommandError({
             ...gitCommandContext({ operation, cwd, args }),
@@ -881,6 +906,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
             stdoutLength: result.stdout.length,
             stderrLength: result.stderr.length,
+            ...(stderrExcerpt === null ? {} : { stderrExcerpt }),
           }),
         );
       }),

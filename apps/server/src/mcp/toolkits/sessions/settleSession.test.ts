@@ -24,10 +24,14 @@ import { expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
 
+import { ServerConfig } from "../../../config.ts";
+import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as GitRepositoryLock from "../../../git/GitRepositoryLock.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -92,12 +96,22 @@ interface HarnessOptions {
   readonly stopHangs?: boolean;
   /** Fails `git worktree remove` with this detail instead of succeeding. */
   readonly removeWorktreeFailure?: string;
+  /** Fails `git worktree remove` with an error the real driver produced. */
+  readonly removeWorktreeError?: GitCommandError;
+  /** Fails `git branch -D` with an error the real driver produced. */
+  readonly deleteRefError?: GitCommandError;
   /** Merged pull requests the host reports for the branch; null = host down. */
   readonly mergedPullRequests?: ReadonlyArray<ChangeRequest> | null;
   /** Local head of the child's branch. */
   readonly localSha?: string;
   /** Remote-tracking head; null means there is no remote-tracking ref. */
   readonly remoteSha?: string | null;
+  /**
+   * Heads to report on the re-read that happens inside the repository lock,
+   * for the branch-moved-while-queued case. Defaults to `localSha`/`remoteSha`.
+   */
+  readonly localShaAfterLock?: string;
+  readonly remoteShaAfterLock?: string | null;
 }
 
 const makeHarness = (options: HarnessOptions) => {
@@ -199,21 +213,45 @@ const makeHarness = (options: HarnessOptions) => {
         yield* Effect.yieldNow;
         yield* Effect.yieldNow;
         worktreeRemovalsInFlight -= 1;
+        if (options.removeWorktreeError !== undefined) {
+          return yield* Effect.fail(options.removeWorktreeError);
+        }
         if (options.removeWorktreeFailure !== undefined) {
           return yield* Effect.fail(gitFailure(options.removeWorktreeFailure));
         }
       }),
-    deleteRef: () => Effect.sync(() => void calls.push("git:deleteRef")),
+    deleteRef: () =>
+      Effect.suspend(() => {
+        calls.push("git:deleteRef");
+        return options.deleteRefError === undefined
+          ? Effect.void
+          : Effect.fail(options.deleteRefError);
+      }),
+    // The heads move to their "after lock" values once the worktree has been
+    // removed, which is how a branch updated while a cleanup waited its turn
+    // is reproduced without real concurrency.
     resolveCommit: () =>
       Effect.sync(() => {
         calls.push("git:resolveCommit");
-        return { commitSha: options.localSha ?? BRANCH_HEAD_SHA };
+        const afterLock =
+          calls.includes("git:removeWorktree") && options.localShaAfterLock !== undefined;
+        return {
+          commitSha: afterLock
+            ? (options.localShaAfterLock as string)
+            : (options.localSha ?? BRANCH_HEAD_SHA),
+        };
       }),
     resolveRemoteTrackingCommit: (input: { readonly refName: string }) =>
       Effect.suspend(() => {
         calls.push("git:resolveRemoteTrackingCommit");
-        const remoteSha = options.remoteSha === undefined ? BRANCH_HEAD_SHA : options.remoteSha;
-        return remoteSha === null
+        const afterLock =
+          calls.includes("git:removeWorktree") && options.remoteShaAfterLock !== undefined;
+        const remoteSha = afterLock
+          ? options.remoteShaAfterLock
+          : options.remoteSha === undefined
+            ? BRANCH_HEAD_SHA
+            : options.remoteSha;
+        return remoteSha === null || remoteSha === undefined
           ? Effect.fail(gitFailure("unknown revision"))
           : Effect.succeed({ commitSha: remoteSha, remoteRefName: `origin/${input.refName}` });
       }),
@@ -251,7 +289,8 @@ const makeHarness = (options: HarnessOptions) => {
     ),
     // The real lock: serialization is the behavior under test, and one
     // instance per harness is what makes parallel settles queue on each other.
-    GitRepositoryLock.layer,
+    // It canonicalizes keys through the filesystem, so it gets the real one.
+    GitRepositoryLock.layer.pipe(Layer.provide(NodeServices.layer)),
     Layer.succeed(ThreadTurnBootstrap.ThreadTurnBootstrap, {
       bootstrapTurnStart: () => Effect.void,
     } as unknown as ThreadTurnBootstrap.ThreadTurnBootstrap["Service"]),
@@ -514,6 +553,68 @@ it.effect("settle_session reports a held git lock with its path and a remedy", (
   }),
 );
 
+/**
+ * Provoke the real thing: a repository with a held ref lock, and the real git
+ * driver failing against it. Nothing here is a hand-written message — the
+ * error handed to the handler is the one production would raise.
+ */
+const provokeRealRefLockFailure = Effect.fn("provokeRealRefLockFailure")(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const driver = yield* GitVcsDriver.GitVcsDriver;
+  const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "settle-lock-" });
+
+  yield* driver.initRepo({ cwd });
+  const run = (args: ReadonlyArray<string>) =>
+    driver.execute({ operation: "settleSession.test.git", cwd, args, timeoutMs: 10_000 });
+  yield* run(["config", "user.email", "test@test.com"]);
+  yield* run(["config", "user.name", "Test"]);
+  yield* fileSystem.writeFileString(path.join(cwd, "README.md"), "# test\n");
+  yield* run(["add", "."]);
+  yield* run(["commit", "-m", "initial commit"]);
+  yield* driver.createRef({ cwd, refName: "feature/locked" });
+
+  const lockPath = path.join(cwd, ".git", "refs", "heads", "feature", "locked.lock");
+  yield* fileSystem.makeDirectory(path.dirname(lockPath), { recursive: true });
+  yield* fileSystem.writeFileString(lockPath, "");
+
+  const error = yield* Effect.flip(
+    driver.deleteRef({ cwd, refName: "feature/locked", force: true }),
+  );
+  // git names the lock by its resolved path (on macOS /var/… is a symlink to
+  // /private/var/…), which is what the handler will echo back.
+  return { error, lockPath: yield* fileSystem.realPath(lockPath) };
+});
+
+const GitDriverLayer = GitVcsDriver.layer.pipe(
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-settle-lock-test-" })),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+it.effect("settle_session turns a real driver lock failure into the structured lock error", () =>
+  Effect.gen(function* () {
+    const { error, lockPath } = yield* provokeRealRefLockFailure();
+    // Guard the premise: if git ever stops naming the lock file, this test
+    // must fail loudly rather than quietly proving nothing.
+    expect(error._tag).toBe("GitCommandError");
+    expect(error.stderrExcerpt ?? "").toContain("locked.lock");
+
+    const harness = makeHarness({
+      sessionStatus: "stopped",
+      branch: "t3code/1a2b3c4d",
+      deleteRefError: error,
+    });
+    const failure = yield* harness.settle({ cleanupWorktree: true }).pipe(Effect.flip);
+
+    expect(failure._tag).toBe("SessionOrchestrationGitLockError");
+    expect((failure as { lockPath: string }).lockPath).toBe(lockPath);
+    expect((failure as { remedy: string }).remedy).toContain(lockPath);
+    // The worktree really was removed, so the thread must stop advertising
+    // it even though the call ends in a failure.
+    expect(harness.calls).toContain("dispatch:thread.meta.update");
+  }).pipe(Effect.provide(GitDriverLayer)),
+);
+
 it.effect("settle_session still reports an ordinary worktree failure as an operation error", () =>
   Effect.gen(function* () {
     const harness = makeHarness({
@@ -545,6 +646,54 @@ it.effect("settle_session deletes a custom branch proven merged by a merged PR h
     expect(harness.calls.indexOf("sourceControl:resolve")).toBeLessThan(
       harness.calls.indexOf("git:removeWorktree"),
     );
+  }),
+);
+
+it.effect("settle_session keeps a proven branch that moved while the cleanup queued", () =>
+  Effect.gen(function* () {
+    // The proof's expensive half runs before the repository lock, so a branch
+    // can gain commits while a cleanup waits behind seven others. Deleting on
+    // the strength of a proof taken minutes ago would destroy those commits.
+    const harness = makeHarness({
+      sessionStatus: "stopped",
+      branch: "feature/user-work",
+      mergedPullRequests: [mergedPullRequest()],
+      localShaAfterLock: "7".repeat(40),
+      remoteShaAfterLock: "7".repeat(40),
+    });
+
+    const result = yield* harness.settle({ cleanupWorktree: true, cleanupBranch: true });
+
+    expect(harness.calls).toContain("git:removeWorktree");
+    // The worktree removal stands on the dirty check, not on the branch proof.
+    expect(result.worktree.removedWorktreePath).toBe(WORKTREE_PATH);
+    expect(harness.calls).not.toContain("git:deleteRef");
+    expect(result.worktree.removedBranch).toBeNull();
+    expect(result.worktree.keptBranch).toBe("feature/user-work");
+    expect(result.worktree.branchProof).toBeNull();
+    expect(result.worktree.detail).toContain("moved");
+    expect(result.worktree.detail).toContain("7777777");
+  }),
+);
+
+it.effect("settle_session deletes a proven branch that stayed put while queued", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({
+      sessionStatus: "stopped",
+      branch: "feature/user-work",
+      mergedPullRequests: [mergedPullRequest()],
+    });
+
+    const result = yield* harness.settle({ cleanupWorktree: true, cleanupBranch: true });
+
+    expect(result.worktree.removedBranch).toBe("feature/user-work");
+    // The re-read happens inside the lock, after the worktree is gone and
+    // immediately before the delete.
+    const removalIndex = harness.calls.indexOf("git:removeWorktree");
+    const deleteIndex = harness.calls.indexOf("git:deleteRef");
+    const recheckIndex = harness.calls.lastIndexOf("git:resolveCommit");
+    expect(recheckIndex).toBeGreaterThan(removalIndex);
+    expect(recheckIndex).toBeLessThan(deleteIndex);
   }),
 );
 

@@ -16,7 +16,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError, type ReviewDiffFileContentsInput } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
-import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
+import {
+  gitStderrExcerpt,
+  makeGitVcsDriverCore,
+  splitNullSeparatedGitStdoutPaths,
+} from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
@@ -1380,6 +1384,50 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(yield* fileSystem.exists(worktreePath), false);
       }),
     );
+  });
+
+  describe("lock diagnostics", () => {
+    it.effect("carries git's own lock complaint on a failed ref delete", () =>
+      Effect.gen(function* () {
+        // A real held ref lock, not a simulated message: this is the failure a
+        // crashed git leaves behind, and the excerpt is the only thing that
+        // can tell a caller which file to remove — `detail` is a fixed string.
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* driver.createRef({ cwd, refName: "feature/locked" });
+        const lockPath = pathService.join(cwd, ".git", "refs", "heads", "feature", "locked.lock");
+        yield* fileSystem.makeDirectory(pathService.dirname(lockPath), { recursive: true });
+        yield* fileSystem.writeFileString(lockPath, "");
+
+        const error = yield* Effect.flip(
+          driver.deleteRef({ cwd, refName: "feature/locked", force: true }),
+        );
+
+        assert.strictEqual(error._tag, "GitCommandError");
+        assert.ok(
+          error.stderrExcerpt !== undefined,
+          "expected the failed git command to carry a stderr excerpt",
+        );
+        assert.ok(
+          error.stderrExcerpt.includes("locked.lock"),
+          `expected the excerpt to name the lock file, got: ${error.stderrExcerpt}`,
+        );
+      }),
+    );
+
+    it("keeps a stderr excerpt bounded, tail first", () => {
+      assert.strictEqual(gitStderrExcerpt("   "), null);
+      assert.strictEqual(gitStderrExcerpt("fatal: boom\n"), "fatal: boom");
+      // The fatal line is the last one, so the tail is what must survive.
+      const excerpt = gitStderrExcerpt(`${"noise\n".repeat(500)}fatal: Unable to create lock`);
+      assert.ok(excerpt !== null && excerpt.length <= 501);
+      assert.ok(excerpt.endsWith("fatal: Unable to create lock"));
+      assert.ok(excerpt.startsWith("…"));
+    });
   });
 
   describe("remote operations", () => {
