@@ -18,11 +18,14 @@ Every session has tools for orchestration alongside its other Phoenix tools:
 - **Message, read, and stop** — a session can send follow-ups to sessions it spawned, check their
   progress, and stop them. It cannot touch threads it did not spawn.
 - **Ping without disturbing** — a session can peek at a spawned session's live progress (status,
-  current activity, plan step, whether a report has landed) without starting a turn or interrupting
-  it, for a cheap check between messages.
+  current activity, plan step, whether a report has landed, and a best-effort usage snapshot —
+  tokens, turn count, elapsed time) without starting a turn or interrupting it, for a cheap check
+  between messages.
 - **Post a report** — when a spawned session finishes, it posts a completion report: a status, a
   summary, and any artifacts (files, branches, PR links). The report shows as a card in the thread,
-  and the session that spawned it is woken automatically with the result — no polling.
+  and the session that spawned it is woken automatically with the result — no polling. The report
+  also carries the same usage snapshot, captured at the moment it was posted, so the spawning
+  session can see what the work cost.
 - **Settle a session** — once the spawning session is done with a child, it marks it settled so the
   thread stops counting as live work. Settling also shuts the child's agent down, so a finished
   session does not sit around holding a process. A child that is mid-task is refused instead: the

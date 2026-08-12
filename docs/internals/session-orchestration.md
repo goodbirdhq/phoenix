@@ -87,6 +87,28 @@ emits no further status transition, so marking an episode "handled" on a dispatc
 would strand the parent in silence forever. That in-memory set is only an optimization; the
 persisted `reports` check is what actually prevents duplicates.
 
+## Usage snapshot
+
+`ping_session` and every posted report (agent or synthesized) carry an optional `usage` snapshot —
+`inputTokens`, `outputTokens`, `totalTokens`, `turnCount`, `elapsedMs` since spawn, and
+`lastTurnDurationMs` — so an orchestrating parent can budget instead of flying blind.
+`apps/server/src/orchestration/sessionUsage.ts` builds it from data that already exists rather than
+adding new provider plumbing: the latest `context-window.updated` activity (the same
+`projection_thread_activities` rows the web client's context-window meter reads, populated by
+`ProviderRuntimeIngestion` from the provider adapters' `thread.token-usage.updated` events) plus two
+bounded queries — `getLatestUsageActivity` (one row) and `getThreadTurnCount` (one indexed
+aggregate). Both degrade to "field omitted" on failure, the same contract as `ping_session`'s other
+purpose-built reads (`getThreadHasReport`, `getLastAssistantMessage`): optional enrichment must
+never fail the caller. Token fields are omitted, not zero, when a provider does not report them.
+
+For a report, `usage` is captured server-side at `post_report` (or terminal-report synthesis) time —
+never agent-supplied — and persisted in the same `structured_json` blob as findings/validation/
+recommendation/completionPercent (`SessionReportStructuredFields`), so no migration was needed. It
+rides along automatically to `SessionReportEnvelope` and `read_report`.
+
+Deliberately no cost estimate anywhere in this: provider price tables go stale, so tokens are the
+stable currency and converting to cost, if a caller wants that, is a client-side concern.
+
 ## Settling a child
 
 Sessions do not settle themselves — a finished report is not the same claim as "this thread is
