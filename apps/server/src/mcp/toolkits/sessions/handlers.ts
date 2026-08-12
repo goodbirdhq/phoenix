@@ -200,7 +200,7 @@ const make = Effect.gen(function* () {
     if (childCount >= SESSION_SPAWN_MAX_CHILDREN) {
       return yield* new SessionOrchestrationDeniedError({
         reason: "spawn_limit_reached",
-        message: `This session already has ${childCount} spawned sessions; stop or archive one first.`,
+        message: `This session already has ${childCount} spawned sessions (stopping one does not free a slot — it stays counted until archived). Archive a spawned thread from the sidebar first.`,
       });
     }
 
@@ -447,6 +447,12 @@ const make = Effect.gen(function* () {
         title: input.title,
         summary: input.summary,
         artifacts: input.artifacts ?? [],
+        ...(input.findings !== undefined ? { findings: input.findings } : {}),
+        ...(input.validation !== undefined ? { validation: input.validation } : {}),
+        ...(input.recommendation !== undefined ? { recommendation: input.recommendation } : {}),
+        ...(input.completionPercent !== undefined
+          ? { completionPercent: input.completionPercent }
+          : {}),
         createdAt,
       }),
     );
@@ -457,6 +463,12 @@ const make = Effect.gen(function* () {
       title: input.title,
       summary: input.summary,
       artifacts: input.artifacts ?? [],
+      ...(input.findings !== undefined ? { findings: input.findings } : {}),
+      ...(input.validation !== undefined ? { validation: input.validation } : {}),
+      ...(input.recommendation !== undefined ? { recommendation: input.recommendation } : {}),
+      ...(input.completionPercent !== undefined
+        ? { completionPercent: input.completionPercent }
+        : {}),
       createdAt,
     };
   });
@@ -474,7 +486,7 @@ const make = Effect.gen(function* () {
         createdAt: yield* nowIso,
       }),
     );
-    return null;
+    return { threadId: child.id, status: "stop-requested" as const };
   });
 
   return {

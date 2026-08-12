@@ -250,6 +250,45 @@ export const SessionReportArtifact = Schema.Struct({
 });
 export type SessionReportArtifact = typeof SessionReportArtifact.Type;
 
+export const SessionReportFindingSeverity = Schema.Literals([
+  "info",
+  "low",
+  "medium",
+  "high",
+  "critical",
+]);
+export type SessionReportFindingSeverity = typeof SessionReportFindingSeverity.Type;
+
+export const SessionReportFinding = Schema.Struct({
+  title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  severity: SessionReportFindingSeverity,
+  detail: Schema.optional(Schema.String.check(Schema.isMaxLength(4_096))),
+});
+export type SessionReportFinding = typeof SessionReportFinding.Type;
+
+export const SessionReportValidation = Schema.Struct({
+  performed: Schema.Array(Schema.String.check(Schema.isMaxLength(512))),
+  gaps: Schema.Array(Schema.String.check(Schema.isMaxLength(512))),
+});
+export type SessionReportValidation = typeof SessionReportValidation.Type;
+
+// Optional machine-readable fields alongside the markdown summary. All
+// additive so pre-feature reports keep decoding without them.
+const SessionReportStructuredFields = {
+  findings: Schema.optional(Schema.Array(SessionReportFinding)),
+  validation: Schema.optional(SessionReportValidation),
+  recommendation: Schema.optional(Schema.String.check(Schema.isMaxLength(1_024))),
+  completionPercent: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
+  ),
+};
+
+// Same fields, grouped as their own schema for persistence layers that store
+// them together (e.g. as one JSON column) separately from the flat fields
+// above.
+export const SessionReportStructured = Schema.Struct(SessionReportStructuredFields);
+export type SessionReportStructured = typeof SessionReportStructured.Type;
+
 export const SessionReport = Schema.Struct({
   reportId: TrimmedNonEmptyString,
   threadId: ThreadId,
@@ -260,6 +299,7 @@ export const SessionReport = Schema.Struct({
   artifacts: Schema.Array(SessionReportArtifact).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  ...SessionReportStructuredFields,
   createdAt: IsoDateTime,
 });
 export type SessionReport = typeof SessionReport.Type;
@@ -1071,6 +1111,7 @@ const ThreadReportPostCommand = Schema.Struct({
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   summary: Schema.String.check(Schema.isMaxLength(16_384)),
   artifacts: Schema.Array(SessionReportArtifact),
+  ...SessionReportStructuredFields,
   createdAt: IsoDateTime,
 });
 

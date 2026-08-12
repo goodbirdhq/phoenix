@@ -1,10 +1,16 @@
-import { SessionReportArtifact } from "@t3tools/contracts";
+import {
+  IsoDateTime,
+  SessionReportArtifact,
+  SessionReportStatus,
+  SessionReportStructured,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "@t3tools/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Struct from "effect/Struct";
 
 import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 
@@ -16,11 +22,49 @@ import {
   type ProjectionThreadReportRepositoryShape,
 } from "../Services/ProjectionThreadReports.ts";
 
-const ProjectionThreadReportDbRowSchema = ProjectionThreadReport.mapFields(
-  Struct.assign({
-    artifacts: Schema.fromJsonString(Schema.Array(SessionReportArtifact)),
-  }),
-);
+const ProjectionThreadReportDbRowSchema = Schema.Struct({
+  reportId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  status: SessionReportStatus,
+  title: TrimmedNonEmptyString,
+  summary: Schema.String,
+  artifacts: Schema.fromJsonString(Schema.Array(SessionReportArtifact)),
+  // Optional findings/validation/recommendation/completionPercent, stored
+  // together as one JSON column.
+  structured: Schema.NullOr(Schema.fromJsonString(SessionReportStructured)),
+  createdAt: IsoDateTime,
+});
+
+function mapReportRow(
+  row: Schema.Schema.Type<typeof ProjectionThreadReportDbRowSchema>,
+): ProjectionThreadReport {
+  return {
+    reportId: row.reportId,
+    threadId: row.threadId,
+    status: row.status,
+    title: row.title,
+    summary: row.summary,
+    artifacts: row.artifacts,
+    ...row.structured,
+    createdAt: row.createdAt,
+  };
+}
+
+function encodeStructured(
+  report: Pick<
+    ProjectionThreadReport,
+    "findings" | "validation" | "recommendation" | "completionPercent"
+  >,
+): string {
+  return JSON.stringify({
+    ...(report.findings !== undefined ? { findings: report.findings } : {}),
+    ...(report.validation !== undefined ? { validation: report.validation } : {}),
+    ...(report.recommendation !== undefined ? { recommendation: report.recommendation } : {}),
+    ...(report.completionPercent !== undefined
+      ? { completionPercent: report.completionPercent }
+      : {}),
+  });
+}
 
 function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
   return (cause: unknown) =>
@@ -42,6 +86,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         title,
         summary,
         artifacts_json,
+        structured_json,
         created_at
       )
       VALUES (
@@ -51,6 +96,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         ${row.title},
         ${row.summary},
         ${JSON.stringify(row.artifacts)},
+        ${encodeStructured(row)},
         ${row.createdAt}
       )
       ON CONFLICT (report_id)
@@ -60,6 +106,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         title = excluded.title,
         summary = excluded.summary,
         artifacts_json = excluded.artifacts_json,
+        structured_json = excluded.structured_json,
         created_at = excluded.created_at
     `,
   });
@@ -75,6 +122,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         title,
         summary,
         artifacts_json AS "artifacts",
+        structured_json AS "structured",
         created_at AS "createdAt"
       FROM projection_thread_reports
       WHERE thread_id = ${threadId}
@@ -102,6 +150,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
 
   const listByThreadId: ProjectionThreadReportRepositoryShape["listByThreadId"] = (input) =>
     listProjectionThreadReportRows(input).pipe(
+      Effect.map((rows) => rows.map(mapReportRow)),
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "ProjectionThreadReportRepository.listByThreadId:query",

@@ -9,7 +9,9 @@ import {
   RuntimeMode,
   SessionReport,
   SessionReportArtifact,
+  SessionReportFinding,
   SessionReportStatus,
+  SessionReportValidation,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -137,11 +139,25 @@ export const StopSessionInput = Schema.Struct({
 });
 export type StopSessionInput = typeof StopSessionInput.Type;
 
+export const StopSessionResult = Schema.Struct({
+  threadId: ThreadId,
+  status: Schema.Literal("stop-requested"),
+});
+export type StopSessionResult = typeof StopSessionResult.Type;
+
 export const PostReportInput = Schema.Struct({
   status: SessionReportStatus,
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   summary: BoundedText(16_384),
   artifacts: Schema.optional(Schema.Array(SessionReportArtifact)),
+  // Optional machine-readable fields alongside the markdown summary.
+  findings: Schema.optional(Schema.Array(SessionReportFinding)),
+  validation: Schema.optional(SessionReportValidation),
+  recommendation: Schema.optional(Schema.String.check(Schema.isMaxLength(1_024))),
+  // 0-100. How much of the assigned work this report represents.
+  completionPercent: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
+  ),
 });
 export type PostReportInput = typeof PostReportInput.Type;
 
