@@ -1257,6 +1257,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.turn-start-requeued": {
+          yield* projectionTurnRepository.requeueQueuedTurnStart({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
+          });
+          return;
+        }
+
         case "thread.session-set": {
           const turnId = event.payload.session.activeTurnId;
           if (turnId === null || event.payload.session.status !== "running") {

@@ -125,6 +125,11 @@ export const RequeueStaleReleasingTurnsInput = Schema.Struct({
   staleBefore: IsoDateTime,
 });
 
+export const RequeueProjectionQueuedTurnInput = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+});
+
 export const DeleteProjectionQueuedTurnStartInput = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
@@ -210,6 +215,10 @@ export interface ProjectionTurnRepositoryShape {
 
   readonly requeueStaleReleasingTurns: (
     input: typeof RequeueStaleReleasingTurnsInput.Type,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  readonly requeueQueuedTurnStart: (
+    input: typeof RequeueProjectionQueuedTurnInput.Type,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /** Compatibility path for events written before queued-delivery receipts. */

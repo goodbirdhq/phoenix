@@ -1193,6 +1193,14 @@ const ThreadQueuedTurnCancelCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadQueuedTurnRequeueCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.queue.requeue"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   type: Schema.Literal("thread.message.assistant.delta"),
   commandId: CommandId,
@@ -1286,6 +1294,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadQueuedTurnStartCommand,
   ThreadQueuedTurnCancelCommand,
+  ThreadQueuedTurnRequeueCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
@@ -1324,6 +1333,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.message-sent",
   "thread.turn-start-queued",
   "thread.turn-start-cancelled",
+  "thread.turn-start-requeued",
   "thread.turn-start-consumed",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -1533,6 +1543,12 @@ export const ThreadTurnStartCancelledPayload = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadTurnStartRequeuedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
 export const ThreadTurnStartConsumedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
@@ -1734,6 +1750,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-start-cancelled"),
     payload: ThreadTurnStartCancelledPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.turn-start-requeued"),
+    payload: ThreadTurnStartRequeuedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

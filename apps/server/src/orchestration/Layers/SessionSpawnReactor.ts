@@ -498,10 +498,6 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
           milliseconds: -Duration.toMillis(RELEASING_RECOVERY_AGE),
         }),
       );
-      yield* projectionTurnRepository.requeueStaleReleasingTurns({
-        threadId: input.threadId,
-        staleBefore,
-      });
       const shell = yield* snapshotQuery.getThreadShellById(input.threadId);
       if (Option.isNone(shell)) return;
       const session = shell.value.session;
@@ -515,6 +511,34 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         Number.isFinite(sessionUpdatedAtMs) &&
         (yield* Clock.currentTimeMillis) - sessionUpdatedAtMs >=
           Duration.toMillis(RECOVERY_INTERVAL);
+      const canRecoverReleasing =
+        session === null ||
+        session.status === "idle" ||
+        session.status === "ready" ||
+        session.status === "interrupted" ||
+        ((session.status === "starting" || session.status === "running") && !live && stale);
+      if (canRecoverReleasing) {
+        yield* Effect.forEach(
+          queuedForThread.filter(
+            (entry) =>
+              entry.state === "releasing" &&
+              entry.releasingAt !== null &&
+              entry.releasingAt <= staleBefore,
+          ),
+          (entry) =>
+            Effect.gen(function* () {
+              const createdAt = yield* nowIso;
+              yield* engine.dispatch({
+                type: "thread.turn.queue.requeue",
+                commandId: yield* serverCommandId("queued-turn-requeue"),
+                threadId: input.threadId,
+                messageId: entry.messageId,
+                createdAt,
+              });
+            }),
+          { concurrency: 1 },
+        );
+      }
       if ((session?.status === "starting" || session?.status === "running") && !live && stale) {
         yield* engine.dispatch({
           type: "thread.session.set",

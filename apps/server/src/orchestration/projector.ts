@@ -597,6 +597,22 @@ export function projectEvent(
       });
     }
 
+    case "thread.turn-start-requeued": {
+      const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
+      if (!thread) return Effect.succeed(nextBase);
+      return Effect.succeed({
+        ...nextBase,
+        threads: updateThread(nextBase.threads, event.payload.threadId, {
+          queuedTurnStarts: (thread.queuedTurnStarts ?? []).map((entry) =>
+            entry.messageId === event.payload.messageId
+              ? { ...entry, releasingAt: undefined }
+              : entry,
+          ),
+          updatedAt: event.occurredAt,
+        }),
+      });
+    }
+
     case "thread.turn-start-consumed":
     case "thread.turn-start-cancelled": {
       const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);

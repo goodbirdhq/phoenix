@@ -1148,6 +1148,33 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.turn.queue.requeue": {
+      const targetThread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const queuedTurn = targetThread.queuedTurnStarts?.find(
+        (entry) => entry.messageId === command.messageId && entry.releasingAt !== undefined,
+      );
+      if (queuedTurn === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Releasing queued turn '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.turn-start-requeued",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.turn.interrupt": {
       yield* requireThread({
         readModel,
@@ -1309,9 +1336,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           session: {
             ...command.session,
-            // The marker is consumed by this running transition only; keeping
-            // it would let later provider lifecycle updates re-attribute it.
-            queuedDeliveryMessageId: null,
+            // Keep the marker through the synthetic `starting` transition.
+            // Provider runtime ingestion copies it onto the subsequent
+            // `running` transition that carries the provider turn id.
+            queuedDeliveryMessageId:
+              command.session.status === "running" &&
+              command.session.activeTurnId !== null &&
+              command.session.queuedDeliveryMessageId !== null
+                ? null
+                : command.session.queuedDeliveryMessageId,
           },
         },
       };

@@ -15,6 +15,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { projectEvent } from "./projector.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const SETTLED_AT = "2025-12-30T00:00:00.000Z";
@@ -78,15 +79,15 @@ it.layer(NodeServices.layer)("queued delivery receipt attribution", (it) => {
       const firstMessageId = MessageId.make("queued-first");
       const releasedMessageId = MessageId.make("queued-released");
       const activeTurnId = TurnId.make("provider-turn-2");
-      const session = {
-        ...makeSession("running"),
-        activeTurnId,
+      const startingSession = {
+        ...makeSession("starting"),
+        activeTurnId: null,
         queuedDeliveryMessageId: releasedMessageId,
       };
       const readModel = makeReadModel(
         null,
         null,
-        session,
+        startingSession,
         [],
         [],
         [
@@ -105,15 +106,40 @@ it.layer(NodeServices.layer)("queued delivery receipt attribution", (it) => {
         ],
       );
 
-      const decided = yield* decideOrchestrationCommand({
+      const starting = yield* decideOrchestrationCommand({
         command: {
           type: "thread.session.set",
-          commandId: CommandId.make("cmd-correlated-consume"),
+          commandId: CommandId.make("cmd-provider-starting"),
           threadId: ThreadId.make("thread-1"),
-          session,
+          session: startingSession,
           createdAt: NOW,
         },
         readModel,
+      });
+      const startingEvents = Array.isArray(starting) ? starting : [starting];
+      const startingSessionSet = startingEvents.find(
+        (event) => event.type === "thread.session-set",
+      );
+      if (startingSessionSet?.type !== "thread.session-set")
+        throw new Error("missing starting event");
+      expect(startingSessionSet.payload.session.queuedDeliveryMessageId).toBe(releasedMessageId);
+      const afterStarting = yield* projectEvent(readModel, { ...startingSessionSet, sequence: 1 });
+
+      // This is the provider-runtime transition that carries the real turn id.
+      const runningSession = {
+        ...afterStarting.threads[0]!.session!,
+        status: "running" as const,
+        activeTurnId,
+      };
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-provider-running"),
+          threadId: ThreadId.make("thread-1"),
+          session: runningSession,
+          createdAt: NOW,
+        },
+        readModel: afterStarting,
       });
       const events = Array.isArray(decided) ? decided : [decided];
       const consumed = events.find((event) => event.type === "thread.turn-start-consumed");
@@ -132,10 +158,10 @@ it.layer(NodeServices.layer)("queued delivery receipt attribution", (it) => {
           type: "thread.session.set",
           commandId: CommandId.make("cmd-unmarked-session-set"),
           threadId: ThreadId.make("thread-1"),
-          session: { ...session, queuedDeliveryMessageId: null },
+          session: { ...runningSession, queuedDeliveryMessageId: null },
           createdAt: NOW,
         },
-        readModel,
+        readModel: afterStarting,
       });
       const unmarkedEvents = Array.isArray(unmarked) ? unmarked : [unmarked];
       expect(unmarkedEvents.some((event) => event.type === "thread.turn-start-consumed")).toBe(

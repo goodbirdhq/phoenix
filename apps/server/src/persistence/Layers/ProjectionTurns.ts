@@ -23,6 +23,7 @@ import {
   ProjectionQueuedDeliveryReceipt,
   ProjectionQueuedTurnStart,
   ProjectionTurn,
+  RequeueProjectionQueuedTurnInput,
   RequeueStaleReleasingTurnsInput,
   ProjectionTurnById,
   ProjectionTurnRepository,
@@ -250,6 +251,19 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const requeueQueuedProjectionTurn = SqlSchema.void({
+    Request: RequeueProjectionQueuedTurnInput,
+    execute: ({ threadId, messageId }) =>
+      sql`
+        UPDATE projection_turns
+        SET state = 'queued', releasing_at = NULL, consumed_by_turn_id = NULL, consumed_at = NULL,
+            cancelled_at = NULL, cancel_reason = NULL
+        WHERE thread_id = ${threadId}
+          AND pending_message_id = ${messageId}
+          AND state = 'releasing'
+      `,
+  });
+
   const deleteQueuedProjectionTurn = SqlSchema.void({
     Request: DeleteProjectionQueuedTurnStartInput,
     execute: ({ threadId, messageId }) =>
@@ -271,7 +285,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           pending_message_id AS "messageId",
           CASE WHEN state = 'interrupting' THEN 'interrupt' ELSE 'queue' END AS mode,
           CASE WHEN state = 'releasing' THEN 'releasing' ELSE 'queued' END AS state,
-          requested_at AS "requestedAt"
+          requested_at AS "requestedAt",
+          releasing_at AS "releasingAt"
         FROM projection_turns
         WHERE state IN ('queued', 'interrupting', 'releasing')
           AND pending_message_id IS NOT NULL
@@ -470,6 +485,13 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       ),
     );
 
+  const requeueQueuedTurnStart: ProjectionTurnRepositoryShape["requeueQueuedTurnStart"] = (input) =>
+    requeueQueuedProjectionTurn(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionTurnRepository.requeueQueuedTurnStart:query"),
+      ),
+    );
+
   const deleteQueuedTurnStart: ProjectionTurnRepositoryShape["deleteQueuedTurnStart"] = (input) =>
     deleteQueuedProjectionTurn(input).pipe(
       Effect.mapError(
@@ -550,6 +572,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     consumeQueuedTurnStart,
     cancelQueuedTurnStart,
     requeueStaleReleasingTurns,
+    requeueQueuedTurnStart,
     deleteQueuedTurnStart,
     listQueuedTurnStarts,
     listQueuedDeliveryReceipts,
