@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  MessageId,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
@@ -569,6 +570,11 @@ const make = Effect.gen(function* () {
           runtimeMode: desiredRuntimeMode,
           activeTurnId: null,
           lastError: null,
+          stoppedBy: thread.session?.stoppedBy ?? null,
+          stopRequestedAt: thread.session?.stopRequestedAt ?? null,
+          stopReason: thread.session?.stopReason ?? null,
+          interruptedToolCall: thread.session?.interruptedToolCall ?? false,
+          lastCompletedOperation: thread.session?.lastCompletedOperation ?? null,
           updatedAt: createdAt,
         },
         createdAt,
@@ -654,6 +660,11 @@ const make = Effect.gen(function* () {
             // Provider turn ids are not orchestration turn ids.
             activeTurnId: null,
             lastError: session.lastError ?? null,
+            stoppedBy: thread.session?.stoppedBy ?? null,
+            stopRequestedAt: thread.session?.stopRequestedAt ?? null,
+            stopReason: thread.session?.stopReason ?? null,
+            interruptedToolCall: thread.session?.interruptedToolCall ?? false,
+            lastCompletedOperation: thread.session?.lastCompletedOperation ?? null,
             updatedAt: session.updatedAt,
           },
           createdAt,
@@ -1093,6 +1104,11 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    // A grace-stop deadline can land while its notice is still queued. Once
+    // the session is stopped, that queued notice must never revive it.
+    if (thread.session?.status === "stopped") {
+      return;
+    }
 
     const isFirstUserMessageTurn =
       thread.messages.filter((entry) => entry.role === "user").length === 1;
@@ -1304,26 +1320,97 @@ const make = Effect.gen(function* () {
     }
 
     const now = event.payload.createdAt;
-    if (thread.session && thread.session.status !== "stopped") {
-      yield* providerService.stopSession({ threadId: thread.id });
+    const stopAudit = (current: typeof thread) => {
+      const lastToolActivity = current.activities
+        .filter(
+          (activity) => activity.kind === "tool.started" || activity.kind === "tool.completed",
+        )
+        .at(-1);
+      const lastCompletedOperation =
+        current.activities.filter((activity) => activity.kind === "tool.completed").at(-1)
+          ?.summary ?? null;
+      return {
+        stoppedBy: event.payload.stoppedBy,
+        stopRequestedAt: event.payload.createdAt,
+        stopReason: event.payload.stopReason,
+        interruptedToolCall:
+          current.session?.activeTurnId !== undefined &&
+          current.session.activeTurnId !== null &&
+          lastToolActivity?.kind === "tool.started",
+        lastCompletedOperation,
+      } as const;
+    };
+    const setStoppedSession = (current: typeof thread) =>
+      setThreadSession({
+        threadId: current.id,
+        session: {
+          threadId: current.id,
+          status: "stopped",
+          providerName: current.session?.providerName ?? null,
+          ...(current.session?.providerInstanceId !== undefined
+            ? { providerInstanceId: current.session.providerInstanceId }
+            : {}),
+          runtimeMode: current.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+          activeTurnId: null,
+          lastError: current.session?.lastError ?? null,
+          ...stopAudit(current),
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+    const hardStop = Effect.fnUntraced(function* () {
+      const current = yield* resolveThread(event.payload.threadId);
+      if (!current || current.session?.status === "stopped") {
+        return;
+      }
+      if (current.session !== null) {
+        yield* providerService.stopSession({ threadId: current.id });
+      }
+      yield* setStoppedSession(current);
+    });
+
+    if (event.payload.gracePeriodMs === null || thread.session === null) {
+      return yield* hardStop();
     }
 
+    // Provider adapters treat a send while a real turn is running as a steer,
+    // so this notice is queued after the in-flight tool work instead of
+    // cancelling it. The child can then use post_report before the deadline.
     yield* setThreadSession({
       threadId: thread.id,
-      session: {
-        threadId: thread.id,
-        status: "stopped",
-        providerName: thread.session?.providerName ?? null,
-        ...(thread.session?.providerInstanceId !== undefined
-          ? { providerInstanceId: thread.session.providerInstanceId }
-          : {}),
-        runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-        activeTurnId: null,
-        lastError: thread.session?.lastError ?? null,
-        updatedAt: now,
-      },
+      session: { ...thread.session!, ...stopAudit(thread), updatedAt: now },
       createdAt: now,
     });
+    const noticeMessageId = MessageId.make(yield* crypto.randomUUIDv4);
+    const partialReportInstruction = event.payload.requestPartialReport
+      ? " Call post_report with a partial report before stopping."
+      : " Stop after completing the current operation.";
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* serverCommandId("session-graceful-stop-notice"),
+      threadId: thread.id,
+      message: {
+        messageId: noticeMessageId,
+        role: "user",
+        text: `A parent session requested that you stop. Finish the current tool call if one is in progress, then stop working.${partialReportInstruction}`,
+        attachments: [],
+      },
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
+      createdAt: now,
+    });
+    yield* Effect.sleep(Duration.millis(event.payload.gracePeriodMs)).pipe(
+      Effect.andThen(hardStop),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logWarning("provider command reactor graceful stop deadline failed", {
+              threadId: thread.id,
+              cause: Cause.pretty(cause),
+            }),
+      ),
+      Effect.forkDaemon,
+    );
   });
 
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (

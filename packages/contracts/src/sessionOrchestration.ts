@@ -13,6 +13,8 @@ import {
   SessionReportStatus,
   SessionReportValidation,
   structuredReportFieldsWithinSizeCap,
+  SessionStopReason,
+  SessionStoppedBy,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -146,6 +148,11 @@ export const ReadSessionResult = Schema.Struct({
   sessionStatus: Schema.NullOr(OrchestrationSessionStatus),
   settled: Schema.Boolean,
   report: Schema.NullOr(SessionReport),
+  stoppedBy: Schema.NullOr(SessionStoppedBy),
+  stopRequestedAt: Schema.NullOr(IsoDateTime),
+  stopReason: Schema.NullOr(SessionStopReason),
+  interruptedToolCall: Schema.Boolean,
+  lastCompletedOperation: Schema.NullOr(TrimmedNonEmptyString),
   messages: Schema.Array(ReadSessionMessage),
   // Present when the spawned session has a git worktree. branch and dirty use
   // cached status; sha is resolved live so callers can verify the revision.
@@ -158,6 +165,12 @@ export type ReadSessionResult = typeof ReadSessionResult.Type;
 
 export const StopSessionInput = Schema.Struct({
   threadId: ThreadId,
+  // When supplied, keep the child alive long enough to receive a stop notice
+  // and post a partial report before the deadline forces a hard stop.
+  gracePeriodMs: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(Schema.isLessThanOrEqualTo(120_000)),
+  ),
+  requestPartialReport: Schema.optional(Schema.Boolean),
 });
 export type StopSessionInput = typeof StopSessionInput.Type;
 

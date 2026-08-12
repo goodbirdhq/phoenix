@@ -538,6 +538,35 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       });
       const stoppedEvents = Array.isArray(stopped) ? stopped : [stopped];
       expect(stoppedEvents.map((event) => event.type)).toEqual(["thread.session-stop-requested"]);
+      expect(stoppedEvents[0]?.payload).toMatchObject({
+        stopReason: "user_stopped",
+        stoppedBy: "user",
+        gracePeriodMs: null,
+        requestPartialReport: false,
+      });
+
+      const gracefulParentStop = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.session.stop",
+          commandId: CommandId.make("cmd-stop-parent-graceful"),
+          threadId: ThreadId.make("thread-1"),
+          createdAt: NOW,
+          stopReason: "parent_stopped",
+          stoppedBy: "parent",
+          gracePeriodMs: 30_000,
+          requestPartialReport: true,
+        },
+        readModel: makeReadModel(null, null, makeSession("running")),
+      });
+      const gracefulParentStopEvent = Array.isArray(gracefulParentStop)
+        ? gracefulParentStop[0]
+        : gracefulParentStop;
+      expect(gracefulParentStopEvent?.payload).toMatchObject({
+        stopReason: "parent_stopped",
+        stoppedBy: "parent",
+        gracePeriodMs: 30_000,
+        requestPartialReport: true,
+      });
 
       // Re-engaged before the stop was decided (a turn start unsettles the
       // thread): the stale cleanup stop must not kill the new session.

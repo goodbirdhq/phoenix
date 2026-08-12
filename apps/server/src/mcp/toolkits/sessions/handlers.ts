@@ -492,6 +492,11 @@ const make = Effect.gen(function* () {
       sessionStatus: child.session?.status ?? null,
       settled: child.settledAt !== null,
       report,
+      stoppedBy: child.session?.stoppedBy ?? null,
+      stopRequestedAt: child.session?.stopRequestedAt ?? null,
+      stopReason: child.session?.stopReason ?? null,
+      interruptedToolCall: child.session?.interruptedToolCall ?? false,
+      lastCompletedOperation: child.session?.lastCompletedOperation ?? null,
       messages,
       ...(worktreePath
         ? {
@@ -547,6 +552,8 @@ const make = Effect.gen(function* () {
 
   const stopSession = Effect.fn("SessionsToolkit.stopSession")(function* (input: {
     readonly threadId: ThreadId;
+    readonly gracePeriodMs?: number | undefined;
+    readonly requestPartialReport?: boolean | undefined;
   }) {
     const scope = yield* requireSessionsCapability;
     const child = yield* requireSpawnedChild(scope.threadId, input.threadId);
@@ -556,6 +563,10 @@ const make = Effect.gen(function* () {
         commandId: yield* serverCommandId("mcp-stop-session"),
         threadId: child.id,
         createdAt: yield* nowIso,
+        stopReason: "parent_stopped",
+        stoppedBy: "parent",
+        ...(input.gracePeriodMs !== undefined ? { gracePeriodMs: input.gracePeriodMs } : {}),
+        requestPartialReport: input.requestPartialReport ?? false,
       }),
     );
     return { threadId: child.id, status: "stop-requested" as const };
