@@ -88,6 +88,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --sidebar-control-gap: 0.5rem;
   --sidebar-icon-color: color-mix(in srgb, var(--sidebar-muted-foreground) 60%, var(--sidebar));
   --sidebar-row-content-inset: 0.625rem;
+  /* One nesting step for spawned sessions in sidebar hierarchy mode. Wide
+     enough that the connector rail clears the card edge, narrow enough that
+     four levels still leave the title room to breathe. */
+  --sidebar-hierarchy-indent: 0.75rem;
   --command-shell-inset: 0.5rem;
   --command-content-inset: 1rem;
   --floating-content-inset: 0.75rem;
