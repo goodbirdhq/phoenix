@@ -185,6 +185,31 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       yield* sql`
+        INSERT INTO projection_thread_reports (
+          report_id,
+          thread_id,
+          status,
+          title,
+          summary,
+          artifacts_json,
+          structured_json,
+          origin,
+          created_at
+        )
+        VALUES (
+          'report-1',
+          'thread-1',
+          'partial',
+          'Session stopped before reporting',
+          'Phoenix generated this report.',
+          '[]',
+          NULL,
+          'system',
+          '2026-02-24T00:00:06.500Z'
+        )
+      `;
+
+      yield* sql`
         INSERT INTO projection_thread_sessions (
           thread_id,
           status,
@@ -350,7 +375,20 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               updatedAt: "2026-02-24T00:00:05.500Z",
             },
           ],
-          reports: [],
+          reports: [
+            {
+              reportId: "report-1",
+              threadId: ThreadId.make("thread-1"),
+              status: "partial",
+              title: "Session stopped before reporting",
+              summary: "Phoenix generated this report.",
+              artifacts: [],
+              // A synthesized terminal report must survive the projection
+              // round trip flagged as Phoenix's, not the agent's.
+              origin: "system",
+              createdAt: "2026-02-24T00:00:06.500Z",
+            },
+          ],
           activities: [
             {
               id: asEventId("activity-1"),

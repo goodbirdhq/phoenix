@@ -25,6 +25,7 @@ import {
 import { buildTemporaryWorktreeBranchName, isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -120,15 +121,34 @@ const SPAWNED_SESSION_REPORT_INSTRUCTIONS =
 // transcript of a large working tree.
 const MAX_REPORTED_DIRTY_FILES = 20;
 
+// How long settle_session waits for a stopped provider process to actually be
+// gone before it declines to delete anything. Generous enough for a normal
+// shutdown, short enough that an agent is not left hanging on a wedged one.
+const SESSION_STOP_TIMEOUT_MS = 10_000;
+const SESSION_STOP_POLL_INTERVAL_MS = 100;
+
 /**
- * Whether the child's agent is still working.
+ * Whether a turn is actively in flight.
  *
- * Mirrors the decider's settle guard (`decider.ts`): those two statuses are
+ * Mirrors the decider's settle guard (`decider.ts`): these two statuses are
  * exactly what makes `thread.settle` fail, so settle_session can refuse first
  * with an actionable message instead of surfacing a raw invariant error.
+ * Live work is never interrupted on the parent's say-so.
  */
 export function isSessionBusy(status: OrchestrationSessionStatus | null | undefined): boolean {
   return status === "starting" || status === "running";
+}
+
+/**
+ * Whether a provider process is still up.
+ *
+ * "ready" is idle but alive — the process is sitting there resumable. Settling
+ * such a child without stopping it would leak the process, and deleting its
+ * worktree underneath it would race a `send_to_session` that revives it. So
+ * settle_session stops anything alive before it settles or touches the disk.
+ */
+export function isSessionAlive(status: OrchestrationSessionStatus | null | undefined): boolean {
+  return status !== null && status !== undefined && status !== "stopped";
 }
 
 export interface WorktreeCleanupRisk {
@@ -188,7 +208,10 @@ export function decideBranchCleanup(branch: string | null): {
       };
 }
 
-const make = Effect.gen(function* () {
+// Exported so tests can drive the real handlers against stub services; the
+// wiring between them (stop → settle → cleanup ordering) is exactly what pure
+// helper tests cannot see.
+export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
   const bootstrap = yield* ThreadTurnBootstrap.ThreadTurnBootstrap;
@@ -610,6 +633,58 @@ const make = Effect.gen(function* () {
   });
 
   /**
+   * Stop a child's provider process and wait for it to actually be gone.
+   *
+   * `thread.session.stop` only records the intent — ProviderCommandReactor
+   * kills the process and writes `stopped` afterwards. Returning as soon as the
+   * command lands would leave the caller free to delete a worktree the process
+   * is still writing to, so this waits for the projected status.
+   *
+   * @returns whether the session reached "stopped" before the timeout.
+   */
+  const stopChildSession = Effect.fn("SessionsToolkit.stopChildSession")(function* (
+    child: OrchestrationThreadShell,
+  ) {
+    if (!isSessionAlive(child.session?.status)) {
+      return true;
+    }
+    yield* enqueue(
+      engine.dispatch({
+        type: "thread.session.stop",
+        commandId: yield* serverCommandId("mcp-settle-session-stop"),
+        threadId: child.id,
+        createdAt: yield* nowIso,
+        // Same audit trail stop_session writes, so a settle-driven stop is not
+        // an anonymous one in the record.
+        stopReason: "parent_stopped",
+        stoppedBy: "parent",
+        // Deliberately no gracePeriodMs, and no partial report requested. A
+        // grace period exists to let a working agent wrap up and report before
+        // the axe falls; settle_session has already refused anything
+        // starting/running, so by construction there is no work in flight to
+        // wind down and nothing to report that the child could not have
+        // reported already. Waiting out a grace period here would only delay
+        // the settle — and, with cleanupWorktree, hold the worktree hostage —
+        // for a session that is idle by definition.
+        requestPartialReport: false,
+      }),
+    );
+
+    let waitedMs = 0;
+    while (waitedMs < SESSION_STOP_TIMEOUT_MS) {
+      const shell = yield* getShell(child.id);
+      // A thread that vanished (archived, deleted) has no process left to wait
+      // on, and neither does one whose session is already gone.
+      if (Option.isNone(shell) || !isSessionAlive(shell.value.session?.status)) {
+        return true;
+      }
+      yield* Effect.sleep(Duration.millis(SESSION_STOP_POLL_INTERVAL_MS));
+      waitedMs += SESSION_STOP_POLL_INTERVAL_MS;
+    }
+    return false;
+  });
+
+  /**
    * Reclaim a settled child's worktree, or explain why it was left alone.
    *
    * Spawned worktrees are otherwise never reclaimed — nothing else in the
@@ -732,14 +807,18 @@ const make = Effect.gen(function* () {
     const scope = yield* requireSessionsCapability;
     const child = yield* requireSpawnedChild(scope.threadId, input.threadId);
 
-    // Sessions never settle themselves, and Phoenix never stops a working
-    // agent on a parent's behalf: that has to be an explicit stop_session.
+    // A turn in flight is never interrupted on the parent's say-so; that stays
+    // an explicit stop_session. An idle-but-alive session is a different
+    // matter — settling is the parent declaring the child finished, so the
+    // process goes with it.
     if (isSessionBusy(child.session?.status)) {
       return yield* new SessionOrchestrationDeniedError({
         reason: "session_still_running",
         message: `Thread ${child.id} is still ${child.session?.status}. Call stop_session first, or wait for it to finish, then settle it.`,
       });
     }
+
+    const stopped = yield* stopChildSession(child);
 
     // Settle before touching the filesystem: it is the reversible half, and a
     // worktree must never be deleted for a thread that turned out to be
@@ -753,6 +832,15 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.mapError(operationError(`Failed to settle thread ${child.id}`)));
+
+    // Deleting files under a process that refused to die is how a "cleanup"
+    // corrupts a live turn. The thread is settled either way; the destructive
+    // half is what gets withheld.
+    if (!stopped && input.cleanupWorktree === true) {
+      return yield* new SessionOrchestrationOperationError({
+        message: `Thread ${child.id} was settled, but its provider session did not reach "stopped" within ${SESSION_STOP_TIMEOUT_MS}ms, so its worktree was left untouched. Retry settle_session once the session has stopped.`,
+      });
+    }
 
     const worktree = yield* cleanupChildWorktree({ child, input });
     return { threadId: child.id, settled: true, worktree };

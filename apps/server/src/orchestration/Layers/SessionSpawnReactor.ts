@@ -52,9 +52,8 @@ const TERMINAL_SESSION_STATUSES = new Set<OrchestrationSessionStatus>(["stopped"
 
 // A type predicate, not just a boolean: the queue-cancellation path it guards
 // only accepts the terminal statuses.
-const isTerminalStatus = (
-  status: OrchestrationSessionStatus,
-): status is "stopped" | "error" => TERMINAL_SESSION_STATUSES.has(status);
+const isTerminalStatus = (status: OrchestrationSessionStatus): status is "stopped" | "error" =>
+  TERMINAL_SESSION_STATUSES.has(status);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const INTERRUPT_FALLBACK_TIMEOUT = Duration.seconds(30);

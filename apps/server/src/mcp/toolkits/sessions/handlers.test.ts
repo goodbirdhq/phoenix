@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import {
   assessWorktreeCleanupRisk,
   decideBranchCleanup,
+  isSessionAlive,
   isSessionBusy,
   resolveSendToSessionDelivery,
   resolveSessionCheckout,
@@ -114,6 +115,24 @@ describe("isSessionBusy", () => {
     expect(isSessionBusy("error")).toBe(false);
     expect(isSessionBusy(null)).toBe(false);
     expect(isSessionBusy(undefined)).toBe(false);
+  });
+});
+
+describe("isSessionAlive", () => {
+  it("counts an idle-but-resumable session as alive", () => {
+    // The distinction that matters for settle_session: "ready" is not busy,
+    // but it still holds a provider process that settling must reclaim.
+    expect(isSessionBusy("ready")).toBe(false);
+    expect(isSessionAlive("ready")).toBe(true);
+    expect(isSessionAlive("idle")).toBe(true);
+    expect(isSessionAlive("interrupted")).toBe(true);
+    expect(isSessionAlive("error")).toBe(true);
+  });
+
+  it("counts a stopped or absent session as already gone", () => {
+    expect(isSessionAlive("stopped")).toBe(false);
+    expect(isSessionAlive(null)).toBe(false);
+    expect(isSessionAlive(undefined)).toBe(false);
   });
 });
 

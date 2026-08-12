@@ -311,6 +311,12 @@ export class GitVcsDriver extends Context.Service<
     readonly createRef: (
       input: VcsCreateRefInput,
     ) => Effect.Effect<VcsCreateRefResult, GitCommandError>;
+    // Deletes whatever branch it is handed: this primitive has no notion of
+    // which branches are safe to remove, by design. Deciding that is the
+    // caller's job (see `decideBranchCleanup` in the sessions toolkit, which
+    // restricts deletion to Phoenix's own temporary worktree branches). Git's
+    // own guardrails — refusing a branch checked out in another worktree — are
+    // the only backstop here, so do not treat this as defense in depth.
     readonly deleteRef: (input: {
       readonly cwd: string;
       readonly refName: string;

@@ -88,7 +88,7 @@ export const StopSessionTool = Tool.make("stop_session", {
 
 export const SettleSessionTool = Tool.make("settle_session", {
   description:
-    "Mark a session this session spawned as finished, so it stops showing up as live work. The child must not be running — call stop_session first if it is. Optionally pass cleanupWorktree: true to PERMANENTLY DELETE the child's git worktree directory and its temporary Phoenix branch; this cannot be undone, and is refused (with the specific dirty files and unpushed commit count) when the worktree still holds work that is not committed and pushed, unless you also pass force: true. The result always lists exactly what was removed and what was kept.",
+    "Mark a session this session spawned as finished, so it stops showing up as live work. This STOPS the child's agent process if it is still alive — settling is declaring the child done, so the process goes with it. A child that is mid-turn (starting or running) is refused instead: call stop_session yourself if you really mean to interrupt live work. Optionally pass cleanupWorktree: true to PERMANENTLY DELETE the child's git worktree directory and its temporary Phoenix branch; this cannot be undone, and is refused (with the specific dirty files and unpushed commit count) when the worktree still holds work that is not committed and pushed, unless you also pass force: true. The result always lists exactly what was removed and what was kept.",
   parameters: SettleSessionInput,
   success: SettleSessionResult,
   failure: SessionOrchestrationError,

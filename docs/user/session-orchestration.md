@@ -21,8 +21,10 @@ Every session has tools for orchestration alongside its other Phoenix tools:
   summary, and any artifacts (files, branches, PR links). The report shows as a card in the thread,
   and the session that spawned it is woken automatically with the result — no polling.
 - **Settle a session** — once the spawning session is done with a child, it marks it settled so the
-  thread stops counting as live work. It can also ask Phoenix to delete the child's worktree at the
-  same time, which is the only thing that reclaims those directories.
+  thread stops counting as live work. Settling also shuts the child's agent down, so a finished
+  session does not sit around holding a process. A child that is mid-task is refused instead: the
+  spawning session has to stop it deliberately. Settling can also delete the child's worktree,
+  which is the only thing that reclaims those directories.
 
 If a spawned session is stopped or hits a provider error before it reports, Phoenix writes the
 report for it: why it ended, what it was last doing, and a warning that the work is probably
