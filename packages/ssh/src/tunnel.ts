@@ -49,7 +49,8 @@ import {
   SshReadinessError,
 } from "./errors.ts";
 
-export const DEFAULT_REMOTE_PORT = 3773;
+// Matches Phoenix's server default; a remote Phoenix listens on 3873, not 3773.
+export const DEFAULT_REMOTE_PORT = 3873;
 const REMOTE_PORT_SCAN_WINDOW = 200;
 const SSH_READY_TIMEOUT_MS = 20_000;
 const SSH_READY_PROBE_TIMEOUT_MS = 1_000;

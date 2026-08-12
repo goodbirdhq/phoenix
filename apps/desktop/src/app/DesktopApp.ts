@@ -29,7 +29,10 @@ import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
 
-const DEFAULT_DESKTOP_BACKEND_PORT = 3773;
+// 3873, matching ServerConfig.DEFAULT_PORT. The desktop scans upward from this
+// for a free port, so leaving it at upstream's 3773 made Phoenix claim T3 Code's
+// port when it started first, and fall forward to 3774 when it did not.
+const DEFAULT_DESKTOP_BACKEND_PORT = 3873;
 const MAX_TCP_PORT = 65_535;
 const DESKTOP_BACKEND_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::"] as const;
 
