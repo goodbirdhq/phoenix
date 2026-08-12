@@ -200,7 +200,10 @@ part of it. Order is stop → settle → cleanup, and it matters:
 
 If the session does not reach `stopped` within the timeout, the thread is still settled but
 cleanup is withheld and the caller is told: deleting files under a process that refused to die is
-how a "cleanup" corrupts a live turn.
+how a "cleanup" corrupts a live turn. A plain settle (no `cleanupWorktree`) has nothing to withhold,
+so it succeeds — but it now carries a `warning` naming the provider and the status the session was
+last seen in. A settle that quietly leaves a live process behind is how orphans accumulate
+unnoticed.
 
 That stop is deliberately **immediate** — no `gracePeriodMs`, no partial report requested — even
 though `stop_session` can stop gracefully. A grace period buys a working agent time to wrap up and
@@ -213,11 +216,51 @@ could not have reported already. Waiting one out would only delay the settle and
 `cleanupWorktree: true` is the only thing in the server that reclaims a spawned worktree; without
 it a long orchestration run leaks a directory per child. Deletion is permanent, so it is refused —
 with the specific dirty files and unpushed commit count — unless the work is committed and pushed,
-or `force: true` is passed. Only `t3code/…` temporary branches are ours to delete; any other branch
-is kept and reported. Note that `deleteRef` itself is a dumb primitive: the safety lives in
-`decideBranchCleanup` at the call site, not in the driver. The result always names what was removed
-and what was kept, and the thread's `worktreePath` is cleared so `read_session` stops advertising a
+or `force: true` is passed. Only `t3code/…` temporary branches are ours to delete on sight; any
+other branch is kept and reported unless `cleanupBranch: true` comes with a merge proof (below).
+Note that `deleteRef` itself is a dumb primitive: the safety lives in `decideBranchCleanup` at the
+call site, not in the driver. The result always names what was removed, what was kept, and the
+proof used, and the thread's `worktreePath` is cleared so `read_session` stops advertising a
 directory that no longer exists.
+
+## Git hygiene during cleanup
+
+Three failures showed up the first time eight children were settled at once, and all three are
+about git being a single-writer program that Phoenix was treating as a service.
+
+**One cleanup per repository at a time.** `git worktree remove` takes `.git/index.lock`; eight
+concurrent removals on one repository do not queue, they all sit on the lock until Phoenix's own
+15s command timeout kills them, so seven cleanups failed and the one that ran alone succeeded.
+`GitRepositoryLock` (`apps/server/src/git/GitRepositoryLock.ts`) is one Effect `Semaphore` per
+repository root, and the removal _and_ the branch delete run inside it — the ref delete takes a
+lock in the same repository, so leaving it outside would just move the race. The lock is built once,
+where the sessions toolkit is registered in `McpHttpServer`, because a per-call instance serializes
+nothing. Reads (`status`, `rev-parse`) stay outside: they do not take the lock.
+
+**A leftover lock is reported, never removed.** A git process killed mid-write leaves its lock file
+behind and every later git command on that repository fails against it. When a git failure names a
+lock path, `settle_session` stats it and answers with `SessionOrchestrationGitLockError`: the path,
+its age, whether it matches the stale heuristic, and the remedy. The heuristic is deliberately
+conservative — zero bytes (git writes the new index into the lock, so an empty one means the writer
+died before writing) _and_ older than 60s (longer than any command Phoenix could still have
+running). Even when both hold, Phoenix does not delete it: nothing in this process can prove that
+no other git — a developer's shell, a second Phoenix, an editor — owns that lock, and deleting a
+live one corrupts the index. Naming the file is the whole value; the caller can confirm what this
+process cannot.
+
+**Deleting a user's branch needs proof, and `git branch --merged` is not it.** This repository
+squash-merges, so a merged branch never becomes an ancestor of `main` and `--merged` reports
+nothing — trusting it would refuse every merged branch, and on a rebase-merging repository it would
+accept branches that were never merged. `cleanupBranch: true` instead demands commit identity: the
+local head, the remote-tracking head, and the head commit of a _merged_ pull request must all be
+the same commit (which also means zero commits ahead). Anything else is
+`SessionOrchestrationBranchNotMergedError` with the reason and the SHAs that disagree. The proof
+runs _before_ the worktree is touched, so a refusal costs nothing and leaves the caller a whole job
+rather than half of one. The remote-tracking ref is read as last fetched rather than re-fetched: a
+stale ref can only cause a false refusal, never a wrong deletion, because a local branch that
+equals a merged PR head holds nothing that is not already published. `ChangeRequest.headRefOid` is
+what carries the merged commit; it is optional on the contract, and only the GitHub provider's
+non-open listing asks `gh` for it today.
 
 ## Guardrails
 
