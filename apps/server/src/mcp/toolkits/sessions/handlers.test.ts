@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 import { GitCommandError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
-import { resolveSessionCheckout, validateSpawnCheckoutInput } from "./handlers.ts";
+import {
+  resolveSendToSessionDelivery,
+  resolveSessionCheckout,
+  validateSpawnCheckoutInput,
+} from "./handlers.ts";
 
 const gitError = (detail: string) =>
   new GitCommandError({ operation: "test", command: "git", cwd: "/repo", detail });
@@ -58,4 +62,19 @@ describe("resolveSessionCheckout", () => {
 
     expect(checkout).toBeNull();
   });
+});
+describe("send_to_session delivery acknowledgement", () => {
+  it.effect("maps persisted acknowledgement branches to delivery status", () =>
+    Effect.gen(function* () {
+      expect(yield* resolveSendToSessionDelivery("thread.turn-start-queued")).toBe("queued");
+      expect(yield* resolveSendToSessionDelivery("thread.turn-start-requested")).toBe("immediate");
+    }),
+  );
+
+  it.effect("reports unknown when acknowledgement readback is missing or unexpected", () =>
+    Effect.gen(function* () {
+      expect(yield* resolveSendToSessionDelivery(undefined)).toBe("unknown");
+      expect(yield* resolveSendToSessionDelivery("thread.message-sent")).toBe("unknown");
+    }),
+  );
 });

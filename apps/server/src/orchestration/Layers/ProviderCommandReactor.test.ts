@@ -516,6 +516,32 @@ describe("ProviderCommandReactor", () => {
     };
   }
 
+  async function completeProviderTurn(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    createdAt: string,
+  ) {
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    );
+    if (thread?.session == null) {
+      throw new Error("Expected an active provider session before completing the turn.");
+    }
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-complete-turn-before-follow-up"),
+        threadId: thread.id,
+        session: {
+          ...thread.session,
+          status: "ready",
+          activeTurnId: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+  }
+
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -1717,6 +1743,8 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
+    await completeProviderTurn(harness, now);
+
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -1770,6 +1798,8 @@ describe("ProviderCommandReactor", () => {
         });
 
         yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
 
         yield* harness.engine.dispatch({
           type: "thread.turn.start",
@@ -1891,6 +1921,8 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
+    await completeProviderTurn(harness, now);
+
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -1939,6 +1971,8 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await completeProviderTurn(harness, now);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -2006,6 +2040,8 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       cwd: "/tmp/provider-project",
     });
+
+    await completeProviderTurn(harness, now);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -2082,6 +2118,8 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
+    await completeProviderTurn(harness, now);
+
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -2149,6 +2187,8 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await completeProviderTurn(harness, now);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -2337,6 +2377,8 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await completeProviderTurn(harness, now);
 
     await Effect.runPromise(
       harness.engine.dispatch({

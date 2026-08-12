@@ -10,11 +10,13 @@ import * as Struct from "effect/Struct";
 import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 import {
   ClearCheckpointTurnConflictInput,
+  DeleteProjectionQueuedTurnStartInput,
   DeleteProjectionTurnsByThreadInput,
   GetProjectionPendingTurnStartInput,
   GetProjectionTurnByTurnIdInput,
   ListProjectionTurnsByThreadInput,
   ProjectionPendingTurnStart,
+  ProjectionQueuedTurnStart,
   ProjectionTurn,
   ProjectionTurnById,
   ProjectionTurnRepository,
@@ -169,6 +171,58 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const insertQueuedProjectionTurn = SqlSchema.void({
+    Request: ProjectionQueuedTurnStart,
+    execute: (row) =>
+      sql`
+        DELETE FROM projection_turns
+        WHERE thread_id = ${row.threadId}
+          AND pending_message_id = ${row.messageId}
+          AND state IN ('queued', 'interrupting')
+      `.pipe(
+        Effect.andThen(sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, source_proposed_plan_thread_id,
+            source_proposed_plan_id, assistant_message_id, state, requested_at,
+            started_at, completed_at, checkpoint_turn_count, checkpoint_ref,
+            checkpoint_status, checkpoint_files_json
+          ) VALUES (
+            ${row.threadId}, NULL, ${row.messageId}, NULL,
+            NULL, NULL, ${row.mode === "interrupt" ? "interrupting" : "queued"}, ${row.requestedAt},
+            NULL, NULL, NULL, NULL, NULL, '[]'
+          )
+        `),
+      ),
+  });
+
+  const deleteQueuedProjectionTurn = SqlSchema.void({
+    Request: DeleteProjectionQueuedTurnStartInput,
+    execute: ({ threadId, messageId }) =>
+      sql`
+        DELETE FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND pending_message_id = ${messageId}
+          AND state IN ('queued', 'interrupting')
+      `,
+  });
+
+  const listQueuedProjectionTurns = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionQueuedTurnStart,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          pending_message_id AS "messageId",
+          CASE WHEN state = 'interrupting' THEN 'interrupt' ELSE 'queue' END AS mode,
+          requested_at AS "requestedAt"
+        FROM projection_turns
+        WHERE state IN ('queued', 'interrupting')
+          AND pending_message_id IS NOT NULL
+        ORDER BY requested_at ASC, row_id ASC
+      `,
+  });
+
   const listProjectionTurnsByThread = SqlSchema.findAll({
     Request: ListProjectionTurnsByThreadInput,
     Result: ProjectionTurnDbRowSchema,
@@ -191,6 +245,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_files_json AS "checkpointFiles"
         FROM projection_turns
         WHERE thread_id = ${threadId}
+          AND state NOT IN ('queued', 'interrupting')
         ORDER BY
           CASE
             WHEN checkpoint_turn_count IS NULL THEN 1
@@ -296,6 +351,28 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         ),
       );
 
+  const enqueueTurnStart: ProjectionTurnRepositoryShape["enqueueTurnStart"] = (row) =>
+    insertQueuedProjectionTurn(row).pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectionTurnRepository.enqueueTurnStart:query")),
+    );
+
+  const deleteQueuedTurnStart: ProjectionTurnRepositoryShape["deleteQueuedTurnStart"] = (input) =>
+    deleteQueuedProjectionTurn(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionTurnRepository.deleteQueuedTurnStart:query"),
+      ),
+    );
+
+  const listQueuedTurnStarts: ProjectionTurnRepositoryShape["listQueuedTurnStarts"] =
+    listQueuedProjectionTurns().pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionTurnRepository.listQueuedTurnStarts:query",
+          "ProjectionTurnRepository.listQueuedTurnStarts:decodeRows",
+        ),
+      ),
+    );
+
   const listByThreadId: ProjectionTurnRepositoryShape["listByThreadId"] = (input) =>
     listProjectionTurnsByThread(input).pipe(
       Effect.mapError(
@@ -342,6 +419,9 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     replacePendingTurnStart,
     getPendingTurnStartByThreadId,
     deletePendingTurnStartByThreadId,
+    enqueueTurnStart,
+    deleteQueuedTurnStart,
+    listQueuedTurnStarts,
     listByThreadId,
     getByTurnId,
     clearCheckpointTurnConflict,

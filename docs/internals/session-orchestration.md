@@ -36,6 +36,14 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
 - **Toolkit** — `apps/server/src/mcp/toolkits/sessions/`. Handlers resolve services once at layer
   build and check the `sessions` capability plus the `enableSessionOrchestration` setting per
   call, so the settings toggle applies to running sessions immediately.
+- **Delivery modes** — `send_to_session` defaults to `queue`. Busy children persist FIFO queued
+  turn starts in the turn projection and release one at each terminal/ready session boundary;
+  idle children start immediately. `interrupt` uses the same queue after requesting the existing
+  provider interrupt, so replacement waits for the provider's boundary instead of racing it. A
+  bounded fallback cancels the replacement, stops the still-running session, and notifies the
+  parent if no boundary arrives. Stopped/error sessions cancel queued messages instead of
+  resurrecting the child; restart and periodic recovery only release stale persisted sessions
+  after confirming there is no live provider binding.
 - **Persistence** — migrations 041 (`projection_threads.spawned_by_thread_id`) and 042
   (`projection_thread_reports`), with hydration through `ProjectionPipeline` and
   `ProjectionSnapshotQuery`.
@@ -59,3 +67,18 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
 Every MCP tool here must declare at least one (optional) parameter. An empty `Schema.Struct({})`
 encodes to a typeless `anyOf` JSON schema, and Claude Code drops an MCP server's entire toolset
 when any single tool schema fails its validation — while still reporting the server as connected.
+
+## Follow-up: notify delivery
+
+Provider steering is not uniform: some adapters treat a mid-turn send as guidance while others
+reject it or start a distinct turn. `send_to_session` therefore exposes only `queue` and
+`interrupt` for now. A future `notify` mode needs an explicit provider capability and fallback
+contract before it can promise tool-boundary guidance without accidentally starting a turn.
+
+Queued-row cleanup for deleted/archived threads and replacing the global recovery scan with a
+thread-indexed query remain persistence follow-ups; terminal session transitions are cleaned up
+by this delivery workflow.
+
+The web client currently renders the queued user message but does not surface a queued-delivery
+indicator because its reducer intentionally ignores the new event. That affordance is a separate
+web-app follow-up; the server contract and delivery behavior do not depend on it.

@@ -1566,11 +1566,11 @@ describe("ProviderRuntimeIngestion", () => {
     expect(targetThreadAfterRejectedStart?.session?.activeTurnId).toBe(activeTurnId);
   });
 
-  it("accepts a conflicting turn.started for a pending turn start when the provider expects that turn", async () => {
-    // Steering a running turn: the server requests a new turn while the old
-    // one is still active, and providers like opencode open the new turn
-    // without ever completing the superseded one. The new turn.started must
-    // replace the active turn instead of being rejected as stale.
+  it("accepts a conflicting turn.started for an immediate pending turn start when the provider expects that turn", async () => {
+    // Internal immediate steering (such as a graceful-stop notice) requests a
+    // new turn while the old one is still active. Providers like opencode can
+    // open the new turn without completing the superseded one, so the expected
+    // turn.started must replace the active turn instead of being rejected.
     const harness = await createHarness();
     const threadId = asThreadId("thread-1");
     const oldTurnId = asTurnId("turn-steered-over");
@@ -1602,7 +1602,8 @@ describe("ProviderRuntimeIngestion", () => {
       threadId,
     );
 
-    // The steer: a user-requested turn start while the old turn still runs.
+    // Ordinary messages now queue while busy; grace notices intentionally keep
+    // the immediate provider-steer path and therefore create a pending start.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -1616,6 +1617,7 @@ describe("ProviderRuntimeIngestion", () => {
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
+        graceStopNotice: true,
         createdAt,
       }),
     );

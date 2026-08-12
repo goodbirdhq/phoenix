@@ -23,6 +23,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -97,6 +98,12 @@ export const resolveSessionCheckout = (gitWorkflow: SessionCheckoutGitWorkflow, 
       ),
     ),
   );
+
+export const resolveSendToSessionDelivery = (eventType: string | undefined) => {
+  if (eventType === "thread.turn-start-queued") return Effect.succeed("queued" as const);
+  if (eventType === "thread.turn-start-requested") return Effect.succeed("immediate" as const);
+  return Effect.succeed("unknown" as const);
+};
 
 // Appended to every spawned session's first message so the completion
 // contract holds across providers without the parent having to remember to
@@ -434,11 +441,12 @@ const make = Effect.gen(function* () {
   const sendToSession = Effect.fn("SessionsToolkit.sendToSession")(function* (input: {
     readonly threadId: ThreadId;
     readonly message: string;
+    readonly mode?: "queue" | "interrupt" | undefined;
   }) {
     const scope = yield* requireSessionsCapability;
     const child = yield* requireSpawnedChild(scope.threadId, input.threadId);
     const createdAt = yield* nowIso;
-    yield* enqueue(
+    const result = yield* enqueue(
       engine.dispatch({
         type: "thread.turn.start",
         commandId: yield* serverCommandId("mcp-send-to-session"),
@@ -451,10 +459,21 @@ const make = Effect.gen(function* () {
         },
         runtimeMode: child.runtimeMode,
         interactionMode: child.interactionMode,
+        ...(input.mode !== undefined ? { deliveryMode: input.mode } : {}),
         createdAt,
       }),
     );
-    return { threadId: child.id };
+    const acknowledgedEvent = yield* engine.readEvents(result.sequence - 1, 1).pipe(
+      Stream.runHead,
+      Effect.catch(() => Effect.succeed(Option.none())),
+    );
+    const delivery = yield* resolveSendToSessionDelivery(
+      Option.isSome(acknowledgedEvent) ? acknowledgedEvent.value.type : undefined,
+    );
+    return {
+      threadId: child.id,
+      delivery,
+    };
   });
 
   const readSession = Effect.fn("SessionsToolkit.readSession")(function* (input: {

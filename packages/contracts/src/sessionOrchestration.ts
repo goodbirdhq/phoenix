@@ -119,11 +119,13 @@ export type ListSessionProvidersResult = typeof ListSessionProvidersResult.Type;
 export const SendToSessionInput = Schema.Struct({
   threadId: ThreadId,
   message: TrimmedNonEmptyString.check(Schema.isMaxLength(65_536)),
+  mode: Schema.optional(Schema.Literals(["queue", "interrupt"])),
 });
 export type SendToSessionInput = typeof SendToSessionInput.Type;
 
 export const SendToSessionResult = Schema.Struct({
   threadId: ThreadId,
+  delivery: Schema.Literals(["immediate", "queued", "unknown"]),
 });
 export type SendToSessionResult = typeof SendToSessionResult.Type;
 

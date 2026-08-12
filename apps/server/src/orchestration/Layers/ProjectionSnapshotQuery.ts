@@ -129,6 +129,12 @@ const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
 });
+const ProjectionQueuedTurnStartDbRowSchema = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  mode: Schema.Literals(["queue", "interrupt"]),
+  requestedAt: IsoDateTime,
+});
 const ProjectionStateDbRowSchema = ProjectionState;
 const ProjectionCountsRowSchema = Schema.Struct({
   projectCount: Schema.Number,
@@ -775,6 +781,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           AND turns.turn_id = threads.latest_turn_id
         WHERE threads.latest_turn_id IS NOT NULL
         ORDER BY turns.thread_id ASC
+      `,
+  });
+
+  const listQueuedTurnStartRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionQueuedTurnStartDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          pending_message_id AS "messageId",
+          CASE WHEN state = 'interrupting' THEN 'interrupt' ELSE 'queue' END AS mode,
+          requested_at AS "requestedAt"
+        FROM projection_turns
+        WHERE state IN ('queued', 'interrupting')
+          AND pending_message_id IS NOT NULL
+        ORDER BY requested_at ASC, row_id ASC
       `,
   });
 
@@ -1797,6 +1820,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listQueuedTurnStartRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:listQueuedTurnStarts:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listQueuedTurnStarts:decodeRows",
+              ),
+            ),
+          ),
           listProjectionStateRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -1816,6 +1847,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             reportRows,
             sessionRows,
             latestTurnRows,
+            queuedTurnStartRows,
             stateRows,
           ]) =>
             Effect.sync(() => {
@@ -1894,6 +1926,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               }
               const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
               const sessionByThread = new Map<string, OrchestrationSession>();
+              const queuedTurnStartsByThread = new Map<
+                string,
+                Array<(typeof queuedTurnStartRows)[number]>
+              >();
 
               for (let index = 0; index < sessionRows.length; index += 1) {
                 const row = sessionRows[index];
@@ -1901,6 +1937,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   continue;
                 }
                 sessionByThread.set(row.threadId, mapSessionRow(row));
+              }
+              for (const row of queuedTurnStartRows) {
+                const rows = queuedTurnStartsByThread.get(row.threadId) ?? [];
+                rows.push(row);
+                queuedTurnStartsByThread.set(row.threadId, rows);
               }
 
               for (let index = 0; index < proposedPlanRows.length; index += 1) {
@@ -1952,6 +1993,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   titleRegeneration: mapTitleRegeneration(row),
                   deletedAt: row.deletedAt,
                   messages: [],
+                  queuedTurnStarts: queuedTurnStartsByThread.get(row.threadId) ?? [],
                   proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
                   reports: reportsByThread.get(row.threadId) ?? [],
                   activities: [],
