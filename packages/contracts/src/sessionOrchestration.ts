@@ -49,6 +49,18 @@ export const SpawnSessionInput = Schema.Struct({
   // agents do not trample one working tree; "project-root" shares the
   // project's root working tree.
   isolation: Schema.optional(Schema.Literals(["worktree", "project-root"])),
+  // Revision to use as the starting point for the spawned worktree. If it is
+  // not present locally, Phoenix fetches origin before resolving it.
+  gitRef: Schema.optional(TrimmedNonEmptyString),
+  // Base ref recorded for the spawned branch's merge-base metadata. Defaults
+  // to the current project branch.
+  baseRef: Schema.optional(TrimmedNonEmptyString),
+  // Name the spawned worktree branch explicitly instead of using a temporary
+  // branch name.
+  branchName: Schema.optional(TrimmedNonEmptyString),
+  // Fetch origin's pull-request head and create the worktree at that commit.
+  // This cannot be combined with gitRef.
+  checkoutPr: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   // Permission mode for the child. Never allowed to exceed the calling
   // thread's own mode.
   runtimeMode: Schema.optional(RuntimeMode),
@@ -64,6 +76,8 @@ export const SpawnSessionResult = Schema.Struct({
   runtimeMode: RuntimeMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  sha: Schema.NullOr(TrimmedNonEmptyString),
+  dirty: Schema.NullOr(Schema.Boolean),
 });
 export type SpawnSessionResult = typeof SpawnSessionResult.Type;
 
@@ -132,6 +146,12 @@ export const ReadSessionResult = Schema.Struct({
   settled: Schema.Boolean,
   report: Schema.NullOr(SessionReport),
   messages: Schema.Array(ReadSessionMessage),
+  // Present when the spawned session has a git worktree. These are resolved
+  // live so callers can verify the revision a session actually inspected.
+  branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  sha: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  dirty: Schema.optional(Schema.NullOr(Schema.Boolean)),
 });
 export type ReadSessionResult = typeof ReadSessionResult.Type;
 

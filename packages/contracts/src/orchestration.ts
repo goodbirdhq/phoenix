@@ -905,6 +905,8 @@ const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   projectCwd: TrimmedNonEmptyString,
   baseBranch: TrimmedNonEmptyString,
   branch: Schema.optional(TrimmedNonEmptyString),
+  checkoutRef: Schema.optional(TrimmedNonEmptyString),
+  checkoutPr: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   startFromOrigin: Schema.optional(Schema.Boolean),
 });
 

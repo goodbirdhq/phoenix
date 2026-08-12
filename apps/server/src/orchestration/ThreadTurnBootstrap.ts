@@ -313,9 +313,59 @@ export const make = Effect.gen(function* () {
           });
           worktreeBaseRef = resolvedRemoteBase.commitSha;
         }
+        const checkoutRef = bootstrap.prepareWorktree.checkoutRef ?? worktreeBaseRef;
+        const checkoutCommit =
+          bootstrap.prepareWorktree.checkoutPr !== undefined
+            ? yield* gitWorkflow.fetchPullRequestHeadCommit({
+                cwd: bootstrap.prepareWorktree.projectCwd,
+                prNumber: bootstrap.prepareWorktree.checkoutPr,
+              })
+            : yield* gitWorkflow
+                .resolveCommit({
+                  cwd: bootstrap.prepareWorktree.projectCwd,
+                  revision: checkoutRef,
+                })
+                .pipe(
+                  Effect.catchAll(() =>
+                    gitWorkflow
+                      .remoteExists({
+                        cwd: bootstrap.prepareWorktree.projectCwd,
+                        remoteName: "origin",
+                      })
+                      .pipe(
+                        Effect.flatMap((hasOrigin) =>
+                          hasOrigin
+                            ? gitWorkflow
+                                .fetchRemote({
+                                  cwd: bootstrap.prepareWorktree.projectCwd,
+                                  remoteName: "origin",
+                                })
+                                .pipe(
+                                  Effect.andThen(
+                                    gitWorkflow.resolveCommit({
+                                      cwd: bootstrap.prepareWorktree.projectCwd,
+                                      revision: checkoutRef,
+                                    }),
+                                  ),
+                                  Effect.mapError(
+                                    () =>
+                                      new Error(
+                                        `Git ref "${checkoutRef}" does not exist locally or on origin.`,
+                                      ),
+                                  ),
+                                )
+                            : Effect.fail(
+                                new Error(
+                                  `Git ref "${checkoutRef}" does not exist locally and this project has no origin remote to fetch.`,
+                                ),
+                              ),
+                        ),
+                      ),
+                  ),
+                );
         const worktree = yield* gitWorkflow.createWorktree({
           cwd: bootstrap.prepareWorktree.projectCwd,
-          refName: worktreeBaseRef,
+          refName: checkoutCommit.commitSha,
           newRefName: bootstrap.prepareWorktree.branch,
           baseRefName: bootstrap.prepareWorktree.baseBranch,
           path: null,
