@@ -27,6 +27,7 @@ import {
   type ServerProvider,
   type SessionUsageSnapshot,
   supersededReportNotice,
+  type SettleSessionBranchRefusal,
   type SettleSessionInput,
   type SettleSessionWorktreeOutcome,
   type SpawnSessionInput,
@@ -1119,14 +1120,35 @@ export const make = Effect.gen(function* () {
       readonly provenSha: string;
     }) {
       const { workspaceRoot, branch, provenSha } = params;
+      const refuse = (input: {
+        readonly reason: SettleSessionBranchRefusal["reason"];
+        readonly message: string;
+        readonly localSha?: string | null;
+        readonly remoteSha?: string | null;
+      }): SettleSessionBranchRefusal => ({
+        branch,
+        reason: input.reason,
+        message: `Worktree removed, but branch "${branch}" was kept: ${input.message}`,
+        localSha: input.localSha ?? null,
+        remoteSha: input.remoteSha ?? null,
+        expectedSha: provenSha,
+      });
+
       const localSha = yield* Effect.option(
         gitWorkflow.resolveCommit({ cwd: workspaceRoot, revision: branch }),
       );
       if (Option.isNone(localSha)) {
-        return `its head could not be re-read just before deleting it`;
+        return refuse({
+          reason: "branch_moved_since_proof",
+          message: "its head could not be re-read just before deleting it.",
+        });
       }
       if (localSha.value.commitSha !== provenSha) {
-        return `its head moved from ${provenSha} to ${localSha.value.commitSha} while the cleanup waited for the repository lock`;
+        return refuse({
+          reason: "branch_moved_since_proof",
+          message: `its head moved from ${provenSha} to ${localSha.value.commitSha} while the cleanup waited for the repository lock. Settle again to re-prove it.`,
+          localSha: localSha.value.commitSha,
+        });
       }
       const remote = yield* Effect.option(
         gitWorkflow.resolveRemoteTrackingCommit({
@@ -1136,10 +1158,20 @@ export const make = Effect.gen(function* () {
         }),
       );
       if (Option.isNone(remote)) {
-        return `its remote-tracking branch disappeared while the cleanup waited for the repository lock`;
+        return refuse({
+          reason: "remote_branch_missing",
+          message:
+            "its remote-tracking branch disappeared while the cleanup waited for the repository lock.",
+          localSha: localSha.value.commitSha,
+        });
       }
       if (remote.value.commitSha !== provenSha) {
-        return `${remote.value.remoteRefName} moved to ${remote.value.commitSha} while the cleanup waited for the repository lock`;
+        return refuse({
+          reason: "local_ahead_of_remote",
+          message: `${remote.value.remoteRefName} moved to ${remote.value.commitSha} while the cleanup waited for the repository lock. Settle again to re-prove it.`,
+          localSha: localSha.value.commitSha,
+          remoteSha: remote.value.commitSha,
+        });
       }
       return null;
     },
@@ -1165,6 +1197,7 @@ export const make = Effect.gen(function* () {
         keptBranch: child.branch,
         detail,
         branchProof: null,
+        branchRefusal: null,
       });
 
       if (input.cleanupWorktree !== true) {
@@ -1258,13 +1291,20 @@ export const make = Effect.gen(function* () {
               ),
             );
 
+          const keptBranch = (input: {
+            readonly detail?: string | null;
+            readonly refusal?: SettleSessionBranchRefusal | null;
+            readonly lockFailure?: SessionOrchestrationGitLockError | null;
+          }) => ({
+            removedBranch: null as string | null,
+            branchProof: null as string | null,
+            detail: input.detail ?? input.refusal?.message ?? null,
+            refusal: input.refusal ?? null,
+            lockFailure: input.lockFailure ?? null,
+          });
+
           if (!branchDecision.deleteBranch || branch === null) {
-            return {
-              removedBranch: null,
-              branchProof: null,
-              detail: branchDecision.detail,
-              lockFailure: null,
-            };
+            return keptBranch({ detail: branchDecision.detail });
           }
 
           // Waiting for the lock is exactly the window in which a branch can
@@ -1274,54 +1314,66 @@ export const make = Effect.gen(function* () {
           // asking for cleanupBranch, and the worktree removal above was
           // authorized by the dirty check, not by this proof.
           if (provenBranch !== null) {
-            const staleReason = yield* revalidateBranchProof({
+            const staleRefusal = yield* revalidateBranchProof({
               workspaceRoot,
               branch,
               provenSha: provenBranch.provenSha,
             });
-            if (staleReason !== null) {
-              return {
-                removedBranch: null,
-                branchProof: null,
-                detail: `Worktree removed, but branch "${branch}" was kept: ${staleReason}. Settle again to re-prove it.`,
-                lockFailure: null,
-              };
+            if (staleRefusal !== null) {
+              return keptBranch({ refusal: staleRefusal });
             }
           }
 
-          // A failed branch delete leaves a dangling ref, not lost work, so it
-          // is reported rather than failing a settle whose destructive step is
-          // already done — except when git could not take the ref lock, which
-          // is the same repository-wide problem a failed worktree removal
-          // reports, and needs the same structured answer.
+          // The re-check above closes the window against this process; only
+          // git can close it against every other one. With a proven head the
+          // delete is a compare-and-swap, so a ref moved by a terminal or a
+          // second Phoenix between the check and here makes git refuse rather
+          // than destroy commits nothing has seen.
           return yield* gitWorkflow
-            .deleteRef({ cwd: workspaceRoot, refName: branch, force: true })
+            .deleteRef({
+              cwd: workspaceRoot,
+              refName: branch,
+              force: true,
+              ...(provenBranch === null ? {} : { expectedSha: provenBranch.provenSha }),
+            })
             .pipe(
               Effect.as({
                 removedBranch: branch as string | null,
                 branchProof: initialBranchProof,
                 detail: null as string | null,
+                refusal: null as SettleSessionBranchRefusal | null,
                 lockFailure: null as SessionOrchestrationGitLockError | null,
               }),
+              // A failed branch delete leaves a dangling ref, not lost work, so
+              // it is reported rather than failing a settle whose destructive
+              // step is already done — except when git could not take the ref
+              // lock, which is the same repository-wide problem a failed
+              // worktree removal reports and needs the same structured answer.
               Effect.catch((cause) =>
                 Effect.gen(function* () {
                   const described = yield* describeGitFailure({
                     cause,
                     fallbackMessage: `Thread ${child.id} was settled and its worktree at ${worktreePath} was removed, but branch "${branch}" could NOT be deleted`,
                   });
-                  return described._tag === "SessionOrchestrationGitLockError"
-                    ? {
-                        removedBranch: null,
-                        branchProof: null,
-                        detail: null,
-                        lockFailure: described,
-                      }
-                    : {
-                        removedBranch: null,
-                        branchProof: null,
-                        detail: described.message,
-                        lockFailure: null,
-                      };
+                  if (described._tag === "SessionOrchestrationGitLockError") {
+                    return keptBranch({ lockFailure: described });
+                  }
+                  // A compare-and-swap that git turned down means the ref
+                  // moved after the re-check — the same partial success the
+                  // re-check reports, and it deserves the same structure
+                  // rather than a prose detail.
+                  return provenBranch === null
+                    ? keptBranch({ detail: described.message })
+                    : keptBranch({
+                        refusal: {
+                          branch,
+                          reason: "branch_moved_since_proof",
+                          message: `Worktree removed, but branch "${branch}" was kept: git refused to delete it at the proven commit ${provenBranch.provenSha}, so the ref moved. Settle again to re-prove it.`,
+                          localSha: null,
+                          remoteSha: null,
+                          expectedSha: provenBranch.provenSha,
+                        },
+                      });
                 }),
               ),
             );
@@ -1353,6 +1405,7 @@ export const make = Effect.gen(function* () {
         keptBranch: branchRemoval.removedBranch === null ? child.branch : null,
         detail: branchRemoval.detail,
         branchProof: branchRemoval.branchProof,
+        branchRefusal: branchRemoval.refusal,
       };
     },
   );

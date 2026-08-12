@@ -121,6 +121,7 @@ const makeHarness = (options: HarnessOptions) => {
   let sessionStatus = options.sessionStatus;
   let worktreeRemovalsInFlight = 0;
   let maxWorktreeRemovalsInFlight = 0;
+  const deleteRefInputs: Array<{ readonly refName: string; readonly expectedSha?: string }> = [];
 
   const children: ReadonlyArray<HarnessChild> = options.children ?? [{ threadId: CHILD_THREAD_ID }];
 
@@ -220,9 +221,10 @@ const makeHarness = (options: HarnessOptions) => {
           return yield* Effect.fail(gitFailure(options.removeWorktreeFailure));
         }
       }),
-    deleteRef: () =>
+    deleteRef: (input: { readonly refName: string; readonly expectedSha?: string }) =>
       Effect.suspend(() => {
         calls.push("git:deleteRef");
+        deleteRefInputs.push(input);
         return options.deleteRefError === undefined
           ? Effect.void
           : Effect.fail(options.deleteRefError);
@@ -337,6 +339,7 @@ const makeHarness = (options: HarnessOptions) => {
     settle,
     withHandlers,
     currentStatus: () => sessionStatus,
+    deleteRefInputs,
     maxWorktreeRemovalsInFlight: () => maxWorktreeRemovalsInFlight,
   };
 };
@@ -671,8 +674,80 @@ it.effect("settle_session keeps a proven branch that moved while the cleanup que
     expect(result.worktree.removedBranch).toBeNull();
     expect(result.worktree.keptBranch).toBe("feature/user-work");
     expect(result.worktree.branchProof).toBeNull();
+    // Partial success has to be machine-readable per resource: the caller must
+    // be able to tell "re-settle to re-prove" from "this repo has no PR host"
+    // without reading English.
+    expect(result.worktree.branchRefusal).toMatchObject({
+      branch: "feature/user-work",
+      reason: "branch_moved_since_proof",
+      expectedSha: BRANCH_HEAD_SHA,
+      localSha: "7".repeat(40),
+    });
     expect(result.worktree.detail).toContain("moved");
-    expect(result.worktree.detail).toContain("7777777");
+  }),
+);
+
+it.effect("settle_session deletes a proven branch only at the commit it proved", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({
+      sessionStatus: "stopped",
+      branch: "feature/user-work",
+      mergedPullRequests: [mergedPullRequest()],
+    });
+
+    yield* harness.settle({ cleanupWorktree: true, cleanupBranch: true });
+
+    // Compare-and-swap through git: the re-check closes the window against
+    // this process, and this closes it against every other one.
+    expect(harness.deleteRefInputs).toEqual([
+      {
+        cwd: WORKSPACE_ROOT,
+        refName: "feature/user-work",
+        force: true,
+        expectedSha: BRANCH_HEAD_SHA,
+      },
+    ]);
+  }),
+);
+
+it.effect("settle_session deletes a temporary branch without a compare-and-swap", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({ sessionStatus: "stopped", branch: "t3code/1a2b3c4d" });
+
+    yield* harness.settle({ cleanupWorktree: true });
+
+    // Nothing but this worktree ever pointed at a t3code branch, so there is
+    // no proof to hold git to.
+    expect(harness.deleteRefInputs[0]?.expectedSha).toBeUndefined();
+  }),
+);
+
+it.effect("settle_session keeps a branch git refused to delete at the proven commit", () =>
+  Effect.gen(function* () {
+    // The external-writer race: the ref moved after the in-lock re-check, and
+    // git — the only arbiter that can see that — turned the delete down.
+    const harness = makeHarness({
+      sessionStatus: "stopped",
+      branch: "feature/user-work",
+      mergedPullRequests: [mergedPullRequest()],
+      deleteRefError: new GitCommandError({
+        operation: "GitVcsDriver.deleteRef.expected",
+        command: "git",
+        cwd: WORKSPACE_ROOT,
+        detail: "git update-ref -d failed: the branch moved since it was checked",
+        stderrExcerpt: `error: cannot lock ref 'refs/heads/feature/user-work': is at 9999999999999999999999999999999999999999 but expected ${BRANCH_HEAD_SHA}`,
+      }),
+    });
+
+    const result = yield* harness.settle({ cleanupWorktree: true, cleanupBranch: true });
+
+    expect(result.worktree.removedWorktreePath).toBe(WORKTREE_PATH);
+    expect(result.worktree.removedBranch).toBeNull();
+    expect(result.worktree.branchRefusal).toMatchObject({
+      branch: "feature/user-work",
+      reason: "branch_moved_since_proof",
+      expectedSha: BRANCH_HEAD_SHA,
+    });
   }),
 );
 

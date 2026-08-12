@@ -380,20 +380,66 @@ function deriveLocalBranchNameFromRemoteRef(branchName: string): string | null {
 // error that crosses the wire.
 const GIT_STDERR_EXCERPT_MAX_CHARS = 500;
 
+// A URL anywhere in the text, split so the parts that carry secrets can be
+// dropped: scheme, optional userinfo, host, path, optional query/fragment.
+// Quotes are excluded from host and path because git quotes paths and URLs,
+// and swallowing the closing quote would mangle the surrounding message.
+const URL_PATTERN =
+  /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/?#'"]*@)?([^\s/?#'"]*)([^\s?#'"]*)(\?[^\s#'"]*)?(#[^\s'"]*)?/gi;
+
+// Token shapes that are secrets wherever they appear, including outside a URL.
+const TOKEN_PATTERN = /\b(gh[pousr]_|github_pat_|glpat-|sk-)[A-Za-z0-9_-]{8,}/g;
+
 /**
- * Bounded, single-block excerpt of a failed git command's stderr.
+ * Strip credentials from text that is about to be attached to an error.
+ *
+ * git echoes remote URLs freely, and a remote can carry its credentials in the
+ * URL (`https://x-access-token:ghs_…@github.com/o/r`), so anything derived
+ * from git's output has to be scrubbed before it crosses the wire. Userinfo,
+ * query strings, and fragments go; scheme, host, and path stay, because
+ * "which remote" is the diagnostic value.
+ *
+ * Note the scope: argv is deliberately not treated as a secret channel in this
+ * driver (`execute` takes `stdin` for payloads that must never appear in
+ * argv), so an argument git happens to echo back is not redacted here.
+ */
+export function redactGitOutput(text: string): string {
+  return text
+    .replace(URL_PATTERN, (_match, scheme, userinfo, host, path, query, fragment) => {
+      const redactedUserinfo = userinfo === undefined ? "" : "***@";
+      const redactedQuery = query === undefined ? "" : "?***";
+      const redactedFragment = fragment === undefined ? "" : "#***";
+      return `${scheme}${redactedUserinfo}${host}${path}${redactedQuery}${redactedFragment}`;
+    })
+    .replace(TOKEN_PATTERN, "$1***");
+}
+
+/**
+ * Bounded, redacted excerpt of a failed git command's stderr.
  *
  * Kept to the *last* lines rather than the first: git prints progress and
  * warnings before the fatal line, and the fatal line is the one that says why.
+ * Redaction happens before truncation, so a credential cannot survive by
+ * sitting on a boundary.
  */
 export function gitStderrExcerpt(stderr: string): string | null {
-  const trimmed = stderr.trim();
+  const trimmed = redactGitOutput(stderr).trim();
   if (trimmed.length === 0) {
     return null;
   }
   return trimmed.length <= GIT_STDERR_EXCERPT_MAX_CHARS
     ? trimmed
     : `…${trimmed.slice(trimmed.length - GIT_STDERR_EXCERPT_MAX_CHARS)}`;
+}
+
+/**
+ * Full ref name for a branch, for the plumbing commands that demand one.
+ *
+ * `git branch` takes a short name; `git update-ref` takes `refs/heads/x` and
+ * would happily create or delete something else entirely if handed a bare one.
+ */
+export function qualifyBranchRefName(refName: string): string {
+  return refName.startsWith("refs/") ? refName : `refs/heads/${refName}`;
 }
 
 function gitCommandContext(
@@ -3126,6 +3172,22 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const deleteRef: GitVcsDriver.GitVcsDriver["Service"]["deleteRef"] = Effect.fn("deleteRef")(
     function* (input) {
+      if (input.expectedSha !== undefined) {
+        // git compares and swaps under its own ref lock, so a ref moved by any
+        // process — in this one or not — makes this fail instead of deleting
+        // whatever the ref happens to point at now.
+        yield* executeGit(
+          "GitVcsDriver.deleteRef.expected",
+          input.cwd,
+          ["update-ref", "-d", qualifyBranchRefName(input.refName), input.expectedSha],
+          {
+            timeoutMs: 10_000,
+            fallbackErrorDetail:
+              "git update-ref -d failed: the branch moved since it was checked, or the ref is locked",
+          },
+        );
+        return;
+      }
       yield* executeGit(
         "GitVcsDriver.deleteRef",
         input.cwd,

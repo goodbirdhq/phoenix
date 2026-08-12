@@ -19,6 +19,8 @@ import { ServerConfig } from "../config.ts";
 import {
   gitStderrExcerpt,
   makeGitVcsDriverCore,
+  qualifyBranchRefName,
+  redactGitOutput,
   splitNullSeparatedGitStdoutPaths,
 } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -1419,6 +1421,60 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it("strips credentials out of anything derived from git output", () => {
+      // The channel that matters: a remote whose URL carries its own
+      // credentials, which git echoes back on any push/fetch failure.
+      assert.strictEqual(
+        redactGitOutput(
+          "fatal: could not read from 'https://x-access-token:ghs_abcdefghijklmnop@github.com/o/r.git'",
+        ),
+        "fatal: could not read from 'https://***@github.com/o/r.git'",
+      );
+      assert.strictEqual(
+        redactGitOutput("remote: https://user:hunter2@example.com/o/r?token=abc#frag"),
+        "remote: https://***@example.com/o/r?***#***",
+      );
+      // A bare token is a secret wherever it turns up.
+      assert.strictEqual(
+        redactGitOutput("error: bad credentials ghp_ABCDEFGHIJKLMNOPQRSTUV"),
+        "error: bad credentials ghp_***",
+      );
+      // Which remote failed is the diagnostic value, and it survives.
+      assert.strictEqual(
+        redactGitOutput("fatal: repository 'https://github.com/o/r.git' not found"),
+        "fatal: repository 'https://github.com/o/r.git' not found",
+      );
+    });
+
+    it.effect("keeps a credentialed remote out of the error it raises", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const secret = "ghs_topsecrettokenvalue1234";
+
+        // A real failing fetch against a real credentialed URL: git echoes the
+        // remote back, and the error must not carry the token onward.
+        const error = yield* Effect.flip(
+          driver.execute({
+            operation: "GitVcsDriver.test.credentialedRemote",
+            cwd,
+            args: ["fetch", `https://x-access-token:${secret}@127.0.0.1:1/o/r.git`],
+            timeoutMs: 20_000,
+          }),
+        );
+
+        assert.strictEqual(error._tag, "GitCommandError");
+        assert.notInclude(error.stderrExcerpt ?? "", secret);
+        assert.notInclude(error.message, secret);
+        // Nothing else on the error smuggles it either.
+        const stringFields = Object.values(error)
+          .filter((value) => typeof value === "string")
+          .join(" ");
+        assert.notInclude(stringFields, secret);
+      }),
+    );
+
     it("keeps a stderr excerpt bounded, tail first", () => {
       assert.strictEqual(gitStderrExcerpt("   "), null);
       assert.strictEqual(gitStderrExcerpt("fatal: boom\n"), "fatal: boom");
@@ -1428,6 +1484,63 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       assert.ok(excerpt.endsWith("fatal: Unable to create lock"));
       assert.ok(excerpt.startsWith("…"));
     });
+  });
+
+  describe("compare-and-swap ref deletion", () => {
+    it("qualifies a short branch name for plumbing commands", () => {
+      // `git update-ref` would act on something else entirely given a bare
+      // name, so this is not cosmetic.
+      assert.strictEqual(qualifyBranchRefName("feature/x"), "refs/heads/feature/x");
+      assert.strictEqual(qualifyBranchRefName("refs/heads/feature/x"), "refs/heads/feature/x");
+    });
+
+    it.effect("deletes a branch that still points at the expected commit", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.createRef({ cwd, refName: "feature/cas" });
+        const head = yield* driver.resolveCommit({ cwd, revision: "feature/cas" });
+
+        yield* driver.deleteRef({ cwd, refName: "feature/cas", expectedSha: head.commitSha });
+
+        const branches = yield* driver.listLocalBranchNames(cwd);
+        assert.notInclude(branches, "feature/cas");
+      }),
+    );
+
+    it.effect("refuses to delete a branch that moved, and leaves it intact", () =>
+      Effect.gen(function* () {
+        // This is the race the proof cannot win on its own: an external git
+        // moves the ref after Phoenix checked it. Only git can arbitrate, and
+        // it does — the commits survive.
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.createRef({ cwd, refName: "feature/moved" });
+        const staleHead = yield* driver.resolveCommit({ cwd, revision: "feature/moved" });
+
+        yield* writeTextFile(cwd, "moved.md", "# moved\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "second commit"]);
+        yield* git(cwd, ["branch", "--force", "feature/moved", "HEAD"]);
+        const movedHead = yield* driver.resolveCommit({ cwd, revision: "feature/moved" });
+        assert.notStrictEqual(movedHead.commitSha, staleHead.commitSha);
+
+        const error = yield* Effect.flip(
+          driver.deleteRef({
+            cwd,
+            refName: "feature/moved",
+            force: true,
+            expectedSha: staleHead.commitSha,
+          }),
+        );
+
+        assert.strictEqual(error._tag, "GitCommandError");
+        const branches = yield* driver.listLocalBranchNames(cwd);
+        assert.include(branches, "feature/moved");
+      }),
+    );
   });
 
   describe("remote operations", () => {

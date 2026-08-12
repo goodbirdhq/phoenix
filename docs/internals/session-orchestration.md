@@ -251,6 +251,12 @@ needs what git actually said, and `GitCommandError.detail` is a fixed per-call-s
 ("git worktree remove failed"), so the driver attaches a bounded `stderrExcerpt` — the tail, since
 git prints progress before the fatal line — to every non-zero exit. Without it the lock path never
 leaves the driver and the structured error below can only ever fire in a test. The excerpt is
+redacted before it is attached, and redacted before it is truncated so nothing survives on a
+boundary: git echoes remote URLs freely and a remote can carry its own credentials
+(`https://x-access-token:ghs_…@host/o/r`), so userinfo, query strings, fragments, and known token
+shapes are stripped while scheme, host, and path — the diagnostic value — stay. Argv is not treated
+as a secret channel here, which is why `execute` takes `stdin` for payloads that must never appear
+in a command line. The excerpt is
 matched on the lock artifact (a `.lock` path) rather than on git's English, which varies by
 version, command, and locale. When a git failure names a lock path, `settle_session` stats it and
 answers with `SessionOrchestrationGitLockError`: the path,
@@ -282,7 +288,23 @@ its cleanup waits behind seven others, and a proof from minutes ago would author
 So the cheap half is re-read inside the critical section, immediately before the delete: two
 `rev-parse`s confirming both heads are still the commit the pull request vouched for. A branch that
 moved is kept and reported, not deleted — the same outcome as never passing `cleanupBranch`, since
-the worktree removal was authorized by the dirty check rather than by this proof. A branch delete
+the worktree removal was authorized by the dirty check rather than by this proof.
+
+That re-check is only atomic against writers inside this process. The repository lock does not bind
+a terminal, an editor, or a second Phoenix, so any check made before the delete is advisory by the
+time the delete runs. The delete itself therefore carries the proven commit:
+`git update-ref -d refs/heads/<branch> <proven-sha>` is a compare-and-swap under git's own ref lock,
+and git refuses if the ref moved. That is the only layer that can settle the race, which is why the
+driver's `deleteRef` takes an `expectedSha` at all. Its one caveat is that plumbing does not refuse
+a branch checked out in another worktree the way `git branch -d` does — acceptable here because the
+call site removes the worktree first, inside the same lock.
+
+Both refusals are structured per resource rather than folded into prose: a settle that removed the
+worktree but kept the branch reports `worktree.branchRefusal` (branch, reason, the SHAs, and the
+commit the proof expected), sharing its reason vocabulary with
+`SessionOrchestrationBranchNotMergedError`. Partial success is still a result the caller has to act
+on, and "the branch moved, settle again" has to be distinguishable from "this repository has no
+pull-request host" without reading English. A branch delete
 that fails on a repository lock surfaces as the same `SessionOrchestrationGitLockError` a failed
 removal does, and the thread's `worktreePath` is still cleared first: the directory really is gone,
 and failing before recording that would leave the thread pointing at it forever.

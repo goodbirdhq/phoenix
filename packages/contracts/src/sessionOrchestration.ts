@@ -504,6 +504,48 @@ export const SettleSessionInput = Schema.Struct({
 });
 export type SettleSessionInput = typeof SettleSessionInput.Type;
 
+/**
+ * Why a branch could not be proven safe to delete.
+ *
+ * One vocabulary for both carriers: the error that refuses a cleanup outright,
+ * and the per-branch refusal on an otherwise successful cleanup.
+ */
+export const SessionOrchestrationBranchNotMergedReason = Schema.Literals([
+  // No pull-request host reachable (no `gh`, unauthenticated, API down).
+  "pull_request_lookup_unavailable",
+  // The host answered, but no merged PR has this branch as its head.
+  "no_merged_pull_request",
+  // The branch has no remote-tracking counterpart to compare against.
+  "remote_branch_missing",
+  // Local and remote heads disagree: work exists in only one of them.
+  "local_ahead_of_remote",
+  // The merged PR was merged from a different commit than the branch head.
+  "pull_request_head_mismatch",
+  // The branch moved between the proof and the delete — either caught by the
+  // re-check inside the repository lock, or by git's own compare-and-swap.
+  "branch_moved_since_proof",
+]);
+export type SessionOrchestrationBranchNotMergedReason =
+  typeof SessionOrchestrationBranchNotMergedReason.Type;
+
+/**
+ * A cleanup that removed the worktree but kept the branch, and why.
+ *
+ * Structured rather than prose because it is a partial success: the caller has
+ * to be able to tell "the branch moved, re-settle to re-prove it" from "this
+ * repository has no pull-request host" without reading English.
+ */
+export const SettleSessionBranchRefusal = Schema.Struct({
+  branch: TrimmedNonEmptyString,
+  reason: SessionOrchestrationBranchNotMergedReason,
+  message: Schema.String,
+  localSha: Schema.NullOr(TrimmedNonEmptyString),
+  remoteSha: Schema.NullOr(TrimmedNonEmptyString),
+  // What the proof expected the head to be, when one was taken.
+  expectedSha: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type SettleSessionBranchRefusal = typeof SettleSessionBranchRefusal.Type;
+
 // Exactly what settle_session did to the child's worktree, so the caller can
 // always tell what was destroyed and what survived.
 export const SettleSessionWorktreeOutcome = Schema.Struct({
@@ -518,6 +560,11 @@ export const SettleSessionWorktreeOutcome = Schema.Struct({
   // temporary branch, or the merge proof (SHAs and the merged PR) that
   // `cleanupBranch` demanded. Null when no branch was deleted.
   branchProof: Schema.NullOr(TrimmedNonEmptyString),
+  // Set when the worktree was removed but the branch was deliberately kept
+  // despite `cleanupBranch` — the partial-success case, structured so the
+  // caller can act on it. Null when no branch cleanup was attempted, or when
+  // it succeeded.
+  branchRefusal: Schema.NullOr(SettleSessionBranchRefusal),
 });
 export type SettleSessionWorktreeOutcome = typeof SettleSessionWorktreeOutcome.Type;
 
@@ -613,18 +660,7 @@ export class SessionOrchestrationBranchNotMergedError extends Schema.TaggedError
   {
     ...SessionOrchestrationErrorFields,
     branch: TrimmedNonEmptyString,
-    reason: Schema.Literals([
-      // No pull-request host reachable (no `gh`, unauthenticated, API down).
-      "pull_request_lookup_unavailable",
-      // The host answered, but no merged PR has this branch as its head.
-      "no_merged_pull_request",
-      // The branch has no remote-tracking counterpart to compare against.
-      "remote_branch_missing",
-      // Local and remote heads disagree: work exists in only one of them.
-      "local_ahead_of_remote",
-      // The merged PR was merged from a different commit than the branch head.
-      "pull_request_head_mismatch",
-    ]),
+    reason: SessionOrchestrationBranchNotMergedReason,
     localSha: Schema.NullOr(TrimmedNonEmptyString),
     remoteSha: Schema.NullOr(TrimmedNonEmptyString),
     mergedPullRequestNumber: Schema.NullOr(NonNegativeInt),
