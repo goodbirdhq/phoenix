@@ -2,6 +2,8 @@ import {
   ListSessionProvidersInput,
   ListSessionProvidersResult,
   PostReportInput,
+  ReadReportInput,
+  ReadReportResult,
   ReadSessionInput,
   ReadSessionResult,
   SendToSessionInput,
@@ -62,7 +64,7 @@ export const SendToSessionTool = Tool.make("send_to_session", {
 
 export const ReadSessionTool = Tool.make("read_session", {
   description:
-    "Read the status of a session this session spawned: live/settled state, its completion report if posted, and optionally its trailing messages. Use for on-demand progress checks; completion is pushed to you automatically, so avoid polling loops. messageLimit accepts 0-20 (default 5); each returned message is truncated to 16,384 characters.",
+    "Read the status of a session this session spawned: live/settled state, its latest completion report as a compact envelope (title, status, origin, abstract, size, structured counts), and optionally its trailing messages. Use read_report to fetch a report's full body and full findings/validation. Use for on-demand progress checks; completion is pushed to you automatically, so avoid polling loops. messageLimit accepts 0-20 (default 5); each returned message is truncated to 16,384 characters.",
   parameters: ReadSessionInput,
   success: ReadSessionResult,
   failure: SessionOrchestrationError,
@@ -99,9 +101,22 @@ export const SettleSessionTool = Tool.make("settle_session", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true);
 
+export const ReadReportTool = Tool.make("read_report", {
+  description:
+    "Read the full body of a completion report posted by a session this session spawned, or by a sibling session (one spawned by the same parent). Pass the reportId from a report envelope, or a threadId to get that thread's latest report. Large reports paginate via offset/maxChars; the result also carries the report's origin (agent vs Phoenix-synthesized) and full findings/validation/recommendation.",
+  parameters: ReadReportInput,
+  success: ReadReportResult,
+  failure: SessionOrchestrationError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Read session report")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
 export const PostReportTool = Tool.make("post_report", {
   description:
-    "Post a completion report for THIS session's work: status, a concise markdown summary, and any artifacts (files, branches, PR URLs). If another session spawned this one, the report is delivered to it automatically; the user also sees the report as a card in this thread. Call once when your assigned work is finished (or clearly failed). Optionally include machine-readable fields: findings (array of {title, severity: info|low|medium|high|critical, detail?}), validation ({performed: string[], gaps: string[]}), recommendation (short string), and completionPercent (0-100).",
+    "Post a completion report for THIS session's work: status, a concise markdown summary, and any artifacts (files, branches, PR URLs). For a long summary, also pass a 1-3 sentence abstract: large reports are delivered to the spawning session as a compact envelope, and the abstract is what it sees first. If another session spawned this one, the report is delivered to it automatically; the user also sees the report as a card in this thread. Call once when your assigned work is finished (or clearly failed). Optionally include machine-readable fields: findings (array of {title, severity: info|low|medium|high|critical, detail?}), validation ({performed: string[], gaps: string[]}), recommendation (short string), and completionPercent (0-100).",
   parameters: PostReportInput,
   success: SessionReport,
   failure: SessionOrchestrationError,
@@ -117,6 +132,7 @@ export const SessionsToolkit = Toolkit.make(
   SpawnSessionTool,
   SendToSessionTool,
   ReadSessionTool,
+  ReadReportTool,
   StopSessionTool,
   SettleSessionTool,
   PostReportTool,

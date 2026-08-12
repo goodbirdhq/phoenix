@@ -23,6 +23,7 @@ import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ThreadTurnBootstrap from "../../../orchestration/ThreadTurnBootstrap.ts";
+import { ProjectionThreadReportRepository } from "../../../persistence/Services/ProjectionThreadReports.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
@@ -136,6 +137,10 @@ const makeHarness = (options: HarnessOptions) => {
     Layer.succeed(ServerSettings.ServerSettingsService, {
       getSettings: Effect.succeed({ enableSessionOrchestration: true }),
     } as unknown as ServerSettings.ServerSettingsService["Service"]),
+    Layer.succeed(ProjectionThreadReportRepository, {
+      listByThreadId: () => Effect.succeed([]),
+      findByReportId: () => Effect.succeed(Option.none()),
+    } as unknown as ProjectionThreadReportRepository["Service"]),
     NodeServices.layer,
   );
 

@@ -4,6 +4,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  SESSION_REPORT_INLINE_MAX_CHARS,
   ThreadId,
   TurnId,
   type OrchestrationCommand,
@@ -368,6 +369,49 @@ describe("formatReportMessage", () => {
     );
     expect(text).toContain("- url: https://example.test/pr/1 (PR)");
     expect(text).toContain("- branch: feature/work");
+  });
+
+  it("inlines reports at or under the envelope threshold whole", () => {
+    const summary = "s".repeat(SESSION_REPORT_INLINE_MAX_CHARS);
+    const text = formatReportMessage("Spawned worker", report({ summary }));
+    expect(text).toContain(summary);
+    expect(text).not.toContain("read_report");
+  });
+
+  it("delivers large reports as a compact envelope pointing at read_report", () => {
+    const summary = "s".repeat(SESSION_REPORT_INLINE_MAX_CHARS + 1);
+    const text = formatReportMessage(
+      "Spawned worker",
+      report({ summary, abstract: "The short version." }),
+    );
+    expect(text).toContain("The short version.");
+    expect(text).not.toContain(summary);
+    expect(text).toContain(`Full report is ${summary.length} chars`);
+    expect(text).toContain('read_report with reportId "report-1"');
+  });
+
+  it("envelopes oversized synthesized reports exactly like agent reports", () => {
+    const summary = "z".repeat(SESSION_REPORT_INLINE_MAX_CHARS + 1);
+    const text = formatReportMessage("Spawned worker", report({ origin: "system", summary }));
+    expect(text).toContain("Phoenix generated");
+    expect(text).not.toContain(summary);
+    expect(text).toContain('read_report with reportId "report-1"');
+  });
+
+  it("keeps artifacts and structured counts visible in envelope deliveries", () => {
+    const text = formatReportMessage(
+      "Spawned worker",
+      report({
+        summary: "a".repeat(SESSION_REPORT_INLINE_MAX_CHARS + 1),
+        recommendation: "Merge after CI.",
+        findings: [{ title: "Loose type", severity: "low" }],
+        validation: { performed: ["typecheck"], gaps: ["no e2e", "no perf run"] },
+        artifacts: [{ kind: "url", value: "https://example.test/pr/1", label: "PR" }],
+      }),
+    );
+    expect(text).toContain("- url: https://example.test/pr/1 (PR)");
+    expect(text).toContain("Recommendation: Merge after CI.");
+    expect(text).toContain("1 finding, 2 validation gaps");
   });
 });
 

@@ -112,6 +112,7 @@ import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
+import { ProjectionThreadReportRepository } from "./persistence/Services/ProjectionThreadReports.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -810,7 +811,16 @@ const buildAppUnderTest = (options?: {
             getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
             getThreadCheckpointContext: () => Effect.succeed(Option.none()),
             ...options?.layers?.projectionSnapshotQuery,
-          }),
+          }).pipe(
+            // Bundled with the snapshot-query mock because the pipe below is
+            // already at the 20-argument overload ceiling.
+            Layer.merge(
+              Layer.mock(ProjectionThreadReportRepository)({
+                listByThreadId: () => Effect.succeed([]),
+                findByReportId: () => Effect.succeed(Option.none()),
+              }),
+            ),
+          ),
         ),
         Layer.provide(
           Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({

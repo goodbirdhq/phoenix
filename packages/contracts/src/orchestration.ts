@@ -334,6 +334,9 @@ export const SessionReport = Schema.Struct({
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   // Markdown body. Bounded so a report stays a summary, not a transcript.
   summary: Schema.String.check(Schema.isMaxLength(16_384)),
+  // Author-provided digest used when the report is delivered as a compact
+  // envelope instead of inline. Optional so pre-feature payloads keep decoding.
+  abstract: Schema.optional(Schema.String.check(Schema.isMaxLength(1024))),
   artifacts: Schema.Array(SessionReportArtifact).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -1211,6 +1214,7 @@ const ThreadReportPostCommand = Schema.Struct({
   status: SessionReportStatus,
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   summary: Schema.String.check(Schema.isMaxLength(16_384)),
+  abstract: Schema.optional(Schema.String.check(Schema.isMaxLength(1024))),
   artifacts: Schema.Array(SessionReportArtifact),
   ...SessionReportStructuredFields,
   // Omitted by the post_report tool; only the reactor's synthesized terminal

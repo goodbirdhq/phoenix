@@ -6,6 +6,8 @@ import {
   type OrchestrationSessionStatus,
   type OrchestrationThreadShell,
   type PostReportInput,
+  READ_REPORT_MAX_CHARS,
+  type ReadReportInput,
   type ReadSessionResult,
   type RuntimeMode,
   SESSION_SPAWN_MAX_CHILDREN,
@@ -20,6 +22,7 @@ import {
   type SettleSessionWorktreeOutcome,
   type SpawnSessionInput,
   ThreadId,
+  toSessionReportEnvelope,
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName, isTemporaryWorktreeBranch } from "@t3tools/shared/git";
@@ -35,6 +38,10 @@ import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ThreadTurnBootstrap from "../../../orchestration/ThreadTurnBootstrap.ts";
+import {
+  type ProjectionThreadReport,
+  ProjectionThreadReportRepository,
+} from "../../../persistence/Services/ProjectionThreadReports.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
@@ -111,11 +118,72 @@ export const resolveSendToSessionDelivery = (eventType: string | undefined) => {
   return Effect.succeed("unknown" as const);
 };
 
+// Who may read a thread's reports through read_report: the thread itself,
+// the session that spawned it, and its siblings (threads spawned by the same
+// parent). Sibling reads are the deliberate exception to the children-only
+// rule — they let one spawned session review another's report without the
+// parent relaying up to 16KB of markdown by hand.
+export const canReadThreadReports = (input: {
+  readonly callerThreadId: string;
+  readonly callerSpawnedByThreadId: string | null;
+  readonly targetThreadId: string;
+  readonly targetSpawnedByThreadId: string | null;
+}): boolean =>
+  input.targetThreadId === input.callerThreadId ||
+  input.targetSpawnedByThreadId === input.callerThreadId ||
+  (input.callerSpawnedByThreadId !== null &&
+    input.targetSpawnedByThreadId === input.callerSpawnedByThreadId);
+
+// One constant denial for every unreadable-report case (unknown id, foreign
+// thread, archived thread, id/thread mismatch, no report posted yet), so
+// responses cannot be used to probe which reports or threads exist.
+export const REPORT_NOT_ACCESSIBLE_MESSAGE =
+  "Report not accessible: it does not exist, has not been posted yet, or belongs to a session outside this session's read scope (own spawned sessions and their siblings).";
+
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+
+// Pure pagination over a report summary, in UTF-16 code units (the same
+// units as `summary.length`). Offsets past the end return an empty body
+// rather than failing, so callers can walk pages blindly. Boundaries are
+// adjusted so a surrogate pair is never split: a start landing on the low
+// half backs up to include the whole character (reflected in the returned
+// `offset`), and an end that would split a pair leaves it for the next page
+// (or, when maxChars is too small to hold the pair, extends by one unit so
+// paging always makes progress).
+export const sliceReportBody = (
+  summary: string,
+  options: { readonly offset?: number | undefined; readonly maxChars?: number | undefined },
+): { body: string; offset: number; totalChars: number; hasMore: boolean } => {
+  const totalChars = summary.length;
+  let start = Math.min(options.offset ?? 0, totalChars);
+  if (
+    start > 0 &&
+    start < totalChars &&
+    isLowSurrogate(summary.charCodeAt(start)) &&
+    isHighSurrogate(summary.charCodeAt(start - 1))
+  ) {
+    start -= 1;
+  }
+  const maxChars = options.maxChars ?? READ_REPORT_MAX_CHARS;
+  let end = Math.min(start + maxChars, totalChars);
+  if (
+    end > start &&
+    end < totalChars &&
+    isHighSurrogate(summary.charCodeAt(end - 1)) &&
+    isLowSurrogate(summary.charCodeAt(end))
+  ) {
+    end = end - 1 > start ? end - 1 : end + 1;
+  }
+  const body = summary.slice(start, end);
+  return { body, offset: start, totalChars, hasMore: end < totalChars };
+};
+
 // Appended to every spawned session's first message so the completion
 // contract holds across providers without the parent having to remember to
 // ask for it. post_report is what wakes the parent up.
 const SPAWNED_SESSION_REPORT_INSTRUCTIONS =
-  "\n\n---\nYou were spawned by another Phoenix agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). The report is delivered to the session that spawned you.";
+  "\n\n---\nYou were spawned by another Phoenix agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). If the summary is long, also pass a 1-3 sentence `abstract`. The report is delivered to the session that spawned you.";
 
 // Enough to tell the caller what is at stake without turning a refusal into a
 // transcript of a large working tree.
@@ -217,6 +285,7 @@ export const make = Effect.gen(function* () {
   const bootstrap = yield* ThreadTurnBootstrap.ThreadTurnBootstrap;
   const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+  const reportRepository = yield* ProjectionThreadReportRepository;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const path = yield* Path.Path;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
@@ -272,7 +341,8 @@ export const make = Effect.gen(function* () {
 
   // Every mutating tool operates only on direct children of the calling
   // thread; a session cannot reach siblings, parents, or the user's other
-  // threads through this toolkit.
+  // threads through this toolkit. (read_report is the one read-only
+  // exception: it also accepts sibling threads — see canReadThreadReports.)
   const requireSpawnedChild = (parentThreadId: ThreadId, threadId: ThreadId) =>
     requireShell(threadId).pipe(
       Effect.flatMap((shell) =>
@@ -589,7 +659,8 @@ export const make = Effect.gen(function* () {
       .getThreadDetailById(child.id)
       .pipe(Effect.mapError(operationError("Failed to read thread detail")));
     if (Option.isSome(detail)) {
-      report = detail.value.reports.at(-1) ?? null;
+      const latest = detail.value.reports.at(-1);
+      report = latest === undefined ? null : toSessionReportEnvelope(latest);
       if (messageLimit > 0) {
         messages = detail.value.messages
           .filter((message) => message.role === "user" || message.role === "assistant")
@@ -860,6 +931,7 @@ export const make = Effect.gen(function* () {
         status: input.status,
         title: input.title,
         summary: input.summary,
+        ...(input.abstract !== undefined ? { abstract: input.abstract } : {}),
         artifacts: input.artifacts ?? [],
         ...(input.findings !== undefined ? { findings: input.findings } : {}),
         ...(input.validation !== undefined ? { validation: input.validation } : {}),
@@ -876,6 +948,7 @@ export const make = Effect.gen(function* () {
       status: input.status,
       title: input.title,
       summary: input.summary,
+      ...(input.abstract !== undefined ? { abstract: input.abstract } : {}),
       artifacts: input.artifacts ?? [],
       ...(input.findings !== undefined ? { findings: input.findings } : {}),
       ...(input.validation !== undefined ? { validation: input.validation } : {}),
@@ -887,6 +960,102 @@ export const make = Effect.gen(function* () {
       // reactor's terminal reports are system-origin.
       origin: "agent" as const,
       createdAt,
+    };
+  });
+
+  const readReport = Effect.fn("SessionsToolkit.readReport")(function* (input: ReadReportInput) {
+    const scope = yield* requireSessionsCapability;
+    if (input.reportId === undefined && input.threadId === undefined) {
+      return yield* new SessionOrchestrationInvalidInputError({
+        message: "Pass reportId (from a report envelope), threadId, or both.",
+      });
+    }
+    const caller = yield* requireShell(scope.threadId);
+
+    // Every unreadable case fails with this one error so responses cannot
+    // distinguish unknown, foreign, archived, mismatched, or report-less
+    // targets from each other.
+    const reportNotAccessible = () =>
+      new SessionOrchestrationDeniedError({
+        reason: "report_not_accessible",
+        message: REPORT_NOT_ACCESSIBLE_MESSAGE,
+      });
+    const mayReadThread = (targetThreadId: ThreadId) =>
+      getShell(targetThreadId).pipe(
+        Effect.map(
+          (shell) =>
+            Option.isSome(shell) &&
+            canReadThreadReports({
+              callerThreadId: scope.threadId,
+              callerSpawnedByThreadId: caller.spawnedByThreadId ?? null,
+              targetThreadId,
+              targetSpawnedByThreadId: shell.value.spawnedByThreadId ?? null,
+            }),
+        ),
+      );
+
+    // When the target thread is named, authorize it before touching any
+    // report rows; only the reportId-only path has to resolve the row first
+    // to learn which thread to authorize, and its failures are
+    // indistinguishable from the pre-authorized paths' by construction. The
+    // residual signal in that path is timing (a row lookup happens before the
+    // denial); acceptable only because reportIds are server-generated v4
+    // UUIDs — unguessable, so there is nothing to probe by dictionary.
+    if (input.threadId !== undefined && !(yield* mayReadThread(input.threadId))) {
+      return yield* reportNotAccessible();
+    }
+
+    let report: ProjectionThreadReport;
+    if (input.reportId !== undefined) {
+      const found = yield* reportRepository
+        .findByReportId({ reportId: input.reportId })
+        .pipe(Effect.mapError(operationError("Failed to read report")));
+      if (Option.isNone(found)) {
+        return yield* reportNotAccessible();
+      }
+      if (input.threadId !== undefined) {
+        if (found.value.threadId !== input.threadId) {
+          return yield* reportNotAccessible();
+        }
+      } else if (!(yield* mayReadThread(found.value.threadId))) {
+        return yield* reportNotAccessible();
+      }
+      report = found.value;
+    } else {
+      const reports = yield* reportRepository
+        // threadId is defined here: the missing-both case returned above.
+        .listByThreadId({ threadId: input.threadId as ThreadId })
+        .pipe(Effect.mapError(operationError("Failed to read reports")));
+      const latest = reports.at(-1);
+      if (latest === undefined) {
+        return yield* reportNotAccessible();
+      }
+      report = latest;
+    }
+
+    const page = sliceReportBody(report.summary, {
+      offset: input.offset,
+      maxChars: input.maxChars,
+    });
+    return {
+      reportId: report.reportId,
+      threadId: report.threadId,
+      status: report.status,
+      title: report.title,
+      origin: report.origin,
+      body: page.body,
+      offset: page.offset,
+      totalChars: page.totalChars,
+      hasMore: page.hasMore,
+      // Full structured data on every page; the envelope only carried counts.
+      ...(report.findings !== undefined ? { findings: report.findings } : {}),
+      ...(report.validation !== undefined ? { validation: report.validation } : {}),
+      ...(report.recommendation !== undefined ? { recommendation: report.recommendation } : {}),
+      ...(report.completionPercent !== undefined
+        ? { completionPercent: report.completionPercent }
+        : {}),
+      artifacts: report.artifacts,
+      createdAt: report.createdAt,
     };
   });
 
@@ -917,6 +1086,7 @@ export const make = Effect.gen(function* () {
     spawn_session: (input) => spawnSession(input),
     send_to_session: (input) => sendToSession(input),
     read_session: (input) => readSession(input),
+    read_report: (input) => readReport(input ?? {}),
     stop_session: (input) => stopSession(input),
     settle_session: (input) => settleSession(input),
     post_report: (input) => postReport(input),

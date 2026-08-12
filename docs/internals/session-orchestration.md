@@ -17,6 +17,7 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
                                       │      setup script → first turn; rollback on failure)
                                       ├─ send_to_session / read_session / stop_session
                                       ├─ settle_session ──> thread.settle (+ worktree cleanup)
+                                      ├─ read_report ──> projection_thread_reports (paginated body)
                                       └─ post_report ──> thread.report.post (internal command)
                                              │
              thread.report-posted / terminal session events
@@ -46,13 +47,18 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   resurrecting the child; restart and periodic recovery only release stale persisted sessions
   after confirming there is no live provider binding.
 - **Persistence** — migrations 041 (`projection_threads.spawned_by_thread_id`), 042
-  (`projection_thread_reports`), 043 (structured report fields), 044 (session stop audit) and
-  045 (`projection_thread_reports.origin`), with hydration through `ProjectionPipeline` and
-  `ProjectionSnapshotQuery`.
+  (`projection_thread_reports`), 043 (structured report fields), 044 (session stop audit), 045
+  (`projection_thread_reports.origin`), and 046 (`projection_thread_reports.abstract`), with
+  hydration through `ProjectionPipeline` and `ProjectionSnapshotQuery`.
 - **Reactor** — `apps/server/src/orchestration/Layers/SessionSpawnReactor.ts` watches
   `thread.report-posted` and `thread.session-set` domain events. A report on a thread with
   `spawnedByThreadId` starts a turn on the parent carrying the report. Turn injection is the wake
   mechanism deliberately: no held-open tool calls, survives restarts, works over remote/tunnel.
+  Reports over `SESSION_REPORT_INLINE_MAX_CHARS` (1KB) — agent-posted and Phoenix-synthesized
+  alike — are delivered as a compact envelope (title, status, origin, abstract, reportId, size,
+  structured counts) instead of inline; the parent — or a sibling — pulls the full body and the
+  full findings/validation arrays on demand with `read_report`, paginated by `offset`/`maxChars`
+  in UTF-16 code units.
 
 ## Terminal reports
 
@@ -119,7 +125,10 @@ directory that no longer exists.
 
 ## Guardrails
 
-- Mutating tools operate only on direct children of the calling thread.
+- Mutating tools operate only on direct children of the calling thread. The read-only
+  `read_report` additionally allows reading reports of sibling threads (same
+  `spawned_by_thread_id`), which is the minimal primitive for peer workflows — e.g. a reviewer
+  child reading a worker child's report without the parent relaying it.
 - At most `SESSION_SPAWN_MAX_CHILDREN` (8) live children per thread and
   `SESSION_SPAWN_MAX_DEPTH` (3) levels of nesting.
 - A child's `runtimeMode` is capped at its parent's.

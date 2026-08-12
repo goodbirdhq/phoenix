@@ -18,6 +18,7 @@ import {
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
+import type * as Option from "effect/Option";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
@@ -27,6 +28,7 @@ export const ProjectionThreadReport = Schema.Struct({
   status: SessionReportStatus,
   title: TrimmedNonEmptyString,
   summary: Schema.String,
+  abstract: Schema.NullOr(Schema.String),
   artifacts: Schema.Array(SessionReportArtifact),
   // Mirrors the same bounds (array lengths, string lengths, 0-100 percent)
   // as the contract-level SessionReport/PostReportInput.
@@ -40,6 +42,11 @@ export const ListProjectionThreadReportsInput = Schema.Struct({
   threadId: ThreadId,
 });
 export type ListProjectionThreadReportsInput = typeof ListProjectionThreadReportsInput.Type;
+
+export const FindProjectionThreadReportInput = Schema.Struct({
+  reportId: TrimmedNonEmptyString,
+});
+export type FindProjectionThreadReportInput = typeof FindProjectionThreadReportInput.Type;
 
 export const DeleteProjectionThreadReportsInput = Schema.Struct({
   threadId: ThreadId,
@@ -65,6 +72,13 @@ export interface ProjectionThreadReportRepositoryShape {
   readonly listByThreadId: (
     input: ListProjectionThreadReportsInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadReport>, ProjectionRepositoryError>;
+
+  /**
+   * Find a single projected session report row by report id.
+   */
+  readonly findByReportId: (
+    input: FindProjectionThreadReportInput,
+  ) => Effect.Effect<Option.Option<ProjectionThreadReport>, ProjectionRepositoryError>;
 
   /**
    * Delete projected session report rows by thread.
