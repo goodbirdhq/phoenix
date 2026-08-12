@@ -6,10 +6,11 @@
     {
       "layers": [
         {
+          "glass": false,
           "image-name": "feather.svg",
           "name": "Feather",
           "position": {
-            "scale": 1,
+            "scale": 8,
             "translation-in-points": [0, 0]
           }
         }
