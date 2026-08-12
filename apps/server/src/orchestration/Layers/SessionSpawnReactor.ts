@@ -106,6 +106,11 @@ export const formatReportMessage = (childTitle: string, report: SessionReport): 
   return `${lead}\n\nAbstract:\n${envelope.abstract}\n${recommendationLine}${structuredLine}\n[Full report is ${envelope.summaryChars} chars; this is a compact envelope. Call read_report with reportId "${report.reportId}" to read the rest.]${artifactLines}\n\n(spawned thread: ${report.threadId}, report: ${report.reportId})`;
 };
 
+export const formatQueuedReportWarning = (messageIds: ReadonlyArray<MessageId>): string =>
+  messageIds.length === 0
+    ? ""
+    : `\n\n[Phoenix] ${messageIds.length} queued message${messageIds.length === 1 ? "" : "s"} were not consumed before this report was written: ${messageIds.join(", ")}.`;
+
 // A stop is an external decision with unknown progress ("partial"); a provider
 // error is the session failing outright ("failure").
 export const terminalReportStatus = (status: OrchestrationSessionStatus): SessionReportStatus =>
@@ -358,7 +363,11 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       const childTitle = Option.isSome(child) ? child.value.title : event.payload.threadId;
       const pending = yield* projectionTurnRepository.listQueuedTurnStarts.pipe(
         Effect.map((rows) =>
-          rows.filter((row) => row.threadId === event.payload.threadId && row.state === "queued"),
+          rows.filter(
+            (row) =>
+              row.threadId === event.payload.threadId &&
+              (row.state === "queued" || row.state === "releasing"),
+          ),
         ),
         Effect.catchCause((cause) =>
           Effect.logWarning("queued delivery report warning lookup failed", { cause }).pipe(
@@ -366,10 +375,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
           ),
         ),
       );
-      const warning =
-        pending.length === 0
-          ? ""
-          : `\n\n[Phoenix] ${pending.length} queued message${pending.length === 1 ? "" : "s"} were not consumed before this report was written: ${pending.map((row) => row.messageId).join(", ")}.`;
+      const warning = formatQueuedReportWarning(pending.map((row) => row.messageId));
       yield* notifyParent({
         childThreadId: event.payload.threadId,
         text: `${formatReportMessage(childTitle, event.payload.report)}${warning}`,

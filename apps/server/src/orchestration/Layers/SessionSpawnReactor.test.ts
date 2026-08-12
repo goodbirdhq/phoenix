@@ -33,6 +33,7 @@ import {
 } from "../../persistence/Services/ProjectionTurns.ts";
 import {
   buildTerminalReportSummary,
+  formatQueuedReportWarning,
   formatReportMessage,
   makeSessionSpawnReactor,
   terminalReportStatus,
@@ -345,6 +346,14 @@ describe("terminalReportStatus", () => {
 });
 
 describe("formatReportMessage", () => {
+  it("adds one pull-first warning when a report predates queued messages", () => {
+    const text = formatQueuedReportWarning([
+      MessageId.make("queued-a"),
+      MessageId.make("queued-b"),
+    ]);
+    expect(text).toContain("2 queued messages were not consumed before this report was written");
+    expect(text).toContain("queued-a, queued-b");
+  });
   it("attributes an agent-posted report to the child", () => {
     const text = formatReportMessage("Spawned worker", report());
     expect(text).toContain('Spawned session "Spawned worker" posted a success report');
