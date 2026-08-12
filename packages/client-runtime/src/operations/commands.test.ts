@@ -115,6 +115,8 @@ describe("environment commands", () => {
           type: "thread.session.stop",
           commandId: "queued-command",
           threadId: "thread-1",
+          stopReason: "user_stopped",
+          stoppedBy: "user",
           createdAt: "2026-06-06T00:01:00.000Z",
         },
       ]);
