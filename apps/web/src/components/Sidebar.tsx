@@ -61,6 +61,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -121,6 +122,7 @@ import { cn } from "~/lib/utils";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   buildBulkTitleRegenerationContextMenuItem,
+  buildSidebarThreadHierarchy,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
   hasUnseenCompletion,
@@ -650,6 +652,13 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
   variant: "card" | "slim";
+  // Nesting level in hierarchy mode: 0 renders exactly as before, deeper
+  // indents the row under its spawning session and trades the branch line for
+  // a shorter card. Children still have their own worktrees — the branch is
+  // dropped for density, because a tree of full-height cards buries the
+  // parent, not because the checkout is shared. The signal that line carried
+  // (PR, terminals) moves up beside the status instead of being lost.
+  hierarchyIndentDepth: number;
   // Slim rows are either settled (action: un-settle) or merely quiet
   // (seen Ready threads — action: settle).
   variantAction: "settle" | "unsettle" | "unsnooze";
@@ -1249,21 +1258,36 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const diff = latestTurnDiff(thread);
 
   const sortable = props.sortable;
+  // A nested row is a child of the card above it: indented, with a rail down
+  // the gutter so the eye can follow the nesting without counting pixels.
+  const isNested = props.hierarchyIndentDepth > 0;
   return (
     <li
       data-thread-item
+      data-hierarchy-indent-depth={isNested ? props.hierarchyIndentDepth : undefined}
       ref={sortable?.setNodeRef}
-      style={
-        sortable
+      style={{
+        ...(sortable
           ? {
               transform: CSS.Translate.toString(sortable.transform),
               transition: sortable.transition,
             }
-          : undefined
-      }
+          : undefined),
+        ...(isNested
+          ? ({
+              paddingLeft: `calc(${props.hierarchyIndentDepth} * var(--sidebar-hierarchy-indent))`,
+              // Rail sits half an indent step left of this row's content edge,
+              // i.e. under the gutter its parent's card left behind.
+              "--sidebar-hierarchy-rail": `calc(${props.hierarchyIndentDepth} * var(--sidebar-hierarchy-indent) - var(--sidebar-hierarchy-indent) / 2)`,
+            } as CSSProperties)
+          : undefined),
+      }}
       {...(sortable?.listeners ?? {})}
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
+        "list-none py-0.5 [content-visibility:auto]",
+        isNested
+          ? "relative [contain-intrinsic-size:auto_60px] before:absolute before:inset-y-0 before:left-[var(--sidebar-hierarchy-rail)] before:w-px before:bg-sidebar-border/70 before:content-['']"
+          : "[contain-intrinsic-size:auto_96px]",
         sortable?.isDragging && "z-20 opacity-80",
       )}
     >
@@ -1283,7 +1307,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             />
           }
         >
-          <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
+          <div
+            className={cn(
+              "relative z-10 px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]",
+              // Two stacked lines instead of three once the branch line goes.
+              isNested ? "h-[3.375rem]" : "h-[4.875rem]",
+            )}
+          >
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               <ProjectFavicon
                 environmentId={thread.environmentId}
@@ -1322,6 +1352,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   />
                 )
               ) : null}
+              {/* Nested rows have no branch line to carry these, and losing the
+                  PR number on a child would gut the row — the PR is usually the
+                  whole point of a spawned session. They ride beside the status
+                  instead. */}
+              {isNested ? terminalStatusIcon : null}
+              {isNested ? prBadge : null}
               {/* The visible state owns this slot's width: status at rest,
                   actions on hover/keyboard focus or while the popover is open. Keeping
                   the hidden state out of flow lets the project label reclaim
@@ -1424,46 +1460,52 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 </span>
               ) : null}
             </div>
-            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
-              {/* Always the branch. The plan step used to take this slot while
+            {isNested ? null : (
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
+                {/* Always the branch. The plan step used to take this slot while
                   working, but it truncated to a half-sentence and dropped the
                   branch, so the row lost its most stable identifier. */}
-              {thread.branch ? (
-                <>
-                  <ThreadWorktreeIndicator thread={thread} />
-                  <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
-                </>
-              ) : (
-                <span className="flex-1" />
-              )}
-              {terminalStatusIcon}
-              {prBadge}
-              {diff ? (
-                <span className="shrink-0 font-mono">
-                  <span className="text-emerald-600 dark:text-emerald-400">+{diff.insertions}</span>{" "}
-                  <span className="text-red-600 dark:text-red-400">−{diff.deletions}</span>
+                {thread.branch ? (
+                  <>
+                    <ThreadWorktreeIndicator thread={thread} />
+                    <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+                      {thread.branch}
+                    </span>
+                  </>
+                ) : (
+                  <span className="flex-1" />
+                )}
+                {terminalStatusIcon}
+                {prBadge}
+                {diff ? (
+                  <span className="shrink-0 font-mono">
+                    <span className="text-emerald-600 dark:text-emerald-400">
+                      +{diff.insertions}
+                    </span>{" "}
+                    <span className="text-red-600 dark:text-red-400">−{diff.deletions}</span>
+                  </span>
+                ) : null}
+                <span
+                  aria-hidden
+                  className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
+                >
+                  {isRemote ? (
+                    <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
+                      <ServerIcon aria-hidden className="size-3.5" />
+                    </span>
+                  ) : null}
+                  {driverKind ? (
+                    <span className="inline-flex shrink-0 items-center opacity-60">
+                      <ProviderInstanceIcon
+                        driverKind={driverKind}
+                        displayName={thread.session?.providerName ?? modelInstanceId}
+                        iconClassName="size-3.5"
+                      />
+                    </span>
+                  ) : null}
                 </span>
-              ) : null}
-              <span
-                aria-hidden
-                className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-              >
-                {isRemote ? (
-                  <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-                    <ServerIcon aria-hidden className="size-3.5" />
-                  </span>
-                ) : null}
-                {driverKind ? (
-                  <span className="inline-flex shrink-0 items-center opacity-60">
-                    <ProviderInstanceIcon
-                      driverKind={driverKind}
-                      displayName={thread.session?.providerName ?? modelInstanceId}
-                      iconClassName="size-3.5"
-                    />
-                  </span>
-                ) : null}
-              </span>
-            </div>
+              </div>
+            )}
           </div>
           {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
         </TooltipTrigger>
@@ -1593,6 +1635,7 @@ export default function Sidebar() {
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
+  const sessionHierarchyEnabled = useClientSettings((s) => s.sidebarSessionHierarchyEnabled);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
@@ -1989,6 +2032,25 @@ export default function Sidebar() {
     snoozeWakeTick,
     threads,
   ]);
+
+  // Hierarchy mode applies to the inbox only. The other blocks each carry an
+  // ordering the user (or the lifecycle) chose, and nesting would fight it:
+  // pinned rows are a hand-dragged arrangement, the snoozed shelf sorts by
+  // what wakes next, and the settled tail is paginated history — a parent and
+  // its children can straddle a page boundary there.
+  const activeThreadRows = useMemo(
+    () =>
+      sessionHierarchyEnabled
+        ? buildSidebarThreadHierarchy(activeThreads)
+        : activeThreads.map((thread) => ({
+            thread,
+            depth: 0,
+            indentDepth: 0,
+            hasChildren: false,
+            isLastChild: true,
+          })),
+    [activeThreads, sessionHierarchyEnabled],
+  );
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -3490,6 +3552,9 @@ export default function Sidebar() {
                     thread: EnvironmentThreadShell,
                     section: "pinned" | "active" | "snoozed" | "settled",
                     sortable?: SortablePinnedRowBag,
+                    // Hierarchy mode only: 0 for a root row, deeper for a
+                    // spawned child. Absent everywhere hierarchy doesn't apply.
+                    hierarchyIndentDepth = 0,
                   ) => {
                     const threadKey = scopedThreadKey(
                       scopeThreadRef(thread.environmentId, thread.id),
@@ -3511,6 +3576,7 @@ export default function Sidebar() {
                         key={`${threadKey}:${rowVariant}`}
                         thread={thread}
                         variant={rowVariant}
+                        hierarchyIndentDepth={hierarchyIndentDepth}
                         // Snoozed rows wake; settled rows un-settle (explicit
                         // settles clear the override, auto-settled rows get
                         // pinned active); cards settle.
@@ -3644,8 +3710,8 @@ export default function Sidebar() {
                       />,
                     );
                   }
-                  for (const thread of activeThreads) {
-                    items.push(renderThreadRow(thread, "active"));
+                  for (const row of activeThreadRows) {
+                    items.push(renderThreadRow(row.thread, "active", undefined, row.indentDepth));
                   }
                   // Snoozed shelf: between the inbox and Settled — out of the
                   // way, never gone. The header always renders while anything

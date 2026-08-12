@@ -14,7 +14,9 @@ Every session has tools for orchestration alongside its other Phoenix tools:
 - **Spawn a session** — create a new thread on a chosen provider and model with an opening prompt.
   By default the new session gets its own git worktree, so parallel sessions never trample each
   other's files. Spawned threads appear in your sidebar like any other thread, marked with a
-  "Spawned by" banner that links back to the thread that created them.
+  "Spawned by" banner that links back to the thread that created them. To see the shape of the
+  work at a glance, turn on **Sidebar session hierarchy** in Settings and spawned threads nest
+  under the session that started them — see [Organizing threads](./thread-sidebar.md).
 - **Message, read, and stop** — a session can send follow-ups to sessions it spawned, check their
   progress, and stop them. It cannot touch threads it did not spawn.
 - **Ping without disturbing** — a session can peek at a spawned session's live progress (status,

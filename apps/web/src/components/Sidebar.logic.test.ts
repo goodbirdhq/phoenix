@@ -33,6 +33,8 @@ import {
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
   shouldCreateNewThreadInCurrentProject,
+  buildSidebarThreadHierarchy,
+  SIDEBAR_HIERARCHY_MAX_INDENT_DEPTH,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
@@ -756,6 +758,142 @@ describe("sortThreadsForSidebar", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("buildSidebarThreadHierarchy", () => {
+  const node = (input: { id: string; parent?: string | null; environmentId?: string }) => ({
+    id: input.id,
+    environmentId: input.environmentId ?? "env-1",
+    spawnedByThreadId: input.parent ?? null,
+  });
+  const shape = (rows: ReturnType<typeof buildSidebarThreadHierarchy>) =>
+    rows.map((row) => `${"  ".repeat(row.depth)}${row.thread.id}`);
+
+  it("nests a spawned thread directly under its parent", () => {
+    const rows = buildSidebarThreadHierarchy([
+      node({ id: "parent" }),
+      node({ id: "child", parent: "parent" }),
+      node({ id: "unrelated" }),
+    ]);
+
+    expect(shape(rows)).toEqual(["parent", "  child", "unrelated"]);
+  });
+
+  it("nests recursively — a child that spawns its own children keeps descending", () => {
+    const rows = buildSidebarThreadHierarchy([
+      node({ id: "root" }),
+      node({ id: "child", parent: "root" }),
+      node({ id: "grandchild", parent: "child" }),
+      node({ id: "great-grandchild", parent: "grandchild" }),
+    ]);
+
+    expect(shape(rows)).toEqual(["root", "  child", "    grandchild", "      great-grandchild"]);
+    expect(rows.map((row) => row.depth)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("caps the indent but not the depth, so deep trees stop crushing the title", () => {
+    const rows = buildSidebarThreadHierarchy([
+      node({ id: "d0" }),
+      node({ id: "d1", parent: "d0" }),
+      node({ id: "d2", parent: "d1" }),
+      node({ id: "d3", parent: "d2" }),
+      node({ id: "d4", parent: "d3" }),
+      node({ id: "d5", parent: "d4" }),
+      node({ id: "d6", parent: "d5" }),
+    ]);
+
+    expect(rows.map((row) => row.depth)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(rows.map((row) => row.indentDepth)).toEqual([
+      0,
+      1,
+      2,
+      3,
+      SIDEBAR_HIERARCHY_MAX_INDENT_DEPTH,
+      SIDEBAR_HIERARCHY_MAX_INDENT_DEPTH,
+      SIDEBAR_HIERARCHY_MAX_INDENT_DEPTH,
+    ]);
+  });
+
+  it("keeps the incoming sibling order — hierarchy re-parents, it never reorders", () => {
+    const rows = buildSidebarThreadHierarchy([
+      node({ id: "parent" }),
+      node({ id: "newest-child", parent: "parent" }),
+      node({ id: "older-child", parent: "parent" }),
+    ]);
+
+    expect(shape(rows)).toEqual(["parent", "  newest-child", "  older-child"]);
+  });
+
+  it("leaves a child at top level when its parent is not in this list", () => {
+    // The parent is archived, snoozed, settled into another section, or
+    // filtered out by project scope — the child must not vanish with it.
+    const rows = buildSidebarThreadHierarchy([node({ id: "orphan", parent: "missing-parent" })]);
+
+    expect(shape(rows)).toEqual(["orphan"]);
+    expect(rows[0]?.depth).toBe(0);
+  });
+
+  it("does not treat a same-id thread in another environment as the parent", () => {
+    const rows = buildSidebarThreadHierarchy([
+      node({ id: "shared-id", environmentId: "env-a" }),
+      node({ id: "child", parent: "shared-id", environmentId: "env-b" }),
+    ]);
+
+    expect(shape(rows)).toEqual(["shared-id", "child"]);
+  });
+
+  it("emits every thread exactly once even when parent links form a cycle", () => {
+    const rows = buildSidebarThreadHierarchy([
+      node({ id: "a", parent: "b" }),
+      node({ id: "b", parent: "a" }),
+      node({ id: "standalone" }),
+    ]);
+
+    expect(rows.map((row) => row.thread.id).toSorted()).toEqual(["a", "b", "standalone"]);
+  });
+
+  it("treats a self-parenting thread as a root rather than recursing", () => {
+    const rows = buildSidebarThreadHierarchy([node({ id: "loop", parent: "loop" })]);
+
+    expect(shape(rows)).toEqual(["loop"]);
+  });
+
+  it("reports children and last-sibling so the connector rail can terminate", () => {
+    const rows = buildSidebarThreadHierarchy([
+      node({ id: "parent" }),
+      node({ id: "first", parent: "parent" }),
+      node({ id: "last", parent: "parent" }),
+    ]);
+
+    expect(rows.map((row) => [row.thread.id, row.hasChildren, row.isLastChild])).toEqual([
+      ["parent", true, true],
+      ["first", false, false],
+      ["last", false, true],
+    ]);
+  });
+
+  it("returns every input thread once for a mixed forest", () => {
+    const threads = [
+      node({ id: "p1" }),
+      node({ id: "c1", parent: "p1" }),
+      node({ id: "p2" }),
+      node({ id: "c2", parent: "p2" }),
+      node({ id: "g1", parent: "c1" }),
+      node({ id: "orphan", parent: "gone" }),
+    ];
+
+    const rows = buildSidebarThreadHierarchy(threads);
+
+    expect(rows).toHaveLength(threads.length);
+    expect(rows.map((row) => row.thread.id).toSorted()).toEqual(
+      threads.map((thread) => thread.id).toSorted(),
+    );
+    expect(shape(rows)).toEqual(["p1", "  c1", "    g1", "p2", "  c2", "orphan"]);
+  });
+
+  it("returns an empty list unchanged", () => {
+    expect(buildSidebarThreadHierarchy([])).toEqual([]);
   });
 });
 

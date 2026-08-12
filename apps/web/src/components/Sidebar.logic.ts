@@ -527,6 +527,117 @@ export function sortThreadsForSidebar<
   );
 }
 
+// ── Session hierarchy (sidebarSessionHierarchyEnabled) ────────────────
+//
+// Orchestrating sessions spawn children, which spawn children of their own.
+// Hierarchy mode renders that tree in place of the flat list: a child sits
+// directly under its parent, indented, so the shape of the work is visible
+// without opening anything.
+
+/** Indentation stops here. Deeper rows keep their true `depth` (a child of a
+    child of a child is still nested in the data) but stop stealing horizontal
+    room — past a few levels the title has nowhere left to go. */
+export const SIDEBAR_HIERARCHY_MAX_INDENT_DEPTH = 4;
+
+export interface SidebarHierarchyThreadInput {
+  readonly id: string;
+  readonly environmentId: string;
+  // Optional, not just nullable: payloads from pre-spawn servers omit it.
+  readonly spawnedByThreadId?: string | null | undefined;
+}
+
+export interface SidebarHierarchyRow<T> {
+  readonly thread: T;
+  /** True nesting depth, 0 for a root. Uncapped. */
+  readonly depth: number;
+  /** `depth` clamped for rendering — see SIDEBAR_HIERARCHY_MAX_INDENT_DEPTH. */
+  readonly indentDepth: number;
+  readonly hasChildren: boolean;
+  /** Last among its siblings: lets the connector rail stop at this row. */
+  readonly isLastChild: boolean;
+}
+
+/** Thread identity is per environment — a parent link is a bare thread id, so
+    two environments can hold the same id without being related. */
+function hierarchyKey(thread: SidebarHierarchyThreadInput): string {
+  return `${thread.environmentId}:${thread.id}`;
+}
+
+/**
+ * Nest `threads` by their spawnedByThreadId links, preserving the incoming
+ * order among siblings — the caller has already applied the section's sort
+ * (creation order for the inbox, settled order for the tail), and hierarchy
+ * mode reorders nothing, it only re-parents.
+ *
+ * Invariant: every input thread comes back exactly once. A parent that isn't
+ * in this list (archived, snoozed, settled into another section, or filtered
+ * out by project scope) leaves its child at top level rather than dropping it,
+ * and threads caught in a parent cycle are emitted flat for the same reason.
+ */
+export function buildSidebarThreadHierarchy<T extends SidebarHierarchyThreadInput>(
+  threads: readonly T[],
+): SidebarHierarchyRow<T>[] {
+  if (threads.length === 0) return [];
+
+  const byKey = new Map<string, T>();
+  for (const thread of threads) byKey.set(hierarchyKey(thread), thread);
+
+  const resolveParentKey = (thread: T): string | null => {
+    const parentId = thread.spawnedByThreadId;
+    if (parentId == null) return null;
+    const parentKey = `${thread.environmentId}:${parentId}`;
+    // Self-parenting is corrupt data, not a root marker — treat it as unlinked.
+    if (parentKey === hierarchyKey(thread)) return null;
+    // Unknown parent: the child stands on its own rather than vanishing.
+    return byKey.has(parentKey) ? parentKey : null;
+  };
+
+  const roots: T[] = [];
+  const childrenByParentKey = new Map<string, T[]>();
+  for (const thread of threads) {
+    const parentKey = resolveParentKey(thread);
+    if (parentKey === null) {
+      roots.push(thread);
+      continue;
+    }
+    const siblings = childrenByParentKey.get(parentKey);
+    if (siblings) siblings.push(thread);
+    else childrenByParentKey.set(parentKey, [thread]);
+  }
+
+  const rows: SidebarHierarchyRow<T>[] = [];
+  const emitted = new Set<string>();
+
+  const visit = (thread: T, depth: number, isLastChild: boolean): void => {
+    const key = hierarchyKey(thread);
+    // Cycle guard: a → b → a would otherwise recurse forever.
+    if (emitted.has(key)) return;
+    emitted.add(key);
+    const children = childrenByParentKey.get(key) ?? [];
+    rows.push({
+      thread,
+      depth,
+      indentDepth: Math.min(depth, SIDEBAR_HIERARCHY_MAX_INDENT_DEPTH),
+      hasChildren: children.length > 0,
+      isLastChild,
+    });
+    children.forEach((child, index) => {
+      visit(child, depth + 1, index === children.length - 1);
+    });
+  };
+
+  roots.forEach((root, index) => visit(root, 0, index === roots.length - 1));
+
+  // Anything still unemitted sits in a cycle with no root above it. Flat is a
+  // worse rendering than nested, but it beats a thread disappearing.
+  for (const thread of threads) {
+    if (emitted.has(hierarchyKey(thread))) continue;
+    visit(thread, 0, true);
+  }
+
+  return rows;
+}
+
 // Pinned-reorder key math and the keyed sort live in client-runtime
 // (state/thread-sort) so web and mobile compute identical pinned orders.
 export {
