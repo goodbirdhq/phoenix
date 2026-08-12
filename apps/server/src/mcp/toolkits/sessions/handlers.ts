@@ -81,6 +81,17 @@ export const validateSpawnCheckoutInput = (
   return null;
 };
 
+type SessionCheckoutGitWorkflow = Pick<
+  GitWorkflowService.GitWorkflowService["Service"],
+  "localStatus" | "resolveCommit"
+>;
+
+export const resolveSessionCheckout = (gitWorkflow: SessionCheckoutGitWorkflow, cwd: string) =>
+  Effect.all({
+    status: gitWorkflow.localStatus({ cwd }),
+    commit: gitWorkflow.resolveCommit({ cwd, revision: "HEAD" }),
+  }).pipe(Effect.catch(() => Effect.succeed(null)));
+
 // Appended to every spawned session's first message so the completion
 // contract holds across providers without the parent having to remember to
 // ask for it. post_report is what wakes the parent up.
@@ -398,10 +409,7 @@ const make = Effect.gen(function* () {
     const spawned = yield* requireShell(threadId);
     const worktreePath = spawned.worktreePath ? NodePath.resolve(spawned.worktreePath) : null;
     const checkout = yield* worktreePath
-      ? Effect.all({
-          status: gitWorkflow.localStatus({ cwd: worktreePath }),
-          commit: gitWorkflow.resolveCommit({ cwd: worktreePath, revision: "HEAD" }),
-        }).pipe(Effect.mapError(operationError("Failed to resolve spawned session checkout")))
+      ? resolveSessionCheckout(gitWorkflow, worktreePath)
       : Effect.succeed(null);
     return {
       threadId,
@@ -468,14 +476,8 @@ const make = Effect.gen(function* () {
       }
     }
     const worktreePath = child.worktreePath ? NodePath.resolve(child.worktreePath) : null;
-    if (worktreePath) {
-      yield* gitWorkflow.invalidateLocalStatus(worktreePath);
-    }
     const checkout = yield* worktreePath
-      ? Effect.all({
-          status: gitWorkflow.localStatus({ cwd: worktreePath }),
-          commit: gitWorkflow.resolveCommit({ cwd: worktreePath, revision: "HEAD" }),
-        }).pipe(Effect.mapError(operationError("Failed to resolve session checkout")))
+      ? resolveSessionCheckout(gitWorkflow, worktreePath)
       : Effect.succeed(null);
     return {
       threadId: child.id,
@@ -484,12 +486,12 @@ const make = Effect.gen(function* () {
       settled: child.settledAt !== null,
       report,
       messages,
-      ...(checkout
+      ...(worktreePath
         ? {
-            branch: checkout.status.refName ?? child.branch,
+            branch: checkout?.status.refName ?? child.branch,
             worktreePath,
-            sha: checkout.commit.commitSha,
-            dirty: checkout.status.hasWorkingTreeChanges,
+            sha: checkout?.commit.commitSha ?? null,
+            dirty: checkout?.status.hasWorkingTreeChanges ?? null,
           }
         : {}),
     };

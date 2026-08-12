@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as Effect from "effect/Effect";
 
-import { validateSpawnCheckoutInput } from "./handlers.ts";
+import { resolveSessionCheckout, validateSpawnCheckoutInput } from "./handlers.ts";
 
 describe("validateSpawnCheckoutInput", () => {
   it("accepts independent checkout specifications in git repositories", () => {
@@ -28,5 +29,21 @@ describe("validateSpawnCheckoutInput", () => {
     expect(validateSpawnCheckoutInput({ baseRef: "main" }, false)).toBe(
       "A git checkout was requested, but this project is not a git repository with a current branch.",
     );
+  });
+});
+
+describe("resolveSessionCheckout", () => {
+  it("returns null when optional checkout metadata cannot be read", async () => {
+    const checkout = await Effect.runPromise(
+      resolveSessionCheckout(
+        {
+          localStatus: () => Effect.succeed({ refName: "review", hasWorkingTreeChanges: false }),
+          resolveCommit: () => Effect.fail(new Error("worktree no longer exists")),
+        },
+        "/missing-worktree",
+      ),
+    );
+
+    expect(checkout).toBeNull();
   });
 });

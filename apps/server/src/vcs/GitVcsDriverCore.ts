@@ -2810,6 +2810,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const commitSha = yield* runGitStdout("GitVcsDriver.resolveCommit", input.cwd, [
       "rev-parse",
       "--verify",
+      "--end-of-options",
       `${input.revision}^{commit}`,
     ]).pipe(Effect.map((stdout) => stdout.trim()));
 

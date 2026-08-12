@@ -52,7 +52,8 @@ export const SpawnSessionInput = Schema.Struct({
   // Revision to use as the starting point for the spawned worktree. If it is
   // not present locally, Phoenix fetches origin before resolving it.
   gitRef: Schema.optional(TrimmedNonEmptyString),
-  // Base ref recorded for the spawned branch's merge-base metadata. Defaults
+  // Base ref for the spawned branch's merge-base metadata. When gitRef and
+  // checkoutPr are omitted, this is also the revision checked out. Defaults
   // to the current project branch.
   baseRef: Schema.optional(TrimmedNonEmptyString),
   // Name the spawned worktree branch explicitly instead of using a temporary

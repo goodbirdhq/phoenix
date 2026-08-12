@@ -63,6 +63,64 @@ export const toBootstrapDispatchCommandCauseError = (cause: Cause.Cause<unknown>
       });
 };
 
+type WorktreeCheckoutGitWorkflow = Pick<
+  GitWorkflowService.GitWorkflowService["Service"],
+  "fetchPullRequestHeadCommit" | "fetchRemote" | "remoteExists" | "resolveCommit"
+>;
+
+const errorDetail = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+export const resolveWorktreeCheckoutCommit = (
+  gitWorkflow: WorktreeCheckoutGitWorkflow,
+  input: {
+    readonly cwd: string;
+    readonly checkoutRef: string;
+    readonly checkoutPr?: number | undefined;
+  },
+) => {
+  if (input.checkoutPr !== undefined) {
+    return gitWorkflow.fetchPullRequestHeadCommit({
+      cwd: input.cwd,
+      prNumber: input.checkoutPr,
+    });
+  }
+
+  return gitWorkflow.resolveCommit({ cwd: input.cwd, revision: input.checkoutRef }).pipe(
+    Effect.catch(() =>
+      gitWorkflow.remoteExists({ cwd: input.cwd, remoteName: "origin" }).pipe(
+        Effect.flatMap((hasOrigin) =>
+          hasOrigin
+            ? gitWorkflow.fetchRemote({ cwd: input.cwd, remoteName: "origin" }).pipe(
+                Effect.mapError(
+                  (error) =>
+                    new Error(
+                      `Failed to fetch origin while resolving git ref "${input.checkoutRef}": ${errorDetail(error)}`,
+                    ),
+                ),
+                Effect.andThen(
+                  gitWorkflow
+                    .resolveCommit({ cwd: input.cwd, revision: input.checkoutRef })
+                    .pipe(
+                      Effect.mapError(
+                        () =>
+                          new Error(
+                            `Git ref "${input.checkoutRef}" does not exist locally or on origin.`,
+                          ),
+                      ),
+                    ),
+                ),
+              )
+            : Effect.fail(
+                new Error(
+                  `Git ref "${input.checkoutRef}" does not exist locally and this project has no origin remote to fetch.`,
+                ),
+              ),
+        ),
+      ),
+    ),
+  );
+};
+
 // Runs the "create thread + prepare worktree + setup script + first turn"
 // macro behind `thread.turn.start` bootstrap payloads. Shared by the WS
 // dispatch path and the sessions MCP toolkit so both get the same rollback
@@ -295,7 +353,11 @@ export const make = Effect.gen(function* () {
         // "Start from origin" is a stored default; repos without an
         // origin remote fall back to the local base branch instead of
         // failing the whole bootstrap on `git fetch origin`.
+        const hasExplicitCheckout =
+          bootstrap.prepareWorktree.checkoutRef !== undefined ||
+          bootstrap.prepareWorktree.checkoutPr !== undefined;
         const startFromOrigin =
+          !hasExplicitCheckout &&
           bootstrap.prepareWorktree.startFromOrigin === true &&
           (yield* gitWorkflow.remoteExists({
             cwd: bootstrap.prepareWorktree.projectCwd,
@@ -314,55 +376,13 @@ export const make = Effect.gen(function* () {
           worktreeBaseRef = resolvedRemoteBase.commitSha;
         }
         const checkoutRef = bootstrap.prepareWorktree.checkoutRef ?? worktreeBaseRef;
-        const checkoutCommit =
-          bootstrap.prepareWorktree.checkoutPr !== undefined
-            ? yield* gitWorkflow.fetchPullRequestHeadCommit({
-                cwd: bootstrap.prepareWorktree.projectCwd,
-                prNumber: bootstrap.prepareWorktree.checkoutPr,
-              })
-            : yield* gitWorkflow
-                .resolveCommit({
-                  cwd: bootstrap.prepareWorktree.projectCwd,
-                  revision: checkoutRef,
-                })
-                .pipe(
-                  Effect.catchAll(() =>
-                    gitWorkflow
-                      .remoteExists({
-                        cwd: bootstrap.prepareWorktree.projectCwd,
-                        remoteName: "origin",
-                      })
-                      .pipe(
-                        Effect.flatMap((hasOrigin) =>
-                          hasOrigin
-                            ? gitWorkflow
-                                .fetchRemote({
-                                  cwd: bootstrap.prepareWorktree.projectCwd,
-                                  remoteName: "origin",
-                                })
-                                .pipe(
-                                  Effect.andThen(
-                                    gitWorkflow.resolveCommit({
-                                      cwd: bootstrap.prepareWorktree.projectCwd,
-                                      revision: checkoutRef,
-                                    }),
-                                  ),
-                                  Effect.mapError(
-                                    () =>
-                                      new Error(
-                                        `Git ref "${checkoutRef}" does not exist locally or on origin.`,
-                                      ),
-                                  ),
-                                )
-                            : Effect.fail(
-                                new Error(
-                                  `Git ref "${checkoutRef}" does not exist locally and this project has no origin remote to fetch.`,
-                                ),
-                              ),
-                        ),
-                      ),
-                  ),
-                );
+        const checkoutCommit = yield* resolveWorktreeCheckoutCommit(gitWorkflow, {
+          cwd: bootstrap.prepareWorktree.projectCwd,
+          checkoutRef,
+          ...(bootstrap.prepareWorktree.checkoutPr !== undefined
+            ? { checkoutPr: bootstrap.prepareWorktree.checkoutPr }
+            : {}),
+        });
         const worktree = yield* gitWorkflow.createWorktree({
           cwd: bootstrap.prepareWorktree.projectCwd,
           refName: checkoutCommit.commitSha,
