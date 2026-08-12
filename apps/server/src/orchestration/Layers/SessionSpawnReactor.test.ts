@@ -443,6 +443,90 @@ describe("formatReportMessage", () => {
   });
 });
 
+const reportPostedEvent = (
+  posted: ReturnType<typeof report>,
+  sequence: number,
+): OrchestrationEvent => ({
+  sequence,
+  eventId: EventId.make(`event-report-${posted.reportId}`),
+  aggregateKind: "thread",
+  aggregateId: CHILD_ID,
+  occurredAt: CREATED_AT,
+  commandId: CommandId.make(`command-report-${posted.reportId}`),
+  causationEventId: null,
+  correlationId: null,
+  metadata: {},
+  type: "thread.report-posted",
+  payload: {
+    threadId: CHILD_ID,
+    report: { ...posted, threadId: CHILD_ID },
+    updatedAt: CREATED_AT,
+  },
+});
+
+// Drives the real reactor over a real thread.report-posted event, rather than
+// calling the formatter directly: what a parent actually receives depends on
+// the reactor resolving the child, finding its spawner, and dispatching a turn
+// start — none of which formatter tests exercise.
+describe("SessionSpawnReactor amended report delivery", () => {
+  const deliveredToParent = (commands: ReadonlyArray<OrchestrationCommand>) =>
+    commands
+      .filter((command) => command.type === "thread.turn.start")
+      .filter((command) => command.threadId === PARENT_ID)
+      .map((command) => (command.type === "thread.turn.start" ? command.message.text : ""));
+
+  it.effect("delivers an amending report to the parent led by what it supersedes", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        boundaryEvents: [
+          reportPostedEvent(
+            report({
+              reportId: "report-amendment",
+              title: "Also handled the late instruction",
+              summary: "The queued instruction arrived after the first report; it is done now.",
+              supersedesReportId: "report-original",
+            }),
+            2,
+          ),
+        ],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const delivered = deliveredToParent(commands);
+          expect(delivered).toHaveLength(1);
+          const text = delivered[0] ?? "";
+          expect(text).toContain("AMENDED report (supersedes report-original)");
+          // The amendment marker precedes the summary the parent may think it
+          // has already read.
+          expect(text.indexOf("AMENDED report")).toBeLessThan(
+            text.indexOf("The queued instruction arrived"),
+          );
+          expect(text).toContain("(spawned thread: child-thread)");
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("delivers an ordinary report with no amendment marker", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        boundaryEvents: [reportPostedEvent(report({ reportId: "report-original" }), 2)],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const delivered = deliveredToParent(commands);
+          expect(delivered).toHaveLength(1);
+          expect(delivered[0]).not.toContain("AMENDED");
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+});
+
 describe("buildTerminalReportSummary", () => {
   it("says the session was stopped and flags the work as unfinished", () => {
     const summary = buildTerminalReportSummary({

@@ -277,6 +277,49 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
     }),
   );
 
+  it.effect("lets a resumed session's agent report supersede a synthesized one", () =>
+    Effect.gen(function* () {
+      const reports = yield* ProjectionThreadReportRepository;
+      const threadId = ThreadId.make("thread-resurrected");
+
+      // The session was stopped, so Phoenix wrote a terminal report for it.
+      yield* reports.upsert(
+        report({
+          reportId: "report-synthetic",
+          threadId,
+          status: "partial",
+          title: "Session stopped before reporting",
+          summary: "Phoenix generated this report.",
+          origin: "system",
+          createdAt: "2026-08-12T01:00:00.000Z",
+        }),
+      );
+      // It came back and finished the work; its own account supersedes the
+      // stand-in.
+      yield* reports.upsert(
+        report({
+          reportId: "report-agent",
+          threadId,
+          summary: "Resumed and finished the work.",
+          supersedesReportId: "report-synthetic",
+          createdAt: "2026-08-12T02:00:00.000Z",
+        }),
+      );
+
+      const synthetic = Option.getOrNull(
+        yield* reports.findByReportId({ reportId: "report-synthetic" }),
+      );
+      // Still system-origin and still readable — the parent can see both that
+      // Phoenix stood in and that the agent later spoke for itself.
+      assert.strictEqual(synthetic?.origin, "system");
+      assert.strictEqual(synthetic?.supersededByReportId, "report-agent");
+
+      const listed = yield* reports.listByThreadId({ threadId });
+      assert.strictEqual(listed.at(-1)?.reportId, "report-agent");
+      assert.strictEqual(listed.at(-1)?.origin, "agent");
+    }),
+  );
+
   it.effect("leaves an unamended report with no supersession links", () =>
     Effect.gen(function* () {
       const reports = yield* ProjectionThreadReportRepository;

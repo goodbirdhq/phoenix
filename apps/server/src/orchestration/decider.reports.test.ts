@@ -1,5 +1,6 @@
 import {
   CommandId,
+  type OrchestrationCommand,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -10,9 +11,18 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import type { OrchestrationCommandInvariantError } from "./Errors.ts";
 
 const CREATED_AT = "2026-01-01T00:00:00.000Z";
 const POSTED_AT = "2026-01-01T01:00:00.000Z";
+
+// decideOrchestrationCommand can also fail with a PlatformError, so the
+// flipped error is a union; narrow before reading the invariant's detail
+// rather than asserting against a field the type does not guarantee.
+const invariantDetail = (error: { readonly _tag: string }): string =>
+  error._tag === "OrchestrationCommandInvariantError"
+    ? (error as OrchestrationCommandInvariantError).detail
+    : `expected an OrchestrationCommandInvariantError, received ${error._tag}`;
 
 const readModel: OrchestrationReadModel = {
   snapshotSequence: 0,
@@ -182,7 +192,9 @@ it.layer(NodeServices.layer)("report decider", (it) => {
           supersedesReportId: "report-1",
           createdAt: POSTED_AT,
         },
-        readModel,
+        // The superseded report has to exist on the thread: the decider
+        // refuses a dangling amendment link.
+        readModel: readModelWithReports([{ reportId: "report-1" }]),
       });
       const event = Array.isArray(result) ? result[0] : result;
 
@@ -192,6 +204,158 @@ it.layer(NodeServices.layer)("report decider", (it) => {
         // Only the forward link is recorded: the superseded report keeps its
         // own event, and the reverse link is derived when reports are read.
         expect(event.payload.report.supersededByReportId).toBeUndefined();
+      }
+    }),
+  );
+
+  // A thread that already carries reports, so the decider's supersession
+  // check has a folded read model to work against — the same shape command
+  // processing sees, which is what makes this check race-proof.
+  const readModelWithReports = (
+    reports: ReadonlyArray<{ readonly reportId: string; readonly supersedesReportId?: string }>,
+  ): OrchestrationReadModel => ({
+    ...readModel,
+    threads: readModel.threads.map((thread) => ({
+      ...thread,
+      reports: reports.map((entry) => ({
+        reportId: entry.reportId,
+        threadId: ThreadId.make("thread-1"),
+        status: "success" as const,
+        title: "Did the work",
+        summary: "All done.",
+        artifacts: [],
+        origin: "agent" as const,
+        ...(entry.supersedesReportId !== undefined
+          ? { supersedesReportId: entry.supersedesReportId }
+          : {}),
+        createdAt: POSTED_AT,
+      })),
+    })),
+  });
+
+  const amendmentCommand = (input: {
+    readonly reportId: string;
+    readonly supersedesReportId: string;
+  }) =>
+    ({
+      type: "thread.report.post",
+      commandId: CommandId.make(`cmd-${input.reportId}`),
+      threadId: ThreadId.make("thread-1"),
+      reportId: input.reportId,
+      status: "success",
+      title: "Amended",
+      summary: "Amended account.",
+      artifacts: [],
+      supersedesReportId: input.supersedesReportId,
+      createdAt: POSTED_AT,
+    }) satisfies Extract<OrchestrationCommand, { type: "thread.report.post" }>;
+
+  it.effect("accepts an amendment of the newest report in a chain", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: amendmentCommand({ reportId: "report-c", supersedesReportId: "report-b" }),
+        readModel: readModelWithReports([
+          { reportId: "report-a" },
+          { reportId: "report-b", supersedesReportId: "report-a" },
+        ]),
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+
+      expect(event.type).toBe("thread.report-posted");
+      if (event.type === "thread.report-posted") {
+        expect(event.payload.report.supersedesReportId).toBe("report-b");
+      }
+    }),
+  );
+
+  it.effect("refuses to fork a chain by superseding an already-superseded report", () =>
+    Effect.gen(function* () {
+      // The race, resolved: two amendments of report-a reach the decider; the
+      // first produced report-b, so the second is rejected here rather than
+      // creating an a→b / a→c fork that no reader could order.
+      const result = yield* decideOrchestrationCommand({
+        command: amendmentCommand({ reportId: "report-c", supersedesReportId: "report-a" }),
+        readModel: readModelWithReports([
+          { reportId: "report-a" },
+          { reportId: "report-b", supersedesReportId: "report-a" },
+        ]),
+      }).pipe(Effect.flip);
+
+      expect(result._tag).toBe("OrchestrationCommandInvariantError");
+      // Actionable: names the winner and where to re-attach.
+      expect(invariantDetail(result)).toContain("report-a is already superseded by report-b");
+      expect(invariantDetail(result)).toContain("supersede report-b instead");
+    }),
+  );
+
+  it.effect("points a rejected amendment at the head of a longer chain", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: amendmentCommand({ reportId: "report-d", supersedesReportId: "report-a" }),
+        readModel: readModelWithReports([
+          { reportId: "report-a" },
+          { reportId: "report-b", supersedesReportId: "report-a" },
+          { reportId: "report-c", supersedesReportId: "report-b" },
+        ]),
+      }).pipe(Effect.flip);
+
+      expect(result._tag).toBe("OrchestrationCommandInvariantError");
+      expect(invariantDetail(result)).toContain("current head of that chain is report-c");
+      expect(invariantDetail(result)).toContain("supersede report-c instead");
+    }),
+  );
+
+  it.effect("refuses an amendment of a report that does not exist on the thread", () =>
+    Effect.gen(function* () {
+      // The decider is authoritative, so this holds for internally dispatched
+      // report posts too — not only ones the toolkit pre-checked.
+      const result = yield* decideOrchestrationCommand({
+        command: amendmentCommand({ reportId: "report-b", supersedesReportId: "report-missing" }),
+        readModel: readModelWithReports([{ reportId: "report-a" }]),
+      }).pipe(Effect.flip);
+
+      expect(result._tag).toBe("OrchestrationCommandInvariantError");
+      expect(invariantDetail(result)).toContain("report-missing");
+    }),
+  );
+
+  it.effect("lets a real agent report supersede a Phoenix-synthesized one", () =>
+    Effect.gen(function* () {
+      // Resurrection: the session was stopped, Phoenix synthesized a terminal
+      // report, then the session resumed and its agent finished the work. The
+      // agent's account must be able to replace the synthesized one.
+      const result = yield* decideOrchestrationCommand({
+        command: amendmentCommand({
+          reportId: "report-agent",
+          supersedesReportId: "report-synthetic",
+        }),
+        readModel: {
+          ...readModel,
+          threads: readModel.threads.map((thread) => ({
+            ...thread,
+            reports: [
+              {
+                reportId: "report-synthetic",
+                threadId: ThreadId.make("thread-1"),
+                status: "partial" as const,
+                title: "Session stopped before reporting",
+                summary: "Phoenix generated this report.",
+                artifacts: [],
+                origin: "system" as const,
+                createdAt: CREATED_AT,
+              },
+            ],
+          })),
+        },
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+
+      expect(event.type).toBe("thread.report-posted");
+      if (event.type === "thread.report-posted") {
+        expect(event.payload.report.supersedesReportId).toBe("report-synthetic");
+        // The amendment is the agent speaking; superseding a system report
+        // does not inherit its origin.
+        expect(event.payload.report.origin).toBe("agent");
       }
     }),
   );

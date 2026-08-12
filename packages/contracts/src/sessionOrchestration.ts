@@ -361,6 +361,85 @@ export type ReadReportResult = typeof ReadReportResult.Type;
 export const supersededReportNotice = (supersededByReportId: string): string =>
   `SUPERSEDED: this report was amended by a newer report on the same session. Read reportId "${supersededByReportId}" for the current account of the work; treat anything below as out of date.`;
 
+/**
+ * Amendments form a single linear chain per thread — never a fork.
+ *
+ * Two reports both superseding A would leave "which report is current"
+ * ambiguous: reverse navigation from A could reach either, while latest-report
+ * selection (newest row) picks one of them, and the two answers need not
+ * agree. Rather than teach every reader a merge rule, superseding an
+ * already-superseded report is refused and the caller is pointed at the head
+ * of the chain.
+ *
+ * Structural on purpose: the decider checks this against folded read-model
+ * reports and the toolkit checks it against projection rows, and both must
+ * reach the same verdict from the same shape.
+ */
+export interface ReportSupersessionLink {
+  readonly reportId: string;
+  // Absent as `undefined` on event/read-model reports and as `null` on
+  // projection rows; both spellings mean "supersedes nothing", and neither
+  // can equal a report id, so the lookups below treat them identically.
+  readonly supersedesReportId?: string | null | undefined;
+}
+
+export type ReportSupersessionCheck =
+  | { readonly _tag: "ok" }
+  // No report with that id on this thread. Deliberately does not distinguish
+  // "no such report anywhere" from "belongs to another thread": see
+  // SUPERSEDES_REPORT_NOT_FOUND_MESSAGE in the toolkit handlers.
+  | { readonly _tag: "unknown-report" }
+  | {
+      readonly _tag: "already-superseded";
+      readonly supersededByReportId: string;
+      readonly chainHeadReportId: string;
+    };
+
+export const checkReportSupersession = (
+  reports: ReadonlyArray<ReportSupersessionLink>,
+  supersedesReportId: string,
+): ReportSupersessionCheck => {
+  if (!reports.some((report) => report.reportId === supersedesReportId)) {
+    return { _tag: "unknown-report" };
+  }
+  const supersederOf = (reportId: string) =>
+    reports.find((report) => report.supersedesReportId === reportId);
+  const direct = supersederOf(supersedesReportId);
+  if (direct === undefined) {
+    return { _tag: "ok" };
+  }
+  // Walk to the end of the chain so the caller is told where to actually
+  // attach, not merely that it lost. `seen` bounds the walk: the linear-chain
+  // invariant makes a cycle unreachable, but this data crosses a persistence
+  // boundary and an infinite loop in the decider would wedge command
+  // processing for the whole server.
+  let chainHead = direct;
+  const seen = new Set<string>([supersedesReportId, direct.reportId]);
+  for (;;) {
+    const next = supersederOf(chainHead.reportId);
+    if (next === undefined || seen.has(next.reportId)) break;
+    seen.add(next.reportId);
+    chainHead = next;
+  }
+  return {
+    _tag: "already-superseded",
+    supersededByReportId: direct.reportId,
+    chainHeadReportId: chainHead.reportId,
+  };
+};
+
+// One wording for the refusal, shared by the toolkit's friendly pre-check and
+// the decider's authoritative rejection, so a caller cannot get two different
+// explanations of the same state depending on which one caught it.
+export const reportAlreadySupersededMessage = (input: {
+  readonly reportId: string;
+  readonly supersededByReportId: string;
+  readonly chainHeadReportId: string;
+}): string =>
+  input.chainHeadReportId === input.supersededByReportId
+    ? `Report ${input.reportId} is already superseded by ${input.supersededByReportId}; supersede ${input.supersededByReportId} instead. Amendments form a single linear chain, so only the newest report in a chain can be amended.`
+    : `Report ${input.reportId} is already superseded by ${input.supersededByReportId}, and the current head of that chain is ${input.chainHeadReportId}; supersede ${input.chainHeadReportId} instead. Amendments form a single linear chain, so only the newest report in a chain can be amended.`;
+
 export const PingSessionInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -513,6 +592,28 @@ export class SessionOrchestrationInvalidInputError extends Schema.TaggedErrorCla
   SessionOrchestrationErrorFields,
 ) {}
 
+/**
+ * post_report refused to fork an amendment chain.
+ *
+ * Structured rather than prose alone because the caller's next move is
+ * mechanical: re-post against `chainHeadReportId`. It is also the losing side
+ * of a concurrent-amendment race, where the winner's id is the only thing the
+ * loser needs to make progress.
+ */
+export class SessionOrchestrationReportAlreadySupersededError extends Schema.TaggedErrorClass<SessionOrchestrationReportAlreadySupersededError>()(
+  "SessionOrchestrationReportAlreadySupersededError",
+  {
+    ...SessionOrchestrationErrorFields,
+    // The report the caller tried to supersede.
+    reportId: TrimmedNonEmptyString,
+    // The report that already superseded it.
+    supersededByReportId: TrimmedNonEmptyString,
+    // Newest report in that chain — what to supersede instead. Equal to
+    // supersededByReportId unless the chain has grown further.
+    chainHeadReportId: TrimmedNonEmptyString,
+  },
+) {}
+
 export class SessionOrchestrationUnavailableError extends Schema.TaggedErrorClass<SessionOrchestrationUnavailableError>()(
   "SessionOrchestrationUnavailableError",
   SessionOrchestrationErrorFields,
@@ -529,5 +630,6 @@ export const SessionOrchestrationError = Schema.Union([
   SessionOrchestrationUnavailableError,
   SessionOrchestrationOperationError,
   SessionOrchestrationWorktreeNotEmptyError,
+  SessionOrchestrationReportAlreadySupersededError,
 ]);
 export type SessionOrchestrationError = typeof SessionOrchestrationError.Type;

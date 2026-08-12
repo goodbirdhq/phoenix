@@ -1,4 +1,5 @@
 import {
+  checkReportSupersession,
   CommandId,
   isProviderAvailable,
   MessageId,
@@ -10,12 +11,14 @@ import {
   READ_REPORT_MAX_CHARS,
   type ReadReportInput,
   type ReadSessionResult,
+  reportAlreadySupersededMessage,
   type RuntimeMode,
   SESSION_SPAWN_MAX_CHILDREN,
   SESSION_SPAWN_MAX_DEPTH,
   SessionOrchestrationDeniedError,
   SessionOrchestrationInvalidInputError,
   SessionOrchestrationOperationError,
+  SessionOrchestrationReportAlreadySupersededError,
   SessionOrchestrationUnavailableError,
   SessionOrchestrationWorktreeNotEmptyError,
   type ServerProvider,
@@ -1015,19 +1018,84 @@ export const make = Effect.gen(function* () {
     const scope = yield* requireSessionsCapability;
     const caller = yield* requireShell(scope.threadId);
 
-    // Resolved before anything is dispatched: an amendment naming a report
-    // that does not exist (or belongs to another thread) would otherwise
-    // persist a dangling link that no reader could follow.
-    if (input.supersedesReportId !== undefined) {
-      const superseded = yield* reportRepository
-        .findByReportId({ reportId: input.supersedesReportId })
-        .pipe(Effect.mapError(operationError("Failed to read the report being superseded")));
-      if (Option.isNone(superseded) || superseded.value.threadId !== scope.threadId) {
+    // Friendly pre-check. The decider runs the same check against the folded
+    // read model and is the authority — this one exists so the common case
+    // fails with a specific, structured error instead of a dispatch failure.
+    // Reading the whole thread's reports (rather than one row) is what makes
+    // the chain-head answer available.
+    const supersedesReportId = input.supersedesReportId;
+    if (supersedesReportId !== undefined) {
+      const reports = yield* reportRepository
+        .listByThreadId({ threadId: scope.threadId })
+        .pipe(Effect.mapError(operationError("Failed to read this session's reports")));
+      const check = checkReportSupersession(reports, supersedesReportId);
+      if (check._tag === "unknown-report") {
         return yield* new SessionOrchestrationInvalidInputError({
           message: SUPERSEDES_REPORT_NOT_FOUND_MESSAGE,
         });
       }
+      if (check._tag === "already-superseded") {
+        return yield* new SessionOrchestrationReportAlreadySupersededError({
+          message: reportAlreadySupersededMessage({
+            reportId: supersedesReportId,
+            supersededByReportId: check.supersededByReportId,
+            chainHeadReportId: check.chainHeadReportId,
+          }),
+          reportId: supersedesReportId,
+          supersededByReportId: check.supersededByReportId,
+          chainHeadReportId: check.chainHeadReportId,
+        });
+      }
     }
+
+    /**
+     * Turn a lost amendment race into the same actionable error the pre-check
+     * would have given.
+     *
+     * Between the pre-check and the decider, another amendment can take the
+     * chain head. The decider rejects this command — correctly — but through
+     * dispatch that surfaces as a generic operation failure, which tells the
+     * caller nothing about where to re-attach. So on failure, re-read the
+     * chain: if it moved, report that; otherwise the dispatch failed for some
+     * other reason and that error stands.
+     */
+    const withSupersessionRaceDetail = (
+      effect: Effect.Effect<{ readonly sequence: number }, SessionOrchestrationOperationError>,
+    ): Effect.Effect<
+      { readonly sequence: number },
+      SessionOrchestrationOperationError | SessionOrchestrationReportAlreadySupersededError
+    > =>
+      supersedesReportId === undefined
+        ? effect
+        : effect.pipe(
+            Effect.catch((dispatchError) =>
+              reportRepository.listByThreadId({ threadId: scope.threadId }).pipe(
+                // The recheck is diagnostic only; if it fails, the original
+                // dispatch error is still the truthful thing to report.
+                Effect.catch(() => Effect.succeed<ReadonlyArray<ProjectionThreadReport>>([])),
+                Effect.flatMap((reports) => {
+                  const check = checkReportSupersession(reports, supersedesReportId);
+                  return check._tag === "already-superseded"
+                    ? Effect.fail<
+                        | SessionOrchestrationOperationError
+                        | SessionOrchestrationReportAlreadySupersededError
+                      >(
+                        new SessionOrchestrationReportAlreadySupersededError({
+                          message: reportAlreadySupersededMessage({
+                            reportId: supersedesReportId,
+                            supersededByReportId: check.supersededByReportId,
+                            chainHeadReportId: check.chainHeadReportId,
+                          }),
+                          reportId: supersedesReportId,
+                          supersededByReportId: check.supersededByReportId,
+                          chainHeadReportId: check.chainHeadReportId,
+                        }),
+                      )
+                    : Effect.fail(dispatchError);
+                }),
+              ),
+            ),
+          );
 
     const createdAt = yield* nowIso;
     const reportId = yield* randomUUID;
@@ -1038,29 +1106,31 @@ export const make = Effect.gen(function* () {
       createdAt: caller.createdAt,
       latestTurn: caller.latestTurn,
     });
-    yield* enqueue(
-      engine.dispatch({
-        type: "thread.report.post",
-        commandId: yield* serverCommandId("mcp-post-report"),
-        threadId: scope.threadId,
-        reportId,
-        status: input.status,
-        title: input.title,
-        summary: input.summary,
-        ...(input.abstract !== undefined ? { abstract: input.abstract } : {}),
-        artifacts: input.artifacts ?? [],
-        ...(input.findings !== undefined ? { findings: input.findings } : {}),
-        ...(input.validation !== undefined ? { validation: input.validation } : {}),
-        ...(input.recommendation !== undefined ? { recommendation: input.recommendation } : {}),
-        ...(input.completionPercent !== undefined
-          ? { completionPercent: input.completionPercent }
-          : {}),
-        usage,
-        ...(input.supersedesReportId !== undefined
-          ? { supersedesReportId: input.supersedesReportId }
-          : {}),
-        createdAt,
-      }),
+    yield* withSupersessionRaceDetail(
+      enqueue(
+        engine.dispatch({
+          type: "thread.report.post",
+          commandId: yield* serverCommandId("mcp-post-report"),
+          threadId: scope.threadId,
+          reportId,
+          status: input.status,
+          title: input.title,
+          summary: input.summary,
+          ...(input.abstract !== undefined ? { abstract: input.abstract } : {}),
+          artifacts: input.artifacts ?? [],
+          ...(input.findings !== undefined ? { findings: input.findings } : {}),
+          ...(input.validation !== undefined ? { validation: input.validation } : {}),
+          ...(input.recommendation !== undefined ? { recommendation: input.recommendation } : {}),
+          ...(input.completionPercent !== undefined
+            ? { completionPercent: input.completionPercent }
+            : {}),
+          usage,
+          ...(input.supersedesReportId !== undefined
+            ? { supersedesReportId: input.supersedesReportId }
+            : {}),
+          createdAt,
+        }),
+      ),
     );
     return {
       reportId,

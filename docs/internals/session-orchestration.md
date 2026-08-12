@@ -135,11 +135,33 @@ and the reverse link (`supersededByReportId`) is _derived_ on every read path by
 report points back at this one. That is why there is no "superseded" flag column to keep in sync,
 and why a report can be read from either end of the chain.
 
-The reference is validated in the toolkit before anything is dispatched: it must name a report on
-the _calling thread_. A report is a session's account of its own work, so amending another
-session's report is not a weaker case of amending your own — it is refused, with the same message
-as an unknown id so the denial cannot double as a probe for which report ids exist elsewhere. A
-dangling link would be worse than a rejection: no reader could follow it.
+Chains are **linear, never forked**: superseding a report that is already superseded is refused.
+Two reports both amending A would leave "which is current" ambiguous — reverse navigation from A
+could reach either, while latest-report selection picks by recency, and the two answers need not
+agree. Rather than teach every reader a merge rule, the loser is refused and handed the head of the
+chain (`SessionOrchestrationReportAlreadySupersededError` carries `supersededByReportId` and
+`chainHeadReportId`, because the caller's next move is mechanical: re-post against the head).
+
+The **decider** is where that check is authoritative, not the toolkit. Handler-level validation
+alone cannot prevent a fork: two amendments of the same report can both pass their pre-checks
+before either is dispatched. The decider runs against the folded read model _serialized with
+command processing_, so the second one loses deterministically — and it also covers
+`thread.report.post` commands dispatched internally, which never pass through the toolkit at all.
+The toolkit keeps a pre-check purely for error quality: the common case fails with a structured
+error instead of a dispatch failure, and a caller that loses the race gets that same structured
+error because post_report re-reads the chain before surfacing the rejection. Both sides share one
+implementation (`checkReportSupersession`) and one wording, so they cannot disagree.
+
+The reference must also name a report on the _calling thread_. A report is a session's account of
+its own work, so amending another session's report is not a weaker case of amending your own — it
+is refused, with the same message as an unknown id so the denial cannot double as a probe for which
+report ids exist elsewhere. A dangling link would be worse than a rejection: no reader could follow
+it.
+
+A Phoenix-synthesized terminal report is amendable like any other, which is what makes resurrection
+work: a session that was stopped, had a report synthesized for it, then resumed and finished can
+supersede the stand-in with its own account. The superseded row keeps `origin: "system"`, so the
+history still shows that Phoenix stood in.
 
 Both ends travel outward. Envelopes and `read_session` carry `supersedesReportId` /
 `supersededByReportId`; the parent notification for an amending report leads with
