@@ -15,6 +15,7 @@ export interface NormalizedGitHubPullRequestRecord {
   readonly headRefName: string;
   readonly state: "open" | "closed" | "merged";
   readonly updatedAt: Option.Option<DateTime.Utc>;
+  readonly headRefOid?: string | null;
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly headRepositoryOwnerLogin?: string | null;
@@ -28,6 +29,9 @@ const GitHubPullRequestSchema = Schema.Struct({
   headRefName: TrimmedNonEmptyString,
   state: Schema.optional(Schema.NullOr(Schema.String)),
   mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  // Only requested by callers that need to compare a local branch head
+  // against what was merged; optional so every other listing still decodes.
+  headRefOid: Schema.optional(Schema.NullOr(Schema.String)),
   updatedAt: Schema.optional(Schema.OptionFromNullOr(Schema.DateTimeUtcFromString)),
   isCrossRepository: Schema.optional(Schema.Boolean),
   // gh < 2.47 exports headRepository as {id, name} only; nameWithOwner was
@@ -94,6 +98,9 @@ function normalizeGitHubPullRequestRecord(
     headRefName: raw.headRefName,
     state: normalizeGitHubPullRequestState(raw),
     updatedAt: raw.updatedAt ?? Option.none(),
+    ...(trimOptionalString(raw.headRefOid)
+      ? { headRefOid: trimOptionalString(raw.headRefOid) }
+      : {}),
     ...(typeof raw.isCrossRepository === "boolean"
       ? { isCrossRepository: raw.isCrossRepository }
       : {}),

@@ -15,7 +15,9 @@ import {
   type RuntimeMode,
   SESSION_SPAWN_MAX_CHILDREN,
   SESSION_SPAWN_MAX_DEPTH,
+  SessionOrchestrationBranchNotMergedError,
   SessionOrchestrationDeniedError,
+  SessionOrchestrationGitLockError,
   SessionOrchestrationInvalidInputError,
   SessionOrchestrationOperationError,
   SessionOrchestrationReportAlreadySupersededError,
@@ -36,10 +38,12 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
+import * as GitRepositoryLock from "../../../git/GitRepositoryLock.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -53,6 +57,7 @@ import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSes
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
+import * as SourceControlProviderRegistry from "../../../sourceControl/SourceControlProviderRegistry.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { SessionsToolkit } from "./tools.ts";
 
@@ -298,22 +303,92 @@ export function assessWorktreeCleanupRisk(
  * Decide whether settle_session may delete the child's branch.
  *
  * Only the throwaway `t3code/…` branches Phoenix creates for worktree
- * isolation are ours to delete; anything else (a user branch a spawned session
- * was pointed at, a renamed branch) is preserved and reported.
+ * isolation are ours to delete on sight. A branch the user named is deleted
+ * only when the caller asked for it (`cleanupBranch`) *and* the merge proof
+ * below holds; otherwise it is preserved and reported.
  */
-export function decideBranchCleanup(branch: string | null): {
+export function decideBranchCleanup(
+  branch: string | null,
+  options: { readonly cleanupBranch?: boolean | undefined } = {},
+): {
   readonly deleteBranch: boolean;
+  readonly requiresMergeProof: boolean;
   readonly detail: string | null;
 } {
   if (branch === null) {
-    return { deleteBranch: false, detail: null };
+    return { deleteBranch: false, requiresMergeProof: false, detail: null };
   }
-  return isTemporaryWorktreeBranch(branch)
-    ? { deleteBranch: true, detail: null }
-    : {
-        deleteBranch: false,
-        detail: `Kept branch "${branch}": it is not a Phoenix temporary worktree branch, so it may hold work you still want.`,
-      };
+  if (isTemporaryWorktreeBranch(branch)) {
+    return { deleteBranch: true, requiresMergeProof: false, detail: null };
+  }
+  if (options.cleanupBranch === true) {
+    return { deleteBranch: true, requiresMergeProof: true, detail: null };
+  }
+  return {
+    deleteBranch: false,
+    requiresMergeProof: false,
+    detail: `Kept branch "${branch}": it is not a Phoenix temporary worktree branch, so it may hold work you still want. Pass cleanupBranch: true to delete it once Phoenix can prove it was merged.`,
+  };
+}
+
+// A lock file younger than this is assumed to belong to a git process that is
+// still working. Generous: our own git commands time out at 15s, so anything
+// older than a minute outlived every command Phoenix could have started.
+export const GIT_LOCK_STALE_AFTER_MS = 60_000;
+
+/**
+ * Pull the lock file path out of a git failure.
+ *
+ * Both shapes git uses name the file in single quotes:
+ *   "fatal: Unable to create '/repo/.git/index.lock': File exists."
+ *   "error: cannot lock ref 'refs/heads/x': Unable to create '/repo/.git/refs/heads/x.lock': File exists"
+ * Returns null for any other failure, which is what keeps ordinary git errors
+ * out of the lock-specific error path.
+ */
+export function parseGitLockPath(message: string): string | null {
+  if (!/unable to create/i.test(message) || !/file exists/i.test(message)) {
+    return null;
+  }
+  const match = /'([^']*\.lock)'/.exec(message);
+  return match?.[1] ?? null;
+}
+
+/**
+ * Conservative staleness heuristic for a leftover git lock.
+ *
+ * A lock looks abandoned when it is BOTH zero bytes — git writes the new index
+ * or ref into the lock file, so an empty one means the writer died before it
+ * wrote anything — AND older than {@link GIT_LOCK_STALE_AFTER_MS}.
+ *
+ * "Looks" is as far as this goes: nothing here can prove that no live git
+ * process on the machine owns the lock (a developer's shell, a second Phoenix,
+ * an editor's git integration), and deleting a live lock corrupts the index.
+ * So the caller reports the path and the remedy instead of deleting it.
+ */
+export function assessGitLockStaleness(stat: {
+  readonly sizeBytes: number | null;
+  readonly ageMs: number | null;
+}): { readonly appearsStale: boolean; readonly detail: string } {
+  if (stat.ageMs === null) {
+    return {
+      appearsStale: false,
+      detail: "the lock file could not be inspected (it may have just been released)",
+    };
+  }
+  const ageSeconds = Math.round(stat.ageMs / 1000);
+  if (stat.sizeBytes !== 0) {
+    return { appearsStale: false, detail: `it is ${ageSeconds}s old and not empty` };
+  }
+  if (stat.ageMs < GIT_LOCK_STALE_AFTER_MS) {
+    return {
+      appearsStale: false,
+      detail: `it is empty but only ${ageSeconds}s old, so a git process is probably still writing`,
+    };
+  }
+  return {
+    appearsStale: true,
+    detail: `it is empty and ${ageSeconds}s old, which matches a git process that died mid-write`,
+  };
 }
 
 // Exported so tests can drive the real handlers against stub services; the
@@ -328,6 +403,9 @@ export const make = Effect.gen(function* () {
   const reportRepository = yield* ProjectionThreadReportRepository;
   const providerSessionDirectory = yield* ProviderSessionDirectory;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+  const repositoryLock = yield* GitRepositoryLock.GitRepositoryLock;
+  const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -772,13 +850,20 @@ export const make = Effect.gen(function* () {
    * command lands would leave the caller free to delete a worktree the process
    * is still writing to, so this waits for the projected status.
    *
-   * @returns whether the session reached "stopped" before the timeout.
+   * @returns whether the session reached "stopped" before the timeout, plus
+   * what it was still doing if it did not — a settle that leaves a live
+   * process behind has to say so rather than reporting a clean success.
    */
   const stopChildSession = Effect.fn("SessionsToolkit.stopChildSession")(function* (
     child: OrchestrationThreadShell,
   ) {
+    const stopped = (): {
+      readonly stopped: true;
+      readonly lastStatus: null;
+      readonly providerName: null;
+    } => ({ stopped: true, lastStatus: null, providerName: null });
     if (!isSessionAlive(child.session?.status)) {
-      return true;
+      return stopped();
     }
     yield* enqueue(
       engine.dispatch({
@@ -803,17 +888,186 @@ export const make = Effect.gen(function* () {
     );
 
     let waitedMs = 0;
+    let latest = child;
     while (waitedMs < SESSION_STOP_TIMEOUT_MS) {
       const shell = yield* getShell(child.id);
       // A thread that vanished (archived, deleted) has no process left to wait
       // on, and neither does one whose session is already gone.
       if (Option.isNone(shell) || !isSessionAlive(shell.value.session?.status)) {
-        return true;
+        return stopped();
       }
+      latest = shell.value;
       yield* Effect.sleep(Duration.millis(SESSION_STOP_POLL_INTERVAL_MS));
       waitedMs += SESSION_STOP_POLL_INTERVAL_MS;
     }
-    return false;
+    return {
+      stopped: false as const,
+      lastStatus: latest.session?.status ?? null,
+      providerName: latest.session?.providerName ?? null,
+    };
+  });
+
+  /**
+   * Turn a failed git mutation into the most useful error we can give.
+   *
+   * A `git worktree remove` that lost a race for the repository lock — or that
+   * ran after another one was killed mid-write — fails with the lock file's
+   * path, and every later git command on that repository fails the same way
+   * until the file is gone. That deserves the path and the remedy, not a
+   * generic "worktree could not be removed".
+   */
+  const describeGitFailure = Effect.fn("SessionsToolkit.describeGitFailure")(function* (params: {
+    readonly cause: unknown;
+    readonly fallbackMessage: string;
+  }) {
+    const causeMessage =
+      params.cause instanceof Error ? params.cause.message : "unknown git failure";
+    const lockPath = parseGitLockPath(causeMessage);
+    if (lockPath === null) {
+      return new SessionOrchestrationOperationError({
+        message: `${params.fallbackMessage}: ${causeMessage}`,
+      });
+    }
+    const stat = yield* Effect.option(fileSystem.stat(lockPath));
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+    const mtimeMs = Option.isSome(stat)
+      ? Option.map(stat.value.mtime, (mtime) => mtime.getTime())
+      : Option.none<number>();
+    const ageMs = Option.isSome(mtimeMs) ? Math.max(0, nowMs - mtimeMs.value) : null;
+    const staleness = assessGitLockStaleness({
+      sizeBytes: Option.isSome(stat) ? Number(stat.value.size) : null,
+      ageMs,
+    });
+    // Deliberately never removed here: see assessGitLockStaleness.
+    const remedy = staleness.appearsStale
+      ? `Confirm no git process is running against this repository, delete ${lockPath}, then retry settle_session.`
+      : `Wait for the git process holding ${lockPath} to finish, then retry settle_session. If nothing is running, delete that file by hand.`;
+    return new SessionOrchestrationGitLockError({
+      message: `${params.fallbackMessage}: git could not take the repository lock at ${lockPath} (${staleness.detail}).`,
+      lockPath,
+      lockAgeMs: ageMs,
+      appearsStale: staleness.appearsStale,
+      remedy,
+    });
+  });
+
+  /**
+   * Prove a branch Phoenix did not create is safe to delete.
+   *
+   * This repository squash-merges, so a merged branch never becomes an
+   * ancestor of main and `git branch --merged` reports nothing — using it here
+   * would refuse every merged branch and, on a rebase-merge repo, accept
+   * branches that were never merged at all. The proof is commit identity: the
+   * local head, the remote head, and the head commit of a *merged* pull
+   * request must all be the same commit, which also means zero commits ahead.
+   *
+   * The remote-tracking ref is read as last fetched rather than re-fetched: a
+   * stale ref can only cost a false refusal, never a wrong deletion, because a
+   * local branch that equals a merged PR head holds nothing that is not
+   * already published.
+   */
+  const proveBranchMerged = Effect.fn("SessionsToolkit.proveBranchMerged")(function* (params: {
+    readonly workspaceRoot: string;
+    readonly branch: string;
+  }) {
+    const { workspaceRoot, branch } = params;
+    const refuse = (input: {
+      readonly reason: SessionOrchestrationBranchNotMergedError["reason"];
+      readonly message: string;
+      readonly localSha?: string | null;
+      readonly remoteSha?: string | null;
+      readonly mergedPullRequestNumber?: number | null;
+      readonly mergedPullRequestHeadSha?: string | null;
+    }) =>
+      new SessionOrchestrationBranchNotMergedError({
+        message: `Refusing to delete branch "${branch}": ${input.message}`,
+        branch,
+        reason: input.reason,
+        localSha: input.localSha ?? null,
+        remoteSha: input.remoteSha ?? null,
+        mergedPullRequestNumber: input.mergedPullRequestNumber ?? null,
+        mergedPullRequestHeadSha: input.mergedPullRequestHeadSha ?? null,
+      });
+
+    const localSha = yield* gitWorkflow
+      .resolveCommit({ cwd: workspaceRoot, revision: branch })
+      .pipe(
+        Effect.map((resolved) => resolved.commitSha),
+        Effect.mapError(operationError(`Failed to resolve the head of branch "${branch}"`)),
+      );
+
+    const remote = yield* Effect.option(
+      gitWorkflow.resolveRemoteTrackingCommit({
+        cwd: workspaceRoot,
+        refName: branch,
+        fallbackRemoteName: "origin",
+      }),
+    );
+    if (Option.isNone(remote)) {
+      return yield* refuse({
+        reason: "remote_branch_missing",
+        message: "it has no remote-tracking branch, so nothing proves its commits are published.",
+        localSha,
+      });
+    }
+    if (remote.value.commitSha !== localSha) {
+      return yield* refuse({
+        reason: "local_ahead_of_remote",
+        message: `its local head (${localSha}) differs from ${remote.value.remoteRefName} (${remote.value.commitSha}), so it holds commits that are not published.`,
+        localSha,
+        remoteSha: remote.value.commitSha,
+      });
+    }
+
+    const mergedPullRequests = yield* sourceControlProviders.resolve({ cwd: workspaceRoot }).pipe(
+      Effect.flatMap((provider) =>
+        provider.listChangeRequests({
+          cwd: workspaceRoot,
+          headSelector: branch,
+          state: "merged",
+          limit: 10,
+        }),
+      ),
+      Effect.map(Option.some),
+      Effect.catch((cause) =>
+        Effect.logDebug("merged pull request lookup failed", { branch, cause }).pipe(
+          Effect.as(Option.none()),
+        ),
+      ),
+    );
+    if (Option.isNone(mergedPullRequests)) {
+      return yield* refuse({
+        reason: "pull_request_lookup_unavailable",
+        message:
+          "its pull requests could not be read (the host CLI is missing, unauthenticated, or unreachable), so the merge cannot be proven.",
+        localSha,
+        remoteSha: remote.value.commitSha,
+      });
+    }
+    const merged = mergedPullRequests.value.filter((pullRequest) => pullRequest.state === "merged");
+    if (merged.length === 0) {
+      return yield* refuse({
+        reason: "no_merged_pull_request",
+        message: "no merged pull request has it as the head branch.",
+        localSha,
+        remoteSha: remote.value.commitSha,
+      });
+    }
+    const proven = merged.find((pullRequest) => pullRequest.headRefOid === localSha);
+    if (proven === undefined) {
+      const closest = merged[0];
+      return yield* refuse({
+        reason: "pull_request_head_mismatch",
+        message: `its merged pull request${
+          closest === undefined ? "" : ` (#${closest.number})`
+        } was merged from a different commit than the branch head (${localSha}), so the branch has moved since.`,
+        localSha,
+        remoteSha: remote.value.commitSha,
+        mergedPullRequestNumber: closest?.number ?? null,
+        mergedPullRequestHeadSha: closest?.headRefOid ?? null,
+      });
+    }
+    return `merged pull request #${proven.number} (${proven.url}) was merged from ${localSha}, which is also the local head and ${remote.value.remoteRefName}`;
   });
 
   /**
@@ -835,9 +1089,16 @@ export const make = Effect.gen(function* () {
         keptWorktreePath: child.worktreePath,
         keptBranch: child.branch,
         detail,
+        branchProof: null,
       });
 
       if (input.cleanupWorktree !== true) {
+        if (input.cleanupBranch === true) {
+          return yield* new SessionOrchestrationInvalidInputError({
+            message:
+              "cleanupBranch requires cleanupWorktree: true — a branch checked out in a worktree cannot be deleted while that worktree exists.",
+          });
+        }
         return kept(
           child.worktreePath === null
             ? null
@@ -877,40 +1138,63 @@ export const make = Effect.gen(function* () {
         }
       }
 
-      // --force on the git side only covers a dirty tree; the decision to
-      // destroy work was already made (or refused) above.
-      yield* gitWorkflow
-        .removeWorktree({ cwd: workspaceRoot, path: worktreePath, force: true })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new SessionOrchestrationOperationError({
-                message: `Thread ${child.id} was settled, but its worktree at ${worktreePath} could NOT be removed: ${
-                  cause instanceof Error ? cause.message : "unknown git failure"
-                }. The directory is still on disk.`,
-              }),
-          ),
-        );
-
       const branch = child.branch;
-      const branchDecision = decideBranchCleanup(branch);
-      // A failed branch delete leaves a dangling ref, not lost work, so it is
-      // reported rather than failing a settle whose destructive step is done.
-      const branchRemoval: {
-        readonly removedBranch: string | null;
-        readonly detail: string | null;
-      } =
-        branchDecision.deleteBranch && branch !== null
-          ? yield* gitWorkflow.deleteRef({ cwd: workspaceRoot, refName: branch, force: true }).pipe(
-              Effect.as({ removedBranch: branch, detail: null }),
+      const branchDecision = decideBranchCleanup(branch, {
+        cleanupBranch: input.cleanupBranch,
+      });
+      // The proof runs before anything is destroyed: a branch that cannot be
+      // proven merged refuses the whole cleanup with the worktree still on
+      // disk, rather than leaving the caller with half a job done.
+      const branchProof =
+        branchDecision.requiresMergeProof && branch !== null
+          ? yield* proveBranchMerged({ workspaceRoot, branch })
+          : branchDecision.deleteBranch && branch !== null
+            ? "it is a Phoenix temporary worktree branch"
+            : null;
+
+      // One repository, one worktree mutation at a time. Concurrent
+      // `git worktree remove` runs on the same repository contend for
+      // .git/index.lock, and the losers sit there until our command timeout
+      // kills them — which is how eight parallel cleanups all failed while a
+      // single sequential one succeeded. Branch deletion joins the same
+      // critical section because it takes the ref lock in the same repository.
+      const branchRemoval = yield* repositoryLock.withRepositoryLock(
+        workspaceRoot,
+        Effect.gen(function* () {
+          // --force on the git side only covers a dirty tree; the decision to
+          // destroy work was already made (or refused) above.
+          yield* gitWorkflow
+            .removeWorktree({ cwd: workspaceRoot, path: worktreePath, force: true })
+            .pipe(
               Effect.catch((cause) =>
-                Effect.succeed({
-                  removedBranch: null,
-                  detail: `Worktree removed, but branch "${branch}" could not be deleted: ${cause.message}`,
-                }),
+                Effect.flatMap(
+                  describeGitFailure({
+                    cause,
+                    fallbackMessage: `Thread ${child.id} was settled, but its worktree at ${worktreePath} could NOT be removed (the directory is still on disk)`,
+                  }),
+                  Effect.fail,
+                ),
               ),
-            )
-          : { removedBranch: null, detail: branchDecision.detail };
+            );
+
+          // A failed branch delete leaves a dangling ref, not lost work, so it
+          // is reported rather than failing a settle whose destructive step is
+          // already done.
+          return branchDecision.deleteBranch && branch !== null
+            ? yield* gitWorkflow
+                .deleteRef({ cwd: workspaceRoot, refName: branch, force: true })
+                .pipe(
+                  Effect.as({ removedBranch: branch, detail: null as string | null }),
+                  Effect.catch((cause) =>
+                    Effect.succeed({
+                      removedBranch: null,
+                      detail: `Worktree removed, but branch "${branch}" could not be deleted: ${cause.message}`,
+                    }),
+                  ),
+                )
+            : { removedBranch: null, detail: branchDecision.detail };
+        }),
+      );
 
       // read_session must stop advertising a worktree that no longer exists.
       yield* enqueue(
@@ -929,6 +1213,7 @@ export const make = Effect.gen(function* () {
         keptWorktreePath: null,
         keptBranch: branchRemoval.removedBranch === null ? child.branch : null,
         detail: branchRemoval.detail,
+        branchProof: branchRemoval.removedBranch === null ? null : branchProof,
       };
     },
   );
@@ -950,7 +1235,7 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    const stopped = yield* stopChildSession(child);
+    const stop = yield* stopChildSession(child);
 
     // Settle before touching the filesystem: it is the reversible half, and a
     // worktree must never be deleted for a thread that turned out to be
@@ -968,14 +1253,25 @@ export const make = Effect.gen(function* () {
     // Deleting files under a process that refused to die is how a "cleanup"
     // corrupts a live turn. The thread is settled either way; the destructive
     // half is what gets withheld.
-    if (!stopped && input.cleanupWorktree === true) {
+    if (!stop.stopped && input.cleanupWorktree === true) {
       return yield* new SessionOrchestrationOperationError({
         message: `Thread ${child.id} was settled, but its provider session did not reach "stopped" within ${SESSION_STOP_TIMEOUT_MS}ms, so its worktree was left untouched. Retry settle_session once the session has stopped.`,
       });
     }
 
     const worktree = yield* cleanupChildWorktree({ child, input });
-    return { threadId: child.id, settled: true, worktree };
+    // Without cleanup there is nothing to withhold, so the settle succeeds —
+    // but a process that outlived its stop is still holding a provider slot
+    // and possibly writing to the worktree, and a silent success is how that
+    // leak goes unnoticed until the machine is full of orphans.
+    const warning = stop.stopped
+      ? null
+      : `Thread ${child.id} was settled, but its ${
+          stop.providerName ?? "provider"
+        } session did not reach "stopped" within ${SESSION_STOP_TIMEOUT_MS}ms (last seen "${
+          stop.lastStatus ?? "unknown"
+        }"). The process may still be running; check the thread, or call stop_session again.`;
+    return { threadId: child.id, settled: true, worktree, warning };
   });
 
   const pingSession = Effect.fn("SessionsToolkit.pingSession")(function* (input: {
