@@ -368,6 +368,25 @@ export function parseGitLockPath(message: string): string | null {
 const isGitCommandError = Schema.is(GitCommandError);
 
 /**
+ * The linked worktree still holding `branch`, if any.
+ *
+ * `git branch -d` refuses to delete a branch another worktree has checked out;
+ * `git update-ref -d` — the compare-and-swap route — does not, and would leave
+ * that worktree's HEAD pointing at a ref that no longer exists. The repository
+ * lock cannot help: the other worktree may be one a user created by hand, and
+ * nothing in this process knows about it. So the list is consulted directly.
+ *
+ * By the time this runs the child's own worktree has already been removed, so
+ * any hit is a genuine conflict rather than our own directory.
+ */
+export function findConflictingWorktree(
+  worktrees: ReadonlyArray<{ readonly path: string; readonly branch: string }>,
+  branch: string,
+): string | null {
+  return worktrees.find((worktree) => worktree.branch === branch)?.path ?? null;
+}
+
+/**
  * The text a git failure should be diagnosed from.
  *
  * `detail` is a fixed per-call-site string ("git worktree remove failed"), so
@@ -1132,6 +1151,7 @@ export const make = Effect.gen(function* () {
         localSha: input.localSha ?? null,
         remoteSha: input.remoteSha ?? null,
         expectedSha: provenSha,
+        conflictingWorktreePath: null,
       });
 
       const localSha = yield* Effect.option(
@@ -1324,6 +1344,48 @@ export const make = Effect.gen(function* () {
             }
           }
 
+          // The compare-and-swap below goes through plumbing, which does not
+          // refuse a branch another worktree has checked out the way
+          // `git branch -d` does — it would leave that worktree's HEAD
+          // pointing at a deleted ref. Our own worktree is gone by now, so
+          // anything still holding the branch belongs to someone else,
+          // possibly a worktree a user made by hand that this process has
+          // never heard of.
+          if (provenBranch !== null) {
+            const worktrees = yield* Effect.option(
+              gitWorkflow.listWorktrees({ cwd: workspaceRoot }),
+            );
+            if (Option.isNone(worktrees)) {
+              // Fails closed: the guard's whole job is to establish that no
+              // other worktree holds this branch.
+              return keptBranch({
+                refusal: {
+                  branch,
+                  reason: "worktree_check_unavailable",
+                  message: `Worktree removed, but branch "${branch}" was kept: the repository's worktree list could not be read, so Phoenix could not confirm no other worktree still has it checked out.`,
+                  localSha: null,
+                  remoteSha: null,
+                  expectedSha: provenBranch.provenSha,
+                  conflictingWorktreePath: null,
+                },
+              });
+            }
+            const conflict = findConflictingWorktree(worktrees.value, branch);
+            if (conflict !== null) {
+              return keptBranch({
+                refusal: {
+                  branch,
+                  reason: "branch_checked_out_elsewhere",
+                  message: `Worktree removed, but branch "${branch}" was kept: it is still checked out in ${conflict}. Deleting it would leave that worktree on a HEAD pointing at nothing.`,
+                  localSha: null,
+                  remoteSha: null,
+                  expectedSha: provenBranch.provenSha,
+                  conflictingWorktreePath: conflict,
+                },
+              });
+            }
+          }
+
           // The re-check above closes the window against this process; only
           // git can close it against every other one. With a proven head the
           // delete is a compare-and-swap, so a ref moved by a terminal or a
@@ -1372,6 +1434,7 @@ export const make = Effect.gen(function* () {
                           localSha: null,
                           remoteSha: null,
                           expectedSha: provenBranch.provenSha,
+                          conflictingWorktreePath: null,
                         },
                       });
                 }),

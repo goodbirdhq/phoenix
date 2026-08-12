@@ -305,6 +305,20 @@ export class GitVcsDriver extends Context.Service<
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
     ) => Effect.Effect<void, GitCommandError>;
+    /**
+     * Every linked worktree of this repository that has a branch checked out.
+     *
+     * Detached worktrees are omitted (they cannot conflict with a branch
+     * delete), as are prunable ones (their directory is already gone). Callers
+     * that delete refs through plumbing need this: `git update-ref` will
+     * happily delete a branch another worktree is sitting on.
+     */
+    readonly listWorktrees: (input: {
+      readonly cwd: string;
+    }) => Effect.Effect<
+      ReadonlyArray<{ readonly path: string; readonly branch: string }>,
+      GitCommandError
+    >;
     readonly renameBranch: (
       input: GitRenameBranchInput,
     ) => Effect.Effect<GitRenameBranchResult, GitCommandError>;

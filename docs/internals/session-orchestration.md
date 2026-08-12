@@ -254,9 +254,11 @@ leaves the driver and the structured error below can only ever fire in a test. T
 redacted before it is attached, and redacted before it is truncated so nothing survives on a
 boundary: git echoes remote URLs freely and a remote can carry its own credentials
 (`https://x-access-token:ghs_…@host/o/r`), so userinfo, query strings, fragments, and known token
-shapes are stripped while scheme, host, and path — the diagnostic value — stay. Argv is not treated
-as a secret channel here, which is why `execute` takes `stdin` for payloads that must never appear
-in a command line. The excerpt is
+shapes are stripped while scheme, host, and path — the diagnostic value — stay. Credentialed URLs
+do reach argv (clone, fetch, and push take the remote as an argument), which is why redaction is
+written against URL shapes rather than a list of "safe" commands; argv itself is never attached to
+an error, only `argumentCount`. Bare secrets still belong on `stdin`, which `execute` takes for
+exactly that. The excerpt is
 matched on the lock artifact (a `.lock` path) rather than on git's English, which varies by
 version, command, and locale. When a git failure names a lock path, `settle_session` stats it and
 answers with `SessionOrchestrationGitLockError`: the path,
@@ -295,9 +297,16 @@ a terminal, an editor, or a second Phoenix, so any check made before the delete 
 time the delete runs. The delete itself therefore carries the proven commit:
 `git update-ref -d refs/heads/<branch> <proven-sha>` is a compare-and-swap under git's own ref lock,
 and git refuses if the ref moved. That is the only layer that can settle the race, which is why the
-driver's `deleteRef` takes an `expectedSha` at all. Its one caveat is that plumbing does not refuse
-a branch checked out in another worktree the way `git branch -d` does — acceptable here because the
-call site removes the worktree first, inside the same lock.
+driver's `deleteRef` takes an `expectedSha` at all.
+
+Plumbing gives up one protection in exchange: `git update-ref -d` does not refuse a branch another
+worktree has checked out, and deleting it would leave that worktree's HEAD pointing at nothing.
+Removing our own worktree first is not enough, because the other one may be a worktree a user
+created by hand that this process has never heard of and the repository lock does not cover. So
+before the compare-and-swap, inside the critical section, `git worktree list --porcelain` is
+consulted and a branch still held anywhere is kept and reported. An unreadable worktree list is
+treated the same way: the guard exists to establish that nothing else holds the branch, so failing
+to establish it fails closed.
 
 Both refusals are structured per resource rather than folded into prose: a settle that removed the
 worktree but kept the branch reports `worktree.branchRefusal` (branch, reason, the SHAs, and the

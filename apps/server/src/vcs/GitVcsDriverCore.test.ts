@@ -1543,6 +1543,65 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
     );
   });
 
+  describe("worktree enumeration", () => {
+    it.effect("reports a linked worktree's branch, and stops once it is removed", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-linked-"), "linked");
+
+        yield* git(cwd, ["worktree", "add", "-b", "feature/held", worktreePath]);
+
+        const held = yield* driver.listWorktrees({ cwd });
+        assert.include(
+          held.map((worktree) => worktree.branch),
+          "feature/held",
+        );
+
+        yield* driver.removeWorktree({ cwd, path: worktreePath });
+
+        const released = yield* driver.listWorktrees({ cwd });
+        assert.notInclude(
+          released.map((worktree) => worktree.branch),
+          "feature/held",
+        );
+      }),
+    );
+
+    it.effect("shows why the caller must check: update-ref deletes a checked-out branch", () =>
+      Effect.gen(function* () {
+        // The hazard in one test. `git branch -d` refuses this; the plumbing
+        // route does not, and the linked worktree is left on a HEAD pointing
+        // at a ref that no longer exists. Hence the guard at the call site.
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-dangling-"), "linked");
+
+        yield* git(cwd, ["worktree", "add", "-b", "feature/dangling", worktreePath]);
+        const head = yield* driver.resolveCommit({ cwd, revision: "feature/dangling" });
+
+        // Porcelain protects the worktree...
+        const refused = yield* Effect.flip(
+          driver.deleteRef({ cwd, refName: "feature/dangling", force: true }),
+        );
+        assert.strictEqual(refused._tag, "GitCommandError");
+
+        // ...plumbing does not.
+        yield* driver.deleteRef({
+          cwd,
+          refName: "feature/dangling",
+          expectedSha: head.commitSha,
+        });
+        const branches = yield* driver.listLocalBranchNames(cwd);
+        assert.notInclude(branches, "feature/dangling");
+      }),
+    );
+  });
+
   describe("remote operations", () => {
     it.effect("ensureRemote reuses an existing remote across ssh/https transport variants", () =>
       Effect.gen(function* () {

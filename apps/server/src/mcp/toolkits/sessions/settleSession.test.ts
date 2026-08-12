@@ -112,6 +112,11 @@ interface HarnessOptions {
    */
   readonly localShaAfterLock?: string;
   readonly remoteShaAfterLock?: string | null;
+  /**
+   * Real git implementations for specific calls, so a case can run against an
+   * actual repository while the rest of the graph stays stubbed.
+   */
+  readonly gitOverrides?: Record<string, unknown>;
 }
 
 const makeHarness = (options: HarnessOptions) => {
@@ -257,6 +262,8 @@ const makeHarness = (options: HarnessOptions) => {
           ? Effect.fail(gitFailure("unknown revision"))
           : Effect.succeed({ commitSha: remoteSha, remoteRefName: `origin/${input.refName}` });
       }),
+    listWorktrees: () => Effect.sync(() => []),
+    ...(options.gitOverrides ?? {}),
   } as unknown as GitWorkflowService.GitWorkflowService["Service"];
 
   const sourceControlProviders = {
@@ -769,6 +776,97 @@ it.effect("settle_session deletes a proven branch that stayed put while queued",
     const recheckIndex = harness.calls.lastIndexOf("git:resolveCommit");
     expect(recheckIndex).toBeGreaterThan(removalIndex);
     expect(recheckIndex).toBeLessThan(deleteIndex);
+  }),
+);
+
+it.effect(
+  "settle_session keeps a branch a real linked worktree still has checked out, then deletes it once freed",
+  () =>
+    Effect.gen(function* () {
+      // Against a real repository with a real second worktree: the one thing
+      // the compare-and-swap cannot protect, because plumbing will happily
+      // delete a branch someone else is sitting on.
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "settle-worktree-" });
+
+      yield* driver.initRepo({ cwd });
+      const run = (args: ReadonlyArray<string>) =>
+        driver.execute({ operation: "settleSession.test.git", cwd, args, timeoutMs: 10_000 });
+      yield* run(["config", "user.email", "test@test.com"]);
+      yield* run(["config", "user.name", "Test"]);
+      yield* fileSystem.writeFileString(path.join(cwd, "README.md"), "# test\n");
+      yield* run(["add", "."]);
+      yield* run(["commit", "-m", "initial commit"]);
+
+      const linkedPath = path.join(
+        yield* fileSystem.makeTempDirectoryScoped({ prefix: "settle-linked-" }),
+        "linked",
+      );
+      yield* run(["worktree", "add", "-b", "feature/held", linkedPath]);
+      const head = yield* driver.resolveCommit({ cwd, revision: "feature/held" });
+
+      const harnessOptions = {
+        sessionStatus: "stopped" as const,
+        branch: "feature/held",
+        localSha: head.commitSha,
+        remoteSha: head.commitSha,
+        mergedPullRequests: [
+          mergedPullRequest({ headRefName: "feature/held", headRefOid: head.commitSha }),
+        ],
+        gitOverrides: {
+          listWorktrees: () => driver.listWorktrees({ cwd }),
+          deleteRef: (input: { readonly refName: string; readonly expectedSha?: string }) =>
+            driver.deleteRef({ ...input, cwd }),
+        },
+      };
+
+      const refused = yield* makeHarness(harnessOptions).settle({
+        cleanupWorktree: true,
+        cleanupBranch: true,
+      });
+
+      expect(refused.worktree.removedBranch).toBeNull();
+      expect(refused.worktree.branchRefusal).toMatchObject({
+        branch: "feature/held",
+        reason: "branch_checked_out_elsewhere",
+      });
+      expect(refused.worktree.branchRefusal?.conflictingWorktreePath ?? "").toContain("linked");
+      // The branch — and the other worktree's HEAD — survive intact.
+      expect(yield* driver.listLocalBranchNames(cwd)).toContain("feature/held");
+
+      yield* driver.removeWorktree({ cwd, path: linkedPath });
+
+      const deleted = yield* makeHarness(harnessOptions).settle({
+        cleanupWorktree: true,
+        cleanupBranch: true,
+      });
+
+      expect(deleted.worktree.removedBranch).toBe("feature/held");
+      expect(deleted.worktree.branchRefusal).toBeNull();
+      expect(yield* driver.listLocalBranchNames(cwd)).not.toContain("feature/held");
+    }).pipe(Effect.provide(GitDriverLayer)),
+);
+
+it.effect("settle_session keeps a branch when the worktree list cannot be read", () =>
+  Effect.gen(function* () {
+    // Fails closed: an unreadable worktree list is not evidence that no other
+    // worktree holds the branch.
+    const harness = makeHarness({
+      sessionStatus: "stopped",
+      branch: "feature/user-work",
+      mergedPullRequests: [mergedPullRequest()],
+      gitOverrides: {
+        listWorktrees: () => Effect.fail(gitFailure("git worktree list failed")),
+      },
+    });
+
+    const result = yield* harness.settle({ cleanupWorktree: true, cleanupBranch: true });
+
+    expect(result.worktree.removedBranch).toBeNull();
+    expect(result.worktree.branchRefusal).toMatchObject({ reason: "worktree_check_unavailable" });
+    expect(harness.calls).not.toContain("git:deleteRef");
   }),
 );
 

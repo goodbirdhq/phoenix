@@ -399,9 +399,16 @@ const TOKEN_PATTERN = /\b(gh[pousr]_|github_pat_|glpat-|sk-)[A-Za-z0-9_-]{8,}/g;
  * query strings, and fragments go; scheme, host, and path stay, because
  * "which remote" is the diagnostic value.
  *
- * Note the scope: argv is deliberately not treated as a secret channel in this
- * driver (`execute` takes `stdin` for payloads that must never appear in
- * argv), so an argument git happens to echo back is not redacted here.
+ * Note the scope. Credentialed URLs *do* reach argv — clone, fetch, and push
+ * take the remote as an argument — which is why redaction is written against
+ * URL shapes rather than against a list of "safe" commands. What argv never
+ * needs to carry is a bare secret with no URL around it: `execute` takes
+ * `stdin` for those. So a URL git echoes back is redacted here, while a bare
+ * argument value it echoes (an unknown option, say) is not, and callers must
+ * keep passing opaque secrets over stdin rather than on a command line.
+ *
+ * argv itself is never attached to an error — only `argumentCount` — so this
+ * covers the one channel that carries git's own output outward.
  */
 export function redactGitOutput(text: string): string {
   return text
@@ -3053,6 +3060,22 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     });
   });
 
+  const listWorktrees: GitVcsDriver.GitVcsDriver["Service"]["listWorktrees"] = Effect.fn(
+    "listWorktrees",
+  )(function* (input) {
+    // -z, because a worktree path may contain newlines.
+    const result = yield* executeGit(
+      "GitVcsDriver.listWorktrees",
+      input.cwd,
+      ["worktree", "list", "--porcelain", "-z"],
+      { timeoutMs: 10_000, fallbackErrorDetail: "git worktree list failed" },
+    );
+    return [...parseWorktreeBranchPaths(result.stdout)].map(([branch, worktreePath]) => ({
+      branch,
+      path: path.normalize(path.resolve(worktreePath)),
+    }));
+  });
+
   const renameBranch: GitVcsDriver.GitVcsDriver["Service"]["renameBranch"] = Effect.fn(
     "renameBranch",
   )(function* (input) {
@@ -3287,6 +3310,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       withListRefsInvalidation(input.cwd, fetchRemoteTrackingBranch(input)),
     setBranchUpstream: (input) => withListRefsInvalidation(input.cwd, setBranchUpstream(input)),
     removeWorktree: (input) => withListRefsInvalidation(input.cwd, removeWorktree(input)),
+    listWorktrees,
     renameBranch: (input) => withListRefsInvalidation(input.cwd, renameBranch(input)),
     createRef: (input) => withListRefsInvalidation(input.cwd, createRef(input)),
     deleteRef: (input) => withListRefsInvalidation(input.cwd, deleteRef(input)),

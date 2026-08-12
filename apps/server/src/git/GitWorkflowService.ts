@@ -92,6 +92,14 @@ export class GitWorkflowService extends Context.Service<
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
     ) => Effect.Effect<void, GitCommandError>;
+    // Linked worktrees with a branch checked out. Callers deleting refs
+    // through plumbing need this; see GitVcsDriver.listWorktrees.
+    readonly listWorktrees: (input: {
+      readonly cwd: string;
+    }) => Effect.Effect<
+      ReadonlyArray<{ readonly path: string; readonly branch: string }>,
+      GitCommandError
+    >;
     readonly createRef: (
       input: VcsCreateRefInput,
     ) => Effect.Effect<VcsCreateRefResult, GitCommandError>;
@@ -342,6 +350,10 @@ export const make = Effect.gen(function* () {
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
         Effect.andThen(git.removeWorktree(input)),
+      ),
+    listWorktrees: (input) =>
+      ensureGitCommand("GitWorkflowService.listWorktrees", input.cwd).pipe(
+        Effect.andThen(git.listWorktrees(input)),
       ),
     createRef: (input) =>
       ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(

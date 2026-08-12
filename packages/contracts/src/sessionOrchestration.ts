@@ -524,6 +524,12 @@ export const SessionOrchestrationBranchNotMergedReason = Schema.Literals([
   // The branch moved between the proof and the delete — either caught by the
   // re-check inside the repository lock, or by git's own compare-and-swap.
   "branch_moved_since_proof",
+  // Another linked worktree still has the branch checked out; deleting it
+  // would leave that worktree on a HEAD pointing at nothing.
+  "branch_checked_out_elsewhere",
+  // The worktree list could not be read, so "no other worktree holds this
+  // branch" could not be established. Deliberately fails closed.
+  "worktree_check_unavailable",
 ]);
 export type SessionOrchestrationBranchNotMergedReason =
   typeof SessionOrchestrationBranchNotMergedReason.Type;
@@ -543,6 +549,8 @@ export const SettleSessionBranchRefusal = Schema.Struct({
   remoteSha: Schema.NullOr(TrimmedNonEmptyString),
   // What the proof expected the head to be, when one was taken.
   expectedSha: Schema.NullOr(TrimmedNonEmptyString),
+  // The linked worktree still holding the branch, when that is why it stayed.
+  conflictingWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type SettleSessionBranchRefusal = typeof SettleSessionBranchRefusal.Type;
 
