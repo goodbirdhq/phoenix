@@ -267,15 +267,17 @@ export const SessionReportFinding = Schema.Struct({
 export type SessionReportFinding = typeof SessionReportFinding.Type;
 
 export const SessionReportValidation = Schema.Struct({
-  performed: Schema.Array(Schema.String.check(Schema.isMaxLength(512))),
-  gaps: Schema.Array(Schema.String.check(Schema.isMaxLength(512))),
+  performed: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).check(
+    Schema.isMaxLength(50),
+  ),
+  gaps: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).check(Schema.isMaxLength(50)),
 });
 export type SessionReportValidation = typeof SessionReportValidation.Type;
 
 // Optional machine-readable fields alongside the markdown summary. All
 // additive so pre-feature reports keep decoding without them.
 const SessionReportStructuredFields = {
-  findings: Schema.optional(Schema.Array(SessionReportFinding)),
+  findings: Schema.optional(Schema.Array(SessionReportFinding).check(Schema.isMaxLength(100))),
   validation: Schema.optional(SessionReportValidation),
   recommendation: Schema.optional(Schema.String.check(Schema.isMaxLength(1_024))),
   completionPercent: Schema.optional(
@@ -283,10 +285,39 @@ const SessionReportStructuredFields = {
   ),
 };
 
+const MAX_STRUCTURED_REPORT_JSON_BYTES = 32_768;
+
+interface StructuredReportSizePayload {
+  readonly findings?: ReadonlyArray<unknown> | undefined;
+  readonly validation?: unknown;
+  readonly recommendation?: string | undefined;
+  readonly completionPercent?: number | undefined;
+}
+
+// Defense in depth alongside the per-array/per-field bounds above: caps the
+// combined encoded size of the optional structured fields so a report stays
+// small enough to return wholesale into a parent session's context via
+// read_session.
+export const structuredReportFieldsWithinSizeCap = Schema.makeFilter<StructuredReportSizePayload>(
+  ({ findings, validation, recommendation, completionPercent }) => {
+    const encodedLength = JSON.stringify({
+      findings,
+      validation,
+      recommendation,
+      completionPercent,
+    }).length;
+    return encodedLength <= MAX_STRUCTURED_REPORT_JSON_BYTES
+      ? undefined
+      : `Combined findings/validation/recommendation/completionPercent exceed ${MAX_STRUCTURED_REPORT_JSON_BYTES} bytes when JSON-encoded.`;
+  },
+);
+
 // Same fields, grouped as their own schema for persistence layers that store
 // them together (e.g. as one JSON column) separately from the flat fields
 // above.
-export const SessionReportStructured = Schema.Struct(SessionReportStructuredFields);
+export const SessionReportStructured = Schema.Struct(SessionReportStructuredFields).check(
+  structuredReportFieldsWithinSizeCap,
+);
 export type SessionReportStructured = typeof SessionReportStructured.Type;
 
 export const SessionReport = Schema.Struct({
@@ -301,7 +332,7 @@ export const SessionReport = Schema.Struct({
   ),
   ...SessionReportStructuredFields,
   createdAt: IsoDateTime,
-});
+}).check(structuredReportFieldsWithinSizeCap);
 export type SessionReport = typeof SessionReport.Type;
 
 export const OrchestrationMessage = Schema.Struct({
@@ -1113,7 +1144,7 @@ const ThreadReportPostCommand = Schema.Struct({
   artifacts: Schema.Array(SessionReportArtifact),
   ...SessionReportStructuredFields,
   createdAt: IsoDateTime,
-});
+}).check(structuredReportFieldsWithinSizeCap);
 
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,

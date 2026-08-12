@@ -56,3 +56,43 @@ it.effect("post_report rejects completionPercent above 100", () =>
     completionPercent: 101,
   }).pipe(Effect.flip),
 );
+
+it.effect("post_report rejects more than 100 findings", () =>
+  decodePostReportInput({
+    status: "success",
+    title: "Done",
+    summary: "All done.",
+    findings: Array.from({ length: 101 }, (_unused, index) => ({
+      title: `Finding ${index}`,
+      severity: "info" as const,
+    })),
+  }).pipe(Effect.flip),
+);
+
+it.effect("post_report rejects more than 50 validation.performed entries", () =>
+  decodePostReportInput({
+    status: "success",
+    title: "Done",
+    summary: "All done.",
+    validation: {
+      performed: Array.from({ length: 51 }, (_unused, index) => `Check ${index}`),
+      gaps: [],
+    },
+  }).pipe(Effect.flip),
+);
+
+it.effect("post_report rejects a combined structured payload over the size cap", () =>
+  decodePostReportInput({
+    status: "success",
+    title: "Done",
+    summary: "All done.",
+    // 100 findings x ~4.3KB details each comfortably clears the 32KB cap
+    // while staying within the per-array (100) and per-field (4,096 char
+    // detail) bounds individually.
+    findings: Array.from({ length: 100 }, (_unused, index) => ({
+      title: `Finding ${index}`,
+      severity: "info" as const,
+      detail: "x".repeat(4_096),
+    })),
+  }).pipe(Effect.flip),
+);

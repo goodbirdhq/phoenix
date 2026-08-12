@@ -13,7 +13,6 @@ import {
   OrchestrationThreadDetailSnapshot,
   ProjectScript,
   SessionReportArtifact,
-  SessionReportStructured,
   TurnId,
   type OrchestrationCheckpointSummary,
   type OrchestrationLatestTurn,
@@ -45,6 +44,7 @@ import {
   toPersistenceSqlError,
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
+import { decodeStructuredReportFields } from "../../persistence/decodeStructuredReportFields.ts";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
@@ -92,8 +92,10 @@ const ProjectionThreadReportDbRowSchema = ProjectionThreadReport.mapFields((fiel
     {
       artifacts: Schema.fromJsonString(Schema.Array(SessionReportArtifact)),
       // Optional findings/validation/recommendation/completionPercent,
-      // stored together as one JSON column.
-      structured: Schema.NullOr(Schema.fromJsonString(SessionReportStructured)),
+      // stored together as one JSON column. Decoded leniently (see
+      // decodeStructuredReportFields) rather than through the schema, so a
+      // malformed blob can never fail the whole row.
+      structuredJson: Schema.NullOr(Schema.String),
     },
   ),
 );
@@ -363,7 +365,7 @@ function mapReportRow(
     title: row.title,
     summary: row.summary,
     artifacts: row.artifacts,
-    ...row.structured,
+    ...decodeStructuredReportFields(row.structuredJson),
     createdAt: row.createdAt,
   };
 }
@@ -600,7 +602,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           summary,
           artifacts_json AS "artifacts",
-          structured_json AS "structured",
+          structured_json AS "structuredJson",
           created_at AS "createdAt"
         FROM projection_thread_reports
         ORDER BY thread_id ASC, created_at ASC, report_id ASC
@@ -1065,7 +1067,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           summary,
           artifacts_json AS "artifacts",
-          structured_json AS "structured",
+          structured_json AS "structuredJson",
           created_at AS "createdAt"
         FROM projection_thread_reports
         WHERE thread_id = ${threadId}

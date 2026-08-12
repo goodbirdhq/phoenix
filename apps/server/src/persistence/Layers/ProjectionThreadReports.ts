@@ -2,7 +2,6 @@ import {
   IsoDateTime,
   SessionReportArtifact,
   SessionReportStatus,
-  SessionReportStructured,
   ThreadId,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
@@ -13,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
+import { decodeStructuredReportFields } from "../decodeStructuredReportFields.ts";
 
 import {
   DeleteProjectionThreadReportsInput,
@@ -30,8 +30,10 @@ const ProjectionThreadReportDbRowSchema = Schema.Struct({
   summary: Schema.String,
   artifacts: Schema.fromJsonString(Schema.Array(SessionReportArtifact)),
   // Optional findings/validation/recommendation/completionPercent, stored
-  // together as one JSON column.
-  structured: Schema.NullOr(Schema.fromJsonString(SessionReportStructured)),
+  // together as one JSON column. Decoded leniently (see
+  // decodeStructuredReportFields) rather than through the schema, so a
+  // malformed blob can never fail the whole row.
+  structuredJson: Schema.NullOr(Schema.String),
   createdAt: IsoDateTime,
 });
 
@@ -45,7 +47,7 @@ function mapReportRow(
     title: row.title,
     summary: row.summary,
     artifacts: row.artifacts,
-    ...row.structured,
+    ...decodeStructuredReportFields(row.structuredJson),
     createdAt: row.createdAt,
   };
 }
@@ -55,7 +57,15 @@ function encodeStructured(
     ProjectionThreadReport,
     "findings" | "validation" | "recommendation" | "completionPercent"
   >,
-): string {
+): string | null {
+  if (
+    report.findings === undefined &&
+    report.validation === undefined &&
+    report.recommendation === undefined &&
+    report.completionPercent === undefined
+  ) {
+    return null;
+  }
   return JSON.stringify({
     ...(report.findings !== undefined ? { findings: report.findings } : {}),
     ...(report.validation !== undefined ? { validation: report.validation } : {}),
@@ -122,7 +132,7 @@ const makeProjectionThreadReportRepository = Effect.gen(function* () {
         title,
         summary,
         artifacts_json AS "artifacts",
-        structured_json AS "structured",
+        structured_json AS "structuredJson",
         created_at AS "createdAt"
       FROM projection_thread_reports
       WHERE thread_id = ${threadId}
