@@ -320,6 +320,13 @@ export const SessionReportStructured = Schema.Struct(SessionReportStructuredFiel
 );
 export type SessionReportStructured = typeof SessionReportStructured.Type;
 
+// Who wrote the report. "agent" is a session calling post_report itself;
+// "system" is Phoenix synthesizing a terminal report for a session that died
+// or was stopped before it could report, so the spawner is never left with
+// silence. Readers must be able to tell the two apart.
+export const SessionReportOrigin = Schema.Literals(["agent", "system"]);
+export type SessionReportOrigin = typeof SessionReportOrigin.Type;
+
 export const SessionReport = Schema.Struct({
   reportId: TrimmedNonEmptyString,
   threadId: ThreadId,
@@ -331,6 +338,9 @@ export const SessionReport = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   ...SessionReportStructuredFields,
+  // Defaulted so reports stored before synthesized reports existed — all of
+  // them agent-posted — keep decoding.
+  origin: SessionReportOrigin.pipe(Schema.withDecodingDefault(Effect.succeed("agent" as const))),
   createdAt: IsoDateTime,
 }).check(structuredReportFieldsWithinSizeCap);
 export type SessionReport = typeof SessionReport.Type;
@@ -1190,7 +1200,8 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
 });
 
-// Posted from the sessions MCP toolkit on behalf of the thread's own agent;
+// Posted from the sessions MCP toolkit on behalf of the thread's own agent,
+// or from SessionSpawnReactor when a session terminates without reporting;
 // never dispatchable by clients.
 const ThreadReportPostCommand = Schema.Struct({
   type: Schema.Literal("thread.report.post"),
@@ -1202,6 +1213,9 @@ const ThreadReportPostCommand = Schema.Struct({
   summary: Schema.String.check(Schema.isMaxLength(16_384)),
   artifacts: Schema.Array(SessionReportArtifact),
   ...SessionReportStructuredFields,
+  // Omitted by the post_report tool; only the reactor's synthesized terminal
+  // reports set "system".
+  origin: Schema.optional(SessionReportOrigin),
   createdAt: IsoDateTime,
 }).check(structuredReportFieldsWithinSizeCap);
 

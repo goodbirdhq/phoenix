@@ -311,6 +311,12 @@ export class GitVcsDriver extends Context.Service<
     readonly createRef: (
       input: VcsCreateRefInput,
     ) => Effect.Effect<VcsCreateRefResult, GitCommandError>;
+    readonly deleteRef: (input: {
+      readonly cwd: string;
+      readonly refName: string;
+      // Delete a branch whose commits are not merged anywhere else.
+      readonly force?: boolean | undefined;
+    }) => Effect.Effect<void, GitCommandError>;
     readonly switchRef: (
       input: VcsSwitchRefInput,
     ) => Effect.Effect<VcsSwitchRefResult, GitCommandError>;

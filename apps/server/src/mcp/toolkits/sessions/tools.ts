@@ -9,6 +9,8 @@ import {
   SESSION_SPAWN_MAX_CHILDREN,
   SessionOrchestrationError,
   SessionReport,
+  SettleSessionInput,
+  SettleSessionResult,
   SpawnSessionInput,
   SpawnSessionResult,
   StopSessionInput,
@@ -84,6 +86,19 @@ export const StopSessionTool = Tool.make("stop_session", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true);
 
+export const SettleSessionTool = Tool.make("settle_session", {
+  description:
+    "Mark a session this session spawned as finished, so it stops showing up as live work. The child must not be running — call stop_session first if it is. Optionally pass cleanupWorktree: true to PERMANENTLY DELETE the child's git worktree directory and its temporary Phoenix branch; this cannot be undone, and is refused (with the specific dirty files and unpushed commit count) when the worktree still holds work that is not committed and pushed, unless you also pass force: true. The result always lists exactly what was removed and what was kept.",
+  parameters: SettleSessionInput,
+  success: SettleSessionResult,
+  failure: SessionOrchestrationError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Settle spawned session")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, true);
+
 export const PostReportTool = Tool.make("post_report", {
   description:
     "Post a completion report for THIS session's work: status, a concise markdown summary, and any artifacts (files, branches, PR URLs). If another session spawned this one, the report is delivered to it automatically; the user also sees the report as a card in this thread. Call once when your assigned work is finished (or clearly failed). Optionally include machine-readable fields: findings (array of {title, severity: info|low|medium|high|critical, detail?}), validation ({performed: string[], gaps: string[]}), recommendation (short string), and completionPercent (0-100).",
@@ -103,5 +118,6 @@ export const SessionsToolkit = Toolkit.make(
   SendToSessionTool,
   ReadSessionTool,
   StopSessionTool,
+  SettleSessionTool,
   PostReportTool,
 );

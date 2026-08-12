@@ -20,9 +20,18 @@ Every session has tools for orchestration alongside its other Phoenix tools:
 - **Post a report** — when a spawned session finishes, it posts a completion report: a status, a
   summary, and any artifacts (files, branches, PR links). The report shows as a card in the thread,
   and the session that spawned it is woken automatically with the result — no polling.
+- **Settle a session** — once the spawning session is done with a child, it marks it settled so the
+  thread stops counting as live work. It can also ask Phoenix to delete the child's worktree at the
+  same time, which is the only thing that reclaims those directories.
 
-If a spawned session hits a provider error instead of finishing, the spawning session is notified
-of that too.
+If a spawned session is stopped or hits a provider error before it reports, Phoenix writes the
+report for it: why it ended, what it was last doing, and a warning that the work is probably
+unfinished. Those reports are labelled as Phoenix-generated, so you and the spawning session can
+always tell them apart from a report the agent actually wrote.
+
+Deleting a worktree is permanent. Phoenix refuses if the worktree still holds uncommitted changes
+or commits that exist nowhere else, and tells the session exactly what is at risk; the session has
+to insist before anything is lost. Branches Phoenix did not create are never deleted.
 
 ## Limits
 

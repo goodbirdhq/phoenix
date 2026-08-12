@@ -1,6 +1,12 @@
 import { Schema } from "effect";
 
-import { IsoDateTime, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ProviderOptionDescriptor, ProviderOptionSelection } from "./model.ts";
 import {
   ModelSelection,
@@ -158,6 +164,8 @@ export const ReadSessionResult = Schema.Struct({
   messages: Schema.Array(ReadSessionMessage),
   // Present when the spawned session has a git worktree. branch and dirty use
   // cached status; sha is resolved live so callers can verify the revision.
+  // A null/absent worktreePath after settle_session cleaned up means the
+  // directory is gone: nothing else in the server reclaims these.
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   sha: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -181,6 +189,38 @@ export const StopSessionResult = Schema.Struct({
   status: Schema.Literal("stop-requested"),
 });
 export type StopSessionResult = typeof StopSessionResult.Type;
+
+export const SettleSessionInput = Schema.Struct({
+  threadId: ThreadId,
+  // Permanently delete the child's git worktree and its temporary branch.
+  // Refused when the worktree holds work that is not committed and pushed,
+  // unless `force` is also set.
+  cleanupWorktree: Schema.optional(Schema.Boolean),
+  // Delete the worktree even though uncommitted or unpushed work would be
+  // lost. Only meaningful together with `cleanupWorktree`.
+  force: Schema.optional(Schema.Boolean),
+});
+export type SettleSessionInput = typeof SettleSessionInput.Type;
+
+// Exactly what settle_session did to the child's worktree, so the caller can
+// always tell what was destroyed and what survived.
+export const SettleSessionWorktreeOutcome = Schema.Struct({
+  removedWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  removedBranch: Schema.NullOr(TrimmedNonEmptyString),
+  keptWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  keptBranch: Schema.NullOr(TrimmedNonEmptyString),
+  // Why anything was kept: cleanup not requested, no worktree, or a branch
+  // Phoenix does not own.
+  detail: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type SettleSessionWorktreeOutcome = typeof SettleSessionWorktreeOutcome.Type;
+
+export const SettleSessionResult = Schema.Struct({
+  threadId: ThreadId,
+  settled: Schema.Boolean,
+  worktree: SettleSessionWorktreeOutcome,
+});
+export type SettleSessionResult = typeof SettleSessionResult.Type;
 
 export const PostReportInput = Schema.Struct({
   status: SessionReportStatus,
@@ -213,7 +253,30 @@ export class SessionOrchestrationDeniedError extends Schema.TaggedErrorClass<Ses
       "spawn_limit_reached",
       "spawn_depth_exceeded",
       "runtime_mode_exceeds_parent",
+      "session_still_running",
     ]),
+  },
+) {}
+
+/**
+ * settle_session refused to delete a worktree that still holds work.
+ *
+ * Structured rather than a message so the caller can decide what to do with
+ * the specific files and commits at risk instead of parsing prose.
+ */
+export class SessionOrchestrationWorktreeNotEmptyError extends Schema.TaggedErrorClass<SessionOrchestrationWorktreeNotEmptyError>()(
+  "SessionOrchestrationWorktreeNotEmptyError",
+  {
+    ...SessionOrchestrationErrorFields,
+    worktreePath: TrimmedNonEmptyString,
+    branch: Schema.NullOr(TrimmedNonEmptyString),
+    // Paths with uncommitted changes, capped so a huge working tree cannot
+    // blow up the tool result.
+    dirtyFiles: Schema.Array(TrimmedNonEmptyString),
+    dirtyFileCount: NonNegativeInt,
+    // Commits on the child's branch that exist nowhere else.
+    unpushedCommitCount: NonNegativeInt,
+    hasUpstream: Schema.Boolean,
   },
 ) {}
 
@@ -237,5 +300,6 @@ export const SessionOrchestrationError = Schema.Union([
   SessionOrchestrationInvalidInputError,
   SessionOrchestrationUnavailableError,
   SessionOrchestrationOperationError,
+  SessionOrchestrationWorktreeNotEmptyError,
 ]);
 export type SessionOrchestrationError = typeof SessionOrchestrationError.Type;

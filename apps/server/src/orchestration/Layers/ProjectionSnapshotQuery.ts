@@ -88,7 +88,15 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadReportDbRowSchema = ProjectionThreadReport.mapFields((fields) =>
   Struct.assign(
-    Struct.pick(fields, ["reportId", "threadId", "status", "title", "summary", "createdAt"]),
+    Struct.pick(fields, [
+      "reportId",
+      "threadId",
+      "status",
+      "title",
+      "summary",
+      "origin",
+      "createdAt",
+    ]),
     {
       artifacts: Schema.fromJsonString(Schema.Array(SessionReportArtifact)),
       // Optional findings/validation/recommendation/completionPercent,
@@ -381,6 +389,7 @@ function mapReportRow(
     summary: row.summary,
     artifacts: row.artifacts,
     ...decodeStructuredReportFields(row.structuredJson),
+    origin: row.origin,
     createdAt: row.createdAt,
   };
 }
@@ -618,6 +627,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           summary,
           artifacts_json AS "artifacts",
           structured_json AS "structuredJson",
+          origin,
           created_at AS "createdAt"
         FROM projection_thread_reports
         ORDER BY thread_id ASC, created_at ASC, report_id ASC
@@ -1121,6 +1131,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           summary,
           artifacts_json AS "artifacts",
           structured_json AS "structuredJson",
+          origin,
           created_at AS "createdAt"
         FROM projection_thread_reports
         WHERE thread_id = ${threadId}

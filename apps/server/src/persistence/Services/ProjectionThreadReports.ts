@@ -9,6 +9,7 @@
 import {
   IsoDateTime,
   SessionReportArtifact,
+  SessionReportOrigin,
   SessionReportStatus,
   SessionReportStructured,
   ThreadId,
@@ -30,6 +31,7 @@ export const ProjectionThreadReport = Schema.Struct({
   // Mirrors the same bounds (array lengths, string lengths, 0-100 percent)
   // as the contract-level SessionReport/PostReportInput.
   ...SessionReportStructured.fields,
+  origin: SessionReportOrigin,
   createdAt: IsoDateTime,
 });
 export type ProjectionThreadReport = typeof ProjectionThreadReport.Type;

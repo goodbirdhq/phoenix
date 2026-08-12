@@ -5276,6 +5276,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
             removeWorktree: () => Effect.void,
             createRef: (input) => Effect.succeed({ refName: input.refName }),
+            deleteRef: () => Effect.void,
             switchRef: (input) => Effect.succeed({ refName: input.refName }),
           },
           vcsStatusBroadcaster: {
