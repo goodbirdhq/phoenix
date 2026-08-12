@@ -282,6 +282,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       const live = (yield* providerService.listSessions()).some(
         (entry) => entry.threadId === input.threadId,
       );
+      // Recovery assumes directory absence means no provider binding, not a transient rebind gap.
       const sessionUpdatedAtMs = session === null ? Number.NaN : Date.parse(session.updatedAt);
       const stale =
         session !== null &&
@@ -391,7 +392,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       },
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
+          ? Effect.interrupt
           : Effect.logWarning("session spawn reactor failed to enqueue queued-turn recovery", {
               cause: Cause.pretty(cause),
             }),
