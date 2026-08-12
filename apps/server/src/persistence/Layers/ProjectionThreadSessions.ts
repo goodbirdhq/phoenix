@@ -39,6 +39,8 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           stop_reason,
           interrupted_tool_call,
           last_completed_operation,
+          grace_stop_deadline_at,
+          grace_stop_episode_id,
           updated_at
         )
         VALUES (
@@ -54,6 +56,8 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           ${row.stopReason},
           ${row.interruptedToolCall ? 1 : 0},
           ${row.lastCompletedOperation},
+          ${row.graceStopDeadlineAt},
+          ${row.graceStopEpisodeId},
           ${row.updatedAt}
         )
         ON CONFLICT (thread_id)
@@ -69,6 +73,8 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           stop_reason = excluded.stop_reason,
           interrupted_tool_call = excluded.interrupted_tool_call,
           last_completed_operation = excluded.last_completed_operation,
+          grace_stop_deadline_at = excluded.grace_stop_deadline_at,
+          grace_stop_episode_id = excluded.grace_stop_episode_id,
           updated_at = excluded.updated_at
       `,
   });
@@ -91,6 +97,8 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           stop_reason AS "stopReason",
           interrupted_tool_call AS "interruptedToolCall",
           last_completed_operation AS "lastCompletedOperation",
+          grace_stop_deadline_at AS "graceStopDeadlineAt",
+          grace_stop_episode_id AS "graceStopEpisodeId",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         WHERE thread_id = ${threadId}

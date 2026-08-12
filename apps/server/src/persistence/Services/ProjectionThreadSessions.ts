@@ -12,6 +12,7 @@ import {
   OrchestrationSessionStatus,
   SessionStopReason,
   SessionStoppedBy,
+  EventId,
   ProviderInstanceId,
   ThreadId,
   TurnId,
@@ -36,6 +37,8 @@ export const ProjectionThreadSession = Schema.Struct({
   stopReason: Schema.NullOr(SessionStopReason),
   interruptedToolCall: Schema.Boolean,
   lastCompletedOperation: Schema.NullOr(Schema.String),
+  graceStopDeadlineAt: Schema.NullOr(IsoDateTime),
+  graceStopEpisodeId: Schema.NullOr(EventId),
   updatedAt: IsoDateTime,
 });
 export type ProjectionThreadSession = typeof ProjectionThreadSession.Type;

@@ -1184,6 +1184,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         stopReason: event.payload.session.stopReason ?? null,
         interruptedToolCall: event.payload.session.interruptedToolCall ?? false,
         lastCompletedOperation: event.payload.session.lastCompletedOperation ?? null,
+        graceStopDeadlineAt: event.payload.session.graceStopDeadlineAt ?? null,
+        graceStopEpisodeId: event.payload.session.graceStopEpisodeId ?? null,
         updatedAt: event.payload.session.updatedAt,
       });
     });

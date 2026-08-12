@@ -60,6 +60,8 @@ import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
+import * as TestClock from "effect/testing/TestClock";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
@@ -150,6 +152,7 @@ describe("ProviderCommandReactor", () => {
     readonly requiresNewThreadForModelChange?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
+    readonly testClock?: boolean;
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
@@ -415,6 +418,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(input?.testClock === true ? TestClock.layer() : Layer.empty),
     );
     runtime = ManagedRuntime.make(layer);
 
@@ -2955,8 +2959,10 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("hard-stops a graceful request when its deadline expires", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ testClock: true });
     const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(TestClock.setTime(Date.parse(now)));
 
     await harness.runEffect(
       harness.engine.dispatch({
@@ -2983,12 +2989,20 @@ describe("ProviderCommandReactor", () => {
         threadId: ThreadId.make("thread-1"),
         stopReason: "parent_stopped",
         stoppedBy: "parent",
-        gracePeriodMs: 1,
+        gracePeriodMs: 100,
         requestPartialReport: false,
         createdAt: now,
       }),
     );
 
+    await harness.drain();
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: "thread-1",
+      input: expect.stringContaining("parent session requested that you stop"),
+    });
+
+    await harness.runEffect(TestClock.adjust(Duration.millis(100)));
     await waitFor(async () => {
       const thread = (await harness.readModel()).threads.find(
         (entry) => entry.id === ThreadId.make("thread-1"),

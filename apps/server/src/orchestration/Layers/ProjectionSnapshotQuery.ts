@@ -326,6 +326,8 @@ function mapSessionRow(
     stopReason: row.stopReason,
     interruptedToolCall: row.interruptedToolCall,
     lastCompletedOperation: row.lastCompletedOperation,
+    graceStopDeadlineAt: row.graceStopDeadlineAt,
+    graceStopEpisodeId: row.graceStopEpisodeId,
     updatedAt: row.updatedAt,
   };
 }
@@ -660,6 +662,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           stop_reason AS "stopReason",
           interrupted_tool_call AS "interruptedToolCall",
           last_completed_operation AS "lastCompletedOperation",
+          grace_stop_deadline_at AS "graceStopDeadlineAt",
+          grace_stop_episode_id AS "graceStopEpisodeId",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         ORDER BY thread_id ASC
@@ -686,6 +690,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.stop_reason AS "stopReason",
           sessions.interrupted_tool_call AS "interruptedToolCall",
           sessions.last_completed_operation AS "lastCompletedOperation",
+          sessions.grace_stop_deadline_at AS "graceStopDeadlineAt",
+          sessions.grace_stop_episode_id AS "graceStopEpisodeId",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
         INNER JOIN projection_threads threads
@@ -716,6 +722,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.stop_reason AS "stopReason",
           sessions.interrupted_tool_call AS "interruptedToolCall",
           sessions.last_completed_operation AS "lastCompletedOperation",
+          sessions.grace_stop_deadline_at AS "graceStopDeadlineAt",
+          sessions.grace_stop_episode_id AS "graceStopEpisodeId",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
         INNER JOIN projection_threads threads
@@ -1139,6 +1147,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           stop_reason AS "stopReason",
           interrupted_tool_call AS "interruptedToolCall",
           last_completed_operation AS "lastCompletedOperation",
+          grace_stop_deadline_at AS "graceStopDeadlineAt",
+          grace_stop_episode_id AS "graceStopEpisodeId",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         WHERE thread_id = ${threadId}
@@ -1658,6 +1668,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   stopReason: row.stopReason,
                   interruptedToolCall: row.interruptedToolCall,
                   lastCompletedOperation: row.lastCompletedOperation,
+                  graceStopDeadlineAt: row.graceStopDeadlineAt,
+                  graceStopEpisodeId: row.graceStopEpisodeId,
                   updatedAt: row.updatedAt,
                 });
               }

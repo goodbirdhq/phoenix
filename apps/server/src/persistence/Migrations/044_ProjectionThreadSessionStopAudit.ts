@@ -24,4 +24,10 @@ export default Effect.gen(function* () {
   if (!columns.some((column) => column.name === "last_completed_operation")) {
     yield* sql`ALTER TABLE projection_thread_sessions ADD COLUMN last_completed_operation TEXT`;
   }
+  if (!columns.some((column) => column.name === "grace_stop_deadline_at")) {
+    yield* sql`ALTER TABLE projection_thread_sessions ADD COLUMN grace_stop_deadline_at TEXT`;
+  }
+  if (!columns.some((column) => column.name === "grace_stop_episode_id")) {
+    yield* sql`ALTER TABLE projection_thread_sessions ADD COLUMN grace_stop_episode_id TEXT`;
+  }
 });

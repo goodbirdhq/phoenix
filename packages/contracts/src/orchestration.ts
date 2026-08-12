@@ -405,6 +405,10 @@ export const OrchestrationSession = Schema.Struct({
   stopReason: Schema.optional(Schema.NullOr(SessionStopReason)),
   interruptedToolCall: Schema.optional(Schema.Boolean),
   lastCompletedOperation: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // A graceful-stop deadline survives reactor restarts. The episode id keeps
+  // an old deadline from stopping a session that was subsequently restarted.
+  graceStopDeadlineAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  graceStopEpisodeId: Schema.optional(Schema.NullOr(EventId)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;
@@ -954,6 +958,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   ),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  graceStopNotice: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
 });
 
@@ -973,6 +978,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  graceStopNotice: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
 });
 
@@ -1392,6 +1398,7 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  graceStopNotice: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
 });
 
@@ -1429,10 +1436,11 @@ export const ThreadRevertedPayload = Schema.Struct({
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   createdAt: IsoDateTime,
-  stopReason: SessionStopReason,
-  stoppedBy: SessionStoppedBy,
-  gracePeriodMs: Schema.NullOr(NonNegativeInt),
-  requestPartialReport: Schema.Boolean,
+  // Optional so persisted events from older servers still decode on replay.
+  stopReason: Schema.optional(SessionStopReason),
+  stoppedBy: Schema.optional(SessionStoppedBy),
+  gracePeriodMs: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  requestPartialReport: Schema.optional(Schema.Boolean),
 });
 
 export const ThreadSessionSetPayload = Schema.Struct({

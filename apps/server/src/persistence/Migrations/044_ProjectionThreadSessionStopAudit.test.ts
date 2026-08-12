@@ -25,6 +25,8 @@ layer("044_ProjectionThreadSessionStopAudit", (it) => {
         "stop_reason",
         "interrupted_tool_call",
         "last_completed_operation",
+        "grace_stop_deadline_at",
+        "grace_stop_episode_id",
       ]) {
         assert.isTrue(columns.some((column) => column.name === name));
       }
