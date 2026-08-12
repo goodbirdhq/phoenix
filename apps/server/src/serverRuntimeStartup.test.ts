@@ -100,6 +100,8 @@ it.effect("launchStartupHeartbeat does not block the caller while counts are loa
           searchThreads: () => Effect.succeed({ matches: [] }),
           getThreadHasReport: () => Effect.die("unused"),
           getLastAssistantMessage: () => Effect.die("unused"),
+          getLatestUsageActivity: () => Effect.die("unused"),
+          getThreadTurnCount: () => Effect.die("unused"),
         }),
         Effect.provideService(AnalyticsService.AnalyticsService, {
           record: () => Effect.void,
@@ -166,6 +168,8 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
         searchThreads: () => Effect.succeed({ matches: [] }),
         getThreadHasReport: () => Effect.die("unused"),
         getLastAssistantMessage: () => Effect.die("unused"),
+        getLatestUsageActivity: () => Effect.die("unused"),
+        getThreadTurnCount: () => Effect.die("unused"),
       }),
       Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
         readEvents: () => Stream.empty,
@@ -213,6 +217,8 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when 
         searchThreads: () => Effect.succeed({ matches: [] }),
         getThreadHasReport: () => Effect.die("unused"),
         getLastAssistantMessage: () => Effect.die("unused"),
+        getLatestUsageActivity: () => Effect.die("unused"),
+        getThreadTurnCount: () => Effect.die("unused"),
       }),
       Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
         readEvents: () => Stream.empty,
@@ -266,6 +272,8 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
         searchThreads: () => Effect.succeed({ matches: [] }),
         getThreadHasReport: () => Effect.die("unused"),
         getLastAssistantMessage: () => Effect.die("unused"),
+        getLatestUsageActivity: () => Effect.die("unused"),
+        getThreadTurnCount: () => Effect.die("unused"),
       }),
       Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
         readEvents: () => Stream.empty,

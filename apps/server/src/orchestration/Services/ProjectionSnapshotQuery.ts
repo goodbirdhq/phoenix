@@ -211,6 +211,26 @@ export interface ProjectionSnapshotQueryShape {
     Option.Option<{ readonly text: string; readonly createdAt: string }>,
     ProjectionRepositoryError
   >;
+
+  /**
+   * The payload of the most recent `context-window.updated` activity for a
+   * thread — the same provider-usage projection the web client's context
+   * window meter reads. Raw/unknown payload; callers extract fields
+   * defensively since it is never schema-validated end to end. Bounded to
+   * one row, independent of turn boundaries.
+   */
+  readonly getLatestUsageActivity: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<unknown>, ProjectionRepositoryError>;
+
+  /**
+   * Total turn count for a thread. A single aggregate over an indexed
+   * column (thread_id), not a row-by-row load — cheap regardless of thread
+   * length.
+   */
+  readonly getThreadTurnCount: (
+    threadId: ThreadId,
+  ) => Effect.Effect<number, ProjectionRepositoryError>;
 }
 
 /**

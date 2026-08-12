@@ -19,6 +19,7 @@ import {
   SessionOrchestrationUnavailableError,
   SessionOrchestrationWorktreeNotEmptyError,
   type ServerProvider,
+  type SessionUsageSnapshot,
   type SettleSessionInput,
   type SettleSessionWorktreeOutcome,
   type SpawnSessionInput,
@@ -38,6 +39,7 @@ import * as Stream from "effect/Stream";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { resolveSessionUsageSnapshot } from "../../../orchestration/sessionUsage.ts";
 import * as ThreadTurnBootstrap from "../../../orchestration/ThreadTurnBootstrap.ts";
 import {
   type ProjectionThreadReport,
@@ -191,6 +193,7 @@ export const buildPingSessionSnapshot = (input: {
   readonly lastActivityAt: string | null;
   readonly hasReport: boolean;
   readonly lastAssistantMessage: string | null;
+  readonly usage: SessionUsageSnapshot;
 }): Omit<PingSessionResult, "threadId"> => ({
   sessionStatus: input.shell.session?.status ?? null,
   settled: input.shell.settledAt !== null,
@@ -200,6 +203,7 @@ export const buildPingSessionSnapshot = (input: {
   hasReport: input.hasReport,
   lastAssistantMessage:
     input.lastAssistantMessage !== null ? truncateText(input.lastAssistantMessage, 500) : null,
+  usage: input.usage,
 });
 
 // Appended to every spawned session's first message so the completion
@@ -980,6 +984,11 @@ export const make = Effect.gen(function* () {
       Effect.catch(() => Effect.succeed(Option.none())),
     );
     const lastActivityAt = yield* getLastActivityAt(child.id);
+    const usage = yield* resolveSessionUsageSnapshot(snapshotQuery, {
+      threadId: child.id,
+      createdAt: child.createdAt,
+      latestTurn: child.latestTurn,
+    });
     return {
       threadId: child.id,
       ...buildPingSessionSnapshot({
@@ -987,15 +996,23 @@ export const make = Effect.gen(function* () {
         lastActivityAt,
         hasReport,
         lastAssistantMessage: Option.getOrNull(lastAssistantMessage),
+        usage,
       }),
     };
   });
 
   const postReport = Effect.fn("SessionsToolkit.postReport")(function* (input: PostReportInput) {
     const scope = yield* requireSessionsCapability;
-    yield* requireShell(scope.threadId);
+    const caller = yield* requireShell(scope.threadId);
     const createdAt = yield* nowIso;
     const reportId = yield* randomUUID;
+    // Captured now, not agent-supplied: what this session cost by the time
+    // it reported, so the parent can budget without polling.
+    const usage = yield* resolveSessionUsageSnapshot(snapshotQuery, {
+      threadId: scope.threadId,
+      createdAt: caller.createdAt,
+      latestTurn: caller.latestTurn,
+    });
     yield* enqueue(
       engine.dispatch({
         type: "thread.report.post",
@@ -1013,6 +1030,7 @@ export const make = Effect.gen(function* () {
         ...(input.completionPercent !== undefined
           ? { completionPercent: input.completionPercent }
           : {}),
+        usage,
         createdAt,
       }),
     );
@@ -1030,6 +1048,7 @@ export const make = Effect.gen(function* () {
       ...(input.completionPercent !== undefined
         ? { completionPercent: input.completionPercent }
         : {}),
+      usage,
       // post_report is by definition the agent speaking for itself; only the
       // reactor's terminal reports are system-origin.
       origin: "agent" as const,
@@ -1129,6 +1148,7 @@ export const make = Effect.gen(function* () {
         ? { completionPercent: report.completionPercent }
         : {}),
       artifacts: report.artifacts,
+      ...(report.usage !== undefined ? { usage: report.usage } : {}),
       createdAt: report.createdAt,
     };
   });

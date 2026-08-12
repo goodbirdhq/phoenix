@@ -212,6 +212,8 @@ describe("OrchestrationEngine", () => {
           searchThreads: () => Effect.succeed({ matches: [] }),
           getThreadHasReport: () => Effect.succeed(false),
           getLastAssistantMessage: () => Effect.succeed(Option.none()),
+          getLatestUsageActivity: () => Effect.succeed(Option.none()),
+          getThreadTurnCount: () => Effect.succeed(0),
         }),
       ),
       Layer.provide(

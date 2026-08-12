@@ -22,6 +22,7 @@ import {
   structuredReportFieldsWithinSizeCap,
   SessionStopReason,
   SessionStoppedBy,
+  SessionUsageSnapshot,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -186,6 +187,8 @@ export const SessionReportEnvelope = Schema.Struct({
   validationPerformedCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   validationGapsCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   artifacts: Schema.Array(SessionReportArtifact),
+  // What the child cost, captured at report-post time.
+  usage: Schema.optional(SessionUsageSnapshot),
   createdAt: IsoDateTime,
 });
 export type SessionReportEnvelope = typeof SessionReportEnvelope.Type;
@@ -228,6 +231,7 @@ export const toSessionReportEnvelope = (report: SessionReport): SessionReportEnv
     validationPerformedCount: report.validation?.performed.length ?? 0,
     validationGapsCount: report.validation?.gaps.length ?? 0,
     artifacts: report.artifacts,
+    ...(report.usage !== undefined ? { usage: report.usage } : {}),
     createdAt: report.createdAt,
   };
   if (report.summary.length <= SESSION_REPORT_INLINE_MAX_CHARS) {
@@ -329,6 +333,7 @@ export const ReadReportResult = Schema.Struct({
     Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
   ),
   artifacts: Schema.Array(SessionReportArtifact),
+  usage: Schema.optional(SessionUsageSnapshot),
   createdAt: IsoDateTime,
 });
 export type ReadReportResult = typeof ReadReportResult.Type;
@@ -358,6 +363,9 @@ export const PingSessionResult = Schema.Struct({
   // Trailing snippet of the child's last assistant message, truncated to
   // ~500 characters; null if it has not said anything yet.
   lastAssistantMessage: Schema.NullOr(BoundedText(500)),
+  // Best-effort token/turn budget snapshot. Optional so payloads from
+  // pre-usage servers still decode; the current server always populates it.
+  usage: Schema.optional(SessionUsageSnapshot),
 });
 export type PingSessionResult = typeof PingSessionResult.Type;
 

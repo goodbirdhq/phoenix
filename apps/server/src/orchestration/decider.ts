@@ -1492,6 +1492,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ...(command.completionPercent !== undefined
               ? { completionPercent: command.completionPercent }
               : {}),
+            ...(command.usage !== undefined ? { usage: command.usage } : {}),
             // post_report never sets an origin: an agent-posted report is the
             // default, and only the reactor claims "system".
             origin: command.origin ?? "agent",

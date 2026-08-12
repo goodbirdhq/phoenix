@@ -64,14 +64,15 @@ function mapReportRow(
 function encodeStructured(
   report: Pick<
     ProjectionThreadReport,
-    "findings" | "validation" | "recommendation" | "completionPercent"
+    "findings" | "validation" | "recommendation" | "completionPercent" | "usage"
   >,
 ): string | null {
   if (
     report.findings === undefined &&
     report.validation === undefined &&
     report.recommendation === undefined &&
-    report.completionPercent === undefined
+    report.completionPercent === undefined &&
+    report.usage === undefined
   ) {
     return null;
   }
@@ -82,6 +83,7 @@ function encodeStructured(
     ...(report.completionPercent !== undefined
       ? { completionPercent: report.completionPercent }
       : {}),
+    ...(report.usage !== undefined ? { usage: report.usage } : {}),
   });
 }
 

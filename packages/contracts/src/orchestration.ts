@@ -274,6 +274,39 @@ export const SessionReportValidation = Schema.Struct({
 });
 export type SessionReportValidation = typeof SessionReportValidation.Type;
 
+// Best-effort token/turn accounting for a session, so an orchestrating
+// parent can budget instead of flying blind. Reused from the same
+// provider-usage projection the context-window meter already reads (see
+// ProviderRuntimeIngestion's "context-window.updated" activity) plus two
+// bounded reads (latest usage activity, turn count) — no new provider
+// plumbing. Individual token fields are null/absent when a provider does not
+// report them; deliberately no cost estimate here (price tables go stale) —
+// tokens are the stable currency, cost-in-client is the pattern.
+//
+// lastTurnInputTokens/lastTurnOutputTokens are exactly that — the most
+// recent turn's counts, not a session accumulation, because that is the only
+// scope both provider adapters report at the per-message level (Codex's
+// `usage.last.*`, Claude's most recent usage iteration). Not comparable
+// across providers: Claude folds cache-read/cache-creation tokens into
+// input, Codex reports cached tokens separately and they are not included
+// here.
+//
+// totalTokens is sourced ONLY from a provider's own cumulative counter
+// (never derived from context-window occupancy, which is bounded by the
+// window and drops after compaction — the opposite of a spend number) and is
+// omitted, not backfilled, when a provider has not reported one yet.
+export const SessionUsageSnapshot = Schema.Struct({
+  lastTurnInputTokens: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  lastTurnOutputTokens: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  totalTokens: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  turnCount: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  // Wall-clock time since the session was spawned. Always server-computed,
+  // so unlike the other fields it is never absent.
+  elapsedMs: NonNegativeInt,
+  lastTurnDurationMs: Schema.optional(Schema.NullOr(NonNegativeInt)),
+});
+export type SessionUsageSnapshot = typeof SessionUsageSnapshot.Type;
+
 // Optional machine-readable fields alongside the markdown summary. All
 // additive so pre-feature reports keep decoding without them.
 const SessionReportStructuredFields = {
@@ -283,6 +316,9 @@ const SessionReportStructuredFields = {
   completionPercent: Schema.optional(
     Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
   ),
+  // Captured server-side at report-post time, not agent-supplied — see
+  // SessionUsageSnapshot above.
+  usage: Schema.optional(SessionUsageSnapshot),
 };
 
 const MAX_STRUCTURED_REPORT_JSON_BYTES = 32_768;
