@@ -329,5 +329,7 @@ export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect
     type: "thread.session.stop",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
+    stopReason: "user_stopped",
+    stoppedBy: "user",
   });
 });

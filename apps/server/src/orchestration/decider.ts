@@ -981,6 +981,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          ...(command.graceStopNotice === true ? { graceStopNotice: true } : {}),
           createdAt: command.createdAt,
         },
       };
@@ -1159,6 +1160,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           createdAt: command.createdAt,
+          stopReason: command.stopReason ?? "user_stopped",
+          stoppedBy: command.stoppedBy ?? "user",
+          gracePeriodMs: command.gracePeriodMs ?? null,
+          requestPartialReport: command.requestPartialReport ?? false,
         },
       };
     }

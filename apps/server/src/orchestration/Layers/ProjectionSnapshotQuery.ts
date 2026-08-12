@@ -110,7 +110,9 @@ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
     sequence: Schema.NullOr(NonNegativeInt),
   }),
 );
-const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
+const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession.mapFields(
+  Struct.assign({ interruptedToolCall: Schema.BooleanFromBit }),
+);
 const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
   Struct.assign({
     files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
@@ -319,6 +321,13 @@ function mapSessionRow(
     runtimeMode: row.runtimeMode,
     activeTurnId: row.activeTurnId,
     lastError: row.lastError,
+    stoppedBy: row.stoppedBy,
+    stopRequestedAt: row.stopRequestedAt,
+    stopReason: row.stopReason,
+    interruptedToolCall: row.interruptedToolCall,
+    lastCompletedOperation: row.lastCompletedOperation,
+    graceStopDeadlineAt: row.graceStopDeadlineAt,
+    graceStopEpisodeId: row.graceStopEpisodeId,
     updatedAt: row.updatedAt,
   };
 }
@@ -648,6 +657,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          stopped_by AS "stoppedBy",
+          stop_requested_at AS "stopRequestedAt",
+          stop_reason AS "stopReason",
+          interrupted_tool_call AS "interruptedToolCall",
+          last_completed_operation AS "lastCompletedOperation",
+          grace_stop_deadline_at AS "graceStopDeadlineAt",
+          grace_stop_episode_id AS "graceStopEpisodeId",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         ORDER BY thread_id ASC
@@ -669,6 +685,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.runtime_mode AS "runtimeMode",
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
+          sessions.stopped_by AS "stoppedBy",
+          sessions.stop_requested_at AS "stopRequestedAt",
+          sessions.stop_reason AS "stopReason",
+          sessions.interrupted_tool_call AS "interruptedToolCall",
+          sessions.last_completed_operation AS "lastCompletedOperation",
+          sessions.grace_stop_deadline_at AS "graceStopDeadlineAt",
+          sessions.grace_stop_episode_id AS "graceStopEpisodeId",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
         INNER JOIN projection_threads threads
@@ -694,6 +717,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.runtime_mode AS "runtimeMode",
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
+          sessions.stopped_by AS "stoppedBy",
+          sessions.stop_requested_at AS "stopRequestedAt",
+          sessions.stop_reason AS "stopReason",
+          sessions.interrupted_tool_call AS "interruptedToolCall",
+          sessions.last_completed_operation AS "lastCompletedOperation",
+          sessions.grace_stop_deadline_at AS "graceStopDeadlineAt",
+          sessions.grace_stop_episode_id AS "graceStopEpisodeId",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
         INNER JOIN projection_threads threads
@@ -1112,6 +1142,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          stopped_by AS "stoppedBy",
+          stop_requested_at AS "stopRequestedAt",
+          stop_reason AS "stopReason",
+          interrupted_tool_call AS "interruptedToolCall",
+          last_completed_operation AS "lastCompletedOperation",
+          grace_stop_deadline_at AS "graceStopDeadlineAt",
+          grace_stop_episode_id AS "graceStopEpisodeId",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         WHERE thread_id = ${threadId}
@@ -1626,6 +1663,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   runtimeMode: row.runtimeMode,
                   activeTurnId: row.activeTurnId,
                   lastError: row.lastError,
+                  stoppedBy: row.stoppedBy,
+                  stopRequestedAt: row.stopRequestedAt,
+                  stopReason: row.stopReason,
+                  interruptedToolCall: row.interruptedToolCall,
+                  lastCompletedOperation: row.lastCompletedOperation,
+                  graceStopDeadlineAt: row.graceStopDeadlineAt,
+                  graceStopEpisodeId: row.graceStopEpisodeId,
                   updatedAt: row.updatedAt,
                 });
               }

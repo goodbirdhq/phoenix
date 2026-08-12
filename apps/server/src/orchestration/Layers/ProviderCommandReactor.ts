@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  MessageId,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
@@ -15,7 +16,9 @@ import {
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -337,6 +340,7 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
+  const armedGraceStopEpisodes = new Set<string>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -569,6 +573,19 @@ const make = Effect.gen(function* () {
           runtimeMode: desiredRuntimeMode,
           activeTurnId: null,
           lastError: null,
+          stoppedBy: thread.session?.stoppedBy ?? null,
+          stopRequestedAt: thread.session?.stopRequestedAt ?? null,
+          stopReason: thread.session?.stopReason ?? null,
+          interruptedToolCall: thread.session?.interruptedToolCall ?? false,
+          lastCompletedOperation: thread.session?.lastCompletedOperation ?? null,
+          graceStopDeadlineAt:
+            thread.session?.status === "stopped"
+              ? null
+              : (thread.session?.graceStopDeadlineAt ?? null),
+          graceStopEpisodeId:
+            thread.session?.status === "stopped"
+              ? null
+              : (thread.session?.graceStopEpisodeId ?? null),
           updatedAt: createdAt,
         },
         createdAt,
@@ -654,6 +671,19 @@ const make = Effect.gen(function* () {
             // Provider turn ids are not orchestration turn ids.
             activeTurnId: null,
             lastError: session.lastError ?? null,
+            stoppedBy: thread.session?.stoppedBy ?? null,
+            stopRequestedAt: thread.session?.stopRequestedAt ?? null,
+            stopReason: thread.session?.stopReason ?? null,
+            interruptedToolCall: thread.session?.interruptedToolCall ?? false,
+            lastCompletedOperation: thread.session?.lastCompletedOperation ?? null,
+            graceStopDeadlineAt:
+              thread.session?.status === "stopped"
+                ? null
+                : (thread.session?.graceStopDeadlineAt ?? null),
+            graceStopEpisodeId:
+              thread.session?.status === "stopped"
+                ? null
+                : (thread.session?.graceStopEpisodeId ?? null),
             updatedAt: session.updatedAt,
           },
           createdAt,
@@ -1093,6 +1123,12 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    // A grace-stop deadline can land while its notice is still queued. It is
+    // the notice alone that must not revive a stopped session; regular turns
+    // are allowed to resume a stopped child.
+    if (event.payload.graceStopNotice === true && thread.session?.status === "stopped") {
+      return;
+    }
 
     const isFirstUserMessageTurn =
       thread.messages.filter((entry) => entry.role === "user").length === 1;
@@ -1295,6 +1331,83 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const stopGraceEpisodeAtDeadline = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly episodeId: EventId;
+  }) {
+    const current = yield* resolveThread(input.threadId);
+    if (
+      !current?.session ||
+      current.session.status === "stopped" ||
+      current.session.graceStopEpisodeId !== input.episodeId
+    ) {
+      return;
+    }
+    yield* providerService.stopSession({ threadId: current.id });
+    const now = DateTime.formatIso(yield* DateTime.now);
+    yield* setThreadSession({
+      threadId: current.id,
+      session: {
+        ...current.session,
+        status: "stopped",
+        activeTurnId: null,
+        graceStopDeadlineAt: null,
+        graceStopEpisodeId: null,
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
+  });
+
+  const armGraceStopDeadline = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly episodeId: EventId;
+    readonly deadlineAt: string;
+  }) {
+    const key = `${input.threadId}:${input.episodeId}`;
+    if (armedGraceStopEpisodes.has(key)) {
+      return;
+    }
+    const deadlineMs = Date.parse(input.deadlineAt);
+    if (Number.isNaN(deadlineMs)) {
+      yield* Effect.logWarning("provider command reactor invalid graceful stop deadline", input);
+      return;
+    }
+    armedGraceStopEpisodes.add(key);
+    const now = yield* Clock.currentTimeMillis;
+    yield* Effect.sleep(Duration.millis(Math.max(0, deadlineMs - now))).pipe(
+      Effect.andThen(stopGraceEpisodeAtDeadline(input)),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logWarning("provider command reactor graceful stop deadline failed", {
+              threadId: input.threadId,
+              cause: Cause.pretty(cause),
+            }),
+      ),
+      Effect.ensuring(Effect.sync(() => armedGraceStopEpisodes.delete(key))),
+      Effect.forkScoped,
+      Effect.asVoid,
+    );
+  });
+
+  const rearmGraceStopDeadlines = Effect.fn("rearmGraceStopDeadlines")(function* () {
+    const snapshot = yield* projectionSnapshotQuery.getSnapshot();
+    for (const thread of snapshot.threads) {
+      if (
+        thread.session?.status !== "stopped" &&
+        thread.session?.graceStopDeadlineAt != null &&
+        thread.session.graceStopEpisodeId != null
+      ) {
+        yield* armGraceStopDeadline({
+          threadId: thread.id,
+          episodeId: thread.session.graceStopEpisodeId,
+          deadlineAt: thread.session.graceStopDeadlineAt,
+        });
+      }
+    }
+  });
+
   const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) {
@@ -1304,24 +1417,112 @@ const make = Effect.gen(function* () {
     }
 
     const now = event.payload.createdAt;
-    if (thread.session && thread.session.status !== "stopped") {
-      yield* providerService.stopSession({ threadId: thread.id });
+    const stopAudit = (current: typeof thread) => {
+      const lastToolActivity = current.activities
+        .filter(
+          (activity) => activity.kind === "tool.started" || activity.kind === "tool.completed",
+        )
+        .at(-1);
+      const lastCompletedOperation =
+        current.activities.filter((activity) => activity.kind === "tool.completed").at(-1)
+          ?.summary ?? null;
+      return {
+        stoppedBy: event.payload.stoppedBy ?? "user",
+        stopRequestedAt: event.payload.createdAt,
+        stopReason: event.payload.stopReason ?? "user_stopped",
+        interruptedToolCall:
+          current.session?.activeTurnId !== undefined &&
+          current.session.activeTurnId !== null &&
+          lastToolActivity?.kind === "tool.started",
+        lastCompletedOperation,
+      } as const;
+    };
+    const setStoppedSession = (current: typeof thread) =>
+      setThreadSession({
+        threadId: current.id,
+        session: {
+          threadId: current.id,
+          status: "stopped",
+          providerName: current.session?.providerName ?? null,
+          ...(current.session?.providerInstanceId !== undefined
+            ? { providerInstanceId: current.session.providerInstanceId }
+            : {}),
+          runtimeMode: current.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+          activeTurnId: null,
+          lastError: current.session?.lastError ?? null,
+          ...stopAudit(current),
+          graceStopDeadlineAt: null,
+          graceStopEpisodeId: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+    const hardStop = Effect.fnUntraced(function* () {
+      const current = yield* resolveThread(event.payload.threadId);
+      if (!current || current.session?.status === "stopped") {
+        return;
+      }
+      if (current.session !== null) {
+        yield* providerService.stopSession({ threadId: current.id });
+      }
+      yield* setStoppedSession(current);
+    });
+
+    if (event.payload.gracePeriodMs == null || thread.session === null) {
+      return yield* hardStop();
     }
 
+    if (thread.session.graceStopDeadlineAt != null && thread.session.graceStopEpisodeId != null) {
+      // Multiple stop commands should not make the provider process several
+      // notices or replace the first deadline. Re-arm in case this reactor
+      // restarted after the deadline was recorded.
+      return yield* armGraceStopDeadline({
+        threadId: thread.id,
+        episodeId: thread.session.graceStopEpisodeId,
+        deadlineAt: thread.session.graceStopDeadlineAt,
+      });
+    }
+
+    const episodeId = event.eventId;
+    const deadlineAt = DateTime.formatIso(
+      DateTime.add(DateTime.makeUnsafe(now), { milliseconds: event.payload.gracePeriodMs }),
+    );
+
+    // Provider adapters treat a send while a real turn is running as a steer,
+    // so this notice is queued after the in-flight tool work instead of
+    // cancelling it. The child can then use post_report before the deadline.
     yield* setThreadSession({
       threadId: thread.id,
       session: {
-        threadId: thread.id,
-        status: "stopped",
-        providerName: thread.session?.providerName ?? null,
-        ...(thread.session?.providerInstanceId !== undefined
-          ? { providerInstanceId: thread.session.providerInstanceId }
-          : {}),
-        runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-        activeTurnId: null,
-        lastError: thread.session?.lastError ?? null,
+        ...thread.session,
+        ...stopAudit(thread),
+        graceStopDeadlineAt: deadlineAt,
+        graceStopEpisodeId: episodeId,
         updatedAt: now,
       },
+      createdAt: now,
+    });
+    // Arm before dispatching so a delivery failure cannot leave the child
+    // running indefinitely. The persisted deadline is re-armed at startup.
+    yield* armGraceStopDeadline({ threadId: thread.id, episodeId, deadlineAt });
+    const noticeMessageId = MessageId.make(yield* crypto.randomUUIDv4);
+    const partialReportInstruction =
+      event.payload.requestPartialReport === true
+        ? " Call post_report with a partial report before stopping."
+        : " Stop after completing the current operation.";
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* serverCommandId("session-graceful-stop-notice"),
+      threadId: thread.id,
+      message: {
+        messageId: noticeMessageId,
+        role: "user",
+        text: `A parent session requested that you stop. Finish the current tool call if one is in progress, then stop working.${partialReportInstruction}`,
+        attachments: [],
+      },
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
+      graceStopNotice: true,
       createdAt: now,
     });
   });
@@ -1388,6 +1589,13 @@ const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
 
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
+    yield* rearmGraceStopDeadlines().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor failed to re-arm graceful stop deadlines", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
     const interruptedTitleRegenerations = yield* findInterruptedThreadTitleRegenerations().pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {

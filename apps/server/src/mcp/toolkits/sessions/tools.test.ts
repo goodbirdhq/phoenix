@@ -1,10 +1,36 @@
-import { PostReportInput, ReadSessionInput } from "@t3tools/contracts";
+import { PostReportInput, ReadSessionInput, StopSessionInput, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 const decodeReadSessionInput = Schema.decodeUnknownEffect(ReadSessionInput);
 const decodePostReportInput = Schema.decodeUnknownEffect(PostReportInput);
+const decodeStopSessionInput = Schema.decodeUnknownSync(StopSessionInput);
+
+it("stop_session keeps the backward-compatible immediate-stop shape", () => {
+  assert.deepStrictEqual(decodeStopSessionInput({ threadId: "thread-1" }), {
+    threadId: ThreadId.make("thread-1"),
+  });
+});
+
+it("stop_session accepts a bounded grace period and partial-report request", () => {
+  assert.deepStrictEqual(
+    decodeStopSessionInput({
+      threadId: ThreadId.make("thread-1"),
+      gracePeriodMs: 120_000,
+      requestPartialReport: true,
+    }),
+    {
+      threadId: ThreadId.make("thread-1"),
+      gracePeriodMs: 120_000,
+      requestPartialReport: true,
+    },
+  );
+});
+
+it("stop_session rejects a grace period above the hard-stop ceiling", () => {
+  assert.throws(() => decodeStopSessionInput({ threadId: "thread-1", gracePeriodMs: 120_001 }));
+});
 
 it.effect("read_session accepts messageLimit at the bounds (0 and 20)", () =>
   Effect.gen(function* () {

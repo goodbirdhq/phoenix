@@ -379,6 +379,18 @@ export const OrchestrationSessionStatus = Schema.Literals([
 ]);
 export type OrchestrationSessionStatus = typeof OrchestrationSessionStatus.Type;
 
+export const SessionStopReason = Schema.Literals([
+  "user_stopped",
+  "parent_stopped",
+  "permission_denied",
+  "tool_failed",
+  "provider_crashed",
+]);
+export type SessionStopReason = typeof SessionStopReason.Type;
+
+export const SessionStoppedBy = Schema.Literals(["user", "parent", "system"]);
+export type SessionStoppedBy = typeof SessionStoppedBy.Type;
+
 export const OrchestrationSession = Schema.Struct({
   threadId: ThreadId,
   status: OrchestrationSessionStatus,
@@ -387,6 +399,16 @@ export const OrchestrationSession = Schema.Struct({
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
+  // Optional for events and snapshots created before stop auditing shipped.
+  stoppedBy: Schema.optional(Schema.NullOr(SessionStoppedBy)),
+  stopRequestedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  stopReason: Schema.optional(Schema.NullOr(SessionStopReason)),
+  interruptedToolCall: Schema.optional(Schema.Boolean),
+  lastCompletedOperation: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // A graceful-stop deadline survives reactor restarts. The episode id keeps
+  // an old deadline from stopping a session that was subsequently restarted.
+  graceStopDeadlineAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  graceStopEpisodeId: Schema.optional(Schema.NullOr(EventId)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;
@@ -936,6 +958,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   ),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  graceStopNotice: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
 });
 
@@ -955,6 +978,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  graceStopNotice: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
 });
 
@@ -997,6 +1021,12 @@ const ThreadSessionStopCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   createdAt: IsoDateTime,
+  stopReason: Schema.optional(SessionStopReason),
+  stoppedBy: Schema.optional(SessionStoppedBy),
+  gracePeriodMs: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(Schema.isLessThanOrEqualTo(120_000)),
+  ),
+  requestPartialReport: Schema.optional(Schema.Boolean),
   // Settle-cleanup stops are conditional: the decider drops the stop if the
   // thread was re-engaged (unsettled, session starting/running, or a queued
   // turn start) between the settle and this command. Guarding in the decider
@@ -1368,6 +1398,7 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  graceStopNotice: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
 });
 
@@ -1405,6 +1436,11 @@ export const ThreadRevertedPayload = Schema.Struct({
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   createdAt: IsoDateTime,
+  // Optional so persisted events from older servers still decode on replay.
+  stopReason: Schema.optional(SessionStopReason),
+  stoppedBy: Schema.optional(SessionStoppedBy),
+  gracePeriodMs: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  requestPartialReport: Schema.optional(Schema.Boolean),
 });
 
 export const ThreadSessionSetPayload = Schema.Struct({

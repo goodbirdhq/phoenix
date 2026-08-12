@@ -73,7 +73,7 @@ export const ReadSessionTool = Tool.make("read_session", {
 
 export const StopSessionTool = Tool.make("stop_session", {
   description:
-    "Stop the live agent session of a thread this session spawned. The thread and its history remain (and still count toward the spawn limit); only the running agent stops.",
+    "Stop the live agent session of a thread this session spawned. Set gracePeriodMs to deliver a stop notice first, allowing the child to finish its current tool call and optionally post a partial report before Phoenix hard-stops it at the deadline. The thread and its history remain (and still count toward the spawn limit).",
   parameters: StopSessionInput,
   success: StopSessionResult,
   failure: SessionOrchestrationError,
