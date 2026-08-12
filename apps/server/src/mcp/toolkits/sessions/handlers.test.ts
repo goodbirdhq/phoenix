@@ -602,8 +602,8 @@ describe("buildPingSessionSnapshot", () => {
 
   it("passes the resolved usage snapshot through unchanged", () => {
     const usage = {
-      inputTokens: 1200,
-      outputTokens: 340,
+      lastTurnInputTokens: 1200,
+      lastTurnOutputTokens: 340,
       totalTokens: 1540,
       turnCount: 3,
       elapsedMs: 45_000,
@@ -796,10 +796,9 @@ describe("ping_session (handler)", () => {
         },
       );
 
-      expect(result.usage?.inputTokens).toBe(1000);
-      expect(result.usage?.outputTokens).toBe(250);
-      // Prefers the cumulative totalProcessedTokens over the context-fill
-      // usedTokens when the provider reports both.
+      expect(result.usage?.lastTurnInputTokens).toBe(1000);
+      expect(result.usage?.lastTurnOutputTokens).toBe(250);
+      // totalTokens comes only from the provider's own cumulative counter.
       expect(result.usage?.totalTokens).toBe(4000);
       expect(result.usage?.turnCount).toBe(3);
       expect(result.usage?.elapsedMs).toBeGreaterThanOrEqual(0);

@@ -129,15 +129,18 @@ it.effect(
     Effect.gen(function* () {
       const harness = makeHarness({
         getLatestUsageActivity: () =>
-          Effect.succeed(Option.some({ inputTokens: 200, outputTokens: 80, usedTokens: 280 })),
+          Effect.succeed(
+            Option.some({ inputTokens: 200, outputTokens: 80, totalProcessedTokens: 900 }),
+          ),
         getThreadTurnCount: () => Effect.succeed(5),
       });
 
       const result = yield* harness.postReport();
 
       expect(result.usage).toBeDefined();
-      expect(result.usage?.inputTokens).toBe(200);
-      expect(result.usage?.outputTokens).toBe(80);
+      expect(result.usage?.lastTurnInputTokens).toBe(200);
+      expect(result.usage?.lastTurnOutputTokens).toBe(80);
+      expect(result.usage?.totalTokens).toBe(900);
       expect(result.usage?.turnCount).toBe(5);
 
       const dispatchedReport = harness.dispatched.find(

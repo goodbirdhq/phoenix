@@ -2459,4 +2459,36 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       assert.equal(zero, 0);
     }),
   );
+
+  it.effect(
+    "getThreadTurnCount excludes pending placeholders and queued/interrupting rows, which have no turn_id",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const threadId = ThreadId.make("thread-usage-turns-with-placeholders");
+
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, state, requested_at, started_at, completed_at,
+            checkpoint_files_json
+          )
+          VALUES
+            (${threadId}, 'turn-a', NULL, 'completed', '2026-03-02T00:00:00.000Z',
+             '2026-03-02T00:00:00.000Z', '2026-03-02T00:00:01.000Z', '[]'),
+            -- A turn start in flight: inserted before a turn_id is assigned
+            -- (insertPendingProjectionTurn), exactly the moment a parent is
+            -- likely to be polling ping_session.
+            (${threadId}, NULL, 'pending-message', 'pending', '2026-03-02T00:01:00.000Z',
+             NULL, NULL, '[]'),
+            -- A queued follow-up message, also turn_id NULL until it starts
+            -- (insertQueuedProjectionTurn).
+            (${threadId}, NULL, 'queued-message', 'queued', '2026-03-02T00:02:00.000Z',
+             NULL, NULL, '[]')
+        `;
+
+        const count = yield* snapshotQuery.getThreadTurnCount(threadId);
+        assert.equal(count, 1);
+      }),
+  );
 });

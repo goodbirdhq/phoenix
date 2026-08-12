@@ -30,28 +30,47 @@ function finiteNonNegativeInt(value: unknown): number | null {
  * Extracts token counts from a `context-window.updated` activity payload.
  * Mirrors apps/web/src/lib/contextWindow.ts's defensive reading: the payload
  * is Schema.Unknown end to end (see ThreadTokenUsageSnapshot), so this never
- * trusts its shape. `totalTokens` prefers `totalProcessedTokens` (the
- * cumulative session total a provider reports after compaction) and falls
- * back to `usedTokens` (current context-window fill) otherwise.
+ * trusts its shape.
+ *
+ * `lastTurnInputTokens`/`lastTurnOutputTokens` are the most recent turn's
+ * counts — both adapters populate `inputTokens`/`outputTokens` on this
+ * payload from their own "last turn" usage, never a session accumulation.
+ *
+ * `totalTokens` is sourced ONLY from `totalProcessedTokens` — a provider's
+ * own cumulative counter — and omitted (not backfilled from `usedTokens`)
+ * when a provider has not reported one. `usedTokens` is context-window
+ * occupancy: bounded by the window and it goes down after compaction, so
+ * using it as a stand-in for cumulative spend would be actively misleading.
  */
 export function tokensFromContextWindowPayload(payload: unknown): {
-  readonly inputTokens: number | null;
-  readonly outputTokens: number | null;
+  readonly lastTurnInputTokens: number | null;
+  readonly lastTurnOutputTokens: number | null;
   readonly totalTokens: number | null;
 } {
   const record =
     payload !== null && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
   return {
-    inputTokens: finiteNonNegativeInt(record?.inputTokens),
-    outputTokens: finiteNonNegativeInt(record?.outputTokens),
-    totalTokens:
-      finiteNonNegativeInt(record?.totalProcessedTokens) ??
-      finiteNonNegativeInt(record?.usedTokens),
+    lastTurnInputTokens: finiteNonNegativeInt(record?.inputTokens),
+    lastTurnOutputTokens: finiteNonNegativeInt(record?.outputTokens),
+    totalTokens: finiteNonNegativeInt(record?.totalProcessedTokens),
   };
 }
 
+// Date.parse returns NaN for an unparseable timestamp; Math.max(0, NaN) is
+// still NaN. elapsedMs is the one always-present field on the wire (an
+// IsoDateTime-typed NonNegativeInt), so letting a bad clock value through as
+// NaN would fail ping_session's schema encode outright, or — for a posted
+// report, where usage rides in the same JSON blob as findings/validation/
+// recommendation/completionPercent — get silently dropped by the lenient
+// decoder along with every other structured field. Guarded so one bad
+// timestamp degrades to "0" instead of voiding the rest of the report.
 export function elapsedMsSince(createdAt: string, now: string): number {
-  return Math.max(0, Date.parse(now) - Date.parse(createdAt));
+  const createdMs = Date.parse(createdAt);
+  const nowMs = Date.parse(now);
+  if (!Number.isFinite(createdMs) || !Number.isFinite(nowMs)) {
+    return 0;
+  }
+  return Math.max(0, nowMs - createdMs);
 }
 
 export function lastTurnDurationMsFromTurn(
@@ -60,7 +79,12 @@ export function lastTurnDurationMsFromTurn(
   if (!latestTurn?.startedAt || !latestTurn.completedAt) {
     return null;
   }
-  return Math.max(0, Date.parse(latestTurn.completedAt) - Date.parse(latestTurn.startedAt));
+  const startedMs = Date.parse(latestTurn.startedAt);
+  const completedMs = Date.parse(latestTurn.completedAt);
+  if (!Number.isFinite(startedMs) || !Number.isFinite(completedMs)) {
+    return null;
+  }
+  return Math.max(0, completedMs - startedMs);
 }
 
 /**
@@ -70,8 +94,8 @@ export function lastTurnDurationMsFromTurn(
  */
 export function buildSessionUsageSnapshot(input: {
   readonly tokens: {
-    readonly inputTokens: number | null;
-    readonly outputTokens: number | null;
+    readonly lastTurnInputTokens: number | null;
+    readonly lastTurnOutputTokens: number | null;
     readonly totalTokens: number | null;
   };
   readonly turnCount: number | null;
@@ -79,8 +103,12 @@ export function buildSessionUsageSnapshot(input: {
   readonly lastTurnDurationMs: number | null;
 }): SessionUsageSnapshot {
   return {
-    ...(input.tokens.inputTokens !== null ? { inputTokens: input.tokens.inputTokens } : {}),
-    ...(input.tokens.outputTokens !== null ? { outputTokens: input.tokens.outputTokens } : {}),
+    ...(input.tokens.lastTurnInputTokens !== null
+      ? { lastTurnInputTokens: input.tokens.lastTurnInputTokens }
+      : {}),
+    ...(input.tokens.lastTurnOutputTokens !== null
+      ? { lastTurnOutputTokens: input.tokens.lastTurnOutputTokens }
+      : {}),
     ...(input.tokens.totalTokens !== null ? { totalTokens: input.tokens.totalTokens } : {}),
     ...(input.turnCount !== null ? { turnCount: input.turnCount } : {}),
     elapsedMs: input.elapsedMs,

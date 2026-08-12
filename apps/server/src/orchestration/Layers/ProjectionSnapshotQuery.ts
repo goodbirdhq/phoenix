@@ -1195,7 +1195,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   // Aggregate count, not a row load: served by the (thread_id, requested_at,
   // turn_id) index from migration 037, so this stays cheap regardless of
-  // thread length.
+  // thread length. turn_id IS NOT NULL excludes rows that are not turns at
+  // all: pending placeholders (state = 'pending', inserted before a turn_id
+  // is assigned) and queued/interrupting rows (state IN ('queued',
+  // 'interrupting')) — see insertPendingProjectionTurn/insertQueuedProjectionTurn
+  // in persistence/Layers/ProjectionTurns.ts. Without the filter a thread
+  // with an in-flight turn start or queued messages over-counts, and the
+  // over-count would never be corrected for consumed/cancelled queue rows
+  // that are retained rather than deleted.
   const getThreadTurnCountRow = SqlSchema.findOne({
     Request: ThreadIdLookupInput,
     Result: Schema.Struct({ turnCount: Schema.Number }),
@@ -1203,7 +1210,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       sql`
         SELECT COUNT(*) AS "turnCount"
         FROM projection_turns
-        WHERE thread_id = ${threadId}
+        WHERE thread_id = ${threadId} AND turn_id IS NOT NULL
       `,
   });
 
