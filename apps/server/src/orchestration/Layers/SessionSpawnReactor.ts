@@ -5,20 +5,23 @@ import {
   type SessionReport,
   ThreadId,
 } from "@t3tools/contracts";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeDrainableWorker, type DrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as Duration from "effect/Duration";
 
 import { forkParked } from "../../serverActivation.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import {
   SessionSpawnReactor,
   type SessionSpawnReactorShape,
@@ -26,9 +29,20 @@ import {
 
 type ReportPostedEvent = Extract<OrchestrationEvent, { type: "thread.report-posted" }>;
 type SessionSetEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
-type WatchedEvent = ReportPostedEvent | SessionSetEvent;
+type TurnQueuedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-queued" }>;
+type WatchedEvent = ReportPostedEvent | SessionSetEvent | TurnQueuedEvent;
+type WorkerInput =
+  | { readonly type: "event"; readonly event: WatchedEvent }
+  | { readonly type: "recover"; readonly threadId: ThreadId; readonly live: boolean }
+  | {
+      readonly type: "interrupt-timeout";
+      readonly threadId: ThreadId;
+      readonly messageId: MessageId;
+    };
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const INTERRUPT_FALLBACK_TIMEOUT = Duration.seconds(30);
+const RECOVERY_INTERVAL = Duration.seconds(30);
 
 const formatReportMessage = (childTitle: string, report: SessionReport): string => {
   const artifactLines =
@@ -49,11 +63,12 @@ const formatErrorMessage = (childTitle: string, threadId: string, lastError: str
     lastError ? `: ${lastError}` : "."
   } It has not posted a report. Use read_session to inspect it, send_to_session to retry, or stop_session to give up.\n\n(spawned thread: ${threadId})`;
 
-const make = Effect.gen(function* () {
+export const makeSessionSpawnReactor = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
+  const providerService = yield* ProviderService;
 
   const randomUUID = crypto.randomUUIDv4.pipe(Effect.orDie);
   const serverCommandId = (tag: string) =>
@@ -76,6 +91,44 @@ const make = Effect.gen(function* () {
       threadId,
       messageId: queued.messageId,
       createdAt: yield* nowIso,
+    });
+  });
+
+  const cancelQueuedTurns = Effect.fn("SessionSpawnReactor.cancelQueuedTurns")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly reason: "session_terminal" | "interrupt_timeout";
+  }) {
+    const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
+      (entry) => entry.threadId === input.threadId,
+    );
+    yield* Effect.forEach(
+      queued,
+      (entry) =>
+        Effect.gen(function* () {
+          yield* engine.dispatch({
+            type: "thread.turn.queue.cancel",
+            commandId: yield* serverCommandId("queued-turn-cancel"),
+            threadId: input.threadId,
+            messageId: entry.messageId,
+            reason: input.reason,
+            createdAt: yield* nowIso,
+          });
+        }),
+      { concurrency: 1 },
+    );
+    return queued.length;
+  });
+
+  const cancelTerminalQueue = Effect.fn("SessionSpawnReactor.cancelTerminalQueue")(function* (
+    threadId: ThreadId,
+    status: "stopped" | "error",
+  ) {
+    const cancelled = yield* cancelQueuedTurns({ threadId, reason: "session_terminal" });
+    if (cancelled === 0) return;
+    yield* notifyParent({
+      childThreadId: threadId,
+      text: `[Phoenix] ${cancelled} queued message${cancelled === 1 ? " was" : "s were"} cancelled because the spawned session entered ${status} state.\n\n(spawned thread: ${threadId})`,
+      commandTag: "queued-turn-cancel-notify",
     });
   });
 
@@ -116,6 +169,7 @@ const make = Effect.gen(function* () {
   const processEvent = Effect.fn("SessionSpawnReactor.processEvent")(function* (
     event: WatchedEvent,
   ) {
+    if (event.type === "thread.turn-start-queued") return;
     if (event.type === "thread.report-posted") {
       const child = yield* snapshotQuery.getThreadShellById(event.payload.threadId);
       const childTitle = Option.isSome(child) ? child.value.title : event.payload.threadId;
@@ -128,8 +182,15 @@ const make = Effect.gen(function* () {
     }
 
     const { threadId, session } = event.payload;
-    if (session.status !== "starting" && session.status !== "running") {
+    if (
+      session.status === "idle" ||
+      session.status === "ready" ||
+      session.status === "interrupted"
+    ) {
       yield* releaseNextQueuedTurn(threadId);
+    }
+    if (session.status === "stopped" || session.status === "error") {
+      yield* cancelTerminalQueue(threadId, session.status);
     }
     if (session.status === "error") {
       if (errorNotifiedThreads.has(threadId)) return;
@@ -148,59 +209,179 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const processEventSafely = (event: WatchedEvent) =>
-    processEvent(event).pipe(
+  let worker!: DrainableWorker<WorkerInput>;
+
+  const scheduleInterruptTimeout = Effect.fn("SessionSpawnReactor.scheduleInterruptTimeout")(
+    function* (queued: {
+      readonly threadId: ThreadId;
+      readonly messageId: MessageId;
+      readonly mode: "queue" | "interrupt";
+      readonly requestedAt: string;
+    }) {
+      if (queued.mode !== "interrupt") return;
+      const elapsed = Math.max(
+        0,
+        (yield* Clock.currentTimeMillis) - Date.parse(queued.requestedAt),
+      );
+      const remaining = Math.max(0, Duration.toMillis(INTERRUPT_FALLBACK_TIMEOUT) - elapsed);
+      yield* Effect.sleep(Duration.millis(remaining));
+      yield* worker.enqueue({
+        type: "interrupt-timeout",
+        threadId: queued.threadId,
+        messageId: queued.messageId,
+      });
+    },
+  );
+
+  const processInput = Effect.fn("SessionSpawnReactor.processInput")(function* (
+    input: WorkerInput,
+  ) {
+    if (input.type === "event") {
+      yield* processEvent(input.event);
+      if (input.event.type === "thread.turn-start-queued") {
+        yield* scheduleInterruptTimeout({
+          threadId: input.event.payload.threadId,
+          messageId: input.event.payload.messageId,
+          mode: input.event.payload.mode,
+          requestedAt: input.event.payload.createdAt,
+        }).pipe(Effect.forkScoped);
+      }
+      return;
+    }
+    if (input.type === "recover") {
+      const queuedForThread = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
+        (entry) => entry.threadId === input.threadId,
+      );
+      yield* Effect.forEach(queuedForThread, (entry) =>
+        scheduleInterruptTimeout(entry).pipe(Effect.forkScoped),
+      );
+      const shell = yield* snapshotQuery.getThreadShellById(input.threadId);
+      if (Option.isNone(shell)) return;
+      const session = shell.value.session;
+      const stale =
+        session !== null &&
+        (yield* Clock.currentTimeMillis) - Date.parse(session.updatedAt) >=
+          Duration.toMillis(RECOVERY_INTERVAL);
+      if (
+        (session?.status === "starting" || session?.status === "running") &&
+        !input.live &&
+        stale
+      ) {
+        yield* engine.dispatch({
+          type: "thread.session.set",
+          commandId: yield* serverCommandId("queued-turn-recover-session"),
+          threadId: input.threadId,
+          session: {
+            ...session,
+            status: "interrupted",
+            activeTurnId: null,
+            updatedAt: yield* nowIso,
+          },
+          createdAt: yield* nowIso,
+        });
+        yield* releaseNextQueuedTurn(input.threadId);
+        return;
+      }
+      if (session?.status === "stopped" || session?.status === "error") {
+        yield* cancelTerminalQueue(input.threadId, session.status);
+        return;
+      }
+      if (
+        session === null ||
+        session.status === "idle" ||
+        session.status === "ready" ||
+        session.status === "interrupted"
+      ) {
+        yield* releaseNextQueuedTurn(input.threadId);
+      }
+      return;
+    }
+    const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).find(
+      (entry) => entry.threadId === input.threadId && entry.messageId === input.messageId,
+    );
+    if (queued === undefined) return;
+    const shell = yield* snapshotQuery.getThreadShellById(input.threadId);
+    if (Option.isNone(shell)) return;
+    if (shell.value.session?.status !== "starting" && shell.value.session?.status !== "running") {
+      yield* releaseNextQueuedTurn(input.threadId);
+      return;
+    }
+    yield* engine.dispatch({
+      type: "thread.turn.queue.cancel",
+      commandId: yield* serverCommandId("queued-turn-interrupt-timeout-cancel"),
+      threadId: input.threadId,
+      messageId: input.messageId,
+      reason: "interrupt_timeout",
+      createdAt: yield* nowIso,
+    });
+    yield* engine.dispatch({
+      type: "thread.session.stop",
+      commandId: yield* serverCommandId("queued-turn-interrupt-timeout-stop"),
+      threadId: input.threadId,
+      createdAt: yield* nowIso,
+    });
+    yield* notifyParent({
+      childThreadId: input.threadId,
+      text: `[Phoenix] Interrupt delivery timed out; the queued replacement was cancelled and the spawned session was stopped.\n\n(spawned thread: ${input.threadId})`,
+      commandTag: "queued-turn-interrupt-timeout-notify",
+    });
+  });
+
+  const processInputSafely = (input: WorkerInput) =>
+    processInput(input).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
         return Effect.logWarning("session spawn reactor failed to process event", {
-          eventType: event.type,
-          threadId: event.payload.threadId,
+          inputType: input.type,
+          threadId: input.type === "event" ? input.event.payload.threadId : input.threadId,
           cause: Cause.pretty(cause),
         });
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processEventSafely);
+  worker = yield* makeDrainableWorker(processInputSafely);
 
   const start: SessionSpawnReactorShape["start"] = Effect.fn("start")(function* () {
     yield* forkParked(
       Stream.runForEach(engine.streamDomainEvents, (event) => {
-        if (event.type !== "thread.report-posted" && event.type !== "thread.session-set") {
+        if (
+          event.type !== "thread.report-posted" &&
+          event.type !== "thread.session-set" &&
+          event.type !== "thread.turn-start-queued"
+        ) {
           return Effect.void;
         }
-        return worker.enqueue(event);
+        return worker.enqueue({ type: "event", event });
       }),
     );
-    yield* Effect.gen(function* () {
-      const queuedThreadIds = new Set(
-        (yield* projectionTurnRepository.listQueuedTurnStarts).map((entry) => entry.threadId),
-      );
-      yield* Effect.forEach(
-        queuedThreadIds,
-        (threadId) =>
-          snapshotQuery.getThreadShellById(threadId).pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.void,
-                onSome: (thread) =>
-                  thread.session?.status === "starting" || thread.session?.status === "running"
-                    ? Effect.void
-                    : releaseNextQueuedTurn(threadId),
-              }),
-            ),
-          ),
-        { concurrency: 1 },
-      );
-    }).pipe(
+    const enqueueRecovery = Effect.fn("SessionSpawnReactor.enqueueRecovery")(
+      function* () {
+        const liveThreadIds = new Set(
+          (yield* providerService.listSessions()).map((entry) => entry.threadId),
+        );
+        const queuedThreadIds = new Set(
+          (yield* projectionTurnRepository.listQueuedTurnStarts).map((entry) => entry.threadId),
+        );
+        yield* Effect.forEach(
+          queuedThreadIds,
+          (threadId) =>
+            worker.enqueue({ type: "recover", threadId, live: liveThreadIds.has(threadId) }),
+          { concurrency: 1 },
+        );
+      },
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
-          ? Effect.interrupt
-          : Effect.logWarning("session spawn reactor failed to recover queued turns", {
+          ? Effect.failCause(cause)
+          : Effect.logWarning("session spawn reactor failed to enqueue queued-turn recovery", {
               cause: Cause.pretty(cause),
             }),
       ),
+    );
+    yield* enqueueRecovery();
+    yield* forkParked(
+      Effect.sleep(RECOVERY_INTERVAL).pipe(Effect.andThen(enqueueRecovery()), Effect.forever),
     );
   });
 
@@ -210,6 +391,7 @@ const make = Effect.gen(function* () {
   } satisfies SessionSpawnReactorShape;
 });
 
-export const SessionSpawnReactorLive = Layer.effect(SessionSpawnReactor, make).pipe(
-  Layer.provide(ProjectionTurnRepositoryLive),
-);
+export const SessionSpawnReactorLive = Layer.effect(
+  SessionSpawnReactor,
+  makeSessionSpawnReactor,
+).pipe(Layer.provide(ProjectionTurnRepositoryLive));

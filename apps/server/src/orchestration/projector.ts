@@ -552,6 +552,42 @@ export function projectEvent(
         };
       });
 
+    case "thread.turn-start-queued": {
+      const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
+      if (!thread) return Effect.succeed(nextBase);
+      return Effect.succeed({
+        ...nextBase,
+        threads: updateThread(nextBase.threads, event.payload.threadId, {
+          queuedTurnStarts: [
+            ...(thread.queuedTurnStarts ?? []).filter(
+              (entry) => entry.messageId !== event.payload.messageId,
+            ),
+            {
+              messageId: event.payload.messageId,
+              mode: event.payload.mode,
+              requestedAt: event.payload.createdAt,
+            },
+          ],
+          updatedAt: event.occurredAt,
+        }),
+      });
+    }
+
+    case "thread.turn-start-requested":
+    case "thread.turn-start-cancelled": {
+      const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
+      if (!thread) return Effect.succeed(nextBase);
+      return Effect.succeed({
+        ...nextBase,
+        threads: updateThread(nextBase.threads, event.payload.threadId, {
+          queuedTurnStarts: (thread.queuedTurnStarts ?? []).filter(
+            (entry) => entry.messageId !== event.payload.messageId,
+          ),
+          updatedAt: event.occurredAt,
+        }),
+      });
+    }
+
     case "thread.session-set":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(

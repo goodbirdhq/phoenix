@@ -99,11 +99,18 @@ export const resolveSessionCheckout = (gitWorkflow: SessionCheckoutGitWorkflow, 
     ),
   );
 
-export const normalizeSendToSessionMode = (mode: "queue" | "interrupt" | undefined) =>
-  mode ?? "queue";
-
-export const deliveryFromAcknowledgedEventType = (eventType: string | undefined) =>
-  eventType === "thread.turn-start-queued" ? ("queued" as const) : ("immediate" as const);
+export const resolveSendToSessionDelivery = (eventType: string | undefined) => {
+  if (eventType === "thread.turn-start-queued") return Effect.succeed("queued" as const);
+  if (eventType === "thread.turn-start-requested") return Effect.succeed("immediate" as const);
+  return Effect.fail(
+    new SessionOrchestrationOperationError({
+      message:
+        eventType === undefined
+          ? "Message delivery acknowledgement was not found."
+          : `Unexpected message delivery acknowledgement '${eventType}'.`,
+    }),
+  );
+};
 
 // Appended to every spawned session's first message so the completion
 // contract holds across providers without the parent having to remember to
@@ -459,7 +466,7 @@ const make = Effect.gen(function* () {
         },
         runtimeMode: child.runtimeMode,
         interactionMode: child.interactionMode,
-        deliveryMode: normalizeSendToSessionMode(input.mode),
+        ...(input.mode !== undefined ? { deliveryMode: input.mode } : {}),
         createdAt,
       }),
     );
@@ -469,11 +476,12 @@ const make = Effect.gen(function* () {
         Stream.runHead,
         Effect.mapError(operationError("Failed to resolve message delivery status")),
       );
+    const delivery = yield* resolveSendToSessionDelivery(
+      Option.isSome(acknowledgedEvent) ? acknowledgedEvent.value.type : undefined,
+    );
     return {
       threadId: child.id,
-      delivery: deliveryFromAcknowledgedEventType(
-        Option.isSome(acknowledgedEvent) ? acknowledgedEvent.value.type : undefined,
-      ),
+      delivery,
     };
   });
 

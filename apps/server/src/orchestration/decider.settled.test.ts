@@ -454,27 +454,35 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           messageId: MessageId.make("message-queue"),
           createdAt: NOW,
         },
-        readModel: makeReadModel(
-          null,
-          null,
-          makeSession("ready"),
-          [],
-          [
-            {
-              id: MessageId.make("message-queue"),
-              role: "user",
-              text: "Follow up",
-              turnId: null,
-              streaming: false,
-              createdAt: NOW,
-              updatedAt: NOW,
-            },
-          ],
-        ),
+        readModel: {
+          ...makeReadModel(null, null, makeSession("ready")),
+          threads: makeReadModel(null, null, makeSession("ready")).threads.map((thread) => ({
+            ...thread,
+            queuedTurnStarts: [
+              {
+                messageId: MessageId.make("message-queue"),
+                mode: "queue" as const,
+                requestedAt: NOW,
+              },
+            ],
+          })),
+        },
       });
       expect((Array.isArray(released) ? released : [released]).map((event) => event.type)).toEqual([
         "thread.turn-start-requested",
       ]);
+
+      const duplicate = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start.queued",
+          commandId: CommandId.make("cmd-release-duplicate"),
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("message-queue"),
+          createdAt: NOW,
+        },
+        readModel: makeReadModel(null, null, makeSession("ready")),
+      }).pipe(Effect.flip);
+      expect(duplicate._tag).toBe("OrchestrationCommandInvariantError");
     }),
   );
 

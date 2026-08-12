@@ -1026,7 +1026,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
       const sessionIsBusy =
         targetThread.session?.status === "starting" || targetThread.session?.status === "running";
-      if (command.deliveryMode !== undefined && sessionIsBusy) {
+      const deliveryMode = command.deliveryMode ?? "queue";
+      if (sessionIsBusy) {
         const queuedEvent: Omit<OrchestrationEvent, "sequence"> = {
           ...(yield* withEventBase({
             aggregateKind: "thread",
@@ -1039,10 +1040,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           payload: {
             threadId: command.threadId,
             messageId: command.message.messageId,
+            mode: deliveryMode,
             createdAt: command.createdAt,
           },
         };
-        if (command.deliveryMode === "queue") {
+        if (deliveryMode === "queue") {
           return [...lifecycleResetEvents, userMessageEvent, queuedEvent];
         }
         const interruptEvent: Omit<OrchestrationEvent, "sequence"> = {
@@ -1074,11 +1076,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      const message = targetThread.messages.find((entry) => entry.id === command.messageId);
-      if (!message || message.role !== "user") {
+      const queuedTurn = targetThread.queuedTurnStarts?.find(
+        (entry) => entry.messageId === command.messageId,
+      );
+      if (queuedTurn === undefined) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Queued user message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+          detail: `Queued turn start '${command.messageId}' does not exist on thread '${command.threadId}'.`,
         });
       }
       const eventBase = yield* withEventBase({
@@ -1091,15 +1095,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         targetThread.session?.status === "starting" ||
         targetThread.session?.status === "running"
       ) {
-        return {
-          ...eventBase,
-          type: "thread.turn-start-queued",
-          payload: {
-            threadId: command.threadId,
-            messageId: command.messageId,
-            createdAt: command.createdAt,
-          },
-        };
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is still busy; queued turn start '${command.messageId}' remains pending.`,
+        });
       }
       return {
         ...eventBase,
@@ -1109,6 +1108,35 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.turn.queue.cancel": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (!targetThread.queuedTurnStarts?.some((entry) => entry.messageId === command.messageId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued turn start '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.turn-start-cancelled",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          reason: command.reason,
           createdAt: command.createdAt,
         },
       };

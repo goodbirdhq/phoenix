@@ -39,7 +39,11 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
 - **Delivery modes** — `send_to_session` defaults to `queue`. Busy children persist FIFO queued
   turn starts in the turn projection and release one at each terminal/ready session boundary;
   idle children start immediately. `interrupt` uses the same queue after requesting the existing
-  provider interrupt, so replacement waits for the provider's boundary instead of racing it.
+  provider interrupt, so replacement waits for the provider's boundary instead of racing it. A
+  bounded fallback cancels the replacement, stops the still-running session, and notifies the
+  parent if no boundary arrives. Stopped/error sessions cancel queued messages instead of
+  resurrecting the child; restart and periodic recovery only release stale persisted sessions
+  after confirming there is no live provider binding.
 - **Persistence** — migrations 041 (`projection_threads.spawned_by_thread_id`) and 042
   (`projection_thread_reports`), with hydration through `ProjectionPipeline` and
   `ProjectionSnapshotQuery`.
@@ -70,3 +74,7 @@ Provider steering is not uniform: some adapters treat a mid-turn send as guidanc
 reject it or start a distinct turn. `send_to_session` therefore exposes only `queue` and
 `interrupt` for now. A future `notify` mode needs an explicit provider capability and fallback
 contract before it can promise tool-boundary guidance without accidentally starting a turn.
+
+Queued-row cleanup for deleted/archived threads and replacing the global recovery scan with a
+thread-indexed query remain persistence follow-ups; terminal session transitions are cleaned up
+by this delivery workflow.

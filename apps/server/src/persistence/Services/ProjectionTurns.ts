@@ -81,6 +81,7 @@ export type ProjectionPendingTurnStart = typeof ProjectionPendingTurnStart.Type;
 export const ProjectionQueuedTurnStart = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  mode: Schema.Literals(["queue", "interrupt"]),
   requestedAt: IsoDateTime,
 });
 export type ProjectionQueuedTurnStart = typeof ProjectionQueuedTurnStart.Type;

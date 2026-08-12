@@ -3,8 +3,7 @@ import { GitCommandError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import {
-  deliveryFromAcknowledgedEventType,
-  normalizeSendToSessionMode,
+  resolveSendToSessionDelivery,
   resolveSessionCheckout,
   validateSpawnCheckoutInput,
 } from "./handlers.ts";
@@ -64,15 +63,22 @@ describe("resolveSessionCheckout", () => {
     expect(checkout).toBeNull();
   });
 });
+describe("send_to_session delivery acknowledgement", () => {
+  it.effect("maps persisted acknowledgement branches to delivery status", () =>
+    Effect.gen(function* () {
+      expect(yield* resolveSendToSessionDelivery("thread.turn-start-queued")).toBe("queued");
+      expect(yield* resolveSendToSessionDelivery("thread.turn-start-requested")).toBe("immediate");
+    }),
+  );
 
-describe("send_to_session delivery modes", () => {
-  it("defaults omitted mode to queue", () => {
-    expect(normalizeSendToSessionMode(undefined)).toBe("queue");
-    expect(normalizeSendToSessionMode("interrupt")).toBe("interrupt");
-  });
-
-  it("reports whether the acknowledged command queued delivery", () => {
-    expect(deliveryFromAcknowledgedEventType("thread.turn-start-queued")).toBe("queued");
-    expect(deliveryFromAcknowledgedEventType("thread.turn-start-requested")).toBe("immediate");
-  });
+  it.effect("rejects missing and unexpected acknowledgements", () =>
+    Effect.gen(function* () {
+      const missing = yield* resolveSendToSessionDelivery(undefined).pipe(Effect.flip);
+      expect(missing.message).toContain("was not found");
+      const unexpected = yield* resolveSendToSessionDelivery("thread.message-sent").pipe(
+        Effect.flip,
+      );
+      expect(unexpected.message).toContain("Unexpected");
+    }),
+  );
 });

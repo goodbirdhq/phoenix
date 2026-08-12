@@ -178,7 +178,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         DELETE FROM projection_turns
         WHERE thread_id = ${row.threadId}
           AND pending_message_id = ${row.messageId}
-          AND state = 'queued'
+          AND state IN ('queued', 'interrupting')
       `.pipe(
         Effect.andThen(sql`
           INSERT INTO projection_turns (
@@ -188,7 +188,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
             checkpoint_status, checkpoint_files_json
           ) VALUES (
             ${row.threadId}, NULL, ${row.messageId}, NULL,
-            NULL, NULL, 'queued', ${row.requestedAt},
+            NULL, NULL, ${row.mode === "interrupt" ? "interrupting" : "queued"}, ${row.requestedAt},
             NULL, NULL, NULL, NULL, NULL, '[]'
           )
         `),
@@ -202,7 +202,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         DELETE FROM projection_turns
         WHERE thread_id = ${threadId}
           AND pending_message_id = ${messageId}
-          AND state = 'queued'
+          AND state IN ('queued', 'interrupting')
       `,
   });
 
@@ -214,9 +214,10 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           pending_message_id AS "messageId",
+          CASE WHEN state = 'interrupting' THEN 'interrupt' ELSE 'queue' END AS mode,
           requested_at AS "requestedAt"
         FROM projection_turns
-        WHERE state = 'queued'
+        WHERE state IN ('queued', 'interrupting')
           AND pending_message_id IS NOT NULL
         ORDER BY requested_at ASC, row_id ASC
       `,
@@ -244,7 +245,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_files_json AS "checkpointFiles"
         FROM projection_turns
         WHERE thread_id = ${threadId}
-          AND state <> 'queued'
+          AND state NOT IN ('queued', 'interrupting')
         ORDER BY
           CASE
             WHEN checkpoint_turn_count IS NULL THEN 1

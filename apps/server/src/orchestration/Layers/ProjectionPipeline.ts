@@ -1198,7 +1198,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionTurnRepository.enqueueTurnStart({
             threadId: event.payload.threadId,
             messageId: event.payload.messageId,
+            mode: event.payload.mode,
             requestedAt: event.payload.createdAt,
+          });
+          return;
+        }
+
+        case "thread.turn-start-cancelled": {
+          yield* projectionTurnRepository.deleteQueuedTurnStart({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
           });
           return;
         }
