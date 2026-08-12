@@ -17,25 +17,25 @@ becomes a Phoenix name. If it only exists inside the repository, it stays exactl
 
 ## Runtime identity — diverges (must never collide)
 
-| Concern                 | Upstream T3 Code               | Phoenix                                               |
-| ----------------------- | ------------------------------ | ----------------------------------------------------- |
-| State / base dir        | `~/.t3`                        | `~/.phoenix`                                          |
-| Base dir env var        | `T3CODE_HOME`                  | `PHOENIX_HOME` (no fallback — see below)              |
-| Desktop userData dir    | `t3code`, `t3code-dev`         | `phoenix`, `phoenix-dev`                              |
-| Desktop product name    | `T3 Code (Alpha)`              | `Phoenix (Alpha)`                                     |
-| macOS Keychain item     | `T3 Code (Alpha) Safe Storage` | `Phoenix (Alpha) Safe Storage` (follows product name) |
-| URL scheme              | `t3code://`, `t3code-dev://`   | `phoenix://`, `phoenix-dev://`                        |
-| AppUserModelID          | `com.t3tools.t3code`           | `com.goodbird.phoenix`                                |
-| Mobile bundle / package | `com.t3tools.t3code`           | `com.goodbird.phoenix`                                |
-| Linux desktop entry     | `t3code.desktop`               | `phoenix.desktop`                                     |
-| Linux WM class          | `t3code`                       | `phoenix`                                             |
-| Linux URL handler entry | `t3code-url-handler.desktop`   | `phoenix-url-handler.desktop`                         |
-| systemd unit            | `t3code.service`               | `phoenix.service`                                     |
-| Server default port     | `3773`                         | `3873`                                                |
-| Dev server / web ports  | `13773` / `5733`               | `13873` / `5833`                                      |
-| CLI binary              | `t3`                           | `phoenix`                                             |
-| MCP server id           | `t3-code`                      | `phoenix`                                             |
-| Worktree dev state      | `<worktree>/.t3`               | `<worktree>/.phoenix`                                 |
+| Concern                 | Upstream T3 Code             | Phoenix                                                                   |
+| ----------------------- | ---------------------------- | ------------------------------------------------------------------------- |
+| State / base dir        | `~/.t3`                      | `~/.phoenix`                                                              |
+| Base dir env var        | `T3CODE_HOME`                | `PHOENIX_HOME` (no fallback — see below)                                  |
+| Desktop userData dir    | `t3code`, `t3code-dev`       | `phoenix`, `phoenix-dev`                                                  |
+| Desktop product name    | `T3 Code (Alpha)`            | `Phoenix (Alpha)`                                                         |
+| macOS Keychain item     | `t3code Safe Storage`        | `phoenix Safe Storage` (follows the staged package name, not productName) |
+| URL scheme              | `t3code://`, `t3code-dev://` | `phoenix://`, `phoenix-dev://`                                            |
+| AppUserModelID          | `com.t3tools.t3code`         | `com.goodbird.phoenix`                                                    |
+| Mobile bundle / package | `com.t3tools.t3code`         | `com.goodbird.phoenix`                                                    |
+| Linux desktop entry     | `t3code.desktop`             | `phoenix.desktop`                                                         |
+| Linux WM class          | `t3code`                     | `phoenix`                                                                 |
+| Linux URL handler entry | `t3code-url-handler.desktop` | `phoenix-url-handler.desktop`                                             |
+| systemd unit            | `t3code.service`             | `phoenix.service`                                                         |
+| Server default port     | `3773`                       | `3873`                                                                    |
+| Dev server / web ports  | `13773` / `5733`             | `13873` / `5833`                                                          |
+| CLI binary              | `t3`                         | `phoenix`                                                                 |
+| MCP server id           | `t3-code`                    | `phoenix`                                                                 |
+| Worktree dev state      | `<worktree>/.t3`             | `<worktree>/.phoenix`                                                     |
 
 ### Two deliberate subtleties
 

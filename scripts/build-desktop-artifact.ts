@@ -1921,7 +1921,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     stageDependencies,
   );
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    // Reaches the OS: Electron derives app.getName() from this, and macOS
+    // safeStorage keys its Keychain item off it ("<name> Safe Storage"). Leaving
+    // it as "t3code" made Phoenix and upstream T3 Code share a single keychain
+    // entry, which is exactly the collision the separate identity prevents
+    // elsewhere. Not the same thing as the workspace package name, which stays
+    // upstream's.
+    name: "phoenix",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
