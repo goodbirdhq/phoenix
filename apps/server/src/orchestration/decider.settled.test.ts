@@ -446,6 +446,28 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         expect(interruptEvents[1].payload.turnId).toBe(TurnId.make("turn-active"));
       }
 
+      const graceNotice = yield* decideOrchestrationCommand({
+        command: {
+          ...makeCommand("queue"),
+          commandId: CommandId.make("cmd-grace-notice"),
+          message: {
+            ...makeCommand("queue").message,
+            messageId: MessageId.make("message-grace-notice"),
+          },
+          graceStopNotice: true,
+        },
+        readModel: makeReadModel(null, null, runningSession),
+      });
+      const graceNoticeEvents = Array.isArray(graceNotice) ? graceNotice : [graceNotice];
+      expect(graceNoticeEvents.map((event) => event.type)).toEqual([
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
+      expect(graceNoticeEvents[1]?.type).toBe("thread.turn-start-requested");
+      if (graceNoticeEvents[1]?.type === "thread.turn-start-requested") {
+        expect(graceNoticeEvents[1].payload.graceStopNotice).toBe(true);
+      }
+
       const released = yield* decideOrchestrationCommand({
         command: {
           type: "thread.turn.start.queued",

@@ -1027,7 +1027,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const sessionIsBusy =
         targetThread.session?.status === "starting" || targetThread.session?.status === "running";
       const deliveryMode = command.deliveryMode ?? "queue";
-      if (sessionIsBusy) {
+      // Graceful-stop notices intentionally reach the provider as an in-turn steer so the
+      // child sees the deadline before its current turn ends; ordinary messages stay queued.
+      if (sessionIsBusy && command.graceStopNotice !== true) {
         const queuedEvent: Omit<OrchestrationEvent, "sequence"> = {
           ...(yield* withEventBase({
             aggregateKind: "thread",
