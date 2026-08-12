@@ -26,6 +26,7 @@ import * as ProjectionSnapshotQuery from "../../../orchestration/Services/Projec
 import * as ThreadTurnBootstrap from "../../../orchestration/ThreadTurnBootstrap.ts";
 import { PersistenceSqlError } from "../../../persistence/Errors.ts";
 import { ProjectionThreadReportRepository } from "../../../persistence/Services/ProjectionThreadReports.ts";
+import { ProjectionTurnRepository } from "../../../persistence/Services/ProjectionTurns.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
@@ -110,6 +111,9 @@ const makeHarness = (options: HarnessOptions = {}) => {
       ProjectionThreadReportRepository,
       {} as unknown as ProjectionThreadReportRepository["Service"],
     ),
+    Layer.succeed(ProjectionTurnRepository, {
+      listQueuedDeliveryReceipts: () => Effect.succeed([]),
+    } as unknown as ProjectionTurnRepository["Service"]),
     Layer.succeed(ProviderSessionDirectory, {} as unknown as ProviderSessionDirectory["Service"]),
     // Only settle_session's cleanup path reaches these two; post_report that
     // touches them is a bug, so the stubs stay empty.

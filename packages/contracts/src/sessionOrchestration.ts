@@ -1,11 +1,14 @@
+import * as Effect from "effect/Effect";
 import { Schema } from "effect";
 
 import {
   IsoDateTime,
+  MessageId,
   NonNegativeInt,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
+  TurnId,
 } from "./baseSchemas.ts";
 import { ProviderOptionDescriptor, ProviderOptionSelection } from "./model.ts";
 import {
@@ -310,6 +313,9 @@ export const ReadSessionResult = Schema.Struct({
   stopReason: Schema.NullOr(SessionStopReason),
   interruptedToolCall: Schema.Boolean,
   lastCompletedOperation: Schema.NullOr(TrimmedNonEmptyString),
+  queuedDeliveryReceipts: Schema.Array(QueuedDeliveryReceipt).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   messages: Schema.Array(ReadSessionMessage),
   // Present when the spawned session has a git worktree. branch and dirty use
   // cached status; sha is resolved live so callers can verify the revision.
@@ -533,6 +539,10 @@ export const PingSessionResult = Schema.Struct({
   // Best-effort token/turn budget snapshot. Optional so payloads from
   // pre-usage servers still decode; the current server always populates it.
   usage: Schema.optional(SessionUsageSnapshot),
+  pendingQueuedCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  mostRecentDeliveryReceipt: Schema.NullOr(QueuedDeliveryReceipt).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
 });
 export type PingSessionResult = typeof PingSessionResult.Type;
 

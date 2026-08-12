@@ -121,7 +121,7 @@ const sessionSetEvent = (shell: OrchestrationThreadShell): OrchestrationEvent =>
   },
 });
 
-const reportPostedEvent = (): OrchestrationEvent => ({
+const queuedReportPostedEvent = (): OrchestrationEvent => ({
   sequence: 1,
   eventId: EventId.make("event-report-posted"),
   aggregateKind: "thread",
@@ -313,7 +313,7 @@ describe("SessionSpawnReactor queued delivery", () => {
         status: "running",
         live: true,
         queued: [queued("waiting"), releasing("releasing", NOW)],
-        boundaryEvents: [reportPostedEvent()],
+        boundaryEvents: [queuedReportPostedEvent()],
       }).pipe(
         Effect.map(({ commands }) => {
           const parentTurns = commands.filter(
