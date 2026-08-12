@@ -6,13 +6,14 @@ import {
   ReadSessionResult,
   SendToSessionInput,
   SendToSessionResult,
+  SESSION_SPAWN_MAX_CHILDREN,
   SessionOrchestrationError,
   SessionReport,
   SpawnSessionInput,
   SpawnSessionResult,
   StopSessionInput,
+  StopSessionResult,
 } from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -33,8 +34,7 @@ export const ListSessionProvidersTool = Tool.make("list_session_providers", {
   .annotate(Tool.Idempotent, true);
 
 export const SpawnSessionTool = Tool.make("spawn_session", {
-  description:
-    "Spawn a new Phoenix agent session (a new thread) that starts working on the given prompt immediately. Choose provider instance, model, and model options (e.g. reasoning effort) from list_session_providers, or omit them to use this session's own provider with defaults. By default the child gets its own git worktree so it cannot conflict with your working tree. The child appears in the user's sidebar like any other thread. End your prompt with report instructions such as: \"When you are done, call post_report with a summary of what you did.\" — the report is delivered back to this session automatically.",
+  description: `Spawn a new Phoenix agent session (a new thread) that starts working on the given prompt immediately. Choose provider instance, model, and model options (e.g. reasoning effort) from list_session_providers, or omit them to use this session's own provider with defaults. By default the child gets its own git worktree so it cannot conflict with your working tree. The child appears in the user's sidebar like any other thread. End your prompt with report instructions such as: "When you are done, call post_report with a summary of what you did." — the report is delivered back to this session automatically. A calling session may have at most ${SESSION_SPAWN_MAX_CHILDREN} spawned children at once, counting stopped and settled ones — archive a child thread (not just stop it) to free a slot.`,
   parameters: SpawnSessionInput,
   success: SpawnSessionResult,
   failure: SessionOrchestrationError,
@@ -60,7 +60,7 @@ export const SendToSessionTool = Tool.make("send_to_session", {
 
 export const ReadSessionTool = Tool.make("read_session", {
   description:
-    "Read the status of a session this session spawned: live/settled state, its completion report if posted, and optionally its trailing messages. Use for on-demand progress checks; completion is pushed to you automatically, so avoid polling loops.",
+    "Read the status of a session this session spawned: live/settled state, its completion report if posted, and optionally its trailing messages. Use for on-demand progress checks; completion is pushed to you automatically, so avoid polling loops. messageLimit accepts 0-20 (default 5); each returned message is truncated to 16,384 characters.",
   parameters: ReadSessionInput,
   success: ReadSessionResult,
   failure: SessionOrchestrationError,
@@ -73,9 +73,9 @@ export const ReadSessionTool = Tool.make("read_session", {
 
 export const StopSessionTool = Tool.make("stop_session", {
   description:
-    "Stop the live agent session of a thread this session spawned. The thread and its history remain; only the running agent stops.",
+    "Stop the live agent session of a thread this session spawned. The thread and its history remain (and still count toward the spawn limit); only the running agent stops.",
   parameters: StopSessionInput,
-  success: Schema.Null,
+  success: StopSessionResult,
   failure: SessionOrchestrationError,
   dependencies,
 })
@@ -86,7 +86,7 @@ export const StopSessionTool = Tool.make("stop_session", {
 
 export const PostReportTool = Tool.make("post_report", {
   description:
-    "Post a completion report for THIS session's work: status, a concise markdown summary, and any artifacts (files, branches, PR URLs). If another session spawned this one, the report is delivered to it automatically; the user also sees the report as a card in this thread. Call once when your assigned work is finished (or clearly failed).",
+    "Post a completion report for THIS session's work: status, a concise markdown summary, and any artifacts (files, branches, PR URLs). If another session spawned this one, the report is delivered to it automatically; the user also sees the report as a card in this thread. Call once when your assigned work is finished (or clearly failed). Optionally include machine-readable fields: findings (array of {title, severity: info|low|medium|high|critical, detail?}), validation ({performed: string[], gaps: string[]}), recommendation (short string), and completionPercent (0-100).",
   parameters: PostReportInput,
   success: SessionReport,
   failure: SessionOrchestrationError,

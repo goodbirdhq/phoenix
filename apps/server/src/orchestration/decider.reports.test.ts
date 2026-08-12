@@ -85,6 +85,59 @@ it.layer(NodeServices.layer)("report decider", (it) => {
     }),
   );
 
+  it.effect("carries optional structured fields through to the event payload", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.report.post",
+          commandId: CommandId.make("cmd-report-post-structured"),
+          threadId: ThreadId.make("thread-1"),
+          reportId: "report-structured-1",
+          status: "partial",
+          title: "Did most of the work",
+          summary: "Two of three tasks completed.",
+          artifacts: [],
+          findings: [
+            { title: "Missing test coverage", severity: "medium", detail: "No integration test." },
+          ],
+          validation: { performed: ["Ran unit tests"], gaps: ["No e2e run"] },
+          recommendation: "Add an integration test before merging.",
+          completionPercent: 66,
+          createdAt: POSTED_AT,
+        },
+        readModel,
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+
+      expect(event.type).toBe("thread.report-posted");
+      if (event.type === "thread.report-posted") {
+        expect(event.payload).toEqual({
+          threadId: ThreadId.make("thread-1"),
+          report: {
+            reportId: "report-structured-1",
+            threadId: ThreadId.make("thread-1"),
+            status: "partial",
+            title: "Did most of the work",
+            summary: "Two of three tasks completed.",
+            artifacts: [],
+            findings: [
+              {
+                title: "Missing test coverage",
+                severity: "medium",
+                detail: "No integration test.",
+              },
+            ],
+            validation: { performed: ["Ran unit tests"], gaps: ["No e2e run"] },
+            recommendation: "Add an integration test before merging.",
+            completionPercent: 66,
+            createdAt: POSTED_AT,
+          },
+          updatedAt: POSTED_AT,
+        });
+      }
+    }),
+  );
+
   it.effect("rejects a report for an unknown thread", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({

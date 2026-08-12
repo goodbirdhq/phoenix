@@ -10,6 +10,7 @@ import {
   IsoDateTime,
   SessionReportArtifact,
   SessionReportStatus,
+  SessionReportStructured,
   ThreadId,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
@@ -26,6 +27,9 @@ export const ProjectionThreadReport = Schema.Struct({
   title: TrimmedNonEmptyString,
   summary: Schema.String,
   artifacts: Schema.Array(SessionReportArtifact),
+  // Mirrors the same bounds (array lengths, string lengths, 0-100 percent)
+  // as the contract-level SessionReport/PostReportInput.
+  ...SessionReportStructured.fields,
   createdAt: IsoDateTime,
 });
 export type ProjectionThreadReport = typeof ProjectionThreadReport.Type;

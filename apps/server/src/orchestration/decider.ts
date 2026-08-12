@@ -1360,6 +1360,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             title: command.title,
             summary: command.summary,
             artifacts: command.artifacts,
+            ...(command.findings !== undefined ? { findings: command.findings } : {}),
+            ...(command.validation !== undefined ? { validation: command.validation } : {}),
+            ...(command.recommendation !== undefined
+              ? { recommendation: command.recommendation }
+              : {}),
+            ...(command.completionPercent !== undefined
+              ? { completionPercent: command.completionPercent }
+              : {}),
             createdAt: command.createdAt,
           },
           updatedAt: command.createdAt,
