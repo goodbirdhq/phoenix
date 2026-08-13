@@ -1354,7 +1354,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.session.queuedDeliveryMessageId !== undefined &&
         command.session.queuedDeliveryMessageId !== null
           ? thread.queuedTurnStarts?.find(
-              (entry) => entry.messageId === command.session.queuedDeliveryMessageId,
+              (entry) =>
+                entry.messageId === command.session.queuedDeliveryMessageId &&
+                entry.releasingAt !== undefined,
             )
           : undefined;
       const consumedEvent: Omit<OrchestrationEvent, "sequence"> | undefined =
