@@ -1323,6 +1323,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      // Conditional session write (provider-inactivity watchdog). The caller
+      // decided from a snapshot; between that read and this command the
+      // provider may have produced a heartbeat (a new turn, a completion) or
+      // a real terminal event. Only a session still live on exactly the turn
+      // the caller judged dead may be rewritten, so a late verdict can never
+      // clobber fresher provider truth.
+      if (command.onlyIfActiveTurnId !== undefined) {
+        const live = thread.session?.status === "starting" || thread.session?.status === "running";
+        if (!live || thread.session?.activeTurnId !== command.onlyIfActiveTurnId) {
+          return yield* Effect.fail(
+            new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `thread ${command.threadId} is no longer running turn ${command.onlyIfActiveTurnId}; skipping conditional session write`,
+            }),
+          );
+        }
+      }
       const sessionSetEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",

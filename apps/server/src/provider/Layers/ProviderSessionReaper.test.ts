@@ -5,6 +5,8 @@ import {
   TurnId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type OrchestrationCommand,
+  type ProviderSession,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -17,6 +19,8 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { OrchestrationCommandInvariantError } from "../../orchestration/Errors.ts";
+import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
@@ -150,8 +154,17 @@ describe("ProviderSessionReaper", () => {
     readonly stopSessionImplementation?: (input: {
       readonly threadId: ThreadId;
     }) => ReturnType<ProviderServiceShape["stopSession"]>;
+    /** Thread ids the provider adapters still hold a live runtime session for. */
+    readonly liveThreadIds?: ReadonlyArray<ThreadId>;
+    readonly activeTurnInactivityThresholdMs?: number;
+    /**
+     * Simulates the decider rejecting the conditional crash write because the
+     * session moved on between the sweep's snapshot and the dispatch.
+     */
+    readonly rejectDispatch?: boolean;
   }) {
     const stoppedThreadIds = new Set<ThreadId>();
+    const dispatchedCommands: OrchestrationCommand[] = [];
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(
       (request) =>
         (input.stopSessionImplementation
@@ -168,7 +181,12 @@ describe("ProviderSessionReaper", () => {
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession,
-      listSessions: () => Effect.succeed([]),
+      listSessions: () =>
+        Effect.succeed(
+          (input.liveThreadIds ?? []).map(
+            (threadId) => ({ threadId }) as unknown as ProviderSession,
+          ),
+        ),
       getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
       getInstanceInfo: (instanceId) => {
         const driverKind = ProviderDriverKind.make(String(instanceId));
@@ -196,10 +214,30 @@ describe("ProviderSessionReaper", () => {
     const layer = makeProviderSessionReaperLive({
       inactivityThresholdMs: 1_000,
       sweepIntervalMs: 60_000,
+      activeTurnInactivityThresholdMs: input.activeTurnInactivityThresholdMs ?? 1_000,
     }).pipe(
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provideMerge(runtimeRepositoryLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
+      Layer.provideMerge(
+        Layer.succeed(OrchestrationEngineService, {
+          readEvents: () => Stream.empty,
+          dispatch: (command: OrchestrationCommand) =>
+            Effect.suspend(() => {
+              dispatchedCommands.push(command);
+              return input.rejectDispatch === true
+                ? Effect.fail(
+                    new OrchestrationCommandInvariantError({
+                      commandType: command.type,
+                      detail: "thread is no longer running that turn",
+                    }),
+                  )
+                : Effect.succeed({ sequence: dispatchedCommands.length });
+            }),
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        } as unknown as OrchestrationEngineService["Service"]),
+      ),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getCommandReadModel: () => Effect.die("unused"),
@@ -233,8 +271,14 @@ describe("ProviderSessionReaper", () => {
     );
 
     runtime = ManagedRuntime.make(layer);
-    return { stopSession, stoppedThreadIds };
+    return { stopSession, stoppedThreadIds, dispatchedCommands };
   }
+
+  const sessionSetCommands = (commands: ReadonlyArray<OrchestrationCommand>) =>
+    commands.filter(
+      (command): command is Extract<OrchestrationCommand, { type: "thread.session.set" }> =>
+        command.type === "thread.session.set",
+    );
 
   it("reaps stale persisted sessions without active turns", async () => {
     const threadId = ThreadId.make("thread-reaper-stale");
@@ -283,7 +327,7 @@ describe("ProviderSessionReaper", () => {
     expect(harness.stoppedThreadIds.has(threadId)).toBe(true);
   });
 
-  it("skips stale sessions when the thread still has an active turn", async () => {
+  it("skips stale sessions when the thread still has an active turn on a live runtime", async () => {
     const threadId = ThreadId.make("thread-reaper-active-turn");
     const turnId = TurnId.make("turn-reaper-active");
     const now = "2026-01-01T00:00:00.000Z";
@@ -302,6 +346,7 @@ describe("ProviderSessionReaper", () => {
           },
         },
       ]),
+      liveThreadIds: [threadId],
     });
     const repository = await runtime!.runPromise(
       Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
@@ -324,6 +369,306 @@ describe("ProviderSessionReaper", () => {
     );
 
     await startReaper();
+    await Effect.runPromise(drainFibers);
+
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.dispatchedCommands).toHaveLength(0);
+    const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
+    expect(Option.isSome(remaining)).toBe(true);
+  });
+
+  it("fails a stale active turn whose provider runtime is gone, exactly once", async () => {
+    const threadId = ThreadId.make("thread-watchdog-crashed");
+    const turnId = TurnId.make("turn-watchdog-crashed");
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-watchdog-crashed" },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await waitFor(() => harness.dispatchedCommands.length === 1);
+    await Effect.runPromise(drainFibers);
+
+    const commands = sessionSetCommands(harness.dispatchedCommands);
+    expect(commands).toHaveLength(1);
+    const command = commands[0]!;
+    expect(command.session.status).toBe("error");
+    expect(command.session.activeTurnId).toBeNull();
+    expect(command.session.stoppedBy).toBe("system");
+    expect(command.session.stopReason).toBe("provider_crashed");
+    expect(command.session.lastError).toContain(turnId);
+    // The conditional guard is what keeps a heartbeat that lands mid-sweep
+    // from being overwritten by this verdict.
+    expect(command.onlyIfActiveTurnId).toBe(turnId);
+    // The dead binding is released so the next sweep has nothing to re-judge.
+    expect(harness.stoppedThreadIds.has(threadId)).toBe(true);
+  });
+
+  it("does not fail an active turn whose session transitioned recently", async () => {
+    const threadId = ThreadId.make("thread-watchdog-fresh-turn");
+    const turnId = TurnId.make("turn-watchdog-fresh");
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            // The binding's lastSeenAt is only bumped by session-level calls,
+            // so a long turn leaves it stale; the session projection is the
+            // fresher clock and must veto the crash.
+            updatedAt: DateTime.formatIso(await Effect.runPromise(DateTime.now)),
+          },
+        },
+      ]),
+      activeTurnInactivityThresholdMs: 60_000,
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-watchdog-fresh" },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await Effect.runPromise(drainFibers);
+
+    expect(harness.dispatchedCommands).toHaveLength(0);
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
+    expect(Option.isSome(remaining)).toBe(true);
+  });
+
+  it("fails a stale active turn even when background liveness is still flagged", async () => {
+    // Deliberate: backgroundLiveness is reported by the provider process
+    // itself, so once that process is gone the flag is stale by construction.
+    // Letting it veto here would leave exactly the sessions this watchdog
+    // exists for pinned at "running" forever. A live runtime — checked
+    // before this point — is what protects real background work.
+    const threadId = ThreadId.make("thread-watchdog-background");
+    const turnId = TurnId.make("turn-watchdog-background");
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          backgroundLiveness: "working",
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-watchdog-background" },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await waitFor(() => harness.dispatchedCommands.length === 1);
+
+    expect(sessionSetCommands(harness.dispatchedCommands)[0]?.session.stopReason).toBe(
+      "provider_crashed",
+    );
+  });
+
+  it("leaves a stale active turn alone while background work runs on a live runtime", async () => {
+    const threadId = ThreadId.make("thread-watchdog-background-live");
+    const turnId = TurnId.make("turn-watchdog-background-live");
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          backgroundLiveness: "monitoring",
+        },
+      ]),
+      liveThreadIds: [threadId],
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-watchdog-background-live" },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await Effect.runPromise(drainFibers);
+
+    expect(harness.dispatchedCommands).toHaveLength(0);
+    expect(harness.stopSession).not.toHaveBeenCalled();
+  });
+
+  it("does not re-fail a session that already reached a terminal state", async () => {
+    const threadId = ThreadId.make("thread-watchdog-terminal");
+    const turnId = TurnId.make("turn-watchdog-terminal");
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "error",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            // A stale active turn id on an already-terminal session must not
+            // earn a second crash verdict.
+            activeTurnId: turnId,
+            lastError: "provider crashed",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-watchdog-terminal" },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await Effect.runPromise(drainFibers);
+
+    expect(harness.dispatchedCommands).toHaveLength(0);
+    expect(harness.stopSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps the binding when the conditional crash write is rejected", async () => {
+    // The decider rejects when the session moved on between the sweep's
+    // snapshot and this dispatch — i.e. the runtime is alive again. Stopping
+    // the binding here would kill the very work that disproved the crash.
+    const threadId = ThreadId.make("thread-watchdog-rejected");
+    const turnId = TurnId.make("turn-watchdog-rejected");
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      ]),
+      rejectDispatch: true,
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-watchdog-rejected" },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await waitFor(() => harness.dispatchedCommands.length === 1);
     await Effect.runPromise(drainFibers);
 
     expect(harness.stopSession).not.toHaveBeenCalled();

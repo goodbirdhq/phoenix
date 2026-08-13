@@ -160,6 +160,10 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   const commands = yield* Ref.make<Array<OrchestrationCommand>>([]);
   const queuedRows = input.queuedRowsRef ?? (yield* Ref.make([...input.queued]));
   const childShell = yield* Ref.make(makeShell(CHILD_ID, input.status, input.updatedAt));
+  // Persisted reports, so the duplicate guard that actually protects
+  // production — "this thread already has a report" — is exercised, not just
+  // the reactor's in-memory episode set.
+  const postedReports = yield* Ref.make<Array<OrchestrationThread["reports"][number]>>([]);
   const events = yield* PubSub.unbounded<OrchestrationEvent>();
   let sequence = 0;
 
@@ -197,6 +201,21 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
           yield* Ref.set(childShell, shell);
           yield* PubSub.publish(events, sessionSetEvent(shell));
         }
+        if (command.type === "thread.report.post") {
+          yield* Ref.update(postedReports, (entries) => [
+            ...entries,
+            {
+              reportId: command.reportId,
+              threadId: command.threadId,
+              status: command.status,
+              title: command.title,
+              summary: command.summary,
+              artifacts: [],
+              origin: command.origin ?? "agent",
+              createdAt: command.createdAt,
+            } as OrchestrationThread["reports"][number],
+          ]);
+        }
         sequence += 1;
         return { sequence };
       }),
@@ -213,6 +232,24 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
         : threadId === PARENT_ID
           ? Effect.succeed(Option.some(makeShell(PARENT_ID, "ready")))
           : Effect.succeed(Option.none()),
+    getThreadDetailById: (threadId: string) =>
+      threadId === CHILD_ID
+        ? Effect.gen(function* () {
+            const shell = yield* Ref.get(childShell);
+            return Option.some({
+              ...shell,
+              messages: [],
+              activities: [],
+              proposedPlans: [],
+              checkpoints: [],
+              queuedTurnStarts: [],
+              deletedAt: null,
+              reports: yield* Ref.get(postedReports),
+            } as unknown as OrchestrationThread);
+          })
+        : Effect.succeed(Option.none()),
+    getLatestUsageActivity: () => Effect.succeed(Option.none()),
+    getThreadTurnCount: () => Effect.succeed(1),
   } as unknown as ProjectionSnapshotQuery["Service"]);
   const turns = ProjectionTurnRepository.of({
     listQueuedTurnStarts: Ref.get(queuedRows),
@@ -242,6 +279,72 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
     queuedRows: yield* Ref.get(queuedRows),
     queuedRowsRef: queuedRows,
   };
+});
+
+// The session the provider-inactivity watchdog writes when it decides a
+// runtime died mid-turn: terminal, with the stop audited to the system.
+const providerCrashedShell = (
+  status: "error" | "stopped",
+  updatedAt = NOW,
+): OrchestrationThreadShell => {
+  const base = makeShell(CHILD_ID, status, updatedAt);
+  return {
+    ...base,
+    session: {
+      ...base.session!,
+      activeTurnId: null,
+      lastError: "Provider session stopped responding while turn turn-1 was running.",
+      stoppedBy: "system",
+      stopReason: "provider_crashed",
+    },
+  };
+};
+
+describe("SessionSpawnReactor provider-crash terminal reports", () => {
+  it.effect("synthesizes one report from the watchdog's crash transition", () =>
+    Effect.scoped(
+      createHarness({
+        status: "running",
+        queued: [],
+        boundaryEvents: [sessionSetEvent(providerCrashedShell("error"))],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const reports = commands.filter((command) => command.type === "thread.report.post");
+          expect(reports).toHaveLength(1);
+          const report = reports[0];
+          if (report?.type !== "thread.report.post") throw new Error("expected a report command");
+          // A provider error is the session failing outright, and the report
+          // is Phoenix's, not the agent's.
+          expect(report.status).toBe("failure");
+          expect(report.origin).toBe("system");
+          expect(report.summary).toContain("Provider session stopped responding");
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("does not add a second report when the provider's exit lands afterwards", () =>
+    Effect.scoped(
+      createHarness({
+        status: "running",
+        queued: [],
+        boundaryEvents: [
+          sessionSetEvent(providerCrashedShell("error")),
+          // The real terminal event the dead runtime eventually emits. It is
+          // the same episode, so it must not re-report it.
+          sessionSetEvent(providerCrashedShell("stopped", "2026-01-01T00:00:05.000Z")),
+        ],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          expect(commands.filter((command) => command.type === "thread.report.post")).toHaveLength(
+            1,
+          );
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
 });
 
 describe("SessionSpawnReactor queued delivery", () => {

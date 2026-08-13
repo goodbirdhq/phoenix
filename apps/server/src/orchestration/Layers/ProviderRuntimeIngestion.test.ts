@@ -798,6 +798,75 @@ describe("ProviderRuntimeIngestion", () => {
     }),
   );
 
+  effectIt.effect(
+    "keeps the inactivity watchdog's crash attribution when the provider exit lands late",
+    () =>
+      Effect.gen(function* () {
+        // The watchdog fails a session whose runtime died mid-turn. If that
+        // runtime's exit event shows up afterwards, ingestion may move the
+        // status on (stopped is still terminal) but must not contradict the
+        // audited verdict: who stopped it, why, and that no turn is running.
+        const harness = yield* Effect.promise(() => createHarness());
+        const threadId = asThreadId("thread-1");
+        const turnId = asTurnId("turn-watchdog-crashed");
+        const crashedAt = "2026-01-01T00:00:05.000Z";
+
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId("evt-watchdog-turn-started"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          turnId,
+        });
+        yield* Effect.promise(() =>
+          waitForThread(
+            harness.readModel,
+            (entry) => entry.session?.status === "running" && entry.session.activeTurnId === turnId,
+          ),
+        );
+
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-provider-watchdog-crash"),
+          threadId,
+          session: {
+            threadId,
+            status: "error",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: "Provider session stopped responding while a turn was running.",
+            stoppedBy: "system",
+            stopReason: "provider_crashed",
+            updatedAt: crashedAt,
+          },
+          onlyIfActiveTurnId: turnId,
+          createdAt: crashedAt,
+        });
+
+        harness.emit({
+          type: "session.exited",
+          eventId: asEventId("evt-watchdog-session-exited"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          createdAt: "2026-01-01T00:00:06.000Z",
+        });
+        yield* Effect.promise(() => harness.drain());
+
+        const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+          (entry) => entry.id === threadId,
+        );
+        expect(thread?.session?.status).toBe("stopped");
+        expect(thread?.session?.activeTurnId).toBeNull();
+        expect(thread?.session?.stoppedBy).toBe("system");
+        expect(thread?.session?.stopReason).toBe("provider_crashed");
+        expect(thread?.session?.lastError).toBe(
+          "Provider session stopped responding while a turn was running.",
+        );
+      }),
+  );
+
   it("does not clear active turn when session/thread started arrives mid-turn", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -3682,5 +3751,86 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime still processed");
+  });
+
+  it("keeps a provider-crash verdict authoritative against a late provider exit", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-watchdog");
+    const crashedAt = "2026-01-01T02:00:00.000Z";
+    const lastError = "Provider session stopped responding for 120 minutes; runtime is gone.";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-watchdog-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId,
+    });
+    const running = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "running" && entry.session?.activeTurnId === turnId,
+    );
+
+    const crashVerdict = {
+      ...running.session!,
+      status: "error" as const,
+      activeTurnId: null,
+      lastError,
+      stoppedBy: "system" as const,
+      stopReason: "provider_crashed" as const,
+      stopRequestedAt: crashedAt,
+      updatedAt: crashedAt,
+    };
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-watchdog-crash"),
+      threadId,
+      session: crashVerdict,
+      onlyIfActiveTurnId: turnId,
+      createdAt: crashedAt,
+    });
+    const crashed = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "error" && entry.session?.activeTurnId === null,
+    );
+    expect(crashed.session?.stoppedBy).toBe("system");
+    expect(crashed.session?.stopReason).toBe("provider_crashed");
+
+    // A second sweep cannot append a second verdict: the guard no longer finds
+    // the thread running that turn.
+    const repeated = await harness
+      .dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-watchdog-crash-repeat"),
+        threadId,
+        session: { ...crashVerdict, updatedAt: "2026-01-01T02:05:00.000Z" },
+        onlyIfActiveTurnId: turnId,
+        createdAt: "2026-01-01T02:05:00.000Z",
+      })
+      .then(
+        () => "accepted",
+        () => "rejected",
+      );
+    expect(repeated).toBe("rejected");
+
+    // The dead provider's own exit notification may still arrive. It may end
+    // the session, but it must not erase who ended it or why.
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-watchdog-late-exit"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T02:10:00.000Z",
+    });
+    const exited = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "stopped",
+    );
+    expect(exited.session?.activeTurnId).toBeNull();
+    expect(exited.session?.stoppedBy).toBe("system");
+    expect(exited.session?.stopReason).toBe("provider_crashed");
+    expect(exited.session?.lastError).toBe(lastError);
   });
 });

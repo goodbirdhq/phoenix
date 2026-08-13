@@ -1174,6 +1174,14 @@ const ThreadSessionSetCommand = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
   createdAt: IsoDateTime,
+  // Conditional session writes: the decider drops the command unless the
+  // thread is still running exactly this turn. The provider-inactivity
+  // watchdog decides a session is dead from a snapshot it read before
+  // dispatching; without this guard a heartbeat or a real provider terminal
+  // event landing in that window would be overwritten by a stale "crashed"
+  // verdict. Commands are decided serially against the authoritative read
+  // model, so checking here — not at the caller's snapshot — closes the race.
+  onlyIfActiveTurnId: Schema.optional(TurnId),
 });
 
 const ThreadQueuedTurnStartCommand = Schema.Struct({
