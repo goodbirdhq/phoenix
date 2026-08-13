@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
+import * as GitRepositoryLock from "../../../git/GitRepositoryLock.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -29,6 +30,7 @@ import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.t
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
+import * as SourceControlProviderRegistry from "../../../sourceControl/SourceControlProviderRegistry.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { make } from "./handlers.ts";
 
@@ -109,6 +111,13 @@ const makeHarness = (options: HarnessOptions = {}) => {
       {} as unknown as ProjectionThreadReportRepository["Service"],
     ),
     Layer.succeed(ProviderSessionDirectory, {} as unknown as ProviderSessionDirectory["Service"]),
+    // Only settle_session's cleanup path reaches these two; post_report that
+    // touches them is a bug, so the stubs stay empty.
+    Layer.succeed(
+      SourceControlProviderRegistry.SourceControlProviderRegistry,
+      {} as unknown as SourceControlProviderRegistry.SourceControlProviderRegistry["Service"],
+    ),
+    GitRepositoryLock.layer.pipe(Layer.provide(NodeServices.layer)),
     NodeServices.layer,
   );
 
