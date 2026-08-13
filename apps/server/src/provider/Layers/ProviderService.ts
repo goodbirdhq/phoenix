@@ -48,7 +48,10 @@ import {
   withMetrics,
 } from "../../observability/Metrics.ts";
 import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
-import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type {
+  ProviderAdapterShape,
+  ProviderSessionRuntimeLiveness,
+} from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
@@ -1018,6 +1021,22 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const getSessionRuntimeLiveness: NonNullable<
+    ProviderService.ProviderService["Service"]["getSessionRuntimeLiveness"]
+  > = (threadId) =>
+    Effect.gen(function* () {
+      const binding = Option.getOrUndefined(
+        yield* directory.getBinding(threadId).pipe(Effect.orElseSucceed(() => Option.none())),
+      );
+      if (!binding) return "dead" as ProviderSessionRuntimeLiveness;
+      if (!binding.providerInstanceId) return "dead" as ProviderSessionRuntimeLiveness;
+      const adapter = yield* registry.getByInstance(binding.providerInstanceId).pipe(Effect.option);
+      if (Option.isNone(adapter)) return "dead" as ProviderSessionRuntimeLiveness;
+      return adapter.value.getSessionRuntimeLiveness
+        ? yield* adapter.value.getSessionRuntimeLiveness(threadId)
+        : ("unknown" as ProviderSessionRuntimeLiveness);
+    });
+
   const getCapabilities: ProviderServiceMethod<"getCapabilities"> = (instanceId) =>
     registry.getByInstance(instanceId).pipe(Effect.map((adapter) => adapter.capabilities));
 
@@ -1133,6 +1152,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToUserInput,
     stopSession,
     listSessions,
+    getSessionRuntimeLiveness,
     getCapabilities,
     getInstanceInfo,
     rollbackConversation,

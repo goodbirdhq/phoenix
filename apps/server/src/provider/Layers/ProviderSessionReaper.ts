@@ -92,14 +92,15 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
         const activeSession = thread?.session;
         if (activeSession?.activeTurnId != null) {
-          const hasLiveSession = (yield* providerService.listSessions()).some(
-            (session) => session.threadId === binding.threadId,
-          );
-          if (hasLiveSession) {
-            yield* Effect.logDebug("provider.session.reaper.skipped-live-active-turn", {
+          const runtimeLiveness = yield* providerService.getSessionRuntimeLiveness
+            ? providerService.getSessionRuntimeLiveness(binding.threadId)
+            : Effect.succeed("unknown" as const);
+          if (runtimeLiveness !== "dead") {
+            yield* Effect.logDebug("provider.session.reaper.skipped-active-turn-runtime-live", {
               threadId: binding.threadId,
               activeTurnId: activeSession.activeTurnId,
               idleDurationMs,
+              runtimeLiveness,
             });
             continue;
           }

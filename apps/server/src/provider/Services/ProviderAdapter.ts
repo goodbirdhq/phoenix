@@ -32,6 +32,8 @@ export interface ProviderAdapterCapabilities {
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
 }
 
+export type ProviderSessionRuntimeLiveness = "live" | "dead" | "unknown";
+
 export interface ProviderThreadTurnSnapshot {
   readonly id: TurnId;
   readonly items: ReadonlyArray<unknown>;
@@ -100,6 +102,15 @@ export interface ProviderAdapterShape<TError> {
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
+
+  /**
+   * Checks the adapter's runtime handle rather than its session map. Missing
+   * support is deliberately unknown: callers must not mistake bookkeeping for
+   * a live child process.
+   */
+  readonly getSessionRuntimeLiveness?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderSessionRuntimeLiveness>;
 
   /**
    * Read a provider thread snapshot.

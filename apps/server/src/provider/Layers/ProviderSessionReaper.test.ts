@@ -154,6 +154,7 @@ describe("ProviderSessionReaper", () => {
       readonly threadId: ThreadId;
     }) => ReturnType<ProviderServiceShape["stopSession"]>;
     readonly sessions?: ReadonlyArray<ProviderSession>;
+    readonly runtimeLiveness?: "live" | "dead" | "unknown";
   }) {
     const stoppedThreadIds = new Set<ThreadId>();
     const dispatch = vi.fn((_: OrchestrationCommand) => Effect.succeed({ sequence: 1 }));
@@ -174,6 +175,7 @@ describe("ProviderSessionReaper", () => {
       respondToUserInput: () => unsupported(),
       stopSession,
       listSessions: () => Effect.succeed(input.sessions ?? []),
+      getSessionRuntimeLiveness: () => Effect.succeed(input.runtimeLiveness ?? "dead"),
       getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
       getInstanceInfo: (instanceId) => {
         const driverKind = ProviderDriverKind.make(String(instanceId));
@@ -360,7 +362,7 @@ describe("ProviderSessionReaper", () => {
     expect(watchdogCommand.session.lastError).toContain("Provider session disappeared");
   });
 
-  it("does not crash a stale active turn while its provider session is live", async () => {
+  it("crashes a stale active turn when an adapter still maps it but its runtime is dead", async () => {
     const threadId = ThreadId.make("thread-reaper-active-live");
     const turnId = TurnId.make("turn-reaper-active-live");
     const now = "2026-01-01T00:00:00.000Z";
@@ -390,6 +392,7 @@ describe("ProviderSessionReaper", () => {
           updatedAt: now,
         },
       ],
+      runtimeLiveness: "dead",
     });
     const repository = await runtime!.runPromise(
       Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
@@ -404,6 +407,51 @@ describe("ProviderSessionReaper", () => {
         status: "running",
         lastSeenAt: "2026-04-14T00:00:00.000Z",
         resumeCursor: { opaque: "resume-active-live" },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await Effect.runPromise(drainFibers);
+
+    await waitFor(() => harness.dispatch.mock.calls.length === 1);
+    expect(harness.stopSession).not.toHaveBeenCalled();
+  });
+
+  it("does not crash a stale active turn while its runtime handle is live", async () => {
+    const threadId = ThreadId.make("thread-reaper-runtime-live");
+    const turnId = TurnId.make("turn-reaper-runtime-live");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+      runtimeLiveness: "live",
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-runtime-live" },
         runtimePayload: null,
       }),
     );

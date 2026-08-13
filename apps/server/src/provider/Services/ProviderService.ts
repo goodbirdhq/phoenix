@@ -30,6 +30,7 @@ import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type { ProviderSessionRuntimeLiveness } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 
 /**
@@ -85,6 +86,11 @@ export interface ProviderServiceShape {
    * Aggregates runtime session lists from all registered adapters.
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
+  /** Runtime/process liveness, not adapter session-map membership. */
+  readonly getSessionRuntimeLiveness?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderSessionRuntimeLiveness>;
 
   /**
    * Read capabilities for the adapter bound to a configured provider instance.
