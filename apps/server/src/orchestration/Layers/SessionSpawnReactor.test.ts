@@ -96,6 +96,7 @@ const queued = (
   state: "queued",
   requestedAt,
   releasingAt: null,
+  redeliveryCount: 0,
 });
 
 const releasing = (suffix: string, releasingAt = STALE): ProjectionQueuedTurnStart => ({
@@ -181,7 +182,12 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
           yield* Ref.update(queuedRows, (entries) =>
             entries.map((entry) =>
               entry.messageId === command.messageId && entry.state === "releasing"
-                ? { ...entry, state: "queued", releasingAt: null }
+                ? {
+                    ...entry,
+                    state: "queued",
+                    releasingAt: null,
+                    redeliveryCount: entry.redeliveryCount + 1,
+                  }
                 : entry,
             ),
           );
@@ -303,6 +309,32 @@ describe("SessionSpawnReactor queued delivery", () => {
         expect(
           restarted.commands.filter((command) => command.type === "thread.turn.start.queued"),
         ).toHaveLength(1);
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("cancels a releasing row after the durable redelivery limit", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const harness = yield* createHarness({
+          status: "ready",
+          queued: [{ ...releasing("limit"), redeliveryCount: 3 }],
+        });
+        const cancelled = harness.commands.filter(
+          (command) => command.type === "thread.turn.queue.cancel",
+        );
+        expect(cancelled).toHaveLength(1);
+        expect(cancelled[0]?.type === "thread.turn.queue.cancel" && cancelled[0].reason).toBe(
+          "redelivery_limit_reached",
+        );
+        const notes = harness.commands.filter(
+          (command) => command.type === "thread.activity.append",
+        );
+        expect(notes).toHaveLength(1);
+        expect(notes[0]?.type === "thread.activity.append" && notes[0].activity.kind).toBe(
+          "queued-delivery.redelivery-limit-reached",
+        );
       }).pipe(Effect.provide(NodeServices.layer)),
     ),
   );

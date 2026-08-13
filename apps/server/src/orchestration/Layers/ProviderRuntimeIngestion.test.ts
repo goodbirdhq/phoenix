@@ -28,6 +28,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -36,7 +37,9 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -195,7 +198,10 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | ProjectionTurnRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -237,7 +243,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
     );
-    const layer = ProviderRuntimeIngestionLive.pipe(
+    const providerRuntimeLayer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       // Single shared liveness instance across ingestion (writer), the
@@ -250,9 +256,14 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
     );
+    const layer = Layer.merge(
+      providerRuntimeLayer,
+      ProjectionTurnRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory)),
+    );
     runtime = ManagedRuntime.make(layer);
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const projectionTurns = await runtime.runPromise(Effect.service(ProjectionTurnRepository));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
@@ -316,6 +327,14 @@ describe("ProviderRuntimeIngestion", () => {
       engine,
       dispatch,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
+      readShell: () => Effect.runPromise(snapshotQuery.getThreadShellById(asThreadId("thread-1"))),
+      readQueuedDeliveryReceipts: () =>
+        Effect.runPromise(
+          projectionTurns.listQueuedDeliveryReceipts({
+            threadId: asThreadId("thread-1"),
+            limit: 20,
+          }),
+        ),
       emit: provider.emit,
       setProviderSession: provider.setSession,
       drain,
@@ -362,6 +381,109 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
+  });
+
+  it("consumes a busy-thread user delivery when the provider starts its released turn", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const messageId = asMessageId("queued-user-message");
+    const queuedAt = "2026-01-01T00:00:01.000Z";
+
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-user-queue-busy"),
+      threadId,
+      session: {
+        threadId,
+        status: "running",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: asTurnId("existing-turn"),
+        lastError: null,
+        updatedAt: queuedAt,
+      },
+      createdAt: queuedAt,
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-user-queued-message"),
+      threadId,
+      message: { messageId, role: "user", text: "queued from the UI", attachments: [] },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: queuedAt,
+    });
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-user-queue-ready"),
+      threadId,
+      session: {
+        threadId,
+        status: "ready",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: "2026-01-01T00:00:02.000Z",
+      },
+      createdAt: "2026-01-01T00:00:02.000Z",
+    });
+    await harness.dispatch({
+      type: "thread.turn.start.queued",
+      commandId: CommandId.make("cmd-user-release"),
+      threadId,
+      messageId,
+      createdAt: "2026-01-01T00:00:03.000Z",
+    });
+    // This is the session transition ProviderCommandReactor writes before the
+    // provider publishes the concrete turn id. It must survive a real DB
+    // snapshot/reload for ProviderRuntimeIngestion to attribute consumption.
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-user-release-starting"),
+      threadId,
+      session: {
+        threadId,
+        status: "starting",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        queuedDeliveryMessageId: messageId,
+        updatedAt: "2026-01-01T00:00:03.000Z",
+      },
+      createdAt: "2026-01-01T00:00:03.000Z",
+    });
+    expect((await harness.readModel()).threads[0]?.session?.queuedDeliveryMessageId).toBe(
+      messageId,
+    );
+    expect(
+      (await harness.readShell()).pipe(Option.getOrUndefined)?.session?.queuedDeliveryMessageId,
+    ).toBe(messageId);
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-user-queued-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:04.000Z",
+      turnId: asTurnId("queued-user-turn"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "queued-user-turn" &&
+        thread.session?.queuedDeliveryMessageId === null,
+    );
+    expect(await harness.readQueuedDeliveryReceipts()).toContainEqual(
+      expect.objectContaining({
+        messageId,
+        state: "consumed",
+        consumedByTurnId: asTurnId("queued-user-turn"),
+        consumedAt: expect.any(String),
+      }),
+    );
   });
 
   it("applies provider session.state.changed transitions directly", async () => {

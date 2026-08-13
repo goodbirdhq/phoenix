@@ -21,7 +21,7 @@ const layer = it.layer(
 layer("ProjectionTurnRepository queued receipts", (it) => {
   it.effect("round-trips releasing rows, requeues them, and returns durable receipts", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 47 });
+      yield* runMigrations({ toMigrationInclusive: 49 });
       const repository = yield* ProjectionTurnRepository;
       yield* repository.enqueueTurnStart({
         threadId: THREAD_ID,
@@ -30,6 +30,7 @@ layer("ProjectionTurnRepository queued receipts", (it) => {
         state: "queued",
         requestedAt: REQUESTED_AT,
         releasingAt: null,
+        redeliveryCount: 0,
       });
       yield* repository.markQueuedTurnStartReleasing({
         threadId: THREAD_ID,
@@ -45,6 +46,7 @@ layer("ProjectionTurnRepository queued receipts", (it) => {
           state: "releasing",
           requestedAt: REQUESTED_AT,
           releasingAt: RELEASING_AT,
+          redeliveryCount: 0,
         },
       ]);
 
@@ -57,6 +59,7 @@ layer("ProjectionTurnRepository queued receipts", (it) => {
           state: "queued",
           requestedAt: REQUESTED_AT,
           releasingAt: null,
+          redeliveryCount: 1,
         },
       ]);
 
