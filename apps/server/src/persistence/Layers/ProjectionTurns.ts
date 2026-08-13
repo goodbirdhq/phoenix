@@ -233,7 +233,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         SET state = 'cancelled', cancelled_at = ${cancelledAt}, cancel_reason = ${reason}
         WHERE thread_id = ${threadId}
           AND pending_message_id = ${messageId}
-          AND state IN ('queued', 'interrupting')
+          AND state IN ('queued', 'interrupting', 'releasing')
       `,
   });
 
@@ -242,7 +242,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     execute: ({ threadId, messageId }) =>
       sql`
         UPDATE projection_turns
-        SET state = 'queued', releasing_at = NULL, consumed_by_turn_id = NULL, consumed_at = NULL,
+        SET state = 'queued', releasing_at = NULL, redelivery_count = redelivery_count + 1,
+            consumed_by_turn_id = NULL, consumed_at = NULL,
             cancelled_at = NULL, cancel_reason = NULL
         WHERE thread_id = ${threadId}
           AND pending_message_id = ${messageId}
@@ -272,7 +273,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           CASE WHEN state = 'interrupting' THEN 'interrupt' ELSE 'queue' END AS mode,
           CASE WHEN state = 'releasing' THEN 'releasing' ELSE 'queued' END AS state,
           requested_at AS "requestedAt",
-          releasing_at AS "releasingAt"
+          releasing_at AS "releasingAt",
+          redelivery_count AS "redeliveryCount"
         FROM projection_turns
         WHERE state IN ('queued', 'interrupting', 'releasing')
           AND pending_message_id IS NOT NULL

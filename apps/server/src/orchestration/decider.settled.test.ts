@@ -167,6 +167,36 @@ it.layer(NodeServices.layer)("queued delivery receipt attribution", (it) => {
       expect(unmarkedEvents.some((event) => event.type === "thread.turn-start-consumed")).toBe(
         false,
       );
+
+      const queuedButNotReleased = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-queued-but-not-released"),
+          threadId: ThreadId.make("thread-1"),
+          session: runningSession,
+          createdAt: NOW,
+        },
+        readModel: makeReadModel(
+          null,
+          null,
+          startingSession,
+          [],
+          [],
+          [
+            {
+              messageId: releasedMessageId,
+              mode: "queue",
+              requestedAt: NOW,
+            },
+          ],
+        ),
+      });
+      const queuedButNotReleasedEvents = Array.isArray(queuedButNotReleased)
+        ? queuedButNotReleased
+        : [queuedButNotReleased];
+      expect(
+        queuedButNotReleasedEvents.some((event) => event.type === "thread.turn-start-consumed"),
+      ).toBe(false);
     }),
   );
 });

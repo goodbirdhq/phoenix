@@ -1192,6 +1192,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         lastCompletedOperation: event.payload.session.lastCompletedOperation ?? null,
         graceStopDeadlineAt: event.payload.session.graceStopDeadlineAt ?? null,
         graceStopEpisodeId: event.payload.session.graceStopEpisodeId ?? null,
+        queuedDeliveryMessageId: event.payload.session.queuedDeliveryMessageId ?? null,
         updatedAt: event.payload.session.updatedAt,
       });
     });
@@ -1208,6 +1209,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             state: "queued",
             requestedAt: event.payload.createdAt,
             releasingAt: null,
+            redeliveryCount: 0,
           });
           return;
         }

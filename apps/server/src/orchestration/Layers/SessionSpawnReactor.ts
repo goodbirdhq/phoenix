@@ -1,5 +1,6 @@
 import {
   CommandId,
+  EventId,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationSession,
@@ -61,6 +62,7 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const INTERRUPT_FALLBACK_TIMEOUT = Duration.seconds(30);
 const RECOVERY_INTERVAL = Duration.seconds(30);
 const RELEASING_RECOVERY_AGE = Duration.seconds(30);
+const MAX_QUEUED_TURN_REDELIVERIES = 3;
 
 const truncate = (text: string, maxLength: number) =>
   text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`;
@@ -216,7 +218,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
 
   const cancelQueuedTurns = Effect.fn("SessionSpawnReactor.cancelQueuedTurns")(function* (input: {
     readonly threadId: ThreadId;
-    readonly reason: "session_terminal" | "interrupt_timeout";
+    readonly reason: "session_terminal" | "interrupt_timeout" | "redelivery_limit_reached";
   }) {
     const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
       (entry) => entry.threadId === input.threadId && entry.state === "queued",
@@ -237,6 +239,38 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       { concurrency: 1 },
     );
     return queued.length;
+  });
+
+  const cancelRedeliveryLimitReached = Effect.fn(
+    "SessionSpawnReactor.cancelRedeliveryLimitReached",
+  )(function* (input: { readonly threadId: ThreadId; readonly messageId: MessageId }) {
+    const createdAt = yield* nowIso;
+    yield* engine.dispatch({
+      type: "thread.turn.queue.cancel",
+      commandId: yield* serverCommandId("queued-turn-redelivery-limit-cancel"),
+      threadId: input.threadId,
+      messageId: input.messageId,
+      reason: "redelivery_limit_reached",
+      createdAt,
+    });
+    yield* engine.dispatch({
+      type: "thread.activity.append",
+      commandId: yield* serverCommandId("queued-turn-redelivery-limit-note"),
+      threadId: input.threadId,
+      activity: {
+        id: EventId.make(yield* randomUUID),
+        tone: "error",
+        kind: "queued-delivery.redelivery-limit-reached",
+        summary: "A queued message was cancelled after repeated delivery failures.",
+        payload: {
+          messageId: input.messageId,
+          redeliveryCount: MAX_QUEUED_TURN_REDELIVERIES,
+        },
+        turnId: null,
+        createdAt,
+      },
+      createdAt,
+    });
   });
 
   const cancelTerminalQueue = Effect.fn("SessionSpawnReactor.cancelTerminalQueue")(function* (
@@ -527,6 +561,13 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
           ),
           (entry) =>
             Effect.gen(function* () {
+              if (entry.redeliveryCount >= MAX_QUEUED_TURN_REDELIVERIES) {
+                yield* cancelRedeliveryLimitReached({
+                  threadId: input.threadId,
+                  messageId: entry.messageId,
+                });
+                return;
+              }
               const createdAt = yield* nowIso;
               yield* engine.dispatch({
                 type: "thread.turn.queue.requeue",

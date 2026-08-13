@@ -686,6 +686,8 @@ const make = Effect.gen(function* () {
               thread.session?.status === "stopped"
                 ? null
                 : (thread.session?.graceStopEpisodeId ?? null),
+            queuedDeliveryMessageId:
+              options?.queuedDeliveryMessageId ?? thread.session?.queuedDeliveryMessageId ?? null,
             updatedAt: session.updatedAt,
           },
           createdAt,
