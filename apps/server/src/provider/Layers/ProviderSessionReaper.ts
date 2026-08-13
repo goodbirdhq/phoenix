@@ -60,15 +60,17 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
+        // Keep ordinary ready/stopped reaping cheap and exactly keyed to the
+        // persisted binding timestamp. Only the active-turn watchdog needs a
+        // shell read and the more conservative session timestamp.
+        const idleDurationMs = now - lastSeenMs;
+        if (idleDurationMs < inactivityThresholdMs) {
+          continue;
+        }
+
         const thread = yield* projectionSnapshotQuery
           .getThreadShellById(binding.threadId)
           .pipe(Effect.map(Option.getOrUndefined));
-        const sessionUpdatedMs = thread?.session ? Date.parse(thread.session.updatedAt) : NaN;
-        const activityMs = Math.max(
-          lastSeenMs,
-          Number.isNaN(sessionUpdatedMs) ? lastSeenMs : sessionUpdatedMs,
-        );
-        const idleDurationMs = now - activityMs;
 
         // The turn can settle while background work runs on (subagent
         // fleets, workflow runs, Monitor watch loops). Those live inside the
@@ -83,15 +85,22 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        // Directory activity is intentionally not updated for every provider
-        // event. For an active turn, use the later of its binding and session
-        // writes, then independently prove the provider has no live session.
-        if (idleDurationMs < inactivityThresholdMs) {
-          continue;
-        }
-
         const activeSession = thread?.session;
-        if (activeSession?.activeTurnId != null) {
+        const isActiveTurn =
+          activeSession?.activeTurnId != null &&
+          (activeSession.status === "starting" || activeSession.status === "running");
+        if (isActiveTurn) {
+          // Directory activity is intentionally not updated for every
+          // provider event. The watchdog therefore uses the later session
+          // update only for an active turn; ready-session reaping above stays
+          // unchanged.
+          const sessionUpdatedMs = Date.parse(activeSession.updatedAt);
+          const watchdogIdleDurationMs =
+            now -
+            Math.max(lastSeenMs, Number.isNaN(sessionUpdatedMs) ? lastSeenMs : sessionUpdatedMs);
+          if (watchdogIdleDurationMs < inactivityThresholdMs) {
+            continue;
+          }
           const runtimeLiveness = yield* providerService.getSessionRuntimeLiveness
             ? providerService.getSessionRuntimeLiveness(binding.threadId)
             : Effect.succeed("unknown" as const);
@@ -99,7 +108,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
             yield* Effect.logDebug("provider.session.reaper.skipped-active-turn-runtime-live", {
               threadId: binding.threadId,
               activeTurnId: activeSession.activeTurnId,
-              idleDurationMs,
+              idleDurationMs: watchdogIdleDurationMs,
               runtimeLiveness,
             });
             continue;
@@ -132,7 +141,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
                 Effect.logWarning("provider.session.reaper.active-turn-crashed", {
                   threadId: binding.threadId,
                   activeTurnId: activeSession.activeTurnId,
-                  idleDurationMs,
+                  idleDurationMs: watchdogIdleDurationMs,
                 }),
               ),
               Effect.catchCause((cause) =>

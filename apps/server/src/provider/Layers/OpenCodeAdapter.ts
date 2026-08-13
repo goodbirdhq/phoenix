@@ -1631,6 +1631,17 @@ export function makeOpenCodeAdapter(
     const hasSession: OpenCodeAdapterShape["hasSession"] = (threadId) =>
       Effect.sync(() => sessions.has(threadId));
 
+    const getSessionRuntimeLiveness: OpenCodeAdapterShape["getSessionRuntimeLiveness"] = (
+      threadId,
+    ) =>
+      Effect.sync(() => {
+        // OpenCode may connect to an external server, where this adapter has
+        // no child-process handle to inspect. A retained context is therefore
+        // intentionally unknown (and the watchdog safely skips it), while a
+        // missing context is definitively dead.
+        return sessions.has(threadId) ? "unknown" : "dead";
+      });
+
     const readThread: OpenCodeAdapterShape["readThread"] = Effect.fn("readThread")(
       function* (threadId) {
         const context = yield* ensureSessionContext(sessions, threadId);
@@ -1710,6 +1721,7 @@ export function makeOpenCodeAdapter(
       stopSession,
       listSessions,
       hasSession,
+      getSessionRuntimeLiveness,
       readThread,
       rollbackThread,
       stopAll,

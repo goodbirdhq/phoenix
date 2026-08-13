@@ -538,6 +538,14 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         ...makeSession("running"),
         activeTurnId: turnId,
       };
+      const startingSession = {
+        ...makeSession("starting"),
+        activeTurnId: turnId,
+      };
+      const errorSessionWithTurn = {
+        ...makeSession("error"),
+        activeTurnId: turnId,
+      };
       const terminalSession = {
         ...makeSession("ready"),
         activeTurnId: null,
@@ -565,11 +573,26 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       const acceptedEvents = Array.isArray(accepted) ? accepted : [accepted];
       expect(acceptedEvents.map((event) => event.type)).toEqual(["thread.session-set"]);
 
+      const startingAccepted = yield* decideOrchestrationCommand({
+        command: command("cmd-watchdog-starting", turnId),
+        readModel: makeReadModel(null, null, startingSession),
+      });
+      const startingEvents = Array.isArray(startingAccepted)
+        ? startingAccepted
+        : [startingAccepted];
+      expect(startingEvents.map((event) => event.type)).toEqual(["thread.session-set"]);
+
       const mismatched = yield* decideOrchestrationCommand({
         command: command("cmd-watchdog-mismatched", otherTurnId),
         readModel: makeReadModel(null, null, runningSession),
       }).pipe(Effect.flip);
       expect(mismatched._tag).toBe("OrchestrationCommandInvariantError");
+
+      const errored = yield* decideOrchestrationCommand({
+        command: command("cmd-watchdog-error", turnId),
+        readModel: makeReadModel(null, null, errorSessionWithTurn),
+      }).pipe(Effect.flip);
+      expect(errored._tag).toBe("OrchestrationCommandInvariantError");
 
       const terminal = yield* decideOrchestrationCommand({
         command: command("cmd-watchdog-late-error", turnId),
