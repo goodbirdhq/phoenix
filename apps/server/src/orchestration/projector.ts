@@ -573,7 +573,47 @@ export function projectEvent(
       });
     }
 
-    case "thread.turn-start-requested":
+    case "thread.turn-start-requested": {
+      const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
+      if (!thread) return Effect.succeed(nextBase);
+      return Effect.succeed({
+        ...nextBase,
+        threads: updateThread(nextBase.threads, event.payload.threadId, {
+          // Old requested events predate receipt retention and keep their
+          // destructive behavior. New queue releases remain until the
+          // provider identifies the concrete turn that consumed them.
+          queuedTurnStarts:
+            event.payload.queuedDelivery === true
+              ? (thread.queuedTurnStarts ?? []).map((entry) =>
+                  entry.messageId === event.payload.messageId
+                    ? { ...entry, releasingAt: event.payload.createdAt }
+                    : entry,
+                )
+              : (thread.queuedTurnStarts ?? []).filter(
+                  (entry) => entry.messageId !== event.payload.messageId,
+                ),
+          updatedAt: event.occurredAt,
+        }),
+      });
+    }
+
+    case "thread.turn-start-requeued": {
+      const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
+      if (!thread) return Effect.succeed(nextBase);
+      return Effect.succeed({
+        ...nextBase,
+        threads: updateThread(nextBase.threads, event.payload.threadId, {
+          queuedTurnStarts: (thread.queuedTurnStarts ?? []).map((entry) =>
+            entry.messageId === event.payload.messageId
+              ? { ...entry, releasingAt: undefined }
+              : entry,
+          ),
+          updatedAt: event.occurredAt,
+        }),
+      });
+    }
+
+    case "thread.turn-start-consumed":
     case "thread.turn-start-cancelled": {
       const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
       if (!thread) return Effect.succeed(nextBase);

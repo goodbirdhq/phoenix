@@ -468,6 +468,11 @@ export const OrchestrationSession = Schema.Struct({
   // an old deadline from stopping a session that was subsequently restarted.
   graceStopDeadlineAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   graceStopEpisodeId: Schema.optional(Schema.NullOr(EventId)),
+  // Correlates a provider turn start to the queued message that released it.
+  // Optional/defaulted so historical session events continue to replay.
+  queuedDeliveryMessageId: Schema.optional(Schema.NullOr(MessageId)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;
@@ -586,6 +591,10 @@ export const OrchestrationThread = Schema.Struct({
         messageId: MessageId,
         mode: Schema.Literals(["queue", "interrupt"]),
         requestedAt: IsoDateTime,
+        // A queue release remains visible until the provider exposes the
+        // concrete turn id that consumed it. Older snapshots never had this
+        // transitional marker, so they decode as immediately releasable.
+        releasingAt: Schema.optional(IsoDateTime),
       }),
     ),
   ),
@@ -1184,6 +1193,14 @@ const ThreadQueuedTurnCancelCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadQueuedTurnRequeueCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.queue.requeue"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   type: Schema.Literal("thread.message.assistant.delta"),
   commandId: CommandId,
@@ -1277,6 +1294,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadQueuedTurnStartCommand,
   ThreadQueuedTurnCancelCommand,
+  ThreadQueuedTurnRequeueCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
@@ -1315,6 +1333,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.message-sent",
   "thread.turn-start-queued",
   "thread.turn-start-cancelled",
+  "thread.turn-start-requeued",
+  "thread.turn-start-consumed",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
   "thread.approval-response-requested",
@@ -1498,6 +1518,12 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   graceStopNotice: Schema.optional(Schema.Boolean),
+  // Set only when this request releases a persisted queued delivery. Optional
+  // so events written before delivery receipts retain their old meaning.
+  queuedDelivery: Schema.optional(Schema.Boolean),
+  queuedDeliveryMessageId: Schema.optional(Schema.NullOr(MessageId)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -1515,6 +1541,19 @@ export const ThreadTurnStartCancelledPayload = Schema.Struct({
   messageId: MessageId,
   reason: Schema.Literals(["session_terminal", "interrupt_timeout"]),
   createdAt: IsoDateTime,
+});
+
+export const ThreadTurnStartRequeuedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadTurnStartConsumedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  turnId: TurnId,
+  consumedAt: IsoDateTime,
 });
 
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
@@ -1711,6 +1750,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-start-cancelled"),
     payload: ThreadTurnStartCancelledPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.turn-start-requeued"),
+    payload: ThreadTurnStartRequeuedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.turn-start-consumed"),
+    payload: ThreadTurnStartConsumedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

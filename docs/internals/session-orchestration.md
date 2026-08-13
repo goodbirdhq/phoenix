@@ -459,9 +459,11 @@ reject it or start a distinct turn. `send_to_session` therefore exposes only `qu
 `interrupt` for now. A future `notify` mode needs an explicit provider capability and fallback
 contract before it can promise tool-boundary guidance without accidentally starting a turn.
 
-Queued-row cleanup for deleted/archived threads and replacing the global recovery scan with a
-thread-indexed query remain persistence follow-ups; terminal session transitions are cleaned up
-by this delivery workflow.
+Queued delivery rows are retained after consumption/cancellation as receipts so a parent can
+compare an instruction's consuming turn with a report's turn. There is intentionally no retention
+cleanup in this slice: deleted/archived-thread cleanup and a bounded receipt-retention policy are
+the next persistence follow-up. The global recovery scan should also become thread-indexed;
+terminal session transitions are handled by this delivery workflow.
 
 The web client currently renders the queued user message but does not surface a queued-delivery
 indicator because its reducer intentionally ignores the new event. That affordance is a separate

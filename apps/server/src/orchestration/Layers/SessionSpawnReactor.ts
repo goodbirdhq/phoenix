@@ -60,6 +60,7 @@ const isTerminalStatus = (status: OrchestrationSessionStatus): status is "stoppe
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const INTERRUPT_FALLBACK_TIMEOUT = Duration.seconds(30);
 const RECOVERY_INTERVAL = Duration.seconds(30);
+const RELEASING_RECOVERY_AGE = Duration.seconds(30);
 
 const truncate = (text: string, maxLength: number) =>
   text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`;
@@ -104,6 +105,11 @@ export const formatReportMessage = (childTitle: string, report: SessionReport): 
     envelope.recommendation !== undefined ? `\nRecommendation: ${envelope.recommendation}` : "";
   return `${lead}\n\nAbstract:\n${envelope.abstract}\n${recommendationLine}${structuredLine}\n[Full report is ${envelope.summaryChars} chars; this is a compact envelope. Call read_report with reportId "${report.reportId}" to read the rest.]${artifactLines}\n\n(spawned thread: ${report.threadId}, report: ${report.reportId})`;
 };
+
+export const formatQueuedReportWarning = (messageIds: ReadonlyArray<MessageId>): string =>
+  messageIds.length === 0
+    ? ""
+    : `\n\n[Phoenix] ${messageIds.length} queued message${messageIds.length === 1 ? "" : "s"} were not consumed before this report was written: ${messageIds.join(", ")}.`;
 
 // A stop is an external decision with unknown progress ("partial"); a provider
 // error is the session failing outright ("failure").
@@ -196,7 +202,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     threadId: ThreadId,
   ) {
     const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).find(
-      (entry) => entry.threadId === threadId,
+      (entry) => entry.threadId === threadId && entry.state === "queued",
     );
     if (queued === undefined) return;
     yield* engine.dispatch({
@@ -213,7 +219,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     readonly reason: "session_terminal" | "interrupt_timeout";
   }) {
     const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
-      (entry) => entry.threadId === input.threadId,
+      (entry) => entry.threadId === input.threadId && entry.state === "queued",
     );
     yield* Effect.forEach(
       queued,
@@ -235,21 +241,17 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
 
   const cancelTerminalQueue = Effect.fn("SessionSpawnReactor.cancelTerminalQueue")(function* (
     threadId: ThreadId,
-    status: "stopped" | "error",
+    _status: "stopped" | "error",
   ) {
-    const cancelled = yield* cancelQueuedTurns({ threadId, reason: "session_terminal" });
-    if (cancelled === 0) return;
-    yield* notifyParent({
-      childThreadId: threadId,
-      text: `[Phoenix] ${cancelled} queued message${cancelled === 1 ? " was" : "s were"} cancelled because the spawned session entered ${status} state.\n\n(spawned thread: ${threadId})`,
-      commandTag: "queued-turn-cancel-notify",
-    });
+    yield* cancelQueuedTurns({ threadId, reason: "session_terminal" });
   });
 
   const notifyParent = Effect.fn("SessionSpawnReactor.notifyParent")(function* (input: {
     readonly childThreadId: ThreadId;
     readonly text: string;
     readonly commandTag: string;
+    readonly commandId?: CommandId | undefined;
+    readonly messageId?: MessageId | undefined;
   }) {
     const child = yield* snapshotQuery.getThreadShellById(input.childThreadId);
     if (Option.isNone(child)) return;
@@ -266,10 +268,10 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     const createdAt = yield* nowIso;
     yield* engine.dispatch({
       type: "thread.turn.start",
-      commandId: yield* serverCommandId(input.commandTag),
+      commandId: input.commandId ?? (yield* serverCommandId(input.commandTag)),
       threadId: parent.value.id,
       message: {
-        messageId: MessageId.make(yield* randomUUID),
+        messageId: input.messageId ?? MessageId.make(yield* randomUUID),
         role: "user",
         text: input.text,
         attachments: [],
@@ -359,9 +361,24 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     if (event.type === "thread.report-posted") {
       const child = yield* snapshotQuery.getThreadShellById(event.payload.threadId);
       const childTitle = Option.isSome(child) ? child.value.title : event.payload.threadId;
+      const pending = yield* projectionTurnRepository.listQueuedTurnStarts.pipe(
+        Effect.map((rows) =>
+          rows.filter(
+            (row) =>
+              row.threadId === event.payload.threadId &&
+              (row.state === "queued" || row.state === "releasing"),
+          ),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("queued delivery report warning lookup failed", { cause }).pipe(
+            Effect.as([]),
+          ),
+        ),
+      );
+      const warning = formatQueuedReportWarning(pending.map((row) => row.messageId));
       yield* notifyParent({
         childThreadId: event.payload.threadId,
-        text: formatReportMessage(childTitle, event.payload.report),
+        text: `${formatReportMessage(childTitle, event.payload.report)}${warning}`,
         commandTag: "spawn-report-notify",
       });
       return;
@@ -476,6 +493,11 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         (entry) => entry.threadId === input.threadId,
       );
       yield* Effect.forEach(queuedForThread, forkInterruptTimeout);
+      const staleBefore = DateTime.formatIso(
+        DateTime.add(yield* DateTime.now, {
+          milliseconds: -Duration.toMillis(RELEASING_RECOVERY_AGE),
+        }),
+      );
       const shell = yield* snapshotQuery.getThreadShellById(input.threadId);
       if (Option.isNone(shell)) return;
       const session = shell.value.session;
@@ -489,6 +511,34 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         Number.isFinite(sessionUpdatedAtMs) &&
         (yield* Clock.currentTimeMillis) - sessionUpdatedAtMs >=
           Duration.toMillis(RECOVERY_INTERVAL);
+      const canRecoverReleasing =
+        session === null ||
+        session.status === "idle" ||
+        session.status === "ready" ||
+        session.status === "interrupted" ||
+        ((session.status === "starting" || session.status === "running") && !live && stale);
+      if (canRecoverReleasing) {
+        yield* Effect.forEach(
+          queuedForThread.filter(
+            (entry) =>
+              entry.state === "releasing" &&
+              entry.releasingAt !== null &&
+              entry.releasingAt <= staleBefore,
+          ),
+          (entry) =>
+            Effect.gen(function* () {
+              const createdAt = yield* nowIso;
+              yield* engine.dispatch({
+                type: "thread.turn.queue.requeue",
+                commandId: yield* serverCommandId("queued-turn-requeue"),
+                threadId: input.threadId,
+                messageId: entry.messageId,
+                createdAt,
+              });
+            }),
+          { concurrency: 1 },
+        );
+      }
       if ((session?.status === "starting" || session?.status === "running") && !live && stale) {
         yield* engine.dispatch({
           type: "thread.session.set",
@@ -520,7 +570,10 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       return;
     }
     const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).find(
-      (entry) => entry.threadId === input.threadId && entry.messageId === input.messageId,
+      (entry) =>
+        entry.threadId === input.threadId &&
+        entry.messageId === input.messageId &&
+        entry.state === "queued",
     );
     if (queued === undefined) return;
     const shell = yield* snapshotQuery.getThreadShellById(input.threadId);

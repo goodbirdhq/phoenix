@@ -12,6 +12,7 @@ import {
   type OrchestrationThreadShell,
   type PingSessionResult,
   type PostReportInput,
+  type QueuedDeliveryReceipt,
   READ_REPORT_MAX_CHARS,
   type ReadReportInput,
   type ReadSessionResult,
@@ -61,6 +62,7 @@ import {
   ProjectionThreadReportRepository,
 } from "../../../persistence/Services/ProjectionThreadReports.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
+import { ProjectionTurnRepository } from "../../../persistence/Services/ProjectionTurns.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
@@ -219,6 +221,8 @@ export const buildPingSessionSnapshot = (input: {
   readonly hasReport: boolean;
   readonly lastAssistantMessage: string | null;
   readonly usage: SessionUsageSnapshot;
+  readonly pendingQueuedCount?: number | undefined;
+  readonly mostRecentDeliveryReceipt?: QueuedDeliveryReceipt | null | undefined;
 }): Omit<PingSessionResult, "threadId"> => ({
   sessionStatus: input.shell.session?.status ?? null,
   settled: input.shell.settledAt !== null,
@@ -229,6 +233,8 @@ export const buildPingSessionSnapshot = (input: {
   lastAssistantMessage:
     input.lastAssistantMessage !== null ? truncateText(input.lastAssistantMessage, 500) : null,
   usage: input.usage,
+  pendingQueuedCount: input.pendingQueuedCount ?? 0,
+  mostRecentDeliveryReceipt: input.mostRecentDeliveryReceipt ?? null,
 });
 
 // Appended to every spawned session's first message so the completion
@@ -493,6 +499,7 @@ export const make = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const reportRepository = yield* ProjectionThreadReportRepository;
+  const projectionTurnRepository = yield* ProjectionTurnRepository;
   const providerSessionDirectory = yield* ProviderSessionDirectory;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const repositoryLock = yield* GitRepositoryLock.GitRepositoryLock;
@@ -518,6 +525,17 @@ export const make = Effect.gen(function* () {
     }
     return invocationScope;
   });
+
+  const getQueuedDeliveryReceipts = (threadId: ThreadId) =>
+    projectionTurnRepository.listQueuedDeliveryReceipts({ threadId, limit: 20 }).pipe(
+      // Receipts enrich read-only observations. A transient projection read
+      // must not turn a session status lookup into an error.
+      Effect.catch((cause) =>
+        Effect.logWarning("queued delivery receipt lookup failed", { threadId, cause }).pipe(
+          Effect.as([] as ReadonlyArray<QueuedDeliveryReceipt>),
+        ),
+      ),
+    );
 
   const randomUUID = crypto.randomUUIDv4.pipe(
     Effect.mapError(operationError("Failed to generate identifier")),
@@ -1054,6 +1072,7 @@ export const make = Effect.gen(function* () {
       ? resolveSessionCheckout(gitWorkflow, worktreePath)
       : Effect.succeed(null);
     const lastActivityAt = yield* getLastActivityAt(child.id);
+    const queuedDeliveryReceipts = yield* getQueuedDeliveryReceipts(child.id);
     return {
       threadId: child.id,
       title: child.title,
@@ -1071,6 +1090,7 @@ export const make = Effect.gen(function* () {
       stopReason: child.session?.stopReason ?? null,
       interruptedToolCall: child.session?.interruptedToolCall ?? false,
       lastCompletedOperation: child.session?.lastCompletedOperation ?? null,
+      queuedDeliveryReceipts,
       messages,
       ...(worktreePath
         ? {
@@ -1680,7 +1700,11 @@ export const make = Effect.gen(function* () {
    */
   const describeStopWarning = (params: {
     readonly childId: ThreadId;
-    readonly stop: { readonly stopped: boolean; readonly lastStatus: OrchestrationSessionStatus | null; readonly providerName: string | null };
+    readonly stop: {
+      readonly stopped: boolean;
+      readonly lastStatus: OrchestrationSessionStatus | null;
+      readonly providerName: string | null;
+    };
   }) =>
     params.stop.stopped
       ? null
@@ -1907,6 +1931,7 @@ export const make = Effect.gen(function* () {
       createdAt: child.createdAt,
       latestTurn: child.latestTurn,
     });
+    const queuedDeliveryReceipts = yield* getQueuedDeliveryReceipts(child.id);
     return {
       threadId: child.id,
       ...buildPingSessionSnapshot({
@@ -1915,6 +1940,9 @@ export const make = Effect.gen(function* () {
         hasReport,
         lastAssistantMessage: Option.getOrNull(lastAssistantMessage),
         usage,
+        pendingQueuedCount: queuedDeliveryReceipts.filter((receipt) => receipt.state === "queued")
+          .length,
+        mostRecentDeliveryReceipt: queuedDeliveryReceipts.at(0) ?? null,
       }),
     };
   });

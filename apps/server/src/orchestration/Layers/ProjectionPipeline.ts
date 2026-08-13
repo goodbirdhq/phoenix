@@ -1205,30 +1205,62 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             threadId: event.payload.threadId,
             messageId: event.payload.messageId,
             mode: event.payload.mode,
+            state: "queued",
             requestedAt: event.payload.createdAt,
+            releasingAt: null,
           });
           return;
         }
 
         case "thread.turn-start-cancelled": {
-          yield* projectionTurnRepository.deleteQueuedTurnStart({
+          yield* projectionTurnRepository.cancelQueuedTurnStart({
             threadId: event.payload.threadId,
             messageId: event.payload.messageId,
+            reason: event.payload.reason,
+            cancelledAt: event.payload.createdAt,
           });
           return;
         }
 
         case "thread.turn-start-requested": {
-          yield* projectionTurnRepository.deleteQueuedTurnStart({
-            threadId: event.payload.threadId,
-            messageId: event.payload.messageId,
-          });
+          if (event.payload.queuedDelivery === true) {
+            yield* projectionTurnRepository.markQueuedTurnStartReleasing({
+              threadId: event.payload.threadId,
+              messageId: event.payload.messageId,
+              releasingAt: event.payload.createdAt,
+            });
+          } else {
+            // Events written before receipts removed the active queue row at
+            // request time. Preserve that replay result for historical logs.
+            yield* projectionTurnRepository.deleteQueuedTurnStart({
+              threadId: event.payload.threadId,
+              messageId: event.payload.messageId,
+            });
+          }
           yield* projectionTurnRepository.replacePendingTurnStart({
             threadId: event.payload.threadId,
             messageId: event.payload.messageId,
             sourceProposedPlanThreadId: event.payload.sourceProposedPlan?.threadId ?? null,
             sourceProposedPlanId: event.payload.sourceProposedPlan?.planId ?? null,
             requestedAt: event.payload.createdAt,
+          });
+          return;
+        }
+
+        case "thread.turn-start-consumed": {
+          yield* projectionTurnRepository.consumeQueuedTurnStart({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
+            turnId: event.payload.turnId,
+            consumedAt: event.payload.consumedAt,
+          });
+          return;
+        }
+
+        case "thread.turn-start-requeued": {
+          yield* projectionTurnRepository.requeueQueuedTurnStart({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
           });
           return;
         }

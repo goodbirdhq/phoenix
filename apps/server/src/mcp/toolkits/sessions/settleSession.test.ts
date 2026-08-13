@@ -39,6 +39,10 @@ import * as ProjectionSnapshotQuery from "../../../orchestration/Services/Projec
 import * as ThreadTurnBootstrap from "../../../orchestration/ThreadTurnBootstrap.ts";
 import { ProjectionThreadReportRepository } from "../../../persistence/Services/ProjectionThreadReports.ts";
 import { ProviderSessionDirectoryPersistenceError } from "../../../provider/Errors.ts";
+import {
+  ProjectionTurnRepository,
+  type ProjectionTurnRepositoryShape,
+} from "../../../persistence/Services/ProjectionTurns.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
@@ -384,6 +388,10 @@ const makeHarness = (options: HarnessOptions) => {
                 : [],
             ),
     } as unknown as ProviderSessionDirectory["Service"]),
+    Layer.succeed(ProjectionTurnRepository, {
+      listQueuedTurnStarts: Effect.succeed([]),
+      listQueuedDeliveryReceipts: () => Effect.succeed([]),
+    } as unknown as ProjectionTurnRepositoryShape),
     NodeServices.layer,
   );
 

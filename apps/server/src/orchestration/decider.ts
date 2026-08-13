@@ -1081,7 +1081,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const queuedTurn = targetThread.queuedTurnStarts?.find(
-        (entry) => entry.messageId === command.messageId,
+        (entry) => entry.messageId === command.messageId && entry.releasingAt === undefined,
       );
       if (queuedTurn === undefined) {
         return yield* new OrchestrationCommandInvariantError({
@@ -1112,6 +1112,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
+          queuedDelivery: true,
+          queuedDeliveryMessageId: command.messageId,
           createdAt: command.createdAt,
         },
       };
@@ -1141,6 +1143,33 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.messageId,
           reason: command.reason,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.turn.queue.requeue": {
+      const targetThread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const queuedTurn = targetThread.queuedTurnStarts?.find(
+        (entry) => entry.messageId === command.messageId && entry.releasingAt !== undefined,
+      );
+      if (queuedTurn === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Releasing queued turn '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.turn-start-requeued",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
           createdAt: command.createdAt,
         },
       };
@@ -1305,9 +1334,47 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.session-set",
         payload: {
           threadId: command.threadId,
-          session: command.session,
+          session: {
+            ...command.session,
+            // Keep the marker through the synthetic `starting` transition.
+            // Provider runtime ingestion copies it onto the subsequent
+            // `running` transition that carries the provider turn id.
+            queuedDeliveryMessageId:
+              command.session.status === "running" &&
+              command.session.activeTurnId !== null &&
+              command.session.queuedDeliveryMessageId !== null
+                ? null
+                : command.session.queuedDeliveryMessageId,
+          },
         },
       };
+      const releasedQueuedTurn =
+        command.session.status === "running" &&
+        command.session.activeTurnId !== null &&
+        command.session.queuedDeliveryMessageId !== undefined &&
+        command.session.queuedDeliveryMessageId !== null
+          ? thread.queuedTurnStarts?.find(
+              (entry) => entry.messageId === command.session.queuedDeliveryMessageId,
+            )
+          : undefined;
+      const consumedEvent: Omit<OrchestrationEvent, "sequence"> | undefined =
+        releasedQueuedTurn === undefined || command.session.activeTurnId === null
+          ? undefined
+          : {
+              ...(yield* withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              })),
+              type: "thread.turn-start-consumed",
+              payload: {
+                threadId: command.threadId,
+                messageId: releasedQueuedTurn.messageId,
+                turnId: command.session.activeTurnId,
+                consumedAt: command.createdAt,
+              },
+            };
       // Only a session coming alive is activity worth waking a settled thread
       // for — status writes like ready/stopped/error arrive after the fact and
       // must not fight a user's explicit settle. Snooze is deliberately NOT
@@ -1320,7 +1387,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.session.status === "starting" || command.session.status === "running";
       // Real activity resets ANY override (settled wakes, active unpins).
       if (thread.settledOverride === null || !isSessionActivity) {
-        return sessionSetEvent;
+        return consumedEvent === undefined ? sessionSetEvent : [sessionSetEvent, consumedEvent];
       }
       const unsettledEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
@@ -1336,7 +1403,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
-      return [unsettledEvent, sessionSetEvent];
+      return consumedEvent === undefined
+        ? [unsettledEvent, sessionSetEvent]
+        : [unsettledEvent, sessionSetEvent, consumedEvent];
     }
 
     case "thread.message.assistant.delta": {

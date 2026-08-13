@@ -488,6 +488,7 @@ const make = Effect.gen(function* () {
     options?: {
       readonly modelSelection?: ModelSelection;
       readonly pendingTurnStart?: boolean;
+      readonly queuedDeliveryMessageId?: MessageId | null;
     },
   ) {
     const thread = yield* resolveThread(threadId);
@@ -586,6 +587,7 @@ const make = Effect.gen(function* () {
             thread.session?.status === "stopped"
               ? null
               : (thread.session?.graceStopEpisodeId ?? null),
+          queuedDeliveryMessageId: options?.queuedDeliveryMessageId ?? null,
           updatedAt: createdAt,
         },
         createdAt,
@@ -768,6 +770,7 @@ const make = Effect.gen(function* () {
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
+    readonly queuedDeliveryMessageId?: MessageId | null;
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -779,6 +782,9 @@ const make = Effect.gen(function* () {
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
+      ...(input.queuedDeliveryMessageId !== undefined
+        ? { queuedDeliveryMessageId: input.queuedDeliveryMessageId }
+        : {}),
     });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
@@ -1205,6 +1211,7 @@ const make = Effect.gen(function* () {
         ? { modelSelection: event.payload.modelSelection }
         : {}),
       interactionMode: event.payload.interactionMode,
+      queuedDeliveryMessageId: event.payload.queuedDeliveryMessageId ?? null,
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.map(Option.some),

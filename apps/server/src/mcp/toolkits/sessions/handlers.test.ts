@@ -37,6 +37,7 @@ import {
   ProjectionThreadReportRepository,
   type ProjectionThreadReportRepositoryShape,
 } from "../../../persistence/Services/ProjectionThreadReports.ts";
+import { ProjectionTurnRepository } from "../../../persistence/Services/ProjectionTurns.ts";
 import { ProviderSessionDirectoryPersistenceError } from "../../../provider/Errors.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
@@ -670,6 +671,8 @@ describe("buildPingSessionSnapshot", () => {
       hasReport: false,
       lastAssistantMessage: null,
       usage: zeroUsage,
+      pendingQueuedCount: 0,
+      mostRecentDeliveryReceipt: null,
     });
   });
 
@@ -885,6 +888,9 @@ const runHandler = <A, E, R>(
         Layer.mock(ProjectionThreadReportRepository)({
           ...(overrides.findByReportId ? { findByReportId: overrides.findByReportId } : {}),
           ...(overrides.listByThreadId ? { listByThreadId: overrides.listByThreadId } : {}),
+        }),
+        Layer.mock(ProjectionTurnRepository)({
+          listQueuedDeliveryReceipts: () => Effect.succeed([]),
         }),
         Layer.mock(ServerRuntimeStartup.ServerRuntimeStartup)({
           enqueueCommand:
