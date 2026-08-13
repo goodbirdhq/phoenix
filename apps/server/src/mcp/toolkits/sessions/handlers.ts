@@ -1,8 +1,11 @@
 import {
+  type ArchiveSessionInput,
   checkReportSupersession,
   CommandId,
   GitCommandError,
   isProviderAvailable,
+  LIST_SESSIONS_MAX_ENTRIES,
+  type ListSessionsInput,
   MessageId,
   type ModelSelection,
   type OrchestrationSessionStatus,
@@ -17,6 +20,7 @@ import {
   SESSION_SPAWN_MAX_CHILDREN,
   SESSION_SPAWN_MAX_DEPTH,
   SessionOrchestrationBranchNotMergedError,
+  SESSION_SPAWN_MAX_RETAINED_CHILDREN,
   SessionOrchestrationDeniedError,
   SessionOrchestrationGitLockError,
   SessionOrchestrationInvalidInputError,
@@ -256,15 +260,41 @@ export function isSessionBusy(status: OrchestrationSessionStatus | null | undefi
 }
 
 /**
- * Whether a provider process is still up.
+ * Whether a provider process is still up, going by status alone.
  *
- * "ready" is idle but alive — the process is sitting there resumable. Settling
- * such a child without stopping it would leak the process, and deleting its
- * worktree underneath it would race a `send_to_session` that revives it. So
- * settle_session stops anything alive before it settles or touches the disk.
+ * This is a fast hint, not authoritative: `session.status` is not reliable
+ * proof either way, because Codex/OpenCode retain an errored session's
+ * binding and `ProviderCommandReactor` treats any status other than
+ * "stopped" as reusable/restartable. Cap-counting and cleanup decisions use
+ * `resolveHasLiveBinding` (the provider session directory) instead — see
+ * there for why. This function is still useful where a rough read is
+ * enough: display, and settle_session's own decision to attempt a stop at
+ * all before checking whether one is actually needed.
  */
 export function isSessionAlive(status: OrchestrationSessionStatus | null | undefined): boolean {
-  return status !== null && status !== undefined && status !== "stopped";
+  return status !== null && status !== undefined && status !== "stopped" && status !== "error";
+}
+
+/**
+ * The single predicate for "does this child consume an active spawn slot" —
+ * shared by spawn_session's cap check and list_sessions' state: "active"
+ * filter so the two can never drift: an orchestrator hitting
+ * spawn_limit_reached must be able to see exactly the children responsible
+ * by listing state: "active" (the default). A child counts while unsettled,
+ * or once settled if it still has a live provider binding (see
+ * resolveHasLiveBinding — settledAt is written even when the stop itself
+ * timed out or never ran, and status alone cannot prove the binding is
+ * gone). state: "settled" is the complement — settled AND no live binding.
+ *
+ * `hasLiveBinding` is a resolved lookup (see `resolveHasLiveBinding`), not a
+ * threadId → Effect call per child, so callers fetch it once per request
+ * rather than re-querying the provider session directory per thread.
+ */
+export function countsTowardActiveCap(
+  thread: OrchestrationThreadShell,
+  hasLiveBinding: (threadId: ThreadId) => boolean,
+): boolean {
+  return thread.settledAt === null || hasLiveBinding(thread.id);
 }
 
 export interface WorktreeCleanupRisk {
@@ -505,6 +535,24 @@ export const make = Effect.gen(function* () {
       .getThreadShellById(threadId)
       .pipe(Effect.mapError(operationError("Failed to read thread state")));
 
+  // getThreadShellById/getShellSnapshot only ever resolve non-archived
+  // threads, so an already-archived child needs its own lookup — used only
+  // by archive_session's idempotency check (a fallback path, not the hot
+  // one), never for authorization on any other tool. Scoped to threads this
+  // caller spawned, same as every other mutating lookup.
+  const findArchivedSpawnedChild = (parentThreadId: ThreadId, threadId: ThreadId) =>
+    snapshotQuery.getArchivedShellSnapshot().pipe(
+      Effect.mapError(operationError("Failed to read archived thread snapshot")),
+      Effect.map((snapshot) =>
+        Option.fromUndefinedOr(
+          snapshot.threads.find(
+            (thread) =>
+              thread.id === threadId && (thread.spawnedByThreadId ?? null) === parentThreadId,
+          ),
+        ),
+      ),
+    );
+
   // The provider session directory tracks activity for every session this
   // server runs, keyed by thread; there is no by-thread lookup with the
   // lastSeenAt metadata, so scan the (small) live binding list. Follow-up:
@@ -520,6 +568,31 @@ export const make = Effect.gen(function* () {
         (bindings) => bindings.find((binding) => binding.threadId === threadId)?.lastSeenAt ?? null,
       ),
       Effect.catch(() => Effect.succeed(null)),
+    );
+
+  /**
+   * The authoritative "is there still a live provider binding for this
+   * thread" check, backing countsTowardActiveCap and stopChildSession.
+   * `session.status` alone is not proof either way — Codex/OpenCode retain
+   * an errored session's binding, and ProviderCommandReactor treats any
+   * status other than "stopped" as reusable/restartable (see
+   * ProviderCommandReactor.ts, existingSessionThreadId) — so a live binding
+   * is the real signal, and status is only ever a fast hint downstream of
+   * it.
+   *
+   * Unlike getLastActivityAt (informational, degrades to null on failure),
+   * this is fail-*safe*, not best-effort-to-false: an unreadable binding
+   * directory must not let a live process go uncounted by the spawn cap, or
+   * let a worktree be deleted out from under it. On failure every thread is
+   * treated as bound, the conservative direction for both call sites.
+   */
+  const resolveHasLiveBinding = () =>
+    providerSessionDirectory.listBindings().pipe(
+      Effect.map((bindings) => {
+        const liveThreadIds = new Set(bindings.map((binding) => binding.threadId));
+        return (threadId: ThreadId) => liveThreadIds.has(threadId);
+      }),
+      Effect.catch(() => Effect.succeed((_threadId: ThreadId) => true)),
     );
 
   const requireShell = (threadId: ThreadId) =>
@@ -599,6 +672,90 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  // Best-effort: the projection's worktreePath can go stale (manual
+  // deletion, a partial cleanup) faster than the projector catches up, so a
+  // reclaimability signal built from cached data alone can lie. A failed
+  // check degrades to trusting the cached path rather than hiding it — the
+  // same "optional enrichment must never fail the read" rule as elsewhere.
+  const resolveWorktreePresence = (worktreePath: string | null) =>
+    worktreePath === null
+      ? Effect.succeed(null)
+      : fileSystem.exists(worktreePath).pipe(
+          Effect.map((exists) => (exists ? worktreePath : null)),
+          Effect.catch(() => Effect.succeed(worktreePath)),
+        );
+
+  const listSessions = Effect.fn("SessionsToolkit.listSessions")(function* (
+    input: ListSessionsInput,
+  ) {
+    const scope = yield* requireSessionsCapability;
+    const activeSnapshot = yield* snapshotQuery
+      .getShellSnapshot()
+      .pipe(Effect.mapError(operationError("Failed to read thread snapshot")));
+    const archivedThreads =
+      input.includeArchived === true
+        ? (yield* snapshotQuery
+            .getArchivedShellSnapshot()
+            .pipe(Effect.mapError(operationError("Failed to read archived thread snapshot"))))
+            .threads
+        : [];
+    const state = input.state ?? "active";
+    // Same predicate the spawn cap counts by: "active" here must show
+    // exactly the children responsible for a spawn_limit_reached refusal,
+    // including a settled child with a live binding. "settled" is the
+    // complement — settled AND no live binding — not just settledAt !== null.
+    // Resolved once per request rather than per child.
+    const hasLiveBinding = yield* resolveHasLiveBinding();
+    const matching = [...activeSnapshot.threads, ...archivedThreads].filter((thread) => {
+      if ((thread.spawnedByThreadId ?? null) !== scope.threadId) return false;
+      if (state === "active") return countsTowardActiveCap(thread, hasLiveBinding);
+      if (state === "settled") return !countsTowardActiveCap(thread, hasLiveBinding);
+      return true;
+    });
+
+    // "settled"/"all" can grow without bound (a settled child never falls
+    // out of the list on its own) so both are always most-recent-first, with
+    // a page truncated to LIST_SESSIONS_MAX_ENTRIES when there are more.
+    // "active" is bounded by the spawn cap in steady state, so it is never
+    // truncated, but is sorted the same way for a consistent result shape.
+    const sorted = [...matching].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    let children = sorted;
+    let hasMore = false;
+    if (state !== "active" && sorted.length > LIST_SESSIONS_MAX_ENTRIES) {
+      hasMore = true;
+      children = sorted.slice(0, LIST_SESSIONS_MAX_ENTRIES);
+    }
+
+    // hasReport and worktree presence are both best-effort enrichment on a
+    // read path — a lookup failure for one child must never keep the rest of
+    // the list from coming back — and both run only over the already-bounded
+    // returned page, not every matching child.
+    const sessions = yield* Effect.forEach(
+      children,
+      (child) =>
+        Effect.all([
+          snapshotQuery
+            .getThreadHasReport(child.id)
+            .pipe(Effect.catch(() => Effect.succeed(false))),
+          resolveWorktreePresence(child.worktreePath),
+        ]).pipe(
+          Effect.map(([hasReport, worktreePath]) => ({
+            threadId: child.id,
+            title: child.title,
+            sessionStatus: child.session?.status ?? null,
+            settled: child.settledAt !== null,
+            archived: child.archivedAt !== null,
+            hasReport,
+            worktreePath,
+            modelSelection: child.modelSelection,
+            createdAt: child.createdAt,
+          })),
+        ),
+      { concurrency: "unbounded" },
+    );
+    return { sessions, hasMore };
+  });
+
   const spawnSession = Effect.fn("SessionsToolkit.spawnSession")(function* (
     input: SpawnSessionInput,
   ) {
@@ -616,13 +773,35 @@ export const make = Effect.gen(function* () {
     const shellSnapshot = yield* snapshotQuery
       .getShellSnapshot()
       .pipe(Effect.mapError(operationError("Failed to read thread snapshot")));
-    const childCount = shellSnapshot.threads.filter(
+    const ownChildren = shellSnapshot.threads.filter(
       (thread) => (thread.spawnedByThreadId ?? null) === scope.threadId,
+    );
+    // Independent of the active cap below: settled children no longer free
+    // themselves automatically, so without this ceiling a parent could
+    // spawn/settle indefinitely and accumulate unbounded thread rows and
+    // worktrees. Only deleted/archived children are already excluded by
+    // getShellSnapshot itself.
+    if (ownChildren.length >= SESSION_SPAWN_MAX_RETAINED_CHILDREN) {
+      return yield* new SessionOrchestrationDeniedError({
+        reason: "spawn_retention_limit_reached",
+        message: `This session already has ${ownChildren.length} retained spawned sessions (max ${SESSION_SPAWN_MAX_RETAINED_CHILDREN}, active + settled). Archive settled children with archive_session to reclaim capacity.`,
+      });
+    }
+    // The cap counts active work, not history: a settled child with no live
+    // provider binding is the parent declaring it done, so it frees a slot
+    // immediately. But settle_session only withholds destructive worktree
+    // cleanup when its stop times out — it still writes settledAt
+    // regardless (see settleChildCascade) — so a settled child whose
+    // binding is still live is not actually finished and keeps counting
+    // until the binding clears (the reaper, or a retried settle/stop).
+    const hasLiveBinding = yield* resolveHasLiveBinding();
+    const childCount = ownChildren.filter((thread) =>
+      countsTowardActiveCap(thread, hasLiveBinding),
     ).length;
     if (childCount >= SESSION_SPAWN_MAX_CHILDREN) {
       return yield* new SessionOrchestrationDeniedError({
         reason: "spawn_limit_reached",
-        message: `This session already has ${childCount} spawned sessions (stopping one does not free a slot — it stays counted until archived). Archive a spawned thread from the sidebar first.`,
+        message: `This session already has ${childCount} active spawned sessions (max ${SESSION_SPAWN_MAX_CHILDREN}). Settle a finished child with settle_session to free a slot, or archive_session to permanently discard one and reclaim its worktree. Settled children with a still-running process count until the process exits.`,
       });
     }
 
@@ -910,10 +1089,15 @@ export const make = Effect.gen(function* () {
    * `thread.session.stop` only records the intent — ProviderCommandReactor
    * kills the process and writes `stopped` afterwards. Returning as soon as the
    * command lands would leave the caller free to delete a worktree the process
-   * is still writing to, so this waits for the projected status.
+   * is still writing to, so this waits for the binding to actually clear.
    *
-   * @returns whether the session reached "stopped" before the timeout, plus
-   * what it was still doing if it did not — a settle that leaves a live
+   * Both the entry check and the wait use `resolveHasLiveBinding`
+   * (authoritative), not `session.status` (a hint only) — an errored
+   * session can still hold a live, restartable binding, and skipping the
+   * stop for one would risk deleting a worktree out from under it.
+   *
+   * @returns whether the binding cleared before the timeout, plus what the
+   * child was still doing if it did not — a settle that leaves a live
    * process behind has to say so rather than reporting a clean success.
    */
   const stopChildSession = Effect.fn("SessionsToolkit.stopChildSession")(function* (
@@ -924,7 +1108,7 @@ export const make = Effect.gen(function* () {
       readonly lastStatus: null;
       readonly providerName: null;
     } => ({ stopped: true, lastStatus: null, providerName: null });
-    if (!isSessionAlive(child.session?.status)) {
+    if (!(yield* resolveHasLiveBinding())(child.id)) {
       return stopped();
     }
     yield* enqueue(
@@ -953,9 +1137,9 @@ export const make = Effect.gen(function* () {
     let latest = child;
     while (waitedMs < SESSION_STOP_TIMEOUT_MS) {
       const shell = yield* getShell(child.id);
-      // A thread that vanished (archived, deleted) has no process left to wait
-      // on, and neither does one whose session is already gone.
-      if (Option.isNone(shell) || !isSessionAlive(shell.value.session?.status)) {
+      // A thread that vanished (archived, deleted) has no process left to
+      // wait on, and neither does one whose binding has actually cleared.
+      if (Option.isNone(shell) || !(yield* resolveHasLiveBinding())(child.id)) {
         return stopped();
       }
       latest = shell.value;
@@ -1221,7 +1405,7 @@ export const make = Effect.gen(function* () {
   const cleanupChildWorktree = Effect.fn("SessionsToolkit.cleanupChildWorktree")(
     function* (params: {
       readonly child: OrchestrationThreadShell;
-      readonly input: SettleSessionInput;
+      readonly input: Pick<SettleSessionInput, "cleanupWorktree" | "force" | "cleanupBranch">;
     }) {
       const { child, input } = params;
       const kept = (detail: string | null): SettleSessionWorktreeOutcome => ({
@@ -1486,11 +1670,39 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const settleSession = Effect.fn("SessionsToolkit.settleSession")(function* (
-    input: SettleSessionInput,
-  ) {
-    const scope = yield* requireSessionsCapability;
-    const child = yield* requireSpawnedChild(scope.threadId, input.threadId);
+  /**
+   * Render a still-live process after a stop wait into a caller-facing
+   * warning, or null when the stop actually confirmed the binding is gone.
+   * Shared by settleChildCascade and archive_session's already-settled path
+   * (which calls stopChildSession directly, without going through the
+   * cascade) so the wording — and the decision to warn at all — cannot
+   * drift between settle_session and archive_session.
+   */
+  const describeStopWarning = (params: {
+    readonly childId: ThreadId;
+    readonly stop: { readonly stopped: boolean; readonly lastStatus: OrchestrationSessionStatus | null; readonly providerName: string | null };
+  }) =>
+    params.stop.stopped
+      ? null
+      : `Thread ${params.childId} was settled, but its ${
+          params.stop.providerName ?? "provider"
+        } session did not reach "stopped" within ${SESSION_STOP_TIMEOUT_MS}ms (last seen "${
+          params.stop.lastStatus ?? "unknown"
+        }"). The process may still be running; check the thread, or call stop_session again.`;
+
+  /**
+   * The stop → settle → cleanup cascade shared by settle_session and
+   * archive_session (an unsettled child's first half). Refuses a busy child
+   * with the same actionable message both tools surface; the caller decides
+   * what to do with a refusal (settle_session fails outright, archive_session
+   * fails the same way rather than archiving a live process out from under
+   * the user).
+   */
+  const settleChildCascade = Effect.fn("SessionsToolkit.settleChildCascade")(function* (params: {
+    readonly child: OrchestrationThreadShell;
+    readonly input: Pick<SettleSessionInput, "cleanupWorktree" | "force" | "cleanupBranch">;
+  }) {
+    const { child, input } = params;
 
     // A turn in flight is never interrupted on the parent's say-so; that stays
     // an explicit stop_session. An idle-but-alive session is a different
@@ -1532,14 +1744,143 @@ export const make = Effect.gen(function* () {
     // but a process that outlived its stop is still holding a provider slot
     // and possibly writing to the worktree, and a silent success is how that
     // leak goes unnoticed until the machine is full of orphans.
-    const warning = stop.stopped
-      ? null
-      : `Thread ${child.id} was settled, but its ${
-          stop.providerName ?? "provider"
-        } session did not reach "stopped" within ${SESSION_STOP_TIMEOUT_MS}ms (last seen "${
-          stop.lastStatus ?? "unknown"
-        }"). The process may still be running; check the thread, or call stop_session again.`;
+    const warning = describeStopWarning({ childId: child.id, stop });
+    return { stopped: stop.stopped, worktree, warning };
+  });
+
+  const settleSession = Effect.fn("SessionsToolkit.settleSession")(function* (
+    input: SettleSessionInput,
+  ) {
+    const scope = yield* requireSessionsCapability;
+    const child = yield* requireSpawnedChild(scope.threadId, input.threadId);
+    const { worktree, warning } = yield* settleChildCascade({ child, input });
     return { threadId: child.id, settled: true, worktree, warning };
+  });
+
+  /**
+   * Permanently discard a spawned child: removes it from view and, by
+   * default, reclaims its worktree/branch. A settled child already stops
+   * counting toward the spawn cap and stays resumable via send_to_session —
+   * archiving is for when the caller is done with it for good. Archiving
+   * subsumes settling: an unsettled child runs the same stop → settle →
+   * cleanup cascade settle_session does (busy children are refused, same as
+   * settle_session). An already-settled child skips straight to cleanup +
+   * archive — re-running stop/settle would be redundant, not safer.
+   *
+   * cleanupWorktree defaults to true here, unlike settle_session: once
+   * archived, the thread no longer resolves through requireSpawnedChild (see
+   * requireShell), so this is the last chance anything in this toolkit gets
+   * to reclaim its worktree.
+   */
+  const archiveSession = Effect.fn("SessionsToolkit.archiveSession")(function* (
+    input: ArchiveSessionInput,
+  ) {
+    const scope = yield* requireSessionsCapability;
+
+    // requireSpawnedChild (via getShell) only resolves non-archived
+    // threads, so a retry after a prior successful archive — by this tool
+    // or the UI's archive path — would otherwise fail with "not found",
+    // contradicting the tool's documented idempotency. Check the archived
+    // snapshot before failing, and no-op if this caller's own child is
+    // already there; no further mutation runs on that path.
+    const activeShell = yield* getShell(input.threadId);
+    if (Option.isNone(activeShell)) {
+      const archivedChild = yield* findArchivedSpawnedChild(scope.threadId, input.threadId);
+      if (Option.isSome(archivedChild)) {
+        return {
+          threadId: input.threadId,
+          stopped: null,
+          settled: archivedChild.value.settledAt !== null,
+          worktree: {
+            removedWorktreePath: null,
+            removedBranch: null,
+            keptWorktreePath: archivedChild.value.worktreePath,
+            keptBranch: archivedChild.value.branch,
+            detail: "Thread was already archived; archive_session is a no-op on retry.",
+            branchProof: null,
+            branchRefusal: null,
+          },
+          archived: true as const,
+          warning: null,
+        };
+      }
+      return yield* new SessionOrchestrationInvalidInputError({
+        message: `Thread ${input.threadId} was not found or is archived.`,
+      });
+    }
+    if ((activeShell.value.spawnedByThreadId ?? null) !== scope.threadId) {
+      return yield* new SessionOrchestrationDeniedError({
+        reason: "not_spawned_by_this_session",
+        message: `Thread ${input.threadId} was not spawned by this session.`,
+      });
+    }
+    const child = activeShell.value;
+    const settleInput = {
+      cleanupWorktree: input.cleanupWorktree ?? true,
+      cleanupBranch: input.cleanupBranch,
+      force: input.force,
+    };
+
+    let stopped: boolean | null = null;
+    let settled = false;
+    let worktree: SettleSessionWorktreeOutcome;
+    let warning: string | null = null;
+
+    if (child.settledAt !== null) {
+      // Idempotent-friendly: still busy-guarded (a settled child can in
+      // principle come back to life before archive_session catches up), and
+      // never re-dispatches thread.settle against a thread that already is.
+      // But settledAt is not proof the binding is gone (same reasoning as
+      // settleChildCascade) — this still routes through the binding-first
+      // stop check, just without a redundant settle. stopChildSession
+      // already short-circuits to a clean "stopped" with no dispatch when
+      // there is nothing to stop, so this costs nothing extra for a
+      // genuinely dead child.
+      if (isSessionBusy(child.session?.status)) {
+        return yield* new SessionOrchestrationDeniedError({
+          reason: "session_still_running",
+          message: `Thread ${child.id} is still ${child.session?.status}. Call stop_session first, or wait for it to finish, then archive it.`,
+        });
+      }
+      const stop = yield* stopChildSession(child);
+      stopped = stop.stopped;
+      warning = describeStopWarning({ childId: child.id, stop });
+      // Unlike settleChildCascade, an already-settled child never fails the
+      // whole call over an unconfirmed stop: the thread is not gaining a new
+      // settledAt here that would otherwise be stranded behind an error, so
+      // archiving still proceeds — only the destructive cleanup step is
+      // conservatively withheld, and the result says so.
+      worktree =
+        !stop.stopped && settleInput.cleanupWorktree === true
+          ? {
+              removedWorktreePath: null,
+              removedBranch: null,
+              keptWorktreePath: child.worktreePath,
+              keptBranch: child.branch,
+              detail: `Cleanup withheld: could not confirm the child's provider binding has cleared (the stop timed out, or the binding directory could not be read — treated conservatively as still live). Retry archive_session once the binding has cleared.`,
+              branchProof: null,
+              branchRefusal: null,
+            }
+          : yield* cleanupChildWorktree({ child, input: settleInput });
+    } else {
+      const cascade = yield* settleChildCascade({ child, input: settleInput });
+      stopped = cascade.stopped;
+      settled = true;
+      worktree = cascade.worktree;
+      warning = cascade.warning;
+    }
+
+    yield* startup
+      .enqueueCommand(
+        engine.dispatch({
+          type: "thread.archive",
+          commandId: yield* serverCommandId("mcp-archive-session"),
+          threadId: child.id,
+        }),
+      )
+      .pipe(Effect.mapError(operationError(`Failed to archive thread ${child.id}`)));
+
+    return { threadId: child.id, stopped, settled, worktree, archived: true, warning };
   });
 
   const pingSession = Effect.fn("SessionsToolkit.pingSession")(function* (input: {
@@ -1853,6 +2194,7 @@ export const make = Effect.gen(function* () {
 
   return {
     list_session_providers: (input) => listProviders(input ?? {}),
+    list_sessions: (input) => listSessions(input ?? {}),
     spawn_session: (input) => spawnSession(input),
     send_to_session: (input) => sendToSession(input),
     read_session: (input) => readSession(input),
@@ -1860,6 +2202,7 @@ export const make = Effect.gen(function* () {
     ping_session: (input) => pingSession(input),
     stop_session: (input) => stopSession(input),
     settle_session: (input) => settleSession(input),
+    archive_session: (input) => archiveSession(input),
     post_report: (input) => postReport(input),
   } satisfies Parameters<typeof SessionsToolkit.toLayer>[0];
 });

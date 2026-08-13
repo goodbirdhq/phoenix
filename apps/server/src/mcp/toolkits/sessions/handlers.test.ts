@@ -49,6 +49,7 @@ import {
   assessWorktreeCleanupRisk,
   buildPingSessionSnapshot,
   canReadThreadReports,
+  countsTowardActiveCap,
   decideBranchCleanup,
   parseGitLockPath,
   isSessionAlive,
@@ -176,13 +177,41 @@ describe("isSessionAlive", () => {
     expect(isSessionAlive("ready")).toBe(true);
     expect(isSessionAlive("idle")).toBe(true);
     expect(isSessionAlive("interrupted")).toBe(true);
-    expect(isSessionAlive("error")).toBe(true);
   });
 
-  it("counts a stopped or absent session as already gone", () => {
+  it("counts a stopped, errored, or absent session as already gone", () => {
+    // "error" is terminal, same as "stopped": the reactor synthesizes a
+    // report for either (see "Terminal reports"), so a crashed session has
+    // no live process left to reclaim and must not squat on a spawn slot.
     expect(isSessionAlive("stopped")).toBe(false);
+    expect(isSessionAlive("error")).toBe(false);
     expect(isSessionAlive(null)).toBe(false);
     expect(isSessionAlive(undefined)).toBe(false);
+  });
+});
+
+describe("countsTowardActiveCap", () => {
+  // countsTowardActiveCap takes a resolved hasLiveBinding lookup, not a
+  // session status: status alone is not proof of anything (see
+  // resolveHasLiveBinding's doc — Codex/OpenCode retain an errored
+  // binding), so the predicate is exercised directly against binding
+  // presence/absence, independent of any particular status string.
+  const alwaysBound = () => true;
+  const neverBound = () => false;
+  const withThread = (settledAt: string | null) =>
+    ({ id: childThreadId, settledAt }) as unknown as OrchestrationThreadShell;
+
+  it("counts an unsettled child regardless of binding state", () => {
+    expect(countsTowardActiveCap(withThread(null), neverBound)).toBe(true);
+    expect(countsTowardActiveCap(withThread(null), alwaysBound)).toBe(true);
+  });
+
+  it("still counts a settled child that still has a live binding", () => {
+    expect(countsTowardActiveCap(withThread(now), alwaysBound)).toBe(true);
+  });
+
+  it("does not count a settled child with no live binding", () => {
+    expect(countsTowardActiveCap(withThread(now), neverBound)).toBe(false);
   });
 });
 
@@ -735,6 +764,29 @@ const parentShell = {
   id: parentThreadId,
 } satisfies OrchestrationThreadShell;
 
+// Shared session-status fixtures: childShell inherits baseShell's "running"
+// (alive) session by default, which is wrong for anything meant to
+// represent a settled-and-actually-dead child — those must override with
+// stoppedSession explicitly, or they silently count as active/alive.
+const stoppedSession = { ...childShell.session, status: "stopped" as const };
+const errorSession = { ...childShell.session, status: "error" as const };
+const aliveSession = { ...childShell.session, status: "ready" as const };
+
+// Stubs a listBindings response reporting a live binding for exactly the
+// given threadIds — the source countsTowardActiveCap/stopChildSession
+// consult, independent of session status (round-3 review: status alone is
+// not proof of anything, Codex/OpenCode retain errored bindings).
+const bindingsFor =
+  (ids: ReadonlyArray<ThreadId>): ProviderSessionDirectory["Service"]["listBindings"] =>
+  () =>
+    Effect.succeed(
+      ids.map((threadId) => ({
+        threadId,
+        provider: "codex" as const,
+        lastSeenAt: now,
+      })),
+    ) as unknown as ReturnType<ProviderSessionDirectory["Service"]["listBindings"]>;
+
 const invocationScope = {
   environmentId: EnvironmentId.make("environment-1"),
   threadId: parentThreadId,
@@ -757,6 +809,9 @@ const runHandler = <A, E, R>(
     getLastAssistantMessage?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getLastAssistantMessage"];
     getLatestUsageActivity?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getLatestUsageActivity"];
     getThreadTurnCount?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadTurnCount"];
+    getShellSnapshot?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getShellSnapshot"];
+    getArchivedShellSnapshot?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getArchivedShellSnapshot"];
+    getProjectShellById?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getProjectShellById"];
     listBindings?: ProviderSessionDirectory["Service"]["listBindings"];
     findByReportId?: ProjectionThreadReportRepositoryShape["findByReportId"];
     listByThreadId?: ProjectionThreadReportRepositoryShape["listByThreadId"];
@@ -805,6 +860,16 @@ const runHandler = <A, E, R>(
           // read_session's pre-existing report/messages fetch; not under test
           // here, so a fixed empty response is enough to keep it from dying.
           getThreadDetailById: () => Effect.succeed(Option.none()),
+          getShellSnapshot:
+            overrides.getShellSnapshot ??
+            (() =>
+              Effect.succeed({ snapshotSequence: 0, projects: [], threads: [], updatedAt: now })),
+          getArchivedShellSnapshot:
+            overrides.getArchivedShellSnapshot ??
+            (() =>
+              Effect.succeed({ snapshotSequence: 0, projects: [], threads: [], updatedAt: now })),
+          getProjectShellById:
+            overrides.getProjectShellById ?? (() => Effect.succeed(Option.none())),
         }),
         Layer.mock(ProviderRegistry.ProviderRegistry)({}),
         Layer.mock(ProviderSessionDirectory)({
@@ -1382,6 +1447,496 @@ describe("read_session (handler)", () => {
 
       expect(result.sessionStatus).toBe("running");
       expect(result.lastActivityAt).toBeNull();
+    }),
+  );
+});
+
+describe("list_sessions (handler)", () => {
+  const strangerThreadId = "stranger-1" as ThreadId;
+  const archivedChildId = "child-archived" as ThreadId;
+
+  const strangerShell = {
+    ...baseShell,
+    id: strangerThreadId,
+    spawnedByThreadId: null,
+  } satisfies OrchestrationThreadShell;
+
+  const archivedChildShell = {
+    ...childShell,
+    id: archivedChildId,
+    archivedAt: now,
+    settledAt: now,
+  } satisfies OrchestrationThreadShell;
+
+  it.effect("lists only this session's own spawned children, not unrelated threads", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler((handlers) => handlers.list_sessions({}), {
+        getShellSnapshot: () =>
+          Effect.succeed({
+            snapshotSequence: 0,
+            projects: [],
+            threads: [childShell, strangerShell],
+            updatedAt: now,
+          }),
+      });
+
+      expect(result.sessions).toHaveLength(1);
+      expect(result.sessions[0]?.threadId).toBe(childThreadId);
+    }),
+  );
+
+  it.effect("omits archived children by default", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler((handlers) => handlers.list_sessions({}), {
+        getShellSnapshot: () =>
+          Effect.succeed({
+            snapshotSequence: 0,
+            projects: [],
+            threads: [childShell],
+            updatedAt: now,
+          }),
+        getArchivedShellSnapshot: () =>
+          Effect.die("getArchivedShellSnapshot must not be called without includeArchived"),
+      });
+
+      expect(result.sessions).toHaveLength(1);
+      expect(result.sessions[0]?.archived).toBe(false);
+    }),
+  );
+
+  it.effect("includes archived children when includeArchived is true", () =>
+    Effect.gen(function* () {
+      // archivedChildShell is also settled, so state: "all" is needed here —
+      // the default state: "active" would exclude it regardless of
+      // includeArchived (see the state-filtering tests below).
+      const result = yield* runHandler(
+        (handlers) => handlers.list_sessions({ includeArchived: true, state: "all" }),
+        {
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 0,
+              projects: [],
+              threads: [childShell],
+              updatedAt: now,
+            }),
+          getArchivedShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 0,
+              projects: [],
+              threads: [archivedChildShell],
+              updatedAt: now,
+            }),
+        },
+      );
+
+      expect(result.sessions.map((session) => session.threadId).sort()).toEqual(
+        [childThreadId, archivedChildId].sort(),
+      );
+      const archived = result.sessions.find((session) => session.threadId === archivedChildId);
+      expect(archived?.archived).toBe(true);
+      expect(archived?.settled).toBe(true);
+    }),
+  );
+
+  describe("state filtering", () => {
+    const activeChild = { ...childShell, id: "child-active" as ThreadId, settledAt: null };
+    // Settled AND no live binding (default listBindings: []): the only case
+    // that should land in "settled".
+    const settledChild = {
+      ...childShell,
+      id: "child-settled" as ThreadId,
+      settledAt: now,
+      session: stoppedSession,
+      worktreePath: null,
+    };
+    // Settled but still has a live binding (a stop-timeout escape, or a
+    // session that came back to life after settling): per the shared
+    // countsTowardActiveCap predicate, this must show under "active", not
+    // "settled", or a spawn_limit_reached refusal would be inexplicable.
+    const settledAliveChild = {
+      ...childShell,
+      id: "child-settled-alive" as ThreadId,
+      settledAt: now,
+      session: aliveSession,
+    };
+    const snapshotWithBoth = () =>
+      Effect.succeed({
+        snapshotSequence: 0,
+        projects: [],
+        threads: [activeChild, settledChild],
+        updatedAt: now,
+      });
+
+    it.effect("defaults to active, excluding a settled child with no live binding", () =>
+      Effect.gen(function* () {
+        const result = yield* runHandler((handlers) => handlers.list_sessions({}), {
+          getShellSnapshot: snapshotWithBoth,
+        });
+
+        expect(result.sessions.map((session) => session.threadId)).toEqual([activeChild.id]);
+      }),
+    );
+
+    it.effect(
+      "state: active includes a settled child with a live binding, same as the spawn cap counts it",
+      () =>
+        Effect.gen(function* () {
+          const result = yield* runHandler((handlers) => handlers.list_sessions({}), {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 0,
+                projects: [],
+                threads: [activeChild, settledChild, settledAliveChild],
+                updatedAt: now,
+              }),
+            listBindings: bindingsFor([settledAliveChild.id]),
+          });
+
+          expect(result.sessions.map((session) => session.threadId).sort()).toEqual(
+            [activeChild.id, settledAliveChild.id].sort(),
+          );
+          const listed = result.sessions.find(
+            (session) => session.threadId === settledAliveChild.id,
+          );
+          // Legible, not just present: the caller can see it is settled and
+          // why it still counts (sessionStatus is not a dead-looking one).
+          expect(listed?.settled).toBe(true);
+          expect(listed?.sessionStatus).toBe("ready");
+        }),
+    );
+
+    it.effect('state: "settled" returns only children with no live binding', () =>
+      Effect.gen(function* () {
+        const result = yield* runHandler(
+          (handlers) => handlers.list_sessions({ state: "settled" }),
+          {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 0,
+                projects: [],
+                threads: [activeChild, settledChild, settledAliveChild],
+                updatedAt: now,
+              }),
+            listBindings: bindingsFor([settledAliveChild.id]),
+          },
+        );
+
+        expect(result.sessions.map((session) => session.threadId)).toEqual([settledChild.id]);
+        // worktreePath is the reclaimability signal for a settled child: null
+        // here means send_to_session cannot resume it, only archive_session
+        // remains.
+        expect(result.sessions[0]?.worktreePath).toBeNull();
+      }),
+    );
+
+    it.effect('state: "all" returns both active and settled children', () =>
+      Effect.gen(function* () {
+        const result = yield* runHandler((handlers) => handlers.list_sessions({ state: "all" }), {
+          getShellSnapshot: snapshotWithBoth,
+        });
+
+        expect(result.sessions.map((session) => session.threadId).sort()).toEqual(
+          [activeChild.id, settledChild.id].sort(),
+        );
+      }),
+    );
+
+    it.effect('state: "settled" truncates to LIST_SESSIONS_MAX_ENTRIES, most-recent first', () =>
+      Effect.gen(function* () {
+        const sixtySettled = Array.from(
+          { length: 60 },
+          (_, index) =>
+            ({
+              ...childShell,
+              id: `settled-${index}` as ThreadId,
+              settledAt: now,
+              session: stoppedSession,
+              createdAt: `2026-08-01T00:${String(index).padStart(2, "0")}:00.000Z`,
+            }) satisfies OrchestrationThreadShell,
+        );
+
+        const result = yield* runHandler(
+          (handlers) => handlers.list_sessions({ state: "settled" }),
+          {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 0,
+                projects: [],
+                threads: sixtySettled,
+                updatedAt: now,
+              }),
+          },
+        );
+
+        expect(result.sessions).toHaveLength(50);
+        expect(result.hasMore).toBe(true);
+        // Most-recently-created first: settled-59 (00:59) is the latest,
+        // settled-0..9 (the oldest 10) fall off the page.
+        expect(result.sessions[0]?.threadId).toBe("settled-59");
+        expect(result.sessions.map((s) => s.threadId)).not.toContain("settled-0");
+      }),
+    );
+
+    it.effect('state: "settled" is most-recent-first even when the page is not truncated', () =>
+      Effect.gen(function* () {
+        const threeSettled = Array.from(
+          { length: 3 },
+          (_, index) =>
+            ({
+              ...childShell,
+              id: `few-settled-${index}` as ThreadId,
+              settledAt: now,
+              session: stoppedSession,
+              createdAt: `2026-08-01T00:0${index}:00.000Z`,
+            }) satisfies OrchestrationThreadShell,
+        );
+
+        const result = yield* runHandler(
+          (handlers) => handlers.list_sessions({ state: "settled" }),
+          {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 0,
+                projects: [],
+                threads: threeSettled,
+                updatedAt: now,
+              }),
+          },
+        );
+
+        expect(result.hasMore).toBe(false);
+        expect(result.sessions.map((session) => session.threadId)).toEqual([
+          "few-settled-2",
+          "few-settled-1",
+          "few-settled-0",
+        ]);
+      }),
+    );
+
+    it.effect("does not truncate state: active, even past LIST_SESSIONS_MAX_ENTRIES", () =>
+      Effect.gen(function* () {
+        // Active is already bounded by the spawn cap in steady state, so it
+        // is intentionally not paginated the way settled/all are.
+        const sixtyActive = Array.from(
+          { length: 60 },
+          (_, index) =>
+            ({
+              ...childShell,
+              id: `active-${index}` as ThreadId,
+              settledAt: null,
+            }) satisfies OrchestrationThreadShell,
+        );
+
+        const result = yield* runHandler((handlers) => handlers.list_sessions({}), {
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 0,
+              projects: [],
+              threads: sixtyActive,
+              updatedAt: now,
+            }),
+        });
+
+        expect(result.sessions).toHaveLength(60);
+        expect(result.hasMore).toBe(false);
+      }),
+    );
+
+    it.effect("state: active is also most-recent-first, same as settled/all", () =>
+      Effect.gen(function* () {
+        const threeActive = Array.from(
+          { length: 3 },
+          (_, index) =>
+            ({
+              ...childShell,
+              id: `few-active-${index}` as ThreadId,
+              settledAt: null,
+              createdAt: `2026-08-01T00:0${index}:00.000Z`,
+            }) satisfies OrchestrationThreadShell,
+        );
+
+        const result = yield* runHandler((handlers) => handlers.list_sessions({}), {
+          getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 0,
+              projects: [],
+              threads: threeActive,
+              updatedAt: now,
+            }),
+        });
+
+        expect(result.sessions.map((session) => session.threadId)).toEqual([
+          "few-active-2",
+          "few-active-1",
+          "few-active-0",
+        ]);
+      }),
+    );
+  });
+
+  it.effect("degrades hasReport to false when the report existence check fails", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler((handlers) => handlers.list_sessions({}), {
+        getShellSnapshot: () =>
+          Effect.succeed({
+            snapshotSequence: 0,
+            projects: [],
+            threads: [childShell],
+            updatedAt: now,
+          }),
+        getThreadHasReport: () =>
+          Effect.fail(
+            new PersistenceSqlError({ operation: "test", detail: "projection unavailable" }),
+          ),
+      });
+
+      expect(result.sessions).toHaveLength(1);
+      expect(result.sessions[0]?.hasReport).toBe(false);
+    }),
+  );
+
+  it.effect("never dispatches a command or starts a turn", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler((handlers) => handlers.list_sessions({}), {
+        getShellSnapshot: () =>
+          Effect.succeed({
+            snapshotSequence: 0,
+            projects: [],
+            threads: [childShell],
+            updatedAt: now,
+          }),
+      });
+      expect(result.sessions).toHaveLength(1);
+    }),
+  );
+});
+
+describe("spawn_session cap (handler)", () => {
+  const parentShell = {
+    ...baseShell,
+    id: parentThreadId,
+    spawnedByThreadId: undefined,
+  } satisfies OrchestrationThreadShell;
+
+  // Session status is cosmetic here — countsTowardActiveCap consults live
+  // binding presence only. eightChildren controls settledAt; boundIds
+  // (passed to runSpawn) independently controls which of them the provider
+  // session directory reports a live binding for.
+  const eightChildren = (
+    settled: boolean,
+    sessionOverride: NonNullable<OrchestrationThreadShell["session"]> = stoppedSession,
+  ) =>
+    Array.from(
+      { length: 8 },
+      (_, index) =>
+        ({
+          ...childShell,
+          id: `cap-child-${index}` as ThreadId,
+          settledAt: settled ? now : null,
+          session: sessionOverride,
+        }) satisfies OrchestrationThreadShell,
+    );
+
+  const runSpawn = (
+    threads: ReadonlyArray<OrchestrationThreadShell>,
+    options: {
+      readonly boundIds?: ReadonlyArray<ThreadId>;
+      readonly getProjectShellById?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getProjectShellById"];
+    } = {},
+  ) =>
+    runHandler((handlers) => handlers.spawn_session({ prompt: "Do the thing" }), {
+      getThreadShellById: (id) =>
+        Effect.succeed(id === parentThreadId ? Option.some(parentShell) : Option.none()),
+      getShellSnapshot: () =>
+        Effect.succeed({ snapshotSequence: 0, projects: [], threads, updatedAt: now }),
+      listBindings: bindingsFor(options.boundIds ?? []),
+      ...(options.getProjectShellById ? { getProjectShellById: options.getProjectShellById } : {}),
+    });
+
+  it.effect("refuses a spawn once 8 active (unsettled) children exist", () =>
+    Effect.gen(function* () {
+      // Unsettled counts regardless of binding state — no boundIds needed.
+      const error = yield* runSpawn(eightChildren(false)).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SessionOrchestrationDeniedError);
+      expect(error).toMatchObject({ reason: "spawn_limit_reached" });
+    }),
+  );
+
+  it.effect("does not count a settled child with no live binding", () =>
+    Effect.gen(function* () {
+      const children = eightChildren(true);
+      // Stub the next thing spawn_session touches after the cap check
+      // (project lookup) to fail cleanly and distinguishably, proving the
+      // cap check itself let this request through.
+      const error = yield* runSpawn(children, {
+        getProjectShellById: () => Effect.succeed(Option.none()),
+      }).pipe(Effect.flip);
+
+      expect(error).not.toMatchObject({ reason: "spawn_limit_reached" });
+      expect((error as { message: string }).message).toContain("was not found");
+    }),
+  );
+
+  it.effect("still counts a settled child that still has a live binding", () =>
+    Effect.gen(function* () {
+      // settleChildCascade writes settledAt unconditionally even when the
+      // stop itself failed to reach "stopped" in time; a settled child is
+      // not actually inactive until its provider binding is confirmed gone.
+      const children = eightChildren(true, aliveSession);
+      const error = yield* runSpawn(children, {
+        boundIds: children.map((child) => child.id),
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SessionOrchestrationDeniedError);
+      expect(error).toMatchObject({ reason: "spawn_limit_reached" });
+    }),
+  );
+
+  it.effect("counts a settled, errored child that still has a live binding", () =>
+    Effect.gen(function* () {
+      // "error" is not proof the binding is gone — Codex/OpenCode retain an
+      // errored session's binding and ProviderCommandReactor can restart it.
+      const children = eightChildren(true, errorSession);
+      const error = yield* runSpawn(children, {
+        boundIds: children.map((child) => child.id),
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SessionOrchestrationDeniedError);
+      expect(error).toMatchObject({ reason: "spawn_limit_reached" });
+    }),
+  );
+
+  it.effect("does not count a settled, errored child with no live binding — genuinely dead", () =>
+    Effect.gen(function* () {
+      const children = eightChildren(true, errorSession);
+      const error = yield* runSpawn(children, {
+        getProjectShellById: () => Effect.succeed(Option.none()),
+      }).pipe(Effect.flip);
+
+      expect(error).not.toMatchObject({ reason: "spawn_limit_reached" });
+      expect((error as { message: string }).message).toContain("was not found");
+    }),
+  );
+
+  it.effect("refuses a spawn once 32 total (active + settled) children are retained", () =>
+    Effect.gen(function* () {
+      const thirtyTwo = Array.from(
+        { length: 32 },
+        (_, index) =>
+          ({
+            ...childShell,
+            id: `retained-child-${index}` as ThreadId,
+            // All settled with no live binding, so the 8-active cap alone
+            // would not refuse this spawn; only the 32-retention cap should.
+            settledAt: now,
+            session: stoppedSession,
+          }) satisfies OrchestrationThreadShell,
+      );
+      const error = yield* runSpawn(thirtyTwo).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SessionOrchestrationDeniedError);
+      expect(error).toMatchObject({ reason: "spawn_retention_limit_reached" });
     }),
   );
 });

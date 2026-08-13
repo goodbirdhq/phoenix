@@ -1,4 +1,11 @@
-import { PostReportInput, ReadSessionInput, StopSessionInput, ThreadId } from "@t3tools/contracts";
+import {
+  ArchiveSessionInput,
+  ListSessionsInput,
+  PostReportInput,
+  ReadSessionInput,
+  StopSessionInput,
+  ThreadId,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -6,6 +13,45 @@ import * as Schema from "effect/Schema";
 const decodeReadSessionInput = Schema.decodeUnknownEffect(ReadSessionInput);
 const decodePostReportInput = Schema.decodeUnknownEffect(PostReportInput);
 const decodeStopSessionInput = Schema.decodeUnknownSync(StopSessionInput);
+const decodeListSessionsInput = Schema.decodeUnknownSync(ListSessionsInput);
+const decodeArchiveSessionInput = Schema.decodeUnknownSync(ArchiveSessionInput);
+
+it("list_sessions defaults to no input fields set", () => {
+  assert.deepStrictEqual(decodeListSessionsInput({}), {});
+});
+
+it("list_sessions accepts includeArchived", () => {
+  assert.deepStrictEqual(decodeListSessionsInput({ includeArchived: true }), {
+    includeArchived: true,
+  });
+});
+
+it("list_sessions accepts state: active | settled | all", () => {
+  for (const state of ["active", "settled", "all"] as const) {
+    assert.deepStrictEqual(decodeListSessionsInput({ state }), { state });
+  }
+});
+
+it("list_sessions rejects an unrecognized state", () => {
+  assert.throws(() => decodeListSessionsInput({ state: "archived" }));
+});
+
+it("archive_session requires only a threadId", () => {
+  assert.deepStrictEqual(decodeArchiveSessionInput({ threadId: "thread-1" }), {
+    threadId: ThreadId.make("thread-1"),
+  });
+});
+
+it("archive_session accepts cleanupWorktree and force", () => {
+  assert.deepStrictEqual(
+    decodeArchiveSessionInput({ threadId: "thread-1", cleanupWorktree: false, force: true }),
+    {
+      threadId: ThreadId.make("thread-1"),
+      cleanupWorktree: false,
+      force: true,
+    },
+  );
+});
 
 it("stop_session keeps the backward-compatible immediate-stop shape", () => {
   assert.deepStrictEqual(decodeStopSessionInput({ threadId: "thread-1" }), {

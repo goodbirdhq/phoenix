@@ -15,8 +15,11 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
                                       ├─ spawn_session ──> ThreadTurnBootstrap.bootstrapTurnStart
                                       │     (thread.create with spawnedByThreadId → worktree →
                                       │      setup script → first turn; rollback on failure)
-                                      ├─ send_to_session / read_session / ping_session / stop_session
+                                      ├─ list_sessions / send_to_session / read_session /
+                                      │     ping_session / stop_session
                                       ├─ settle_session ──> thread.settle (+ worktree cleanup)
+                                      ├─ archive_session ──> settle cascade (if unsettled) +
+                                      │     thread.archive (+ worktree cleanup, default on)
                                       ├─ read_report ──> projection_thread_reports (paginated body)
                                       └─ post_report ──> thread.report.post (internal command)
                                              │
@@ -325,14 +328,120 @@ that fails on a repository lock surfaces as the same `SessionOrchestrationGitLoc
 removal does, and the thread's `worktreePath` is still cleared first: the directory really is gone,
 and failing before recording that would leave the thread pointing at it forever.
 
+## The spawn cap counts active work, not history
+
+`SESSION_SPAWN_MAX_CHILDREN` counts only _active_ children: non-deleted, non-archived, and
+**unsettled OR with a live provider binding**, computed by one shared predicate,
+`countsTowardActiveCap`, used by both `spawn_session`'s cap check and `list_sessions`'s
+`state: "active"` filter — they cannot drift, because a caller who just hit `spawn_limit_reached`
+must be able to list exactly the children responsible for it. The "or has a live binding" half
+matters because `settleChildCascade` writes `settledAt` unconditionally — a failed stop (the
+provider process did not reach `stopped` within the timeout) only withholds destructive worktree
+cleanup, not the settle itself (see below). Without this, a wedged provider process could be
+"settled" and immediately stop counting while its process is still running, letting a parent spawn
+past what should be a hard ceiling on live processes. A settled child only actually frees its slot
+once its binding is confirmed gone (the reaper, or a retried `settle_session`/`stop_session`).
+`list_sessions`'s `state: "settled"` is the exact complement of `"active"` — settled AND no live
+binding, the pool safe to reclaim or discard at leisure — not just "has a `settledAt`"; `"all"` is
+both.
+
+**`session.status` is a hint, not proof, of whether a provider binding is still live.**
+`isSessionAlive(status)` looks authoritative but isn't: Codex/OpenCode retain an errored session's
+binding, and `ProviderCommandReactor` treats any status other than `"stopped"` as
+reusable/restartable (see its `existingSessionThreadId` branch) — so an `"error"` status child can
+still have a live, restartable process. Cap-counting and cleanup use `resolveHasLiveBinding`
+instead — a query against the provider session directory (the same source the recovery sweep uses)
+— as the authoritative signal at every decision point: `countsTowardActiveCap`, and
+`stopChildSession`'s decision to attempt a stop at all (and what it waits on to confirm the stop
+actually happened). Getting this wrong in either direction breaks something — trusting `"error"`
+as dead lets a still-restartable child both squat forever if miscounted as alive by a _different_
+heuristic, or get archived (worktree deleted) out from under a process that comes back. Status
+still shows up in results (`sessionStatus` on `list_sessions` entries) as a legible, cheap-to-read
+hint for humans and callers deciding what to do next; it just never gates a decision on its own.
+
+This makes `settle_session` the normal way to free a slot once the process is actually gone: the
+parent declares a child finished, its process is stopped, and the slot becomes available again — no
+separate archiving step. `archive_session` is not the slot-freeing mechanism; a settled-and-dead
+child already isn't counted. What `archive_session` is for: permanently discarding a child
+(declutter the board) and reclaiming its worktree/branch (the settle path only reclaims the
+worktree if `cleanupWorktree: true` is passed, and leaves the thread itself resumable). A settled
+child stays reachable via `send_to_session` as long as its worktree survives; a settled child whose
+worktree was already cleaned up cannot be resumed (the platform does not support resuming a session
+whose worktree is gone — an existing, unrelated bug), so `list_sessions`'s `worktreePath` field is
+the caller's signal for whether `send_to_session` can still bring a settled child back, or whether
+`archive_session` is the only option left. That signal is verified with a best-effort filesystem
+existence check rather than trusting the cached projection value outright — the projection can go
+stale (manual deletion, a partially-failed cleanup) faster than it is reprojected, and a false
+"reclaimable" signal is worse than a slightly stale-but-safe one; a failed check degrades to the
+cached value rather than hiding it.
+
+Settled-but-undead children are still bounded overall: `SESSION_SPAWN_MAX_RETAINED_CHILDREN` (32)
+caps the total non-deleted, non-archived children — active plus settled — one thread may retain, so
+a parent that spawns and settles repeatedly without ever archiving cannot accumulate unbounded
+thread rows and worktrees. This is a separate, independent ceiling from the active cap; hitting it
+fails with its own `spawn_retention_limit_reached` reason and points at `archive_session` to
+reclaim capacity.
+
+## Archiving a child
+
+Archiving deliberately **subsumes** settling rather than requiring it as a separate step first: a
+child the caller wants gone for good is a child the caller is also done with. An unsettled child
+runs the exact same stop → settle → cleanup cascade `settle_session` does — including the same
+refusal for a `starting`/`running` child — implemented as one shared helper so the two tools cannot
+drift on ordering. An already-settled child skips the redundant `thread.settle` re-dispatch, but
+**not** the binding check: `settledAt` is no more proof the binding is gone than `session.status`
+is (same reasoning as `countsTowardActiveCap`), so this path still calls `stopChildSession` —
+which itself already short-circuits to an immediate no-dispatch `true` when there is nothing to
+stop, so a genuinely dead child costs nothing extra. The busy check still applies first (in
+principle a settled child's session could come back alive and start a new turn before
+`archive_session` catches up).
+
+Unlike the unsettled cascade, an unconfirmed stop on the already-settled path never fails the whole
+call: there is no freshly-written `settledAt` here that would otherwise be stranded behind an error
+(`settleChildCascade`'s reasoning for failing outright does not apply), so archiving still proceeds
+— only the destructive worktree cleanup is conservatively withheld, with the result explaining why.
+This is also what makes an unreadable binding directory fail safe end-to-end: `resolveHasLiveBinding`
+degrading to "assume bound" makes `stopChildSession` dispatch a stop it can never confirm cleared,
+which then simply withholds cleanup here rather than blocking the archive itself.
+
+`cleanupWorktree` defaults to `true` for `archive_session`, the opposite of `settle_session`'s
+default. Once a thread is archived it no longer resolves through `requireSpawnedChild` (`getShell`
+filters archived threads, same as active-only reads elsewhere), so archiving is the last point
+anything in this toolkit can reach the worktree — leaving it around by default would leak it
+permanently, since nothing else ever revisits an archived thread. The dirty/unpushed-work refusal
+is identical to `settle_session`'s; pass `cleanupWorktree: false` to keep the directory anyway, or
+`force: true` to delete over uncommitted or unpushed work.
+
+The result always reports the full cascade — whether a binding was stopped (`null` only for the
+already-archived retry no-op below, where nothing runs at all), whether a settle ran (`false` for
+an already-settled child, since only its binding gets checked, not re-settled), the worktree
+outcome, and that the thread is archived — so a caller never has to infer what happened from a bare
+acknowledgement.
+
+`archive_session` is genuinely idempotent, matching its `Tool.Idempotent` annotation: retrying it
+against a child that is already archived is a no-op success, not a "not found" error. That needs a
+dedicated lookup — `requireSpawnedChild` (via `getShell`) only ever resolves non-archived threads,
+so without it a retry (the caller not knowing whether its first call landed, a client-side timeout,
+at-least-once delivery) would fail as if the thread never existed. The fallback only runs when the
+normal lookup misses, checks the archived snapshot for a thread this caller spawned, and performs no
+further mutation on that path — the destructive step already happened (or was already decided
+against) the first time.
+
+`list_sessions` bounds `"settled"`/`"all"` queries to `LIST_SESSIONS_MAX_ENTRIES` (50) entries,
+most-recently-created first, with `hasMore` signalling truncation. `"active"` is not paginated — it
+is already bounded by the spawn cap in steady state. This keeps the per-entry enrichment
+(`hasReport`, the worktree existence check) bounded to the page actually returned rather than every
+matching child, which matters once retention is only capped at 32 instead of 8.
+
 ## Guardrails
 
 - Mutating tools operate only on direct children of the calling thread. The read-only
   `read_report` additionally allows reading reports of sibling threads (same
   `spawned_by_thread_id`), which is the minimal primitive for peer workflows — e.g. a reviewer
   child reading a worker child's report without the parent relaying it.
-- At most `SESSION_SPAWN_MAX_CHILDREN` (8) live children per thread and
-  `SESSION_SPAWN_MAX_DEPTH` (3) levels of nesting.
+- At most `SESSION_SPAWN_MAX_CHILDREN` (8) active (unsettled, or settled but still alive) children
+  per thread, `SESSION_SPAWN_MAX_RETAINED_CHILDREN` (32) total non-archived children (active +
+  settled) per thread, and `SESSION_SPAWN_MAX_DEPTH` (3) levels of nesting.
 - A child's `runtimeMode` is capped at its parent's.
 - Spawned threads participate in normal archive/settle session cleanup, so orchestration cannot
   leak provider processes.
