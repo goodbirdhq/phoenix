@@ -30,6 +30,9 @@ export const ChangeRequest = Schema.Struct({
   headRefName: TrimmedNonEmptyString,
   state: ChangeRequestState,
   updatedAt: Schema.Option(Schema.DateTimeUtc),
+  // Commit the change request's head branch pointed at. Optional: not every
+  // host exposes it, and older listings did not ask for it.
+  headRefOid: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   isCrossRepository: Schema.optional(Schema.Boolean),
   headRepositoryNameWithOwner: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   headRepositoryOwnerLogin: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

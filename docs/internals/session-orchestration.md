@@ -200,7 +200,10 @@ part of it. Order is stop → settle → cleanup, and it matters:
 
 If the session does not reach `stopped` within the timeout, the thread is still settled but
 cleanup is withheld and the caller is told: deleting files under a process that refused to die is
-how a "cleanup" corrupts a live turn.
+how a "cleanup" corrupts a live turn. A plain settle (no `cleanupWorktree`) has nothing to withhold,
+so it succeeds — but it now carries a `warning` naming the provider and the status the session was
+last seen in. A settle that quietly leaves a live process behind is how orphans accumulate
+unnoticed.
 
 That stop is deliberately **immediate** — no `gracePeriodMs`, no partial report requested — even
 though `stop_session` can stop gracefully. A grace period buys a working agent time to wrap up and
@@ -213,11 +216,114 @@ could not have reported already. Waiting one out would only delay the settle and
 `cleanupWorktree: true` is the only thing in the server that reclaims a spawned worktree; without
 it a long orchestration run leaks a directory per child. Deletion is permanent, so it is refused —
 with the specific dirty files and unpushed commit count — unless the work is committed and pushed,
-or `force: true` is passed. Only `t3code/…` temporary branches are ours to delete; any other branch
-is kept and reported. Note that `deleteRef` itself is a dumb primitive: the safety lives in
-`decideBranchCleanup` at the call site, not in the driver. The result always names what was removed
-and what was kept, and the thread's `worktreePath` is cleared so `read_session` stops advertising a
+or `force: true` is passed. Only `t3code/…` temporary branches are ours to delete on sight; any
+other branch is kept and reported unless `cleanupBranch: true` comes with a merge proof (below).
+Note that `deleteRef` itself is a dumb primitive: the safety lives in `decideBranchCleanup` at the
+call site, not in the driver. The result always names what was removed, what was kept, and the
+proof used, and the thread's `worktreePath` is cleared so `read_session` stops advertising a
 directory that no longer exists.
+
+## Git hygiene during cleanup
+
+Three failures showed up the first time eight children were settled at once, and all three are
+about git being a single-writer program that Phoenix was treating as a service.
+
+**One cleanup per repository at a time.** Git's worktree and ref mutations take locks under `.git`;
+concurrent cleanups on one repository do not queue, they sit on the lock until Phoenix's own 15s
+command timeout kills them, so seven cleanups failed and the one that ran alone succeeded.
+`GitRepositoryLock` (`apps/server/src/git/GitRepositoryLock.ts`) is one Effect `Semaphore` per
+repository, and the removal _and_ the branch delete run inside it — the ref delete takes a lock in
+the same repository, so leaving it outside would just move the race. The lock is built once, where
+the sessions toolkit is registered in `McpHttpServer`, because a per-call instance serializes
+nothing. Reads (`status`, `rev-parse`) stay outside: they do not take the lock.
+
+The key is what makes it a mutex rather than a decoration. Keying on the path as handed in gives
+`/tmp/repo`, its symlink `/link/repo`, and a linked worktree of the same repository three different
+semaphores — serializing nothing while looking like it does. So the key is canonical: `realPath`
+first, then the repository's common git directory (a linked worktree's `.git` is a file pointing at
+`…/.git/worktrees/<name>`, and everything above `worktrees/` is what every worktree shares). Each
+step degrades to the best answer so far: a lock keyed on a slightly coarser path is still correct,
+while failing to lock is not.
+
+**A leftover lock is reported, never removed.** A git process killed mid-write leaves its lock file
+behind and every later git command on that repository fails against it. Reaching that diagnosis
+needs what git actually said, and `GitCommandError.detail` is a fixed per-call-site string
+("git worktree remove failed"), so the driver attaches a bounded `stderrExcerpt` — the tail, since
+git prints progress before the fatal line — to every non-zero exit. Without it the lock path never
+leaves the driver and the structured error below can only ever fire in a test. The excerpt is
+redacted before it is attached, and redacted before it is truncated so nothing survives on a
+boundary: git echoes remote URLs freely and a remote can carry its own credentials
+(`https://x-access-token:ghs_…@host/o/r`), so userinfo, query strings, fragments, and known token
+shapes are stripped while scheme, host, and path — the diagnostic value — stay. Credentialed URLs
+do reach argv (clone, fetch, and push take the remote as an argument), which is why redaction is
+written against URL shapes rather than a list of "safe" commands; argv itself is never attached to
+an error, only `argumentCount`. Bare secrets still belong on `stdin`, which `execute` takes for
+exactly that. The excerpt is
+matched on the lock artifact (a `.lock` path) rather than on git's English, which varies by
+version, command, and locale. When a git failure names a lock path, `settle_session` stats it and
+answers with `SessionOrchestrationGitLockError`: the path,
+its age, whether it matches the stale heuristic, and the remedy. The heuristic is deliberately
+conservative — zero bytes (git writes the new index into the lock, so an empty one means the writer
+died before writing) _and_ older than 60s (longer than any command Phoenix could still have
+running). Even when both hold, Phoenix does not delete it: nothing in this process can prove that
+no other git — a developer's shell, a second Phoenix, an editor — owns that lock, and deleting a
+live one corrupts the index. Naming the file is the whole value; the caller can confirm what this
+process cannot.
+
+**Deleting a user's branch needs proof, and `git branch --merged` is not it.** This repository
+squash-merges, so a merged branch never becomes an ancestor of `main` and `--merged` reports
+nothing — trusting it would refuse every merged branch, and on a rebase-merging repository it would
+accept branches that were never merged. `cleanupBranch: true` instead demands commit identity: the
+local head, the remote-tracking head, and the head commit of a _merged_ pull request must all be
+the same commit (which also means zero commits ahead). Anything else is
+`SessionOrchestrationBranchNotMergedError` with the reason and the SHAs that disagree. The proof
+runs _before_ the worktree is touched, so a refusal costs nothing and leaves the caller a whole job
+rather than half of one. The remote-tracking ref is read as last fetched rather than re-fetched: a
+stale ref can only cause a false refusal, never a wrong deletion, because a local branch that
+equals a merged PR head holds nothing that is not already published. `ChangeRequest.headRefOid` is
+what carries the merged commit; it is optional on the contract, and only the GitHub provider's
+non-open listing asks `gh` for it today.
+
+The proof is taken outside the repository lock — it makes a network call, and holding a repository
+hostage across one would defeat the point — which leaves a window: a branch can gain commits while
+its cleanup waits behind seven others, and a proof from minutes ago would authorize deleting them.
+So the cheap half is re-read inside the critical section, immediately before the delete: two
+`rev-parse`s confirming both heads are still the commit the pull request vouched for. A branch that
+moved is kept and reported, not deleted — the same outcome as never passing `cleanupBranch`, since
+the worktree removal was authorized by the dirty check rather than by this proof.
+
+That re-check is only atomic against writers inside this process, and the repository lock does not
+bind a terminal, an editor, or a second Phoenix. There are two races left, and they are not equally
+survivable — which is what decides the deletion mechanism.
+
+A **checkout** by another worktree is unrecoverable if we get it wrong: the other worktree's HEAD
+ends up pointing at a ref that no longer exists, and no reflog fixes someone else's broken
+directory. A **ref move** costs a ref pointer, which the reflog still holds.
+
+Compare-and-swap deletion (`git update-ref -d <ref> <sha>`) closes the second and is _blind_ to the
+first: checking a branch out does not move its OID, so the swap succeeds while a worktree holds the
+branch. Porcelain deletion (`git branch -D`) is the reverse: it refuses a checked-out branch
+atomically at delete time, and cannot notice a concurrent ref move. Phoenix takes `git branch -D`,
+because worktree safety is absolute and ref-pointer safety is best-effort-plus-reflog. The in-lock
+re-proof stays as the merged-safety check, with the residual stated where the code makes it:
+between that check and the delete, an external ref move can lose a pointer.
+
+The explicit `git worktree list --porcelain` check still runs first, inside the critical section
+and for **every** branch deletion — temporary `t3code/…` branches included, since nothing stops a
+user checking one out. git would refuse anyway; the check exists so the caller gets a structured
+refusal naming the conflicting directory instead of a raw git error. An unreadable worktree list
+fails closed for the same reason the check exists at all. When a worktree appears in the gap
+between the check and the delete, git's own refusal is parsed back into the same structured answer.
+
+Both refusals are structured per resource rather than folded into prose: a settle that removed the
+worktree but kept the branch reports `worktree.branchRefusal` (branch, reason, the SHAs, and the
+commit the proof expected), sharing its reason vocabulary with
+`SessionOrchestrationBranchNotMergedError`. Partial success is still a result the caller has to act
+on, and "the branch moved, settle again" has to be distinguishable from "this repository has no
+pull-request host" without reading English. A branch delete
+that fails on a repository lock surfaces as the same `SessionOrchestrationGitLockError` a failed
+removal does, and the thread's `worktreePath` is still cleared first: the directory really is gone,
+and failing before recording that would leave the thread pointing at it forever.
 
 ## Guardrails
 

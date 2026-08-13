@@ -10,6 +10,7 @@ import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import packageJson from "../../package.json" with { type: "json" };
+import * as GitRepositoryLock from "../git/GitRepositoryLock.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -218,8 +219,11 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
+// The repository lock is built here, once, so every settle_session in this
+// server queues on the same permit per repository. A per-call instance would
+// serialize nothing.
 const SessionsToolkitRegistrationLive = McpServer.toolkit(SessionsToolkit).pipe(
-  Layer.provide(SessionsToolkitHandlersLive),
+  Layer.provide(SessionsToolkitHandlersLive.pipe(Layer.provide(GitRepositoryLock.layer))),
 );
 
 const McpTransportLive = McpServer.layerHttp({

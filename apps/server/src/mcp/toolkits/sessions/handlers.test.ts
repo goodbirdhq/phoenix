@@ -25,6 +25,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import * as GitRepositoryLock from "../../../git/GitRepositoryLock.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -41,12 +42,15 @@ import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.t
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import { layerTest as serverSettingsLayerTest } from "../../../serverSettings.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
+import * as SourceControlProviderRegistry from "../../../sourceControl/SourceControlProviderRegistry.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
+  assessGitLockStaleness,
   assessWorktreeCleanupRisk,
   buildPingSessionSnapshot,
   canReadThreadReports,
   decideBranchCleanup,
+  parseGitLockPath,
   isSessionAlive,
   isSessionBusy,
   make,
@@ -232,17 +236,85 @@ describe("assessWorktreeCleanupRisk", () => {
 
 describe("decideBranchCleanup", () => {
   it("deletes a Phoenix temporary worktree branch", () => {
-    expect(decideBranchCleanup("t3code/1a2b3c4d")).toEqual({ deleteBranch: true, detail: null });
+    expect(decideBranchCleanup("t3code/1a2b3c4d")).toEqual({
+      deleteBranch: true,
+      requiresMergeProof: false,
+      detail: null,
+    });
   });
 
   it("keeps a branch Phoenix did not create, and says so", () => {
     const decision = decideBranchCleanup("feature/user-work");
     expect(decision.deleteBranch).toBe(false);
     expect(decision.detail).toContain("feature/user-work");
+    expect(decision.detail).toContain("cleanupBranch");
+  });
+
+  it("deletes a user branch only against a merge proof when cleanupBranch is asked for", () => {
+    expect(decideBranchCleanup("feature/user-work", { cleanupBranch: true })).toEqual({
+      deleteBranch: true,
+      requiresMergeProof: true,
+      detail: null,
+    });
+    // Phoenix's own throwaway branches never need the proof: nothing but this
+    // worktree ever pointed at them.
+    expect(decideBranchCleanup("t3code/1a2b3c4d", { cleanupBranch: true }).requiresMergeProof).toBe(
+      false,
+    );
   });
 
   it("has nothing to do when the thread has no branch", () => {
-    expect(decideBranchCleanup(null)).toEqual({ deleteBranch: false, detail: null });
+    expect(decideBranchCleanup(null)).toEqual({
+      deleteBranch: false,
+      requiresMergeProof: false,
+      detail: null,
+    });
+  });
+});
+
+describe("parseGitLockPath", () => {
+  it("finds the lock path in git's index-lock failure", () => {
+    expect(parseGitLockPath("fatal: Unable to create '/repo/.git/index.lock': File exists.")).toBe(
+      "/repo/.git/index.lock",
+    );
+  });
+
+  it("finds the lock path in a ref-lock failure", () => {
+    expect(
+      parseGitLockPath(
+        "error: cannot lock ref 'refs/heads/x': Unable to create '/repo/.git/refs/heads/x.lock': File exists",
+      ),
+    ).toBe("/repo/.git/refs/heads/x.lock");
+  });
+
+  it("leaves ordinary git failures alone", () => {
+    expect(parseGitLockPath("fatal: '/tmp/wt' is not a working tree")).toBeNull();
+    // "Unable to create" without the lock file is a different failure.
+    expect(parseGitLockPath("fatal: Unable to create directory '/tmp/wt'")).toBeNull();
+  });
+});
+
+describe("assessGitLockStaleness", () => {
+  it("calls an empty, long-untouched lock stale", () => {
+    const assessment = assessGitLockStaleness({ sizeBytes: 0, ageMs: 10 * 60_000 });
+    expect(assessment.appearsStale).toBe(true);
+    expect(assessment.detail).toContain("died mid-write");
+  });
+
+  it("refuses to call a fresh lock stale, however empty", () => {
+    // Inside the window a git process is plausibly still writing, and the
+    // whole point of the heuristic is to never accuse a live one.
+    expect(assessGitLockStaleness({ sizeBytes: 0, ageMs: 5_000 }).appearsStale).toBe(false);
+  });
+
+  it("refuses to call a lock with contents stale", () => {
+    expect(assessGitLockStaleness({ sizeBytes: 96, ageMs: 10 * 60_000 }).appearsStale).toBe(false);
+  });
+
+  it("says nothing definite when the lock could not be inspected", () => {
+    const assessment = assessGitLockStaleness({ sizeBytes: null, ageMs: null });
+    expect(assessment.appearsStale).toBe(false);
+    expect(assessment.detail).toContain("could not be inspected");
   });
 });
 
@@ -739,6 +811,10 @@ const runHandler = <A, E, R>(
           listBindings: overrides.listBindings ?? (() => Effect.succeed([])),
         }),
         Layer.mock(GitWorkflowService.GitWorkflowService)({}),
+        // Only settle_session's cleanup path touches these two; a read-only
+        // tool that reaches them is a bug, so the mocks stay empty.
+        Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({}),
+        GitRepositoryLock.layer.pipe(Layer.provide(NodeServices.layer)),
         // Not exercised by ping_session/read_session (only read_report/post_report
         // touch it); unused methods die if called.
         Layer.mock(ProjectionThreadReportRepository)({

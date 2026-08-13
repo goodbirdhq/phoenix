@@ -41,7 +41,16 @@ always tell them apart from a report the agent actually wrote.
 
 Deleting a worktree is permanent. Phoenix refuses if the worktree still holds uncommitted changes
 or commits that exist nowhere else, and tells the session exactly what is at risk; the session has
-to insist before anything is lost. Branches Phoenix did not create are never deleted.
+to insist before anything is lost. A branch you named yourself is only deleted if the session asks
+for it _and_ Phoenix can prove the branch was merged — the branch, its remote, and a merged pull
+request all pointing at the same commit. Squash merges rewrite history, so "looks merged" is not
+good enough; if the proof does not hold, the branch stays and the session is told which commits
+disagree.
+
+Cleaning up several sessions at once is safe: Phoenix removes worktrees from one repository one at
+a time, because git allows only one writer per repository. If a git process elsewhere on your
+machine is holding the repository open, Phoenix says which lock file is in the way instead of
+forcing its way through.
 
 ## Limits
 

@@ -140,6 +140,7 @@ import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
+import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -626,6 +627,12 @@ const buildAppUnderTest = (options?: {
       // own pipe step: the pipe below is already at the 20-argument overload
       // ceiling.
       .pipe(Layer.provideMerge(ThreadTurnBootstrap.layer))
+      // settle_session reads merged pull requests through this registry to
+      // prove a branch is safe to delete; no route test here takes that path,
+      // so the mock only has to satisfy the graph.
+      .pipe(
+        Layer.provide(Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({})),
+      )
       .pipe(
         Layer.provide(
           Layer.mock(Keybindings.Keybindings)({

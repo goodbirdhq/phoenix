@@ -30,6 +30,7 @@ function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeReq
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
     updatedAt: Option.none(),
+    ...(summary.headRefOid !== undefined ? { headRefOid: summary.headRefOid } : {}),
     ...(summary.isCrossRepository !== undefined
       ? { isCrossRepository: summary.isCrossRepository }
       : {}),
@@ -139,7 +140,9 @@ export const make = Effect.gen(function* () {
             "--limit",
             String(input.limit ?? 20),
             "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            // headRefOid is what proves a merged PR was merged *from this
+            // branch head*, which squash-merge histories cannot show.
+            "number,title,url,baseRefName,headRefName,headRefOid,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         })
         .pipe(

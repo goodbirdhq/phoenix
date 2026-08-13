@@ -16,7 +16,12 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError, type ReviewDiffFileContentsInput } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
-import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
+import {
+  gitStderrExcerpt,
+  makeGitVcsDriverCore,
+  redactGitOutput,
+  splitNullSeparatedGitStdoutPaths,
+} from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
@@ -1378,6 +1383,172 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         yield* driver.removeWorktree({ cwd, path: worktreePath });
         const fileSystem = yield* FileSystem.FileSystem;
         assert.equal(yield* fileSystem.exists(worktreePath), false);
+      }),
+    );
+  });
+
+  describe("lock diagnostics", () => {
+    it.effect("carries git's own lock complaint on a failed ref delete", () =>
+      Effect.gen(function* () {
+        // A real held ref lock, not a simulated message: this is the failure a
+        // crashed git leaves behind, and the excerpt is the only thing that
+        // can tell a caller which file to remove — `detail` is a fixed string.
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* driver.createRef({ cwd, refName: "feature/locked" });
+        const lockPath = pathService.join(cwd, ".git", "refs", "heads", "feature", "locked.lock");
+        yield* fileSystem.makeDirectory(pathService.dirname(lockPath), { recursive: true });
+        yield* fileSystem.writeFileString(lockPath, "");
+
+        const error = yield* Effect.flip(
+          driver.deleteRef({ cwd, refName: "feature/locked", force: true }),
+        );
+
+        assert.strictEqual(error._tag, "GitCommandError");
+        assert.ok(
+          error.stderrExcerpt !== undefined,
+          "expected the failed git command to carry a stderr excerpt",
+        );
+        assert.ok(
+          error.stderrExcerpt.includes("locked.lock"),
+          `expected the excerpt to name the lock file, got: ${error.stderrExcerpt}`,
+        );
+      }),
+    );
+
+    it("strips credentials out of anything derived from git output", () => {
+      // The channel that matters: a remote whose URL carries its own
+      // credentials, which git echoes back on any push/fetch failure.
+      assert.strictEqual(
+        redactGitOutput(
+          "fatal: could not read from 'https://x-access-token:ghs_abcdefghijklmnop@github.com/o/r.git'",
+        ),
+        "fatal: could not read from 'https://***@github.com/o/r.git'",
+      );
+      assert.strictEqual(
+        redactGitOutput("remote: https://user:hunter2@example.com/o/r?token=abc#frag"),
+        "remote: https://***@example.com/o/r?***#***",
+      );
+      // A bare token is a secret wherever it turns up.
+      assert.strictEqual(
+        redactGitOutput("error: bad credentials ghp_ABCDEFGHIJKLMNOPQRSTUV"),
+        "error: bad credentials ghp_***",
+      );
+      // Which remote failed is the diagnostic value, and it survives.
+      assert.strictEqual(
+        redactGitOutput("fatal: repository 'https://github.com/o/r.git' not found"),
+        "fatal: repository 'https://github.com/o/r.git' not found",
+      );
+    });
+
+    it.effect("keeps a credentialed remote out of the error it raises", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const secret = "ghs_topsecrettokenvalue1234";
+
+        // A real failing fetch against a real credentialed URL: git echoes the
+        // remote back, and the error must not carry the token onward.
+        const error = yield* Effect.flip(
+          driver.execute({
+            operation: "GitVcsDriver.test.credentialedRemote",
+            cwd,
+            args: ["fetch", `https://x-access-token:${secret}@127.0.0.1:1/o/r.git`],
+            timeoutMs: 20_000,
+          }),
+        );
+
+        assert.strictEqual(error._tag, "GitCommandError");
+        assert.notInclude(error.stderrExcerpt ?? "", secret);
+        assert.notInclude(error.message, secret);
+        // Nothing else on the error smuggles it either.
+        const stringFields = Object.values(error)
+          .filter((value) => typeof value === "string")
+          .join(" ");
+        assert.notInclude(stringFields, secret);
+      }),
+    );
+
+    it("keeps a stderr excerpt bounded, tail first", () => {
+      assert.strictEqual(gitStderrExcerpt("   "), null);
+      assert.strictEqual(gitStderrExcerpt("fatal: boom\n"), "fatal: boom");
+      // The fatal line is the last one, so the tail is what must survive.
+      const excerpt = gitStderrExcerpt(`${"noise\n".repeat(500)}fatal: Unable to create lock`);
+      assert.ok(excerpt !== null && excerpt.length <= 501);
+      assert.ok(excerpt.endsWith("fatal: Unable to create lock"));
+      assert.ok(excerpt.startsWith("…"));
+    });
+  });
+
+  describe("worktree enumeration", () => {
+    it.effect("reports a linked worktree's branch, and stops once it is removed", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-linked-"), "linked");
+
+        yield* git(cwd, ["worktree", "add", "-b", "feature/held", worktreePath]);
+
+        const held = yield* driver.listWorktrees({ cwd });
+        assert.include(
+          held.map((worktree) => worktree.branch),
+          "feature/held",
+        );
+
+        yield* driver.removeWorktree({ cwd, path: worktreePath });
+
+        const released = yield* driver.listWorktrees({ cwd });
+        assert.notInclude(
+          released.map((worktree) => worktree.branch),
+          "feature/held",
+        );
+      }),
+    );
+
+    it.effect("pins why deleteRef uses porcelain: a compare-and-swap cannot see checkouts", () =>
+      Effect.gen(function* () {
+        // The reason `deleteRef` is `git branch -D` and not
+        // `git update-ref -d <ref> <sha>`. Checking a branch out does not move
+        // its OID, so a compare-and-swap on the commit succeeds even while a
+        // worktree holds the branch — and leaves that worktree's HEAD pointing
+        // at a ref that no longer exists. Porcelain refuses instead.
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-dangling-"), "linked");
+
+        yield* git(cwd, ["worktree", "add", "-b", "feature/dangling", worktreePath]);
+        const before = yield* driver.resolveCommit({ cwd, revision: "feature/dangling" });
+        const after = yield* driver.resolveCommit({ cwd, revision: "feature/dangling" });
+        // The checkout left the OID untouched, which is exactly why a
+        // commit-based compare-and-swap is blind to it.
+        assert.strictEqual(before.commitSha, after.commitSha);
+
+        // Porcelain — what deleteRef uses — protects the other worktree.
+        const refused = yield* Effect.flip(
+          driver.deleteRef({ cwd, refName: "feature/dangling", force: true }),
+        );
+        assert.strictEqual(refused._tag, "GitCommandError");
+        assert.include(refused.stderrExcerpt ?? "", "used by worktree");
+        assert.include(yield* driver.listLocalBranchNames(cwd), "feature/dangling");
+
+        // Plumbing, with the very SHA a proof would have carried, does not.
+        const plumbing = yield* driver.execute({
+          operation: "GitVcsDriver.test.plumbingDelete",
+          cwd,
+          args: ["update-ref", "-d", "refs/heads/feature/dangling", before.commitSha],
+          timeoutMs: 10_000,
+        });
+        assert.strictEqual(plumbing.exitCode, 0);
+        assert.notInclude(yield* driver.listLocalBranchNames(cwd), "feature/dangling");
       }),
     );
   });

@@ -305,6 +305,20 @@ export class GitVcsDriver extends Context.Service<
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
     ) => Effect.Effect<void, GitCommandError>;
+    /**
+     * Every linked worktree of this repository that has a branch checked out.
+     *
+     * Detached worktrees are omitted (they cannot conflict with a branch
+     * delete), as are prunable ones (their directory is already gone). Callers
+     * that delete refs through plumbing need this: `git update-ref` will
+     * happily delete a branch another worktree is sitting on.
+     */
+    readonly listWorktrees: (input: {
+      readonly cwd: string;
+    }) => Effect.Effect<
+      ReadonlyArray<{ readonly path: string; readonly branch: string }>,
+      GitCommandError
+    >;
     readonly renameBranch: (
       input: GitRenameBranchInput,
     ) => Effect.Effect<GitRenameBranchResult, GitCommandError>;
@@ -322,6 +336,16 @@ export class GitVcsDriver extends Context.Service<
       readonly refName: string;
       // Delete a branch whose commits are not merged anywhere else.
       readonly force?: boolean | undefined;
+      /**
+       * Deliberately `git branch -d/-D` rather than `git update-ref -d`, even
+       * though plumbing could compare-and-swap the ref's commit. A checkout
+       * does not move a branch's OID, so a compare-and-swap sees nothing when
+       * another worktree takes the branch, and deleting it would leave that
+       * worktree's HEAD dangling — an unrecoverable corruption of someone
+       * else's directory. `git branch -D` refuses that atomically at delete
+       * time. It cannot detect a concurrent ref move, which costs at most a
+       * ref pointer the reflog still holds.
+       */
     }) => Effect.Effect<void, GitCommandError>;
     readonly switchRef: (
       input: VcsSwitchRefInput,

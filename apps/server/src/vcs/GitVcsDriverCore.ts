@@ -375,6 +375,70 @@ function deriveLocalBranchNameFromRemoteRef(branchName: string): string | null {
   return localBranch.length > 0 ? localBranch : null;
 }
 
+// Enough for git's own diagnosis (the failing ref, the lock file it could not
+// create), small enough that a runaway hook's output cannot ride along on an
+// error that crosses the wire.
+const GIT_STDERR_EXCERPT_MAX_CHARS = 500;
+
+// A URL anywhere in the text, split so the parts that carry secrets can be
+// dropped: scheme, optional userinfo, host, path, optional query/fragment.
+// Quotes are excluded from host and path because git quotes paths and URLs,
+// and swallowing the closing quote would mangle the surrounding message.
+const URL_PATTERN =
+  /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/?#'"]*@)?([^\s/?#'"]*)([^\s?#'"]*)(\?[^\s#'"]*)?(#[^\s'"]*)?/gi;
+
+// Token shapes that are secrets wherever they appear, including outside a URL.
+const TOKEN_PATTERN = /\b(gh[pousr]_|github_pat_|glpat-|sk-)[A-Za-z0-9_-]{8,}/g;
+
+/**
+ * Strip credentials from text that is about to be attached to an error.
+ *
+ * git echoes remote URLs freely, and a remote can carry its credentials in the
+ * URL (`https://x-access-token:ghs_…@github.com/o/r`), so anything derived
+ * from git's output has to be scrubbed before it crosses the wire. Userinfo,
+ * query strings, and fragments go; scheme, host, and path stay, because
+ * "which remote" is the diagnostic value.
+ *
+ * Note the scope. Credentialed URLs *do* reach argv — clone, fetch, and push
+ * take the remote as an argument — which is why redaction is written against
+ * URL shapes rather than against a list of "safe" commands. What argv never
+ * needs to carry is a bare secret with no URL around it: `execute` takes
+ * `stdin` for those. So a URL git echoes back is redacted here, while a bare
+ * argument value it echoes (an unknown option, say) is not, and callers must
+ * keep passing opaque secrets over stdin rather than on a command line.
+ *
+ * argv itself is never attached to an error — only `argumentCount` — so this
+ * covers the one channel that carries git's own output outward.
+ */
+export function redactGitOutput(text: string): string {
+  return text
+    .replace(URL_PATTERN, (_match, scheme, userinfo, host, path, query, fragment) => {
+      const redactedUserinfo = userinfo === undefined ? "" : "***@";
+      const redactedQuery = query === undefined ? "" : "?***";
+      const redactedFragment = fragment === undefined ? "" : "#***";
+      return `${scheme}${redactedUserinfo}${host}${path}${redactedQuery}${redactedFragment}`;
+    })
+    .replace(TOKEN_PATTERN, "$1***");
+}
+
+/**
+ * Bounded, redacted excerpt of a failed git command's stderr.
+ *
+ * Kept to the *last* lines rather than the first: git prints progress and
+ * warnings before the fatal line, and the fatal line is the one that says why.
+ * Redaction happens before truncation, so a credential cannot survive by
+ * sitting on a boundary.
+ */
+export function gitStderrExcerpt(stderr: string): string | null {
+  const trimmed = redactGitOutput(stderr).trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return trimmed.length <= GIT_STDERR_EXCERPT_MAX_CHARS
+    ? trimmed
+    : `…${trimmed.slice(trimmed.length - GIT_STDERR_EXCERPT_MAX_CHARS)}`;
+}
+
 function gitCommandContext(
   input: Pick<GitVcsDriver.ExecuteGitInput, "operation" | "cwd" | "args">,
 ) {
@@ -874,6 +938,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (options.allowNonZeroExit || result.exitCode === 0) {
           return Effect.succeed(result);
         }
+        // Callers diagnose from what git said, not from the fixed detail
+        // string: settle_session turns "Unable to create '…/index.lock'" into
+        // a structured lock error naming the file to remove.
+        const stderrExcerpt = gitStderrExcerpt(result.stderr);
         return Effect.fail(
           new GitCommandError({
             ...gitCommandContext({ operation, cwd, args }),
@@ -881,6 +949,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
             stdoutLength: result.stdout.length,
             stderrLength: result.stderr.length,
+            ...(stderrExcerpt === null ? {} : { stderrExcerpt }),
           }),
         );
       }),
@@ -2981,6 +3050,22 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     });
   });
 
+  const listWorktrees: GitVcsDriver.GitVcsDriver["Service"]["listWorktrees"] = Effect.fn(
+    "listWorktrees",
+  )(function* (input) {
+    // -z, because a worktree path may contain newlines.
+    const result = yield* executeGit(
+      "GitVcsDriver.listWorktrees",
+      input.cwd,
+      ["worktree", "list", "--porcelain", "-z"],
+      { timeoutMs: 10_000, fallbackErrorDetail: "git worktree list failed" },
+    );
+    return [...parseWorktreeBranchPaths(result.stdout)].map(([branch, worktreePath]) => ({
+      branch,
+      path: path.normalize(path.resolve(worktreePath)),
+    }));
+  });
+
   const renameBranch: GitVcsDriver.GitVcsDriver["Service"]["renameBranch"] = Effect.fn(
     "renameBranch",
   )(function* (input) {
@@ -3199,6 +3284,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       withListRefsInvalidation(input.cwd, fetchRemoteTrackingBranch(input)),
     setBranchUpstream: (input) => withListRefsInvalidation(input.cwd, setBranchUpstream(input)),
     removeWorktree: (input) => withListRefsInvalidation(input.cwd, removeWorktree(input)),
+    listWorktrees,
     renameBranch: (input) => withListRefsInvalidation(input.cwd, renameBranch(input)),
     createRef: (input) => withListRefsInvalidation(input.cwd, createRef(input)),
     deleteRef: (input) => withListRefsInvalidation(input.cwd, deleteRef(input)),

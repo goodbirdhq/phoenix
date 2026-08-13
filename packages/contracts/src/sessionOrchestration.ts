@@ -494,11 +494,65 @@ export const SettleSessionInput = Schema.Struct({
   // Refused when the worktree holds work that is not committed and pushed,
   // unless `force` is also set.
   cleanupWorktree: Schema.optional(Schema.Boolean),
+  // Also delete a branch Phoenix did not create, once it is proven merged:
+  // local head == remote head == the head commit of a merged pull request.
+  // Requires `cleanupWorktree`; `force` does not weaken the proof.
+  cleanupBranch: Schema.optional(Schema.Boolean),
   // Delete the worktree even though uncommitted or unpushed work would be
   // lost. Only meaningful together with `cleanupWorktree`.
   force: Schema.optional(Schema.Boolean),
 });
 export type SettleSessionInput = typeof SettleSessionInput.Type;
+
+/**
+ * Why a branch could not be proven safe to delete.
+ *
+ * One vocabulary for both carriers: the error that refuses a cleanup outright,
+ * and the per-branch refusal on an otherwise successful cleanup.
+ */
+export const SessionOrchestrationBranchNotMergedReason = Schema.Literals([
+  // No pull-request host reachable (no `gh`, unauthenticated, API down).
+  "pull_request_lookup_unavailable",
+  // The host answered, but no merged PR has this branch as its head.
+  "no_merged_pull_request",
+  // The branch has no remote-tracking counterpart to compare against.
+  "remote_branch_missing",
+  // Local and remote heads disagree: work exists in only one of them.
+  "local_ahead_of_remote",
+  // The merged PR was merged from a different commit than the branch head.
+  "pull_request_head_mismatch",
+  // The branch moved between the proof and the delete — either caught by the
+  // re-check inside the repository lock, or by git's own compare-and-swap.
+  "branch_moved_since_proof",
+  // Another linked worktree still has the branch checked out; deleting it
+  // would leave that worktree on a HEAD pointing at nothing.
+  "branch_checked_out_elsewhere",
+  // The worktree list could not be read, so "no other worktree holds this
+  // branch" could not be established. Deliberately fails closed.
+  "worktree_check_unavailable",
+]);
+export type SessionOrchestrationBranchNotMergedReason =
+  typeof SessionOrchestrationBranchNotMergedReason.Type;
+
+/**
+ * A cleanup that removed the worktree but kept the branch, and why.
+ *
+ * Structured rather than prose because it is a partial success: the caller has
+ * to be able to tell "the branch moved, re-settle to re-prove it" from "this
+ * repository has no pull-request host" without reading English.
+ */
+export const SettleSessionBranchRefusal = Schema.Struct({
+  branch: TrimmedNonEmptyString,
+  reason: SessionOrchestrationBranchNotMergedReason,
+  message: Schema.String,
+  localSha: Schema.NullOr(TrimmedNonEmptyString),
+  remoteSha: Schema.NullOr(TrimmedNonEmptyString),
+  // What the proof expected the head to be, when one was taken.
+  expectedSha: Schema.NullOr(TrimmedNonEmptyString),
+  // The linked worktree still holding the branch, when that is why it stayed.
+  conflictingWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type SettleSessionBranchRefusal = typeof SettleSessionBranchRefusal.Type;
 
 // Exactly what settle_session did to the child's worktree, so the caller can
 // always tell what was destroyed and what survived.
@@ -510,6 +564,15 @@ export const SettleSessionWorktreeOutcome = Schema.Struct({
   // Why anything was kept: cleanup not requested, no worktree, or a branch
   // Phoenix does not own.
   detail: Schema.NullOr(TrimmedNonEmptyString),
+  // What justified deleting `removedBranch`: either that it is a Phoenix
+  // temporary branch, or the merge proof (SHAs and the merged PR) that
+  // `cleanupBranch` demanded. Null when no branch was deleted.
+  branchProof: Schema.NullOr(TrimmedNonEmptyString),
+  // Set when the worktree was removed but the branch was deliberately kept
+  // despite `cleanupBranch` — the partial-success case, structured so the
+  // caller can act on it. Null when no branch cleanup was attempted, or when
+  // it succeeded.
+  branchRefusal: Schema.NullOr(SettleSessionBranchRefusal),
 });
 export type SettleSessionWorktreeOutcome = typeof SettleSessionWorktreeOutcome.Type;
 
@@ -517,6 +580,10 @@ export const SettleSessionResult = Schema.Struct({
   threadId: ThreadId,
   settled: Schema.Boolean,
   worktree: SettleSessionWorktreeOutcome,
+  // Set when the settle succeeded but something is left for the caller to
+  // deal with — today: the child's provider process was still alive when the
+  // stop wait timed out. Null when the settle was clean.
+  warning: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type SettleSessionResult = typeof SettleSessionResult.Type;
 
@@ -587,6 +654,51 @@ export class SessionOrchestrationWorktreeNotEmptyError extends Schema.TaggedErro
   },
 ) {}
 
+/**
+ * settle_session refused to delete a branch it could not prove is merged.
+ *
+ * This repository — like most that squash-merge — never makes a merged branch
+ * an ancestor of its base, so `git branch --merged` cannot answer the
+ * question. The proof is identity instead: the local branch head, the remote
+ * branch head, and the head commit of a merged pull request all being the same
+ * commit. `reason` says which leg of that failed, and the SHAs say by how much.
+ */
+export class SessionOrchestrationBranchNotMergedError extends Schema.TaggedErrorClass<SessionOrchestrationBranchNotMergedError>()(
+  "SessionOrchestrationBranchNotMergedError",
+  {
+    ...SessionOrchestrationErrorFields,
+    branch: TrimmedNonEmptyString,
+    reason: SessionOrchestrationBranchNotMergedReason,
+    localSha: Schema.NullOr(TrimmedNonEmptyString),
+    remoteSha: Schema.NullOr(TrimmedNonEmptyString),
+    mergedPullRequestNumber: Schema.NullOr(NonNegativeInt),
+    mergedPullRequestHeadSha: Schema.NullOr(TrimmedNonEmptyString),
+  },
+) {}
+
+/**
+ * A git operation failed because the repository's index/ref lock was held.
+ *
+ * Structured because the remedy is a specific file path: a git process that
+ * died mid-write (the exact failure mode a timed-out `git worktree remove`
+ * leaves behind) blocks every later git command on that repository until its
+ * lock is removed, and only the caller can confirm no live git process owns it.
+ */
+export class SessionOrchestrationGitLockError extends Schema.TaggedErrorClass<SessionOrchestrationGitLockError>()(
+  "SessionOrchestrationGitLockError",
+  {
+    ...SessionOrchestrationErrorFields,
+    lockPath: TrimmedNonEmptyString,
+    // Null when the lock file vanished (or could not be read) between the
+    // failing command and the staleness check.
+    lockAgeMs: Schema.NullOr(NonNegativeInt),
+    // Whether the lock matched the conservative stale heuristic. Phoenix never
+    // deletes it on its own: staleness cannot be proven from this process.
+    appearsStale: Schema.Boolean,
+    remedy: TrimmedNonEmptyString,
+  },
+) {}
+
 export class SessionOrchestrationInvalidInputError extends Schema.TaggedErrorClass<SessionOrchestrationInvalidInputError>()(
   "SessionOrchestrationInvalidInputError",
   SessionOrchestrationErrorFields,
@@ -631,5 +743,7 @@ export const SessionOrchestrationError = Schema.Union([
   SessionOrchestrationOperationError,
   SessionOrchestrationWorktreeNotEmptyError,
   SessionOrchestrationReportAlreadySupersededError,
+  SessionOrchestrationBranchNotMergedError,
+  SessionOrchestrationGitLockError,
 ]);
 export type SessionOrchestrationError = typeof SessionOrchestrationError.Type;
