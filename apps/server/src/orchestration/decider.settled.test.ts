@@ -530,6 +530,35 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
     }),
   );
 
+  it.effect("rejects a watchdog session error after the active turn has terminally settled", () =>
+    Effect.gen(function* () {
+      const turnId = TurnId.make("turn-watchdog-race");
+      const terminalSession = {
+        ...makeSession("ready"),
+        activeTurnId: null,
+      };
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-watchdog-late-error"),
+          threadId: ThreadId.make("thread-1"),
+          onlyIfActiveTurnId: turnId,
+          session: {
+            ...terminalSession,
+            status: "error",
+            lastError: "Provider session disappeared after inactivity.",
+            stoppedBy: "system",
+            stopReason: "provider_crashed",
+          },
+          createdAt: NOW,
+        },
+        readModel: makeReadModel(null, null, terminalSession),
+      }).pipe(Effect.flip);
+
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
   it.effect("queues busy session deliveries and interrupts only when requested", () =>
     Effect.gen(function* () {
       const runningSession = {

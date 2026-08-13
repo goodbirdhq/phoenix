@@ -1,11 +1,15 @@
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import { CommandId } from "@t3tools/contracts";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
   ProviderSessionReaper,
@@ -27,6 +31,8 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const orchestrationEngine = yield* OrchestrationEngineService;
+    const crypto = yield* Crypto.Crypto;
 
     const inactivityThresholdMs = Math.max(
       1,
@@ -54,22 +60,15 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        const idleDurationMs = now - lastSeenMs;
-        if (idleDurationMs < inactivityThresholdMs) {
-          continue;
-        }
-
         const thread = yield* projectionSnapshotQuery
           .getThreadShellById(binding.threadId)
           .pipe(Effect.map(Option.getOrUndefined));
-        if (thread?.session?.activeTurnId != null) {
-          yield* Effect.logDebug("provider.session.reaper.skipped-active-turn", {
-            threadId: binding.threadId,
-            activeTurnId: thread.session.activeTurnId,
-            idleDurationMs,
-          });
-          continue;
-        }
+        const sessionUpdatedMs = thread?.session ? Date.parse(thread.session.updatedAt) : NaN;
+        const activityMs = Math.max(
+          lastSeenMs,
+          Number.isNaN(sessionUpdatedMs) ? lastSeenMs : sessionUpdatedMs,
+        );
+        const idleDurationMs = now - activityMs;
 
         // The turn can settle while background work runs on (subagent
         // fleets, workflow runs, Monitor watch loops). Those live inside the
@@ -81,6 +80,68 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
             backgroundLiveness: thread.backgroundLiveness,
             idleDurationMs,
           });
+          continue;
+        }
+
+        // Directory activity is intentionally not updated for every provider
+        // event. For an active turn, use the later of its binding and session
+        // writes, then independently prove the provider has no live session.
+        if (idleDurationMs < inactivityThresholdMs) {
+          continue;
+        }
+
+        const activeSession = thread?.session;
+        if (activeSession?.activeTurnId != null) {
+          const hasLiveSession = (yield* providerService.listSessions()).some(
+            (session) => session.threadId === binding.threadId,
+          );
+          if (hasLiveSession) {
+            yield* Effect.logDebug("provider.session.reaper.skipped-live-active-turn", {
+              threadId: binding.threadId,
+              activeTurnId: activeSession.activeTurnId,
+              idleDurationMs,
+            });
+            continue;
+          }
+
+          const commandId = yield* crypto.randomUUIDv4.pipe(
+            Effect.map((uuid) => CommandId.make(`server:provider-active-turn-watchdog:${uuid}`)),
+          );
+          const createdAt = DateTime.formatIso(yield* DateTime.now);
+          yield* orchestrationEngine
+            .dispatch({
+              type: "thread.session.set",
+              commandId,
+              threadId: binding.threadId,
+              onlyIfActiveTurnId: activeSession.activeTurnId,
+              session: {
+                ...activeSession,
+                status: "error",
+                activeTurnId: null,
+                lastError:
+                  "Provider session disappeared after inactivity; the active turn was stopped because the provider crashed.",
+                stoppedBy: "system",
+                stopReason: "provider_crashed",
+                updatedAt: createdAt,
+              },
+              createdAt,
+            })
+            .pipe(
+              Effect.tap(() =>
+                Effect.logWarning("provider.session.reaper.active-turn-crashed", {
+                  threadId: binding.threadId,
+                  activeTurnId: activeSession.activeTurnId,
+                  idleDurationMs,
+                }),
+              ),
+              Effect.catchCause((cause) =>
+                Effect.logDebug("provider.session.reaper.active-turn-crash-skipped", {
+                  threadId: binding.threadId,
+                  activeTurnId: activeSession.activeTurnId,
+                  cause,
+                }),
+              ),
+            );
           continue;
         }
 

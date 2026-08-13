@@ -1323,6 +1323,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.onlyIfActiveTurnId !== undefined) {
+        const currentSession = thread.session;
+        const isStillActive =
+          currentSession?.activeTurnId === command.onlyIfActiveTurnId &&
+          (currentSession.status === "starting" || currentSession.status === "running");
+        if (!isStillActive) {
+          return yield* Effect.fail(
+            new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `thread ${command.threadId} is no longer active for turn ${command.onlyIfActiveTurnId}; skipping conditional session set`,
+            }),
+          );
+        }
+      }
       const sessionSetEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
