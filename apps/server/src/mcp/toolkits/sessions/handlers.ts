@@ -1700,7 +1700,11 @@ export const make = Effect.gen(function* () {
    */
   const describeStopWarning = (params: {
     readonly childId: ThreadId;
-    readonly stop: { readonly stopped: boolean; readonly lastStatus: OrchestrationSessionStatus | null; readonly providerName: string | null };
+    readonly stop: {
+      readonly stopped: boolean;
+      readonly lastStatus: OrchestrationSessionStatus | null;
+      readonly providerName: string | null;
+    };
   }) =>
     params.stop.stopped
       ? null

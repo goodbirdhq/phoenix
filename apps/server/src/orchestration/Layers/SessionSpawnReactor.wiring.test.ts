@@ -115,6 +115,8 @@ const runReactor = (events: ReadonlyArray<OrchestrationEvent>, options: HarnessO
 
     const snapshotQuery = {
       getThreadShellById: (threadId: ThreadId) => Effect.sync(() => Option.some(shell(threadId))),
+      getLatestUsageActivity: () => Effect.succeed(Option.none()),
+      getThreadTurnCount: () => Effect.succeed(null),
       getThreadDetailById: (threadId: ThreadId) =>
         Effect.sync(() =>
           Option.some({
