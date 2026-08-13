@@ -11,6 +11,11 @@ Every session has tools for orchestration alongside its other Phoenix tools:
 
 - **List providers** — enumerate the providers and models this environment can start, so the agent
   offers real choices instead of guessing.
+- **List spawned sessions** — see this session's children: status, settled/archived state, whether
+  it has posted a report, its worktree, provider/model, and when it was created. Shows active
+  (still-counted) children by default — including a settled child whose process has not actually
+  stopped yet; ask for settled to see the ones safely done (settled and confirmed stopped), or all
+  for both. Archived children are omitted unless asked for.
 - **Spawn a session** — create a new thread on a chosen provider and model with an opening prompt.
   By default the new session gets its own git worktree, so parallel sessions never trample each
   other's files. Spawned threads appear in your sidebar like any other thread, marked with a
@@ -29,10 +34,19 @@ Every session has tools for orchestration alongside its other Phoenix tools:
   also carries the same usage snapshot, captured at the moment it was posted, so the spawning
   session can see what the work cost.
 - **Settle a session** — once the spawning session is done with a child, it marks it settled so the
-  thread stops counting as live work. Settling also shuts the child's agent down, so a finished
-  session does not sit around holding a process. A child that is mid-task is refused instead: the
-  spawning session has to stop it deliberately. Settling can also delete the child's worktree,
-  which is the only thing that reclaims those directories.
+  thread stops counting as live work — this is also what frees the spawn slot, once the child's
+  process has actually stopped (a settle that could not stop the process in time keeps counting
+  until it dies). Settling also shuts the child's agent down, so a finished session does not sit
+  around holding a process. A child that is mid-task is refused instead: the spawning session has to
+  stop it deliberately. A settled child keeps its worktree by default and stays resumable; pass
+  cleanupWorktree to reclaim it early.
+- **Archive a session** — permanently discards a child: removes it from view and, by default,
+  deletes its worktree/branch too. Archiving includes everything settling does: an unsettled child
+  is stopped and settled first (refused, the same way, if it is mid-task), then its worktree is
+  deleted by default, since an archived thread has no later handle to clean one up. A child that is
+  already settled is archived directly. Once archived, a child cannot be resumed — settle it (and
+  leave it be) instead if you just want it out of the way for now. Archiving an already-archived
+  child is a no-op, not an error, so retrying is always safe.
 
 If a spawned session is stopped or hits a provider error before it reports, Phoenix writes the
 report for it: why it ended, what it was last doing, and a warning that the work is probably
@@ -56,7 +70,11 @@ forcing its way through.
 
 Orchestration is bounded so a runaway agent cannot overwhelm your machine:
 
-- A session can have at most 8 spawned sessions at a time.
+- A session can have at most 8 active (unsettled) spawned sessions at a time — settling a finished
+  child frees its slot as soon as its process has stopped.
+- A session can retain at most 32 spawned children total (active + settled, not yet archived) — a
+  separate limit from the 8-active cap, meant to stop settled children from accumulating forever;
+  archive settled children to reclaim capacity.
 - Spawn chains go at most 3 levels deep.
 - A spawned session never gets a more permissive permission mode than the session that spawned it.
 

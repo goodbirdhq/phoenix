@@ -32,11 +32,24 @@ import { ProviderInstanceId } from "./providerInstance.ts";
  * completion report back to whoever spawned it.
  */
 
-// How many live children one thread may spawn, and how deep spawn chains may
-// nest. Both caps exist to stop a runaway agent from fork-bombing the
+// How many active children one thread may spawn, and how deep spawn chains
+// may nest. Both caps exist to stop a runaway agent from fork-bombing the
 // machine with provider processes.
 export const SESSION_SPAWN_MAX_CHILDREN = 8;
 export const SESSION_SPAWN_MAX_DEPTH = 3;
+
+// Independent of the active cap: how many total non-deleted, non-archived
+// children (active + settled) one thread may retain at once. Settled
+// children no longer count toward SESSION_SPAWN_MAX_CHILDREN, so without a
+// separate ceiling a parent could spawn/settle indefinitely and accumulate
+// unbounded thread rows and worktrees. Archiving a settled child is what
+// reclaims a slot under this cap.
+export const SESSION_SPAWN_MAX_RETAINED_CHILDREN = 32;
+
+// Cap on how many entries list_sessions returns for a "settled" or "all"
+// query, most-recently-created first, so a long-lived parent's report/status
+// enrichment (one read per entry) stays bounded. hasMore signals truncation.
+export const LIST_SESSIONS_MAX_ENTRIES = 50;
 
 // Reports at or under this size are still delivered inline to the parent;
 // larger ones arrive as a compact envelope pointing at read_report.
@@ -297,6 +310,47 @@ export const ReadSessionResult = Schema.Struct({
   dirty: Schema.optional(Schema.NullOr(Schema.Boolean)),
 });
 export type ReadSessionResult = typeof ReadSessionResult.Type;
+
+export const ListSessionsInput = Schema.Struct({
+  // "active" (default): unsettled children — what actually counts toward
+  // SESSION_SPAWN_MAX_CHILDREN. "settled": children the parent has declared
+  // done but not archived, the pool available to reclaim (send_to_session)
+  // or permanently discard (archive_session). "all": both.
+  state: Schema.optional(Schema.Literals(["active", "settled", "all"])),
+  // Include archived children in the result. Defaults to false, matching
+  // the sidebar's default view.
+  includeArchived: Schema.optional(Schema.Boolean),
+});
+export type ListSessionsInput = typeof ListSessionsInput.Type;
+
+export const SessionListEntry = Schema.Struct({
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  sessionStatus: Schema.NullOr(OrchestrationSessionStatus),
+  settled: Schema.Boolean,
+  archived: Schema.Boolean,
+  // Whether the child has posted at least one completion report.
+  hasReport: Schema.Boolean,
+  // Null once the worktree has been reclaimed (settle_session/archive_session
+  // with cleanupWorktree, or a child spawned without one). For a settled
+  // child this is the reclaimability signal: resuming a session whose
+  // worktree is gone does not currently work, so a null worktreePath here
+  // means send_to_session cannot bring it back — archive_session is the only
+  // remaining option.
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  modelSelection: ModelSelection,
+  createdAt: IsoDateTime,
+});
+export type SessionListEntry = typeof SessionListEntry.Type;
+
+export const ListSessionsResult = Schema.Struct({
+  sessions: Schema.Array(SessionListEntry),
+  // True when more matching children exist than LIST_SESSIONS_MAX_ENTRIES
+  // returned (state: "settled" or "all" only; "active" is not paginated,
+  // since it is already bounded by the spawn cap in steady state).
+  hasMore: Schema.Boolean,
+});
+export type ListSessionsResult = typeof ListSessionsResult.Type;
 
 export const ReadReportInput = Schema.Struct({
   // Report id from a delivery envelope or read_session. When omitted,
@@ -587,6 +641,46 @@ export const SettleSessionResult = Schema.Struct({
 });
 export type SettleSessionResult = typeof SettleSessionResult.Type;
 
+export const ArchiveSessionInput = Schema.Struct({
+  threadId: ThreadId,
+  // Permanently delete the child's git worktree and its temporary branch.
+  // Defaults to true here (unlike settle_session): once archived, the
+  // thread no longer resolves through this toolkit, so this is the last
+  // chance to reclaim it. Refused when the worktree holds work that is not
+  // committed and pushed, unless `force` is also set.
+  cleanupWorktree: Schema.optional(Schema.Boolean),
+  // Also delete a branch Phoenix did not create, once it is proven merged:
+  // local head == remote head == the head commit of a merged pull request.
+  // Requires `cleanupWorktree`; `force` does not weaken the proof. Same
+  // semantics as settle_session's `cleanupBranch`.
+  cleanupBranch: Schema.optional(Schema.Boolean),
+  // Delete the worktree even though uncommitted or unpushed work would be
+  // lost. Only meaningful together with `cleanupWorktree`.
+  force: Schema.optional(Schema.Boolean),
+});
+export type ArchiveSessionInput = typeof ArchiveSessionInput.Type;
+
+export const ArchiveSessionResult = Schema.Struct({
+  threadId: ThreadId,
+  // Whether a live provider binding was confirmed stopped (or found already
+  // absent — settledAt alone is never proof of that). Null only when the
+  // child was already archived: a retry that hit the idempotent no-op path,
+  // where nothing ran at all.
+  stopped: Schema.NullOr(Schema.Boolean),
+  // Whether the settle cascade (stop + thread.settle) ran. False for an
+  // already-settled child, where archive_session still checks for a live
+  // binding and stops it if found, but never re-dispatches thread.settle.
+  settled: Schema.Boolean,
+  worktree: SettleSessionWorktreeOutcome,
+  archived: Schema.Boolean,
+  // Set when the archive succeeded but a live provider process outlived its
+  // stop wait — same meaning as settle_session's warning. Null when clean or
+  // when no stop was attempted (nothing to stop, or the already-archived
+  // idempotent no-op path).
+  warning: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ArchiveSessionResult = typeof ArchiveSessionResult.Type;
+
 export const PostReportInput = Schema.Struct({
   status: SessionReportStatus,
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
@@ -625,6 +719,7 @@ export class SessionOrchestrationDeniedError extends Schema.TaggedErrorClass<Ses
       "not_spawned_by_this_session",
       "report_not_accessible",
       "spawn_limit_reached",
+      "spawn_retention_limit_reached",
       "spawn_depth_exceeded",
       "runtime_mode_exceeds_parent",
       "session_still_running",

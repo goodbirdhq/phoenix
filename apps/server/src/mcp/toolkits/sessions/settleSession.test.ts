@@ -38,6 +38,7 @@ import * as OrchestrationEngine from "../../../orchestration/Services/Orchestrat
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ThreadTurnBootstrap from "../../../orchestration/ThreadTurnBootstrap.ts";
 import { ProjectionThreadReportRepository } from "../../../persistence/Services/ProjectionThreadReports.ts";
+import { ProviderSessionDirectoryPersistenceError } from "../../../provider/Errors.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
@@ -117,6 +118,21 @@ interface HarnessOptions {
    * actual repository while the rest of the graph stays stubbed.
    */
   readonly gitOverrides?: Record<string, unknown>;
+  readonly settledAt?: string | null;
+  // Simulates a child that was already archived before this call: the
+  // active lookup (getThreadShellById) excludes it, same as production.
+  readonly archivedAlready?: boolean;
+  // Simulates an unreadable provider session directory: listBindings fails
+  // outright rather than succeeding with a binding list. resolveHasLiveBinding
+  // degrades this to "treat as bound" (fail-safe), not "treat as absent".
+  readonly bindingDirectoryFails?: boolean;
+  // Whether the provider session directory reports a live binding for this
+  // child, independent of sessionStatus (round-3 review: status alone is
+  // not proof either way — Codex/OpenCode retain an errored binding).
+  // Defaults to mirroring the old status-only heuristic (alive-looking
+  // statuses have a binding, "stopped"/null don't) so existing harnesses
+  // that don't care about the distinction keep working unchanged.
+  readonly hasBinding?: boolean;
 }
 
 const makeHarness = (options: HarnessOptions) => {
@@ -129,6 +145,12 @@ const makeHarness = (options: HarnessOptions) => {
   const deleteRefInputs: Array<{ readonly refName: string; readonly expectedSha?: string }> = [];
 
   const children: ReadonlyArray<HarnessChild> = options.children ?? [{ threadId: CHILD_THREAD_ID }];
+  // hasBinding/settledAt are shared across every child in the harness, same
+  // as sessionStatus already was: the multi-child cases (concurrency, one
+  // repository vs. two) only ever exercise unsettled/alive children, so a
+  // single shared value is enough — no test needs per-child liveness.
+  let hasBinding = options.hasBinding ?? (sessionStatus !== null && sessionStatus !== "stopped");
+  let settledAt: string | null = options.settledAt ?? null;
 
   const shell = (child: HarnessChild): OrchestrationThreadShell =>
     ({
@@ -142,7 +164,7 @@ const makeHarness = (options: HarnessOptions) => {
         (options.worktreePath === undefined ? WORKTREE_PATH : options.worktreePath),
       runtimeMode: "auto",
       interactionMode: "default",
-      settledAt: null,
+      settledAt,
       session:
         sessionStatus === null
           ? null
@@ -158,6 +180,8 @@ const makeHarness = (options: HarnessOptions) => {
     issuedAt: 0,
   };
 
+  let archived = false;
+
   const dispatched: Array<Record<string, unknown>> = [];
   const engine = {
     dispatch: (command: { readonly type: string }) =>
@@ -165,10 +189,17 @@ const makeHarness = (options: HarnessOptions) => {
         calls.push(`dispatch:${command.type}`);
         dispatched.push(command as unknown as Record<string, unknown>);
         // The stop is what makes the session actually die; everything after
-        // this point must observe a stopped session — unless the test is
-        // reproducing a process that refuses to go.
+        // this point must observe a stopped session with no live binding —
+        // unless the test is reproducing a process that refuses to go.
         if (command.type === "thread.session.stop" && options.stopHangs !== true) {
           sessionStatus = "stopped";
+          hasBinding = false;
+        }
+        if (command.type === "thread.settle") {
+          settledAt = "2026-08-12T00:00:00.000Z";
+        }
+        if (command.type === "thread.archive") {
+          archived = true;
         }
         return undefined;
       }),
@@ -177,12 +208,26 @@ const makeHarness = (options: HarnessOptions) => {
   const snapshotQuery = {
     getThreadShellById: (threadId: ThreadId) =>
       Effect.sync(() => {
+        // archivedAlready only ever applies to the single default child (the
+        // multi-child concurrency cases never combine with it).
+        if (threadId === CHILD_THREAD_ID && options.archivedAlready) {
+          return Option.none();
+        }
         const child = children.find((candidate) => candidate.threadId === threadId);
         return child === undefined ? Option.none() : Option.some(shell(child));
       }),
     getProjectShellById: (projectId: ProjectId) =>
       Effect.sync(() => Option.some({ id: projectId, workspaceRoot: workspaceRootFor(projectId) })),
     getThreadDetailById: () => Effect.sync(() => Option.none()),
+    getArchivedShellSnapshot: () =>
+      Effect.sync(() => ({
+        snapshotSequence: 0,
+        projects: [],
+        threads: options.archivedAlready
+          ? [{ ...shell({ threadId: CHILD_THREAD_ID }), archivedAt: "2026-08-11T00:00:00.000Z" }]
+          : [],
+        updatedAt: "2026-08-11T00:00:00.000Z",
+      })),
   } as unknown as typeof ProjectionSnapshotQuery.ProjectionSnapshotQuery.Service;
 
   const gitWorkflow = {
@@ -318,9 +363,27 @@ const makeHarness = (options: HarnessOptions) => {
       listByThreadId: () => Effect.succeed([]),
       findByReportId: () => Effect.succeed(Option.none()),
     } as unknown as ProjectionThreadReportRepository["Service"]),
-    // Not exercised by settle_session; only ping_session/read_session read
-    // it. Unused, so no methods are needed on the stub.
-    Layer.succeed(ProviderSessionDirectory, {} as unknown as ProviderSessionDirectory["Service"]),
+    Layer.succeed(ProviderSessionDirectory, {
+      listBindings: () =>
+        options.bindingDirectoryFails
+          ? Effect.fail(
+              new ProviderSessionDirectoryPersistenceError({
+                operation: "test",
+                detail: "binding directory unavailable",
+              }),
+            )
+          : Effect.sync(() =>
+              hasBinding
+                ? [
+                    {
+                      threadId: CHILD_THREAD_ID,
+                      provider: "codex",
+                      lastSeenAt: "2026-08-12T00:00:00.000Z",
+                    },
+                  ]
+                : [],
+            ),
+    } as unknown as ProviderSessionDirectory["Service"]),
     NodeServices.layer,
   );
 
@@ -339,15 +402,22 @@ const makeHarness = (options: HarnessOptions) => {
       force?: boolean;
     } = {},
   ) => withHandlers((handlers) => handlers.settle_session({ threadId: CHILD_THREAD_ID, ...input }));
+  const archive = (
+    input: { cleanupWorktree?: boolean; cleanupBranch?: boolean; force?: boolean } = {},
+  ) =>
+    withHandlers((handlers) => handlers.archive_session({ threadId: CHILD_THREAD_ID, ...input }));
 
   return {
     calls,
     dispatched,
     settle,
+    archive,
     withHandlers,
     currentStatus: () => sessionStatus,
     deleteRefInputs,
     maxWorktreeRemovalsInFlight: () => maxWorktreeRemovalsInFlight,
+    hasLiveBinding: () => hasBinding,
+    isArchived: () => archived,
   };
 };
 
@@ -746,6 +816,57 @@ it.effect("settle_session deletes a proven branch that stayed put while queued",
   }),
 );
 
+/**
+ * archive_session wiring tests.
+ *
+ * archive_session subsumes settle_session (per docs/internals/session-orchestration.md):
+ * an unsettled child runs the exact same stop → settle → cleanup cascade
+ * settle_session does, then archives; an already-settled child skips
+ * straight to cleanup + archive. cleanupWorktree defaults to true here
+ * (unlike settle_session), so most of these harnesses pass cleanupWorktree:
+ * false explicitly to isolate the cascade ordering from the cleanup step.
+ */
+
+it.effect(
+  "archive_session runs the full stop -> settle -> archive cascade for an alive child",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ sessionStatus: "ready" });
+      const result = yield* harness.archive({ cleanupWorktree: false });
+
+      expect(harness.calls).toEqual([
+        "dispatch:thread.session.stop",
+        "dispatch:thread.settle",
+        "dispatch:thread.archive",
+      ]);
+      expect(result.stopped).toBe(true);
+      expect(result.settled).toBe(true);
+      expect(result.archived).toBe(true);
+      expect(harness.isArchived()).toBe(true);
+    }),
+);
+
+it.effect("archive_session stops-first an errored child that still has a live binding", () =>
+  Effect.gen(function* () {
+    // "error" is not proof the provider process is gone — Codex/OpenCode
+    // retain an errored session's binding, and ProviderCommandReactor can
+    // still restart it. resolveHasLiveBinding, not session.status, is the
+    // authoritative signal, so a live binding must still get stop-first
+    // treatment even though the status alone looks terminal.
+    const harness = makeHarness({ sessionStatus: "error", hasBinding: true });
+    const result = yield* harness.archive({ cleanupWorktree: false });
+
+    expect(harness.calls).toEqual([
+      "dispatch:thread.session.stop",
+      "dispatch:thread.settle",
+      "dispatch:thread.archive",
+    ]);
+    expect(result.stopped).toBe(true);
+    expect(result.settled).toBe(true);
+    expect(result.archived).toBe(true);
+  }),
+);
+
 it.effect(
   "settle_session keeps a branch a real linked worktree still has checked out, then deletes it once freed",
   () =>
@@ -1052,4 +1173,217 @@ it.effect("settle_session still withholds cleanup when the stop wait times out",
     expect(error.message).toContain("left untouched");
     expect(harness.calls).not.toContain("git:removeWorktree");
   }).pipe(Effect.provide(TestClock.layer())),
+);
+
+it.effect(
+  "archive_session archives an errored child with no live binding directly — genuinely dead",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ sessionStatus: "error", hasBinding: false });
+      const result = yield* harness.archive({ cleanupWorktree: false });
+
+      expect(harness.calls).toEqual(["dispatch:thread.settle", "dispatch:thread.archive"]);
+      expect(result.stopped).toBe(true);
+      expect(result.settled).toBe(true);
+      expect(result.archived).toBe(true);
+    }),
+);
+
+it.effect("archive_session refuses a child that is mid-turn without stopping or archiving it", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({ sessionStatus: "running" });
+    const error = yield* harness.archive({ cleanupWorktree: false }).pipe(Effect.flip);
+
+    expect(error._tag).toBe("SessionOrchestrationDeniedError");
+    expect((error as { reason: string }).reason).toBe("session_still_running");
+    expect(harness.calls).toEqual([]);
+    expect(harness.isArchived()).toBe(false);
+  }),
+);
+
+it.effect(
+  "archive_session archives an already-settled child without re-running stop or settle",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({
+        sessionStatus: "stopped",
+        settledAt: "2026-08-11T00:00:00.000Z",
+      });
+      const result = yield* harness.archive({ cleanupWorktree: false });
+
+      // No thread.session.stop (nothing to stop — no live binding), no
+      // thread.settle — just cleanup (a no-op here) and archive.
+      expect(harness.calls).toEqual(["dispatch:thread.archive"]);
+      // Still routed through the binding check (stopChildSession short-
+      // circuits to true when there is no live binding), so stopped is
+      // true, not null — null is reserved for the already-archived retry
+      // no-op, where nothing runs at all.
+      expect(result.stopped).toBe(true);
+      expect(result.settled).toBe(false);
+      expect(result.archived).toBe(true);
+    }),
+);
+
+it.effect(
+  "archive_session stops-first an already-settled child whose errored session still has a live binding",
+  () =>
+    Effect.gen(function* () {
+      // The already-settled fast path must not bypass binding evidence:
+      // settledAt is not proof the binding is gone any more than "error"
+      // status is (round-4 review). Same stop-first treatment as the
+      // unsettled cascade, just without re-dispatching thread.settle.
+      const harness = makeHarness({
+        sessionStatus: "error",
+        settledAt: "2026-08-11T00:00:00.000Z",
+        hasBinding: true,
+      });
+      const result = yield* harness.archive({ cleanupWorktree: false });
+
+      expect(harness.calls).toEqual(["dispatch:thread.session.stop", "dispatch:thread.archive"]);
+      expect(result.stopped).toBe(true);
+      expect(result.settled).toBe(false);
+      expect(result.archived).toBe(true);
+    }),
+);
+
+it.effect(
+  "archive_session withholds cleanup but still archives an already-settled child when the binding directory is unreadable",
+  () =>
+    Effect.gen(function* () {
+      // Fail-safe: an unreadable directory is treated as "still bound", so
+      // the stop dispatch fires but can never confirm the binding cleared
+      // within the timeout. Unlike settleChildCascade's unsettled path,
+      // this must not fail the whole call — only the destructive cleanup
+      // step is conservatively withheld; archiving itself still succeeds.
+      const harness = makeHarness({
+        sessionStatus: "stopped",
+        settledAt: "2026-08-11T00:00:00.000Z",
+        bindingDirectoryFails: true,
+      });
+      // The poll loop genuinely waits out the full SESSION_STOP_TIMEOUT_MS
+      // here (the directory never becomes readable), so this runs it on a
+      // forked fiber and drives TestClock forward past the timeout instead
+      // of consuming 10 real seconds of wall-clock time.
+      const fiber = yield* Effect.forkChild(harness.archive({ cleanupWorktree: true }));
+      yield* TestClock.adjust(Duration.seconds(15));
+      const result = yield* Fiber.join(fiber);
+
+      expect(harness.calls).toContain("dispatch:thread.session.stop");
+      expect(harness.calls).toContain("dispatch:thread.archive");
+      expect(harness.calls).not.toContain("git:removeWorktree");
+      expect(result.archived).toBe(true);
+      expect(result.stopped).toBe(false);
+      expect(result.worktree.removedWorktreePath).toBeNull();
+      expect(result.worktree.keptWorktreePath).toBe(WORKTREE_PATH);
+      expect(result.worktree.detail).toContain("could not be read");
+    }),
+);
+
+it.effect(
+  "archive_session still refuses an already-settled child whose session came back alive and busy",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({
+        sessionStatus: "running",
+        settledAt: "2026-08-11T00:00:00.000Z",
+      });
+      const error = yield* harness.archive({ cleanupWorktree: false }).pipe(Effect.flip);
+
+      expect(error._tag).toBe("SessionOrchestrationDeniedError");
+      expect((error as { reason: string }).reason).toBe("session_still_running");
+      expect(harness.calls).toEqual([]);
+    }),
+);
+
+it.effect("archive_session defaults cleanupWorktree to true, unlike settle_session", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({ sessionStatus: "stopped" });
+    const result = yield* harness.archive();
+
+    expect(harness.calls).toEqual([
+      "dispatch:thread.settle",
+      "git:status",
+      "git:removeWorktree",
+      "git:deleteRef",
+      "dispatch:thread.meta.update",
+      "dispatch:thread.archive",
+    ]);
+    expect(result.worktree.removedWorktreePath).toBe(WORKTREE_PATH);
+    expect(result.worktree.removedBranch).toBe("t3code/1a2b3c4d");
+  }),
+);
+
+it.effect(
+  "archive_session keeps the worktree when cleanupWorktree: false is passed explicitly",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ sessionStatus: "stopped" });
+      const result = yield* harness.archive({ cleanupWorktree: false });
+
+      expect(harness.calls).toEqual(["dispatch:thread.settle", "dispatch:thread.archive"]);
+      expect(result.worktree.keptWorktreePath).toBe(WORKTREE_PATH);
+      expect(result.worktree.removedWorktreePath).toBeNull();
+    }),
+);
+
+it.effect("archive_session refuses to delete a worktree holding uncommitted work", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({ sessionStatus: "stopped", dirtyFiles: ["src/wip.ts"] });
+    const error = yield* harness.archive().pipe(Effect.flip);
+
+    expect(error._tag).toBe("SessionOrchestrationWorktreeNotEmptyError");
+    expect((error as { dirtyFiles: ReadonlyArray<string> }).dirtyFiles).toEqual(["src/wip.ts"]);
+    // Settled, but neither destroyed nor archived.
+    expect(harness.calls).toEqual(["dispatch:thread.settle", "git:status"]);
+    expect(harness.isArchived()).toBe(false);
+  }),
+);
+
+it.effect("archive_session deletes a worktree holding uncommitted work when forced", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({ sessionStatus: "stopped", dirtyFiles: ["src/wip.ts"] });
+    const result = yield* harness.archive({ force: true });
+
+    expect(harness.calls).toEqual([
+      "dispatch:thread.settle",
+      "git:removeWorktree",
+      "git:deleteRef",
+      "dispatch:thread.meta.update",
+      "dispatch:thread.archive",
+    ]);
+    expect(result.archived).toBe(true);
+  }),
+);
+
+it.effect("archive_session is a no-op success on retry against an already-archived child", () =>
+  Effect.gen(function* () {
+    // The active lookup excludes an archived thread (same as production),
+    // so without a dedicated fallback this would fail as "not found" —
+    // contradicting the tool's Idempotent annotation.
+    const harness = makeHarness({
+      sessionStatus: "stopped",
+      settledAt: "2026-08-11T00:00:00.000Z",
+      archivedAlready: true,
+    });
+    const result = yield* harness.archive();
+
+    expect(result).toEqual({
+      threadId: CHILD_THREAD_ID,
+      stopped: null,
+      settled: true,
+      worktree: {
+        removedWorktreePath: null,
+        removedBranch: null,
+        keptWorktreePath: WORKTREE_PATH,
+        keptBranch: "t3code/1a2b3c4d",
+        detail: "Thread was already archived; archive_session is a no-op on retry.",
+        branchProof: null,
+        branchRefusal: null,
+      },
+      archived: true,
+      warning: null,
+    });
+    // No mutation at all — not even a redundant thread.archive re-dispatch.
+    expect(harness.calls).toEqual([]);
+  }),
 );
