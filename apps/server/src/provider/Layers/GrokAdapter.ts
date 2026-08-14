@@ -1432,6 +1432,13 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         return c !== undefined && !c.stopped;
       });
 
+    const getSessionRuntimeLiveness: GrokAdapterShape["getSessionRuntimeLiveness"] = (threadId) =>
+      Effect.sync(() => {
+        const context = sessions.get(threadId);
+        if (!context || context.stopped) return "dead";
+        return context.notificationFiber?.pollUnsafe() === undefined ? "live" : "dead";
+      });
+
     const stopAll: GrokAdapterShape["stopAll"] = () =>
       Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true });
 
@@ -1457,6 +1464,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       stopSession,
       listSessions,
       hasSession,
+      getSessionRuntimeLiveness,
       stopAll,
       streamEvents,
     } satisfies GrokAdapterShape;

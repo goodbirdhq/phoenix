@@ -1,11 +1,15 @@
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import { CommandId } from "@t3tools/contracts";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
   ProviderSessionReaper,
@@ -27,6 +31,8 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const orchestrationEngine = yield* OrchestrationEngineService;
+    const crypto = yield* Crypto.Crypto;
 
     const inactivityThresholdMs = Math.max(
       1,
@@ -54,6 +60,9 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
+        // Keep ordinary ready/stopped reaping cheap and exactly keyed to the
+        // persisted binding timestamp. Only the active-turn watchdog needs a
+        // shell read and the more conservative session timestamp.
         const idleDurationMs = now - lastSeenMs;
         if (idleDurationMs < inactivityThresholdMs) {
           continue;
@@ -62,14 +71,6 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         const thread = yield* projectionSnapshotQuery
           .getThreadShellById(binding.threadId)
           .pipe(Effect.map(Option.getOrUndefined));
-        if (thread?.session?.activeTurnId != null) {
-          yield* Effect.logDebug("provider.session.reaper.skipped-active-turn", {
-            threadId: binding.threadId,
-            activeTurnId: thread.session.activeTurnId,
-            idleDurationMs,
-          });
-          continue;
-        }
 
         // The turn can settle while background work runs on (subagent
         // fleets, workflow runs, Monitor watch loops). Those live inside the
@@ -81,6 +82,76 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
             backgroundLiveness: thread.backgroundLiveness,
             idleDurationMs,
           });
+          continue;
+        }
+
+        const activeSession = thread?.session;
+        const isActiveTurn =
+          activeSession?.activeTurnId != null &&
+          (activeSession.status === "starting" || activeSession.status === "running");
+        if (isActiveTurn) {
+          // Directory activity is intentionally not updated for every
+          // provider event. The watchdog therefore uses the later session
+          // update only for an active turn; ready-session reaping above stays
+          // unchanged.
+          const sessionUpdatedMs = Date.parse(activeSession.updatedAt);
+          const watchdogIdleDurationMs =
+            now -
+            Math.max(lastSeenMs, Number.isNaN(sessionUpdatedMs) ? lastSeenMs : sessionUpdatedMs);
+          if (watchdogIdleDurationMs < inactivityThresholdMs) {
+            continue;
+          }
+          const runtimeLiveness = yield* providerService.getSessionRuntimeLiveness
+            ? providerService.getSessionRuntimeLiveness(binding.threadId)
+            : Effect.succeed("unknown" as const);
+          if (runtimeLiveness !== "dead") {
+            yield* Effect.logDebug("provider.session.reaper.skipped-active-turn-runtime-live", {
+              threadId: binding.threadId,
+              activeTurnId: activeSession.activeTurnId,
+              idleDurationMs: watchdogIdleDurationMs,
+              runtimeLiveness,
+            });
+            continue;
+          }
+
+          const commandId = yield* crypto.randomUUIDv4.pipe(
+            Effect.map((uuid) => CommandId.make(`server:provider-active-turn-watchdog:${uuid}`)),
+          );
+          const createdAt = DateTime.formatIso(yield* DateTime.now);
+          yield* orchestrationEngine
+            .dispatch({
+              type: "thread.session.set",
+              commandId,
+              threadId: binding.threadId,
+              onlyIfActiveTurnId: activeSession.activeTurnId,
+              session: {
+                ...activeSession,
+                status: "error",
+                activeTurnId: null,
+                lastError:
+                  "Provider session disappeared after inactivity; the active turn was stopped because the provider crashed.",
+                stoppedBy: "system",
+                stopReason: "provider_crashed",
+                updatedAt: createdAt,
+              },
+              createdAt,
+            })
+            .pipe(
+              Effect.tap(() =>
+                Effect.logWarning("provider.session.reaper.active-turn-crashed", {
+                  threadId: binding.threadId,
+                  activeTurnId: activeSession.activeTurnId,
+                  idleDurationMs: watchdogIdleDurationMs,
+                }),
+              ),
+              Effect.catchCause((cause) =>
+                Effect.logDebug("provider.session.reaper.active-turn-crash-skipped", {
+                  threadId: binding.threadId,
+                  activeTurnId: activeSession.activeTurnId,
+                  cause,
+                }),
+              ),
+            );
           continue;
         }
 

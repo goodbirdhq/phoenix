@@ -530,6 +530,79 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
     }),
   );
 
+  it.effect("guards watchdog session errors by the active running turn", () =>
+    Effect.gen(function* () {
+      const turnId = TurnId.make("turn-watchdog-race");
+      const otherTurnId = TurnId.make("turn-watchdog-other");
+      const runningSession = {
+        ...makeSession("running"),
+        activeTurnId: turnId,
+      };
+      const startingSession = {
+        ...makeSession("starting"),
+        activeTurnId: turnId,
+      };
+      const errorSessionWithTurn = {
+        ...makeSession("error"),
+        activeTurnId: turnId,
+      };
+      const terminalSession = {
+        ...makeSession("ready"),
+        activeTurnId: null,
+      };
+      const command = (commandId: string, onlyIfActiveTurnId: TurnId) => ({
+        type: "thread.session.set" as const,
+        commandId: CommandId.make(commandId),
+        threadId: ThreadId.make("thread-1"),
+        onlyIfActiveTurnId,
+        session: {
+          ...runningSession,
+          status: "error" as const,
+          activeTurnId: null,
+          lastError: "Provider session disappeared after inactivity.",
+          stoppedBy: "system" as const,
+          stopReason: "provider_crashed" as const,
+        },
+        createdAt: NOW,
+      });
+
+      const accepted = yield* decideOrchestrationCommand({
+        command: command("cmd-watchdog-matching", turnId),
+        readModel: makeReadModel(null, null, runningSession),
+      });
+      const acceptedEvents = Array.isArray(accepted) ? accepted : [accepted];
+      expect(acceptedEvents.map((event) => event.type)).toEqual(["thread.session-set"]);
+
+      const startingAccepted = yield* decideOrchestrationCommand({
+        command: command("cmd-watchdog-starting", turnId),
+        readModel: makeReadModel(null, null, startingSession),
+      });
+      const startingEvents = Array.isArray(startingAccepted)
+        ? startingAccepted
+        : [startingAccepted];
+      expect(startingEvents.map((event) => event.type)).toEqual(["thread.session-set"]);
+
+      const mismatched = yield* decideOrchestrationCommand({
+        command: command("cmd-watchdog-mismatched", otherTurnId),
+        readModel: makeReadModel(null, null, runningSession),
+      }).pipe(Effect.flip);
+      expect(mismatched._tag).toBe("OrchestrationCommandInvariantError");
+
+      const errored = yield* decideOrchestrationCommand({
+        command: command("cmd-watchdog-error", turnId),
+        readModel: makeReadModel(null, null, errorSessionWithTurn),
+      }).pipe(Effect.flip);
+      expect(errored._tag).toBe("OrchestrationCommandInvariantError");
+
+      const terminal = yield* decideOrchestrationCommand({
+        command: command("cmd-watchdog-late-error", turnId),
+        readModel: makeReadModel(null, null, terminalSession),
+      }).pipe(Effect.flip);
+
+      expect(terminal._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
   it.effect("queues busy session deliveries and interrupts only when requested", () =>
     Effect.gen(function* () {
       const runningSession = {

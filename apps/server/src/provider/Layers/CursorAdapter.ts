@@ -1147,6 +1147,13 @@ export function makeCursorAdapter(
         return c !== undefined && !c.stopped;
       });
 
+    const getSessionRuntimeLiveness: CursorAdapterShape["getSessionRuntimeLiveness"] = (threadId) =>
+      Effect.sync(() => {
+        const context = sessions.get(threadId);
+        if (!context || context.stopped) return "dead";
+        return context.notificationFiber?.pollUnsafe() === undefined ? "live" : "dead";
+      });
+
     const stopAll: CursorAdapterShape["stopAll"] = () =>
       Effect.forEach(sessions.values(), stopSessionInternal, { discard: true });
 
@@ -1175,6 +1182,7 @@ export function makeCursorAdapter(
       stopSession,
       listSessions,
       hasSession,
+      getSessionRuntimeLiveness,
       stopAll,
       streamEvents,
     } satisfies CursorAdapterShape;

@@ -1173,6 +1173,9 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  // Conditional lifecycle writes close races between asynchronous provider
+  // observations and a newer terminal/restarted session state.
+  onlyIfActiveTurnId: Schema.optional(TurnId),
   createdAt: IsoDateTime,
 });
 

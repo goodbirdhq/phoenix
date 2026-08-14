@@ -4559,6 +4559,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return context !== undefined && !context.stopped;
     });
 
+  const getSessionRuntimeLiveness: ClaudeAdapterShape["getSessionRuntimeLiveness"] = (threadId) =>
+    Effect.sync(() => {
+      const context = sessions.get(threadId);
+      if (!context || context.stopped) return "dead";
+      // `sessions` is bookkeeping. The SDK stream fiber is the actual
+      // provider runtime handle and completes when its child/stream exits.
+      return context.streamFiber?.pollUnsafe() === undefined ? "live" : "dead";
+    });
+
   const stopAll: ClaudeAdapterShape["stopAll"] = () =>
     Effect.forEach(
       sessions,
@@ -4601,6 +4610,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     stopSession,
     listSessions,
     hasSession,
+    getSessionRuntimeLiveness,
     stopAll,
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);
