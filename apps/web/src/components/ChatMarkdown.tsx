@@ -1300,41 +1300,67 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   );
 
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <a
-            href={href}
-            className={cn(CHAT_FILE_TAG_CHIP_CLASS_NAME, MARKDOWN_FILE_LINK_CLASS_NAME, className)}
-            data-markdown-copy={copyMarkdown}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (remoteTarget) {
-                handleOpenRemoteEditor();
-                return;
-              }
-              if (onOpenInBrowser) {
-                handleOpenInBrowser();
-                return;
-              }
-              handleOpenInFilePreview();
-            }}
-            onContextMenu={handleContextMenu}
+    <span className="inline-flex items-center gap-1">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <a
+              href={href}
+              className={cn(
+                CHAT_FILE_TAG_CHIP_CLASS_NAME,
+                MARKDOWN_FILE_LINK_CLASS_NAME,
+                className,
+              )}
+              data-markdown-copy={copyMarkdown}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (remoteTarget) {
+                  handleOpenRemoteEditor();
+                  return;
+                }
+                if (onOpenInBrowser) {
+                  handleOpenInBrowser();
+                  return;
+                }
+                handleOpenInFilePreview();
+              }}
+              onContextMenu={handleContextMenu}
+            >
+              <FileTagChipContent path={iconPath} label={label} theme={theme} selectable />
+            </a>
+          }
+        />
+        <TooltipPopup
+          side="top"
+          className="max-w-[min(40rem,calc(100vw-2rem))] font-mono text-[11px] leading-tight"
+        >
+          <div className="markdown-file-link-tooltip-scroll overflow-x-auto whitespace-nowrap">
+            {displayPath}
+          </div>
+        </TooltipPopup>
+      </Tooltip>
+      {remoteTarget ? (
+        <>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="h-5 px-1 text-[10px]"
+            onClick={() => handleCopy(remoteTarget.command, "Remote-SSH command")}
           >
-            <FileTagChipContent path={iconPath} label={label} theme={theme} selectable />
-          </a>
-        }
-      />
-      <TooltipPopup
-        side="top"
-        className="max-w-[min(40rem,calc(100vw-2rem))] font-mono text-[11px] leading-tight"
-      >
-        <div className="markdown-file-link-tooltip-scroll overflow-x-auto whitespace-nowrap">
-          {displayPath}
-        </div>
-      </TooltipPopup>
-    </Tooltip>
+            Copy Remote-SSH command
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="h-5 px-1 text-[10px]"
+            onClick={onOpenInBrowser ?? handleOpenInFilePreview}
+          >
+            Preview in Phoenix
+          </Button>
+        </>
+      ) : null}
+    </span>
   );
 }, areMarkdownFileLinkPropsEqual);
 
