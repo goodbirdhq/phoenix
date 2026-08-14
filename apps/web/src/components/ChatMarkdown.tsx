@@ -13,7 +13,11 @@ import {
   TriangleAlertIcon,
   WrapTextIcon,
 } from "lucide-react";
-import type { ScopedThreadRef, ServerProviderSkill } from "@t3tools/contracts";
+import {
+  DEFAULT_ENVIRONMENT_EDITOR_HANDOFF,
+  type ScopedThreadRef,
+  type ServerProviderSkill,
+} from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -60,13 +64,14 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { recordVisitForThread } from "../browserHistoryStore";
 import { useOpenInPreferredEditor } from "../editorPreferences";
+import { buildRemoteEditorTarget } from "../remoteEditorHandoff";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
 import { useTheme } from "../hooks/useTheme";
-import { getClientSettings } from "../hooks/useSettings";
+import { getClientSettings, useClientSettings } from "../hooks/useSettings";
 import {
   chatMarkdownClipboardPayload,
   serializeTableElementToCsv,
@@ -786,12 +791,22 @@ interface MarkdownFileLinkProps {
   displayPath: string;
   workspaceRelativePath: string | null;
   line?: number | undefined;
+  column?: number | undefined;
   label: string;
   copyMarkdown: string;
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
-  onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
+  onOpen: (
+    targetPath: string,
+    target: {
+      workspaceRelativePath?: string | null | undefined;
+      line?: number | undefined;
+      column?: number | undefined;
+    },
+  ) => Promise<AtomCommandResult<unknown, unknown>>;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
+  remoteCommand?: string | undefined;
+  preferEditor?: boolean | undefined;
   className?: string | undefined;
 }
 
@@ -1088,18 +1103,21 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   displayPath,
   workspaceRelativePath,
   line,
+  column,
   label,
   copyMarkdown,
   theme,
   threadRef,
   onOpen,
   onOpenInBrowser,
+  remoteCommand,
+  preferEditor = false,
   className,
 }: MarkdownFileLinkProps) {
   const handleOpenInEditor = useCallback(() => {
     void (async () => {
       try {
-        const result = await onOpen(targetPath);
+        const result = await onOpen(targetPath, { workspaceRelativePath, line, column });
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
           return;
         }
@@ -1129,7 +1147,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     })();
-  }, [onOpen, targetPath]);
+  }, [column, line, onOpen, targetPath, workspaceRelativePath]);
 
   const handleOpenInFilePreview = useCallback(() => {
     if (!threadRef || !workspaceRelativePath) {
@@ -1227,12 +1245,15 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       try {
         const clicked = await api.contextMenu.show(
           [
-            { id: "open", label: "Open in editor" },
+            { id: "open", label: preferEditor ? "Open in local VS Code" : "Open in editor" },
             ...(onOpenInBrowser
               ? ([{ id: "open-in-browser", label: "Open in integrated browser" }] as const)
               : []),
             { id: "copy-relative", label: "Copy relative path" },
             { id: "copy-full", label: "Copy full path" },
+            ...(remoteCommand
+              ? ([{ id: "copy-remote-command", label: "Copy Remote-SSH command" }] as const)
+              : []),
           ] as const,
           { x: event.clientX, y: event.clientY },
         );
@@ -1251,6 +1272,10 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         }
         if (clicked === "copy-full") {
           handleCopy(targetPath, "Full path");
+          return;
+        }
+        if (clicked === "copy-remote-command" && remoteCommand) {
+          handleCopy(remoteCommand, "Remote-SSH command");
         }
       } catch (cause) {
         reportMarkdownActionFailure(
@@ -1259,7 +1284,16 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     },
-    [displayPath, handleCopy, handleOpenInBrowser, handleOpenInEditor, onOpenInBrowser, targetPath],
+    [
+      displayPath,
+      handleCopy,
+      handleOpenInBrowser,
+      handleOpenInEditor,
+      onOpenInBrowser,
+      preferEditor,
+      remoteCommand,
+      targetPath,
+    ],
   );
 
   return (
@@ -1273,6 +1307,10 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
+              if (preferEditor) {
+                handleOpenInEditor();
+                return;
+              }
               if (onOpenInBrowser) {
                 handleOpenInBrowser();
                 return;
@@ -1308,12 +1346,15 @@ function areMarkdownFileLinkPropsEqual(
     previous.displayPath === next.displayPath &&
     previous.workspaceRelativePath === next.workspaceRelativePath &&
     previous.line === next.line &&
+    previous.column === next.column &&
     previous.label === next.label &&
     previous.copyMarkdown === next.copyMarkdown &&
     previous.theme === next.theme &&
     previous.threadRef === next.threadRef &&
     previous.onOpen === next.onOpen &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
+    previous.remoteCommand === next.remoteCommand &&
+    previous.preferEditor === next.preferEditor &&
     previous.className === next.className
   );
 }
@@ -1342,6 +1383,13 @@ function ChatMarkdown({
     environmentId,
     serverConfig?.availableEditors ?? [],
   );
+  const environmentEditorHandoffs = useClientSettings(
+    (settings) => settings.environmentEditorHandoffs,
+  );
+  const editorHandoff =
+    environmentId === null
+      ? DEFAULT_ENVIRONMENT_EDITOR_HANDOFF
+      : (environmentEditorHandoffs[environmentId] ?? DEFAULT_ENVIRONMENT_EDITOR_HANDOFF);
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownFileLinkMetaByHref = useMemo(() => {
     const metaByHref = new Map<
@@ -1444,6 +1492,12 @@ function ChatMarkdown({
       className?: string,
     ) => {
       const parentSuffix = fileLinkParentSuffixByPath.get(fileLinkMeta.filePath);
+      const remoteTarget = buildRemoteEditorTarget({
+        handoff: editorHandoff,
+        workspaceRelativePath: fileLinkMeta.workspaceRelativePath,
+        line: fileLinkMeta.line,
+        column: fileLinkMeta.column,
+      });
       const labelParts = [fileLinkMeta.basename];
       if (typeof parentSuffix === "string" && parentSuffix.length > 0) {
         labelParts.push(parentSuffix);
@@ -1462,6 +1516,7 @@ function ChatMarkdown({
           displayPath={fileLinkMeta.displayPath}
           workspaceRelativePath={fileLinkMeta.workspaceRelativePath}
           line={fileLinkMeta.line}
+          column={fileLinkMeta.column}
           label={labelParts.join(" · ")}
           copyMarkdown={copyMarkdown}
           theme={resolvedTheme}
@@ -1474,6 +1529,8 @@ function ChatMarkdown({
               ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
               : undefined
           }
+          remoteCommand={remoteTarget?.command}
+          preferEditor={remoteTarget !== null}
           className={className}
         />
       );

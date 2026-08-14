@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import { EnvironmentId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { ThreadEnvMode } from "./environment.ts";
 import {
   DEFAULT_TEXT_GENERATION_MODEL,
@@ -111,6 +111,35 @@ export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationM
 export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200));
 export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 
+// This intentionally lives in client settings: an SSH config alias is a property of the
+// device running Phoenix, not of the environment it is connected to.
+export const ClientEditorHandoff = Schema.Literals([
+  "local-server-editor",
+  "vscode-remote-ssh",
+  "disabled",
+]);
+export type ClientEditorHandoff = typeof ClientEditorHandoff.Type;
+
+export const RemoteSshHostAlias = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(255),
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+);
+export const RemoteWorkspaceRoot = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(4096),
+  Schema.isPattern(/^\/(?:[^/\0]+(?:\/|$))*$/),
+);
+
+export const EnvironmentEditorHandoff = Schema.Struct({
+  mode: ClientEditorHandoff,
+  sshHostAlias: Schema.optionalKey(RemoteSshHostAlias),
+  remoteWorkspaceRoot: Schema.optionalKey(RemoteWorkspaceRoot),
+});
+export type EnvironmentEditorHandoff = typeof EnvironmentEditorHandoff.Type;
+
+export const DEFAULT_ENVIRONMENT_EDITOR_HANDOFF: EnvironmentEditorHandoff = {
+  mode: "local-server-editor",
+};
+
 export const ClientSettingsSchema = Schema.Struct({
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -120,6 +149,9 @@ export const ClientSettingsSchema = Schema.Struct({
   diffIgnoreWhitespace: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   environmentIdentificationMode: EnvironmentIdentificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE)),
+  ),
+  environmentEditorHandoffs: Schema.Record(EnvironmentId, EnvironmentEditorHandoff).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
   ),
   glassOpacity: GlassOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_GLASS_OPACITY)),
@@ -772,6 +804,9 @@ export const ClientSettingsPatch = Schema.Struct({
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
+  environmentEditorHandoffs: Schema.optionalKey(
+    Schema.Record(EnvironmentId, EnvironmentEditorHandoff),
+  ),
   glassOpacity: Schema.optionalKey(GlassOpacity),
   fontSizeInterface: Schema.optionalKey(InterfaceFontSize),
   fontSizePrompt: Schema.optionalKey(PromptFontSize),

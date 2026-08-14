@@ -27,6 +27,8 @@ import {
   type DesktopServerExposureState,
   type DesktopWslState,
   type EnvironmentId,
+  type EnvironmentEditorHandoff,
+  DEFAULT_ENVIRONMENT_EDITOR_HANDOFF,
 } from "@t3tools/contracts";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import {
@@ -130,10 +132,97 @@ import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { ServerUpdateAction, ServerUpdateProgress } from "../ServerUpdateAction";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
+import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
 const EMPTY_DISCOVERED_SSH_HOSTS: ReadonlyArray<DesktopDiscoveredSshHost> = [];
+
+function isRemoteSshAlias(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
+}
+
+function isRemoteWorkspaceRoot(value: string): boolean {
+  return /^\/(?:[^/\0]+(?:\/|$))*$/.test(value);
+}
+
+function EnvironmentEditorHandoffRow({ environment }: { environment: EnvironmentPresentation }) {
+  const handoffs = useClientSettings((settings) => settings.environmentEditorHandoffs);
+  const updateSettings = useUpdateClientSettings();
+  const handoff = handoffs[environment.environmentId] ?? DEFAULT_ENVIRONMENT_EDITOR_HANDOFF;
+  const [sshHostAlias, setSshHostAlias] = useState(handoff.sshHostAlias ?? "");
+  const [remoteWorkspaceRoot, setRemoteWorkspaceRoot] = useState(handoff.remoteWorkspaceRoot ?? "");
+  const invalidRemoteConfig =
+    handoff.mode === "vscode-remote-ssh" &&
+    (!isRemoteSshAlias(sshHostAlias) || !isRemoteWorkspaceRoot(remoteWorkspaceRoot));
+  const update = (next: EnvironmentEditorHandoff) => {
+    updateSettings({
+      environmentEditorHandoffs: { ...handoffs, [environment.environmentId]: next },
+    });
+  };
+
+  return (
+    <SettingsRow
+      title={environment.label}
+      description="Editor opening happens on this device. Remote-SSH requires a matching local VS Code SSH config alias; Phoenix does not test or enable SSH."
+      control={
+        <select
+          className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+          aria-label={`Editor handoff for ${environment.label}`}
+          value={handoff.mode}
+          onChange={(event) =>
+            update({
+              mode: event.target.value as EnvironmentEditorHandoff["mode"],
+              ...(event.target.value === "vscode-remote-ssh"
+                ? {
+                    ...(isRemoteSshAlias(sshHostAlias) ? { sshHostAlias } : {}),
+                    ...(isRemoteWorkspaceRoot(remoteWorkspaceRoot) ? { remoteWorkspaceRoot } : {}),
+                  }
+                : {}),
+            })
+          }
+        >
+          <option value="local-server-editor">Environment editor</option>
+          <option value="vscode-remote-ssh">Local VS Code Remote-SSH</option>
+          <option value="disabled">Disabled</option>
+        </select>
+      }
+    >
+      {handoff.mode === "vscode-remote-ssh" ? (
+        <div className="grid gap-2 px-3 pb-3 sm:grid-cols-2 sm:px-4">
+          <Input
+            aria-label={`${environment.label} SSH host alias`}
+            placeholder="SSH config host alias"
+            value={sshHostAlias}
+            onChange={(event) => setSshHostAlias(event.target.value)}
+            onBlur={() => {
+              if (!invalidRemoteConfig) {
+                update({ mode: "vscode-remote-ssh", sshHostAlias, remoteWorkspaceRoot });
+              }
+            }}
+          />
+          <Input
+            aria-label={`${environment.label} remote workspace root`}
+            placeholder="/home/me/project"
+            value={remoteWorkspaceRoot}
+            onChange={(event) => setRemoteWorkspaceRoot(event.target.value)}
+            onBlur={() => {
+              if (!invalidRemoteConfig) {
+                update({ mode: "vscode-remote-ssh", sshHostAlias, remoteWorkspaceRoot });
+              }
+            }}
+          />
+          {invalidRemoteConfig ? (
+            <p className="text-xs text-destructive sm:col-span-2">
+              Enter a host alias using letters, numbers, dots, underscores, or hyphens, and an
+              absolute POSIX workspace path.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </SettingsRow>
+  );
+}
 
 // Sentinels for the consolidated WSL backend picker. The colon is
 // rejected by DISTRO_NAME_PATTERN (validated on the desktop side) so
@@ -3430,6 +3519,12 @@ export function ConnectionsSettings() {
           primaryEnvironmentId={primaryEnvironmentId}
           savedEnvironments={savedEnvironments}
         />
+      </SettingsSection>
+
+      <SettingsSection {...searchableSetting("editor-handoff")} title="Editor handoff">
+        {environments.map((environment) => (
+          <EnvironmentEditorHandoffRow key={environment.environmentId} environment={environment} />
+        ))}
       </SettingsSection>
     </SettingsPageContainer>
   );
