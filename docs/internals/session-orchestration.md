@@ -25,7 +25,7 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
                                              │
              thread.report-posted / terminal session events
                                              │
-        SessionSpawnReactor ── thread.turn.start on the spawning thread (the "wake-up")
+        SessionSpawnReactor ── thread.activity.append on the spawning thread (report digest)
 ```
 
 ## Pieces
@@ -59,13 +59,19 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   and `ProjectionSnapshotQuery`.
 - **Reactor** — `apps/server/src/orchestration/Layers/SessionSpawnReactor.ts` watches
   `thread.report-posted` and `thread.session-set` domain events. A report on a thread with
-  `spawnedByThreadId` starts a turn on the parent carrying the report. Turn injection is the wake
-  mechanism deliberately: no held-open tool calls, survives restarts, works over remote/tunnel.
-  Reports over `SESSION_REPORT_INLINE_MAX_CHARS` (1KB) — agent-posted and Phoenix-synthesized
-  alike — are delivered as a compact envelope (title, status, origin, abstract, reportId, size,
-  structured counts) instead of inline; the parent — or a sibling — pulls the full body and the
-  full findings/validation arrays on demand with `read_report`, paginated by `offset`/`maxChars`
-  in UTF-16 code units.
+  `spawnedByThreadId` appends a typed `session-report.posted` activity on the parent; web groups
+  those activities into a durable digest. The activity carries child/report IDs, status, origin,
+  and the supersession edge; reports remain the source of truth and are pulled with `read_report`
+  or `read_session`. Its command and activity IDs are deterministic from parent/child/report IDs:
+  command receipts deduplicate a replay, and the projector replaces the same activity ID if it is
+  applied again. This survives restart without a report queue or synthetic user message.
+
+  There is deliberately no report-to-turn delivery mode. Compatibility is explicit: an agent that
+  wants the parent to act sends an ordinary, meaningful `send_to_session` instruction referring to
+  a report ID, retaining that tool's existing queue/receipt semantics. A report itself never adds
+  queued turn work, so a burst cannot create unbounded parent work. A future, separate API may add
+  a bounded report-escalation request with a parent-selected cap/coalescing policy; it must not
+  reuse report posting as implicit escalation.
 
 ## Terminal reports
 
@@ -75,7 +81,7 @@ child had done. So the reactor synthesizes one. When a child's session reaches `
 `error` and it has posted no report, the reactor dispatches an ordinary `thread.report.post`
 carrying the termination reason, the last tool activity and assistant message, and an explicit
 "work is likely unfinished" warning. Everything downstream — projection, the user's report card,
-the parent wake-up — then behaves exactly as it does for an agent-posted report.
+and the parent digest — then behaves exactly as it does for an agent-posted report.
 
 Two things react to the same terminal `thread.session-set`, and the order is deliberate: the
 delivery-mode queue is cancelled first, so the parent learns its pending messages were dropped
@@ -167,9 +173,9 @@ supersede the stand-in with its own account. The superseded row keeps `origin: "
 history still shows that Phoenix stood in.
 
 Both ends travel outward. Envelopes and `read_session` carry `supersedesReportId` /
-`supersededByReportId`; the parent notification for an amending report leads with
-`AMENDED report (supersedes …)` before the summary, because a parent that already acted on the
-superseded report has to see that first. `read_report` on a superseded report returns the body it
+`supersededByReportId`; the parent digest labels an amending report with its
+`supersedesReportId`, because a parent that already acted on the superseded report has to see that
+edge first. `read_report` on a superseded report returns the body it
 always did — the record is append-only — plus `supersededByReportId` and a `supersededNotice`
 sentence: a caller paging an old report must learn a newer one exists, and cannot be relied on to
 notice a field it was not looking for.

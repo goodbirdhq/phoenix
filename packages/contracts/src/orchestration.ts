@@ -519,6 +519,34 @@ export const OrchestrationThreadActivity = Schema.Struct({
 });
 export type OrchestrationThreadActivity = typeof OrchestrationThreadActivity.Type;
 
+// A child report is an observation for its parent, not an instruction for the
+// parent's provider.  This intentionally lives in the durable activity log so
+// a busy parent can discover a burst without Phoenix manufacturing turns.
+export const SessionReportNotificationPayload = Schema.Struct({
+  childThreadId: ThreadId,
+  childTitle: TrimmedNonEmptyString,
+  reportId: TrimmedNonEmptyString,
+  status: SessionReportStatus,
+  origin: SessionReportOrigin,
+  supersedesReportId: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+export type SessionReportNotificationPayload = typeof SessionReportNotificationPayload.Type;
+
+export const SessionReportNotificationActivity = Schema.Struct({
+  id: EventId,
+  tone: Schema.Literals(["info", "error"]),
+  kind: Schema.Literal("session-report.posted"),
+  summary: TrimmedNonEmptyString,
+  payload: SessionReportNotificationPayload,
+  turnId: Schema.Null,
+  sequence: Schema.optional(NonNegativeInt),
+  createdAt: IsoDateTime,
+});
+export type SessionReportNotificationActivity = typeof SessionReportNotificationActivity.Type;
+
+export const isSessionReportNotificationActivity = Schema.is(SessionReportNotificationActivity);
+
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",
   "interrupted",

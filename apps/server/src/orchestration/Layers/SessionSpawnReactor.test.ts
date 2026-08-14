@@ -1,6 +1,7 @@
 import {
   CommandId,
   EventId,
+  isSessionReportNotificationActivity,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -36,6 +37,7 @@ import {
   formatQueuedReportWarning,
   formatReportMessage,
   makeSessionSpawnReactor,
+  reportNotificationActivity,
   terminalReportStatus,
   terminalReportTitle,
 } from "./SessionSpawnReactor.ts";
@@ -339,7 +341,7 @@ describe("SessionSpawnReactor queued delivery", () => {
     ),
   );
 
-  it.effect("adds one warning to the existing report delivery for unconsumed messages", () =>
+  it.effect("records a report notification without changing queued user-message delivery", () =>
     Effect.scoped(
       createHarness({
         status: "running",
@@ -348,15 +350,21 @@ describe("SessionSpawnReactor queued delivery", () => {
         boundaryEvents: [queuedReportPostedEvent()],
       }).pipe(
         Effect.map(({ commands }) => {
-          const parentTurns = commands.filter(
-            (command): command is Extract<OrchestrationCommand, { type: "thread.turn.start" }> =>
-              command.type === "thread.turn.start",
+          const notifications = commands.filter(
+            (
+              command,
+            ): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
+              command.type === "thread.activity.append" &&
+              command.activity.kind === "session-report.posted",
           );
-          expect(parentTurns).toHaveLength(1);
-          expect(parentTurns[0]?.message.text).toContain(
-            "2 queued messages were not consumed before this report was written",
+          expect(notifications).toHaveLength(1);
+          expect(notifications[0]?.activity.payload).toMatchObject({
+            reportId: "report-queued-warning",
+            childThreadId: CHILD_ID,
+          });
+          expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(
+            0,
           );
-          expect(parentTurns[0]?.message.text).toContain("queued-waiting, queued-releasing");
         }),
         Effect.provide(NodeServices.layer),
       ),
@@ -614,18 +622,18 @@ const reportPostedEvent = (
   },
 });
 
-// Drives the real reactor over a real thread.report-posted event, rather than
-// calling the formatter directly: what a parent actually receives depends on
-// the reactor resolving the child, finding its spawner, and dispatching a turn
-// start — none of which formatter tests exercise.
-describe("SessionSpawnReactor amended report delivery", () => {
+// Reports are durable parent activity, never synthetic parent user messages.
+// The provider can pull full truth with read_report/read_session when it is
+// explicitly asked to act, instead of being turned once per report burst.
+describe("SessionSpawnReactor report notifications", () => {
   const deliveredToParent = (commands: ReadonlyArray<OrchestrationCommand>) =>
     commands
-      .filter((command) => command.type === "thread.turn.start")
+      .filter((command) => command.type === "thread.activity.append")
       .filter((command) => command.threadId === PARENT_ID)
-      .map((command) => (command.type === "thread.turn.start" ? command.message.text : ""));
+      .map((command) => (command.type === "thread.activity.append" ? command.activity : undefined))
+      .filter(isSessionReportNotificationActivity);
 
-  it.effect("delivers an amending report to the parent led by what it supersedes", () =>
+  it.effect("records an amending report with its supersession link", () =>
     Effect.scoped(
       createHarness({
         status: "ready",
@@ -645,36 +653,71 @@ describe("SessionSpawnReactor amended report delivery", () => {
         Effect.map(({ commands }) => {
           const delivered = deliveredToParent(commands);
           expect(delivered).toHaveLength(1);
-          const text = delivered[0] ?? "";
-          expect(text).toContain("AMENDED report (supersedes report-original)");
-          // The amendment marker precedes the summary the parent may think it
-          // has already read.
-          expect(text.indexOf("AMENDED report")).toBeLessThan(
-            text.indexOf("The queued instruction arrived"),
+          expect(delivered[0]?.kind).toBe("session-report.posted");
+          expect(delivered[0]?.payload).toMatchObject({
+            reportId: "report-amendment",
+            childThreadId: CHILD_ID,
+            supersedesReportId: "report-original",
+            origin: "agent",
+          });
+          expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(
+            0,
           );
-          expect(text).toContain("(spawned thread: child-thread)");
         }),
         Effect.provide(NodeServices.layer),
       ),
     ),
   );
 
-  it.effect("delivers an ordinary report with no amendment marker", () =>
+  it.effect("coalesces a six-report busy-parent burst into activity without queued turns", () =>
     Effect.scoped(
       createHarness({
         status: "ready",
         queued: [],
-        boundaryEvents: [reportPostedEvent(report({ reportId: "report-original" }), 2)],
+        boundaryEvents: Array.from({ length: 6 }, (_unused, index) =>
+          reportPostedEvent(report({ reportId: `report-${index + 1}` }), index + 2),
+        ),
       }).pipe(
         Effect.map(({ commands }) => {
           const delivered = deliveredToParent(commands);
-          expect(delivered).toHaveLength(1);
-          expect(delivered[0]).not.toContain("AMENDED");
+          expect(delivered).toHaveLength(6);
+          expect(delivered.map((entry) => entry?.payload.reportId)).toEqual([
+            "report-1",
+            "report-2",
+            "report-3",
+            "report-4",
+            "report-5",
+            "report-6",
+          ]);
+          expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(
+            0,
+          );
+          expect(
+            commands.filter((command) => command.type === "thread.turn.start.queued"),
+          ).toHaveLength(0);
         }),
         Effect.provide(NodeServices.layer),
       ),
     ),
   );
+
+  it("reuses the same receipt/activity key after a report event is replayed", () => {
+    const posted = report({ reportId: "report-restarted", origin: "system" });
+    const first = reportNotificationActivity({
+      parentThreadId: PARENT_ID,
+      childThreadId: CHILD_ID,
+      childTitle: "Child",
+      report: { ...posted, threadId: CHILD_ID },
+    });
+    const replay = reportNotificationActivity({
+      parentThreadId: PARENT_ID,
+      childThreadId: CHILD_ID,
+      childTitle: "Child",
+      report: { ...posted, threadId: CHILD_ID },
+    });
+    expect(replay.id).toBe(first.id);
+    expect(replay.payload).toMatchObject({ reportId: "report-restarted", origin: "system" });
+  });
 });
 
 describe("buildTerminalReportSummary", () => {

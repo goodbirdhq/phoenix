@@ -7,6 +7,7 @@ import {
   type OrchestrationSessionStatus,
   type OrchestrationThread,
   type SessionReport,
+  type SessionReportNotificationActivity,
   type SessionReportStatus,
   ThreadId,
   toSessionReportEnvelope,
@@ -106,6 +107,40 @@ export const formatReportMessage = (childTitle: string, report: SessionReport): 
   const recommendationLine =
     envelope.recommendation !== undefined ? `\nRecommendation: ${envelope.recommendation}` : "";
   return `${lead}\n\nAbstract:\n${envelope.abstract}\n${recommendationLine}${structuredLine}\n[Full report is ${envelope.summaryChars} chars; this is a compact envelope. Call read_report with reportId "${report.reportId}" to read the rest.]${artifactLines}\n\n(spawned thread: ${report.threadId}, report: ${report.reportId})`;
+};
+
+export const reportNotificationActivity = (input: {
+  readonly parentThreadId: ThreadId;
+  readonly childThreadId: ThreadId;
+  readonly childTitle: string;
+  readonly report: SessionReport;
+}): SessionReportNotificationActivity => {
+  const { report } = input;
+  const amendment = report.supersedesReportId
+    ? `Amended report (supersedes ${report.supersedesReportId})`
+    : "Report";
+  const source = report.origin === "system" ? "Phoenix generated" : "Child posted";
+  return {
+    // The report ID is immutable; this makes replay/restart delivery exactly
+    // once at the projection boundary as well as at the command receipt.
+    id: EventId.make(
+      `session-report-notification:${input.parentThreadId}:${input.childThreadId}:${report.reportId}`,
+    ),
+    tone: report.status === "failure" ? "error" : "info",
+    kind: "session-report.posted",
+    summary: `${source} ${amendment}: ${input.childTitle} — ${report.title}`,
+    payload: {
+      childThreadId: input.childThreadId,
+      childTitle: input.childTitle,
+      reportId: report.reportId,
+      status: report.status,
+      origin: report.origin,
+      ...(report.supersedesReportId ? { supersedesReportId: report.supersedesReportId } : {}),
+      createdAt: report.createdAt,
+    },
+    turnId: null,
+    createdAt: report.createdAt,
+  };
 };
 
 export const formatQueuedReportWarning = (messageIds: ReadonlyArray<MessageId>): string =>
@@ -394,26 +429,28 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     if (event.type === "thread.turn-start-queued") return;
     if (event.type === "thread.report-posted") {
       const child = yield* snapshotQuery.getThreadShellById(event.payload.threadId);
-      const childTitle = Option.isSome(child) ? child.value.title : event.payload.threadId;
-      const pending = yield* projectionTurnRepository.listQueuedTurnStarts.pipe(
-        Effect.map((rows) =>
-          rows.filter(
-            (row) =>
-              row.threadId === event.payload.threadId &&
-              (row.state === "queued" || row.state === "releasing"),
-          ),
-        ),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("queued delivery report warning lookup failed", { cause }).pipe(
-            Effect.as([]),
-          ),
-        ),
-      );
-      const warning = formatQueuedReportWarning(pending.map((row) => row.messageId));
-      yield* notifyParent({
+      if (Option.isNone(child)) return;
+      const parentThreadId = child.value.spawnedByThreadId ?? null;
+      if (parentThreadId === null) return;
+      const parent = yield* snapshotQuery.getThreadShellById(ThreadId.make(parentThreadId));
+      if (Option.isNone(parent)) return;
+      const activity = reportNotificationActivity({
+        parentThreadId: parent.value.id,
         childThreadId: event.payload.threadId,
-        text: `${formatReportMessage(childTitle, event.payload.report)}${warning}`,
-        commandTag: "spawn-report-notify",
+        childTitle: child.value.title,
+        report: event.payload.report,
+      });
+      // Command ID and activity ID are both deterministic. A stream replay
+      // after a crash reuses the receipt; a partial projection retry replaces
+      // the same activity rather than making a second notification.
+      yield* engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make(
+          `session-report-notification:${parent.value.id}:${event.payload.threadId}:${event.payload.report.reportId}`,
+        ),
+        threadId: parent.value.id,
+        activity,
+        createdAt: event.payload.report.createdAt,
       });
       return;
     }
