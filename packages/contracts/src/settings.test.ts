@@ -67,6 +67,56 @@ describe("ClientSettings environment identification", () => {
   });
 });
 
+describe("ClientSettings editor handoff", () => {
+  it("defaults to the environment-directed editor and persists per-environment remote mappings", () => {
+    expect(decodeClientSettings({}).environmentEditorHandoffs).toEqual({});
+    expect(
+      decodeClientSettings({
+        environmentEditorHandoffs: {
+          "environment-1": {
+            mode: "vscode-remote-ssh",
+            sshHostAlias: "work-box",
+            sourceWorkspaceRoot: "/srv/project",
+            remoteWorkspaceRoot: "/home/me/project",
+          },
+        },
+      }).environmentEditorHandoffs,
+    ).toEqual({
+      "environment-1": {
+        mode: "vscode-remote-ssh",
+        sshHostAlias: "work-box",
+        sourceWorkspaceRoot: "/srv/project",
+        remoteWorkspaceRoot: "/home/me/project",
+      },
+    });
+  });
+
+  it("rejects invalid aliases and non-absolute remote roots", () => {
+    expect(() =>
+      decodeClientSettings({
+        environmentEditorHandoffs: {
+          environment: {
+            mode: "vscode-remote-ssh",
+            sshHostAlias: "bad alias",
+            remoteWorkspaceRoot: "/repo",
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        environmentEditorHandoffs: {
+          environment: {
+            mode: "vscode-remote-ssh",
+            sshHostAlias: "host",
+            remoteWorkspaceRoot: "repo",
+          },
+        },
+      }),
+    ).toThrow();
+  });
+});
+
 describe("ClientSettings sidebar", () => {
   it("defaults to the current sidebar with a three-day auto-settle threshold", () => {
     const settings = decodeClientSettings({});

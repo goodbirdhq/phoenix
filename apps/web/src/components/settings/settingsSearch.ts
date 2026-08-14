@@ -36,6 +36,11 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
  */
 export const SETTINGS_SEARCH_ITEMS = [
   {
+    id: "editor-handoff",
+    title: "Editor handoff",
+    to: "/settings/connections",
+  },
+  {
     id: "color-scheme",
     title: "Color scheme",
     to: "/settings/appearance",

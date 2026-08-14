@@ -13,7 +13,11 @@ import {
   TriangleAlertIcon,
   WrapTextIcon,
 } from "lucide-react";
-import type { ScopedThreadRef, ServerProviderSkill } from "@t3tools/contracts";
+import {
+  DEFAULT_ENVIRONMENT_EDITOR_HANDOFF,
+  type ScopedThreadRef,
+  type ServerProviderSkill,
+} from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -60,13 +64,18 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { recordVisitForThread } from "../browserHistoryStore";
 import { useOpenInPreferredEditor } from "../editorPreferences";
+import { buildRemoteEditorTarget, launchRemoteEditor } from "../remoteEditorHandoff";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
 import { useTheme } from "../hooks/useTheme";
-import { getClientSettings } from "../hooks/useSettings";
+import {
+  getClientSettings,
+  useClientSettings,
+  useClientSettingsHydrated,
+} from "../hooks/useSettings";
 import {
   chatMarkdownClipboardPayload,
   serializeTableElementToCsv,
@@ -786,12 +795,16 @@ interface MarkdownFileLinkProps {
   displayPath: string;
   workspaceRelativePath: string | null;
   line?: number | undefined;
+  column?: number | undefined;
   label: string;
   copyMarkdown: string;
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
+  remoteTarget?: ReturnType<typeof buildRemoteEditorTarget> | undefined;
+  editorDisabled: boolean;
+  settingsHydrated: boolean;
   className?: string | undefined;
 }
 
@@ -1088,17 +1101,32 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   displayPath,
   workspaceRelativePath,
   line,
+  column,
   label,
   copyMarkdown,
   theme,
   threadRef,
   onOpen,
   onOpenInBrowser,
+  remoteTarget,
+  editorDisabled,
+  settingsHydrated,
   className,
 }: MarkdownFileLinkProps) {
   const handleOpenInEditor = useCallback(() => {
     void (async () => {
       try {
+        if (!settingsHydrated) return;
+        if (editorDisabled) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title: "Editor opening is disabled",
+              description: "Use Phoenix preview or enable an editor handoff in Connections.",
+            }),
+          );
+          return;
+        }
         const result = await onOpen(targetPath);
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
           return;
@@ -1129,7 +1157,22 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     })();
-  }, [onOpen, targetPath]);
+  }, [editorDisabled, onOpen, settingsHydrated, targetPath]);
+
+  const handleOpenRemoteEditor = useCallback(() => {
+    if (!remoteTarget) return;
+    void launchRemoteEditor(remoteTarget).then((opened) => {
+      if (!opened) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "VS Code did not open",
+            description: "Copy the Remote-SSH command or preview the file in Phoenix.",
+          }),
+        );
+      }
+    });
+  }, [remoteTarget]);
 
   const handleOpenInFilePreview = useCallback(() => {
     if (!threadRef || !workspaceRelativePath) {
@@ -1227,18 +1270,21 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       try {
         const clicked = await api.contextMenu.show(
           [
-            { id: "open", label: "Open in editor" },
+            { id: "open", label: remoteTarget ? "Open in local VS Code" : "Open in editor" },
             ...(onOpenInBrowser
               ? ([{ id: "open-in-browser", label: "Open in integrated browser" }] as const)
               : []),
             { id: "copy-relative", label: "Copy relative path" },
             { id: "copy-full", label: "Copy full path" },
+            ...(remoteTarget
+              ? ([{ id: "copy-remote-command", label: "Copy Remote-SSH command" }] as const)
+              : []),
           ] as const,
           { x: event.clientX, y: event.clientY },
         );
 
         if (clicked === "open") {
-          handleOpenInEditor();
+          remoteTarget ? handleOpenRemoteEditor() : handleOpenInEditor();
           return;
         }
         if (clicked === "open-in-browser") {
@@ -1251,6 +1297,10 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         }
         if (clicked === "copy-full") {
           handleCopy(targetPath, "Full path");
+          return;
+        }
+        if (clicked === "copy-remote-command" && remoteTarget) {
+          handleCopy(remoteTarget.command, "Remote-SSH command");
         }
       } catch (cause) {
         reportMarkdownActionFailure(
@@ -1259,41 +1309,80 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     },
-    [displayPath, handleCopy, handleOpenInBrowser, handleOpenInEditor, onOpenInBrowser, targetPath],
+    [
+      displayPath,
+      handleCopy,
+      handleOpenInBrowser,
+      handleOpenInEditor,
+      onOpenInBrowser,
+      remoteTarget,
+      handleOpenRemoteEditor,
+      targetPath,
+    ],
   );
 
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <a
-            href={href}
-            className={cn(CHAT_FILE_TAG_CHIP_CLASS_NAME, MARKDOWN_FILE_LINK_CLASS_NAME, className)}
-            data-markdown-copy={copyMarkdown}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (onOpenInBrowser) {
-                handleOpenInBrowser();
-                return;
-              }
-              handleOpenInFilePreview();
-            }}
-            onContextMenu={handleContextMenu}
+    <span className="inline-flex items-center gap-1">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <a
+              href={href}
+              className={cn(
+                CHAT_FILE_TAG_CHIP_CLASS_NAME,
+                MARKDOWN_FILE_LINK_CLASS_NAME,
+                className,
+              )}
+              data-markdown-copy={copyMarkdown}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (remoteTarget) {
+                  handleOpenRemoteEditor();
+                  return;
+                }
+                if (onOpenInBrowser) {
+                  handleOpenInBrowser();
+                  return;
+                }
+                handleOpenInFilePreview();
+              }}
+              onContextMenu={handleContextMenu}
+            >
+              <FileTagChipContent path={iconPath} label={label} theme={theme} selectable />
+            </a>
+          }
+        />
+        <TooltipPopup
+          side="top"
+          className="max-w-[min(40rem,calc(100vw-2rem))] font-mono text-[11px] leading-tight"
+        >
+          <div className="markdown-file-link-tooltip-scroll overflow-x-auto whitespace-nowrap">
+            {displayPath}
+          </div>
+        </TooltipPopup>
+      </Tooltip>
+      {remoteTarget ? (
+        <>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="h-5 px-1 text-[10px]"
+            onClick={() => handleCopy(remoteTarget.command, "Remote-SSH command")}
           >
-            <FileTagChipContent path={iconPath} label={label} theme={theme} selectable />
-          </a>
-        }
-      />
-      <TooltipPopup
-        side="top"
-        className="max-w-[min(40rem,calc(100vw-2rem))] font-mono text-[11px] leading-tight"
-      >
-        <div className="markdown-file-link-tooltip-scroll overflow-x-auto whitespace-nowrap">
-          {displayPath}
-        </div>
-      </TooltipPopup>
-    </Tooltip>
+            Copy Remote-SSH command
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="h-5 px-1 text-[10px]"
+            onClick={onOpenInBrowser ?? handleOpenInFilePreview}
+          >
+            Preview in Phoenix
+          </Button>
+        </>
+      ) : null}
+    </span>
   );
 }, areMarkdownFileLinkPropsEqual);
 
@@ -1308,12 +1397,16 @@ function areMarkdownFileLinkPropsEqual(
     previous.displayPath === next.displayPath &&
     previous.workspaceRelativePath === next.workspaceRelativePath &&
     previous.line === next.line &&
+    previous.column === next.column &&
     previous.label === next.label &&
     previous.copyMarkdown === next.copyMarkdown &&
     previous.theme === next.theme &&
     previous.threadRef === next.threadRef &&
     previous.onOpen === next.onOpen &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
+    previous.remoteTarget === next.remoteTarget &&
+    previous.editorDisabled === next.editorDisabled &&
+    previous.settingsHydrated === next.settingsHydrated &&
     previous.className === next.className
   );
 }
@@ -1342,6 +1435,14 @@ function ChatMarkdown({
     environmentId,
     serverConfig?.availableEditors ?? [],
   );
+  const environmentEditorHandoffs = useClientSettings(
+    (settings) => settings.environmentEditorHandoffs,
+  );
+  const clientSettingsHydrated = useClientSettingsHydrated();
+  const editorHandoff =
+    !clientSettingsHydrated || environmentId === null
+      ? DEFAULT_ENVIRONMENT_EDITOR_HANDOFF
+      : (environmentEditorHandoffs[environmentId] ?? DEFAULT_ENVIRONMENT_EDITOR_HANDOFF);
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownFileLinkMetaByHref = useMemo(() => {
     const metaByHref = new Map<
@@ -1444,6 +1545,13 @@ function ChatMarkdown({
       className?: string,
     ) => {
       const parentSuffix = fileLinkParentSuffixByPath.get(fileLinkMeta.filePath);
+      const remoteTarget = buildRemoteEditorTarget({
+        handoff: editorHandoff,
+        sourceWorkspaceRoot: cwd,
+        workspaceRelativePath: fileLinkMeta.workspaceRelativePath,
+        line: fileLinkMeta.line,
+        column: fileLinkMeta.column,
+      });
       const labelParts = [fileLinkMeta.basename];
       if (typeof parentSuffix === "string" && parentSuffix.length > 0) {
         labelParts.push(parentSuffix);
@@ -1462,6 +1570,7 @@ function ChatMarkdown({
           displayPath={fileLinkMeta.displayPath}
           workspaceRelativePath={fileLinkMeta.workspaceRelativePath}
           line={fileLinkMeta.line}
+          column={fileLinkMeta.column}
           label={labelParts.join(" · ")}
           copyMarkdown={copyMarkdown}
           theme={resolvedTheme}
@@ -1474,6 +1583,9 @@ function ChatMarkdown({
               ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
               : undefined
           }
+          remoteTarget={remoteTarget ?? undefined}
+          editorDisabled={editorHandoff.mode === "disabled"}
+          settingsHydrated={clientSettingsHydrated}
           className={className}
         />
       );
@@ -1679,7 +1791,9 @@ function ChatMarkdown({
     };
   }, [
     cwd,
+    clientSettingsHydrated,
     diffThemeName,
+    editorHandoff,
     fileLinkParentSuffixByPath,
     inlineCodeFileLinkMetaByText,
     isStreaming,

@@ -19,6 +19,19 @@ vi.mock("electron", () => ({
 import * as ElectronShell from "./ElectronShell.ts";
 
 describe("ElectronShell", () => {
+  it.effect("allows the narrow VS Code Remote-SSH protocol", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockResolvedValue(undefined);
+      const shell = yield* ElectronShell.ElectronShell;
+      assert.equal(
+        yield* shell.openExternal("vscode://vscode-remote/ssh-remote+work/home/me/project/file.ts"),
+        true,
+      );
+      assert.deepEqual(openExternalMock.mock.calls, [
+        ["vscode://vscode-remote/ssh-remote+work/home/me/project/file.ts"],
+      ]);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
   beforeEach(() => {
     openExternalMock.mockReset();
     writeTextMock.mockReset();
