@@ -64,14 +64,18 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { recordVisitForThread } from "../browserHistoryStore";
 import { useOpenInPreferredEditor } from "../editorPreferences";
-import { buildRemoteEditorTarget } from "../remoteEditorHandoff";
+import { buildRemoteEditorTarget, launchRemoteEditor } from "../remoteEditorHandoff";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
 import { useTheme } from "../hooks/useTheme";
-import { getClientSettings, useClientSettings } from "../hooks/useSettings";
+import {
+  getClientSettings,
+  useClientSettings,
+  useClientSettingsHydrated,
+} from "../hooks/useSettings";
 import {
   chatMarkdownClipboardPayload,
   serializeTableElementToCsv,
@@ -796,17 +800,10 @@ interface MarkdownFileLinkProps {
   copyMarkdown: string;
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
-  onOpen: (
-    targetPath: string,
-    target: {
-      workspaceRelativePath?: string | null | undefined;
-      line?: number | undefined;
-      column?: number | undefined;
-    },
-  ) => Promise<AtomCommandResult<unknown, unknown>>;
+  onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
-  remoteCommand?: string | undefined;
-  preferEditor?: boolean | undefined;
+  remoteTarget?: ReturnType<typeof buildRemoteEditorTarget> | undefined;
+  settingsHydrated: boolean;
   className?: string | undefined;
 }
 
@@ -1110,14 +1107,15 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   threadRef,
   onOpen,
   onOpenInBrowser,
-  remoteCommand,
-  preferEditor = false,
+  remoteTarget,
+  settingsHydrated,
   className,
 }: MarkdownFileLinkProps) {
   const handleOpenInEditor = useCallback(() => {
     void (async () => {
       try {
-        const result = await onOpen(targetPath, { workspaceRelativePath, line, column });
+        if (!settingsHydrated) return;
+        const result = await onOpen(targetPath);
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
           return;
         }
@@ -1147,7 +1145,12 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     })();
-  }, [column, line, onOpen, targetPath, workspaceRelativePath]);
+  }, [onOpen, settingsHydrated, targetPath]);
+
+  const handleOpenRemoteEditor = useCallback(() => {
+    if (!remoteTarget) return;
+    void launchRemoteEditor(remoteTarget);
+  }, [remoteTarget]);
 
   const handleOpenInFilePreview = useCallback(() => {
     if (!threadRef || !workspaceRelativePath) {
@@ -1245,13 +1248,13 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       try {
         const clicked = await api.contextMenu.show(
           [
-            { id: "open", label: preferEditor ? "Open in local VS Code" : "Open in editor" },
+            { id: "open", label: remoteTarget ? "Open in local VS Code" : "Open in editor" },
             ...(onOpenInBrowser
               ? ([{ id: "open-in-browser", label: "Open in integrated browser" }] as const)
               : []),
             { id: "copy-relative", label: "Copy relative path" },
             { id: "copy-full", label: "Copy full path" },
-            ...(remoteCommand
+            ...(remoteTarget
               ? ([{ id: "copy-remote-command", label: "Copy Remote-SSH command" }] as const)
               : []),
           ] as const,
@@ -1259,7 +1262,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
 
         if (clicked === "open") {
-          handleOpenInEditor();
+          remoteTarget ? handleOpenRemoteEditor() : handleOpenInEditor();
           return;
         }
         if (clicked === "open-in-browser") {
@@ -1274,8 +1277,8 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           handleCopy(targetPath, "Full path");
           return;
         }
-        if (clicked === "copy-remote-command" && remoteCommand) {
-          handleCopy(remoteCommand, "Remote-SSH command");
+        if (clicked === "copy-remote-command" && remoteTarget) {
+          handleCopy(remoteTarget.command, "Remote-SSH command");
         }
       } catch (cause) {
         reportMarkdownActionFailure(
@@ -1290,8 +1293,8 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       handleOpenInBrowser,
       handleOpenInEditor,
       onOpenInBrowser,
-      preferEditor,
-      remoteCommand,
+      remoteTarget,
+      handleOpenRemoteEditor,
       targetPath,
     ],
   );
@@ -1307,8 +1310,8 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              if (preferEditor) {
-                handleOpenInEditor();
+              if (remoteTarget) {
+                handleOpenRemoteEditor();
                 return;
               }
               if (onOpenInBrowser) {
@@ -1353,8 +1356,8 @@ function areMarkdownFileLinkPropsEqual(
     previous.threadRef === next.threadRef &&
     previous.onOpen === next.onOpen &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
-    previous.remoteCommand === next.remoteCommand &&
-    previous.preferEditor === next.preferEditor &&
+    previous.remoteTarget === next.remoteTarget &&
+    previous.settingsHydrated === next.settingsHydrated &&
     previous.className === next.className
   );
 }
@@ -1386,8 +1389,9 @@ function ChatMarkdown({
   const environmentEditorHandoffs = useClientSettings(
     (settings) => settings.environmentEditorHandoffs,
   );
+  const clientSettingsHydrated = useClientSettingsHydrated();
   const editorHandoff =
-    environmentId === null
+    !clientSettingsHydrated || environmentId === null
       ? DEFAULT_ENVIRONMENT_EDITOR_HANDOFF
       : (environmentEditorHandoffs[environmentId] ?? DEFAULT_ENVIRONMENT_EDITOR_HANDOFF);
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
@@ -1494,6 +1498,7 @@ function ChatMarkdown({
       const parentSuffix = fileLinkParentSuffixByPath.get(fileLinkMeta.filePath);
       const remoteTarget = buildRemoteEditorTarget({
         handoff: editorHandoff,
+        sourceWorkspaceRoot: cwd,
         workspaceRelativePath: fileLinkMeta.workspaceRelativePath,
         line: fileLinkMeta.line,
         column: fileLinkMeta.column,
@@ -1529,8 +1534,8 @@ function ChatMarkdown({
               ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
               : undefined
           }
-          remoteCommand={remoteTarget?.command}
-          preferEditor={remoteTarget !== null}
+          remoteTarget={remoteTarget ?? undefined}
+          settingsHydrated={clientSettingsHydrated}
           className={className}
         />
       );

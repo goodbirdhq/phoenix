@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { EnvironmentEditorHandoff } from "@t3tools/contracts";
 
-import { buildRemoteEditorTarget } from "./remoteEditorHandoff";
-import { resolveEditorOpenPlan } from "./editorPreferences";
+import { buildRemoteEditorTarget, quoteForShell } from "./remoteEditorHandoff";
 
 const remoteHandoff: EnvironmentEditorHandoff = {
   mode: "vscode-remote-ssh",
   sshHostAlias: "dev-box",
+  sourceWorkspaceRoot: "/remote/project",
   remoteWorkspaceRoot: "/home/me/work space",
 };
 
@@ -15,6 +15,7 @@ describe("buildRemoteEditorTarget", () => {
     expect(
       buildRemoteEditorTarget({
         handoff: remoteHandoff,
+        sourceWorkspaceRoot: "/remote/project",
         workspaceRelativePath: "src/my file.ts",
         line: 12,
         column: 4,
@@ -33,35 +34,32 @@ describe("buildRemoteEditorTarget", () => {
     ).toBeNull();
     expect(
       buildRemoteEditorTarget({
-        handoff: { mode: "vscode-remote-ssh" },
-        workspaceRelativePath: "a.ts",
+        handoff: remoteHandoff,
+        sourceWorkspaceRoot: "/remote/project",
+        workspaceRelativePath: "../secret",
       }),
     ).toBeNull();
     expect(
-      buildRemoteEditorTarget({ handoff: remoteHandoff, workspaceRelativePath: "../secret" }),
+      buildRemoteEditorTarget({
+        handoff: remoteHandoff,
+        sourceWorkspaceRoot: "/remote/project",
+        workspaceRelativePath: null,
+      }),
     ).toBeNull();
     expect(
-      buildRemoteEditorTarget({ handoff: remoteHandoff, workspaceRelativePath: null }),
+      buildRemoteEditorTarget({
+        handoff: remoteHandoff,
+        sourceWorkspaceRoot: "/another/project",
+        workspaceRelativePath: "src/a.ts",
+      }),
     ).toBeNull();
   });
 });
 
-describe("editor handoff selection", () => {
-  it("selects local handoff instead of the environment shell for configured workspace files", () => {
-    expect(
-      resolveEditorOpenPlan(remoteHandoff, { workspaceRelativePath: "src/app.ts", line: 3 }),
-    ).toMatchObject({ kind: "remote", target: { remotePath: "/home/me/work space/src/app.ts" } });
-  });
-
-  it("keeps local mode environment-directed and makes disabled/mobile-style clients unavailable", () => {
-    expect(
-      resolveEditorOpenPlan(
-        { mode: "local-server-editor" },
-        { workspaceRelativePath: "src/app.ts" },
-      ),
-    ).toEqual({ kind: "environment" });
-    expect(
-      resolveEditorOpenPlan({ mode: "disabled" }, { workspaceRelativePath: "src/app.ts" }),
-    ).toEqual({ kind: "unavailable" });
+describe("quoteForShell", () => {
+  it("contains shell metacharacters in one POSIX argument", () => {
+    expect(quoteForShell("a'; rm -rf /; `x` $HOME\nnext")).toBe(
+      "'a'\"'\"'; rm -rf /; `x` $HOME\nnext'",
+    );
   });
 });

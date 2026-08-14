@@ -150,11 +150,21 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
   const handoffs = useClientSettings((settings) => settings.environmentEditorHandoffs);
   const updateSettings = useUpdateClientSettings();
   const handoff = handoffs[environment.environmentId] ?? DEFAULT_ENVIRONMENT_EDITOR_HANDOFF;
-  const [sshHostAlias, setSshHostAlias] = useState(handoff.sshHostAlias ?? "");
-  const [remoteWorkspaceRoot, setRemoteWorkspaceRoot] = useState(handoff.remoteWorkspaceRoot ?? "");
+  const [selectedMode, setSelectedMode] = useState<EnvironmentEditorHandoff["mode"]>(handoff.mode);
+  const [sshHostAlias, setSshHostAlias] = useState(
+    handoff.mode === "vscode-remote-ssh" ? handoff.sshHostAlias : "",
+  );
+  const [sourceWorkspaceRoot, setSourceWorkspaceRoot] = useState(
+    handoff.mode === "vscode-remote-ssh" ? handoff.sourceWorkspaceRoot : "",
+  );
+  const [remoteWorkspaceRoot, setRemoteWorkspaceRoot] = useState(
+    handoff.mode === "vscode-remote-ssh" ? handoff.remoteWorkspaceRoot : "",
+  );
   const invalidRemoteConfig =
-    handoff.mode === "vscode-remote-ssh" &&
-    (!isRemoteSshAlias(sshHostAlias) || !isRemoteWorkspaceRoot(remoteWorkspaceRoot));
+    selectedMode === "vscode-remote-ssh" &&
+    (!isRemoteSshAlias(sshHostAlias) ||
+      !isRemoteWorkspaceRoot(sourceWorkspaceRoot) ||
+      !isRemoteWorkspaceRoot(remoteWorkspaceRoot));
   const update = (next: EnvironmentEditorHandoff) => {
     updateSettings({
       environmentEditorHandoffs: { ...handoffs, [environment.environmentId]: next },
@@ -169,18 +179,24 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
         <select
           className="h-8 rounded-md border border-input bg-background px-2 text-sm"
           aria-label={`Editor handoff for ${environment.label}`}
-          value={handoff.mode}
-          onChange={(event) =>
-            update({
-              mode: event.target.value as EnvironmentEditorHandoff["mode"],
-              ...(event.target.value === "vscode-remote-ssh"
-                ? {
-                    ...(isRemoteSshAlias(sshHostAlias) ? { sshHostAlias } : {}),
-                    ...(isRemoteWorkspaceRoot(remoteWorkspaceRoot) ? { remoteWorkspaceRoot } : {}),
-                  }
-                : {}),
-            })
-          }
+          value={selectedMode}
+          onChange={(event) => {
+            if (event.target.value === "vscode-remote-ssh") {
+              setSelectedMode("vscode-remote-ssh");
+              if (!invalidRemoteConfig) {
+                update({
+                  mode: "vscode-remote-ssh",
+                  sshHostAlias,
+                  sourceWorkspaceRoot,
+                  remoteWorkspaceRoot,
+                });
+              }
+              return;
+            }
+            const mode = event.target.value as "local-server-editor" | "disabled";
+            setSelectedMode(mode);
+            update({ mode });
+          }}
         >
           <option value="local-server-editor">Environment editor</option>
           <option value="vscode-remote-ssh">Local VS Code Remote-SSH</option>
@@ -188,8 +204,14 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
         </select>
       }
     >
-      {handoff.mode === "vscode-remote-ssh" ? (
+      {selectedMode === "vscode-remote-ssh" ? (
         <div className="grid gap-2 px-3 pb-3 sm:grid-cols-2 sm:px-4">
+          <Input
+            aria-label={`${environment.label} source workspace root`}
+            placeholder="Environment workspace root, e.g. /repo/project"
+            value={sourceWorkspaceRoot}
+            onChange={(event) => setSourceWorkspaceRoot(event.target.value)}
+          />
           <Input
             aria-label={`${environment.label} SSH host alias`}
             placeholder="SSH config host alias"
@@ -197,7 +219,12 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
             onChange={(event) => setSshHostAlias(event.target.value)}
             onBlur={() => {
               if (!invalidRemoteConfig) {
-                update({ mode: "vscode-remote-ssh", sshHostAlias, remoteWorkspaceRoot });
+                update({
+                  mode: "vscode-remote-ssh",
+                  sshHostAlias,
+                  sourceWorkspaceRoot,
+                  remoteWorkspaceRoot,
+                });
               }
             }}
           />
@@ -208,14 +235,19 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
             onChange={(event) => setRemoteWorkspaceRoot(event.target.value)}
             onBlur={() => {
               if (!invalidRemoteConfig) {
-                update({ mode: "vscode-remote-ssh", sshHostAlias, remoteWorkspaceRoot });
+                update({
+                  mode: "vscode-remote-ssh",
+                  sshHostAlias,
+                  sourceWorkspaceRoot,
+                  remoteWorkspaceRoot,
+                });
               }
             }}
           />
           {invalidRemoteConfig ? (
             <p className="text-xs text-destructive sm:col-span-2">
-              Enter a host alias using letters, numbers, dots, underscores, or hyphens, and an
-              absolute POSIX workspace path.
+              Enter a host alias and both source and Remote-SSH workspace roots as absolute POSIX
+              paths.
             </p>
           ) : null}
         </div>

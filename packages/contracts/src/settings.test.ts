@@ -76,6 +76,7 @@ describe("ClientSettings editor handoff", () => {
           "environment-1": {
             mode: "vscode-remote-ssh",
             sshHostAlias: "work-box",
+            sourceWorkspaceRoot: "/srv/project",
             remoteWorkspaceRoot: "/home/me/project",
           },
         },
@@ -84,6 +85,7 @@ describe("ClientSettings editor handoff", () => {
       "environment-1": {
         mode: "vscode-remote-ssh",
         sshHostAlias: "work-box",
+        sourceWorkspaceRoot: "/srv/project",
         remoteWorkspaceRoot: "/home/me/project",
       },
     });

@@ -128,12 +128,18 @@ export const RemoteWorkspaceRoot = TrimmedNonEmptyString.check(
   Schema.isMaxLength(4096),
   Schema.isPattern(/^\/(?:[^/\0]+(?:\/|$))*$/),
 );
+export const SourceWorkspaceRoot = RemoteWorkspaceRoot;
 
-export const EnvironmentEditorHandoff = Schema.Struct({
-  mode: ClientEditorHandoff,
-  sshHostAlias: Schema.optionalKey(RemoteSshHostAlias),
-  remoteWorkspaceRoot: Schema.optionalKey(RemoteWorkspaceRoot),
-});
+export const EnvironmentEditorHandoff = Schema.Union([
+  Schema.Struct({ mode: Schema.Literal("local-server-editor") }),
+  Schema.Struct({ mode: Schema.Literal("disabled") }),
+  Schema.Struct({
+    mode: Schema.Literal("vscode-remote-ssh"),
+    sshHostAlias: RemoteSshHostAlias,
+    sourceWorkspaceRoot: SourceWorkspaceRoot,
+    remoteWorkspaceRoot: RemoteWorkspaceRoot,
+  }),
+]);
 export type EnvironmentEditorHandoff = typeof EnvironmentEditorHandoff.Type;
 
 export const DEFAULT_ENVIRONMENT_EDITOR_HANDOFF: EnvironmentEditorHandoff = {
@@ -150,6 +156,8 @@ export const ClientSettingsSchema = Schema.Struct({
   environmentIdentificationMode: EnvironmentIdentificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE)),
   ),
+  // Bind the remote mapping to a trusted source workspace root; an environment
+  // can host several projects and Phoenix must never guess between them.
   environmentEditorHandoffs: Schema.Record(EnvironmentId, EnvironmentEditorHandoff).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),

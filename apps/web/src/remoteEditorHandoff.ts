@@ -6,8 +6,10 @@ export interface RemoteEditorTarget {
   readonly remotePath: string;
 }
 
-function quoteForShell(value: string): string {
-  return `'${value.replaceAll("'", "'\\\"'\\\"'")}'`;
+export function quoteForShell(value: string): string {
+  // POSIX single quotes preserve every shell metacharacter. A literal quote is
+  // represented by closing the quote, adding an escaped quote, then reopening.
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
 function encodePath(path: string): string {
@@ -17,6 +19,7 @@ function encodePath(path: string): string {
 /** Maps a trusted workspace-relative path to the user-owned Remote-SSH workspace. */
 export function buildRemoteEditorTarget(input: {
   readonly handoff: EnvironmentEditorHandoff;
+  readonly sourceWorkspaceRoot?: string | undefined;
   readonly workspaceRelativePath?: string | null | undefined;
   readonly line?: number | undefined;
   readonly column?: number | undefined;
@@ -24,6 +27,7 @@ export function buildRemoteEditorTarget(input: {
   if (
     input.handoff.mode !== "vscode-remote-ssh" ||
     !input.handoff.sshHostAlias ||
+    input.sourceWorkspaceRoot !== input.handoff.sourceWorkspaceRoot ||
     !input.handoff.remoteWorkspaceRoot ||
     !input.workspaceRelativePath ||
     input.workspaceRelativePath.startsWith("/") ||
@@ -49,5 +53,7 @@ export async function launchRemoteEditor(target: RemoteEditorTarget): Promise<bo
     return window.desktopBridge.openExternal(target.uri);
   }
   window.location.assign(target.uri);
-  return true;
+  // Browsers do not report whether a custom protocol handler accepted this.
+  // The caller must keep an explicit copy fallback visible.
+  return false;
 }
