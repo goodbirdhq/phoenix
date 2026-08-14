@@ -1157,7 +1157,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     })();
-  }, [onOpen, settingsHydrated, targetPath]);
+  }, [editorDisabled, onOpen, settingsHydrated, targetPath]);
 
   const handleOpenRemoteEditor = useCallback(() => {
     if (!remoteTarget) return;

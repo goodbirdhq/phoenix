@@ -6,7 +6,7 @@ import {
   TerminalIcon,
 } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
-import { type ReactNode, memo, useCallback, useId, useMemo, useState } from "react";
+import { type ReactNode, memo, useCallback, useEffect, useId, useMemo, useState } from "react";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -165,6 +165,14 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
   const [remoteWorkspaceRoot, setRemoteWorkspaceRoot] = useState(
     handoff.mode === "vscode-remote-ssh" ? handoff.remoteWorkspaceRoot : "",
   );
+  const [isEditing, setIsEditing] = useState(false);
+  useEffect(() => {
+    if (!settingsHydrated || isEditing) return;
+    setSelectedMode(handoff.mode);
+    setSshHostAlias(handoff.mode === "vscode-remote-ssh" ? handoff.sshHostAlias : "");
+    setSourceWorkspaceRoot(handoff.mode === "vscode-remote-ssh" ? handoff.sourceWorkspaceRoot : "");
+    setRemoteWorkspaceRoot(handoff.mode === "vscode-remote-ssh" ? handoff.remoteWorkspaceRoot : "");
+  }, [handoff, isEditing, settingsHydrated]);
   const invalidRemoteConfig =
     selectedMode === "vscode-remote-ssh" &&
     (!isRemoteSshAlias(sshHostAlias) ||
@@ -190,10 +198,12 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
           value={selectedMode}
           onChange={(event) => {
             if (event.target.value === "vscode-remote-ssh") {
+              setIsEditing(true);
               setSelectedMode("vscode-remote-ssh");
               return;
             }
             const mode = event.target.value as "local-server-editor" | "disabled";
+            setIsEditing(false);
             setSelectedMode(mode);
             update({ mode });
           }}
@@ -210,7 +220,10 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
             aria-label={`${environment.label} source workspace root`}
             placeholder="Environment workspace root, e.g. /repo/project"
             value={sourceWorkspaceRoot}
-            onChange={(event) => setSourceWorkspaceRoot(event.target.value)}
+            onChange={(event) => {
+              setIsEditing(true);
+              setSourceWorkspaceRoot(event.target.value);
+            }}
             onBlur={() => {
               if (!invalidRemoteConfig) {
                 update({
@@ -219,6 +232,7 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
                   sourceWorkspaceRoot,
                   remoteWorkspaceRoot,
                 });
+                setIsEditing(false);
               }
             }}
           />
@@ -226,7 +240,10 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
             aria-label={`${environment.label} SSH host alias`}
             placeholder="SSH config host alias"
             value={sshHostAlias}
-            onChange={(event) => setSshHostAlias(event.target.value)}
+            onChange={(event) => {
+              setIsEditing(true);
+              setSshHostAlias(event.target.value);
+            }}
             onBlur={() => {
               if (!invalidRemoteConfig) {
                 update({
@@ -235,6 +252,7 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
                   sourceWorkspaceRoot,
                   remoteWorkspaceRoot,
                 });
+                setIsEditing(false);
               }
             }}
           />
@@ -242,7 +260,10 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
             aria-label={`${environment.label} remote workspace root`}
             placeholder="/home/me/project"
             value={remoteWorkspaceRoot}
-            onChange={(event) => setRemoteWorkspaceRoot(event.target.value)}
+            onChange={(event) => {
+              setIsEditing(true);
+              setRemoteWorkspaceRoot(event.target.value);
+            }}
             onBlur={() => {
               if (!invalidRemoteConfig) {
                 update({
@@ -251,6 +272,7 @@ function EnvironmentEditorHandoffRow({ environment }: { environment: Environment
                   sourceWorkspaceRoot,
                   remoteWorkspaceRoot,
                 });
+                setIsEditing(false);
               }
             }}
           />
