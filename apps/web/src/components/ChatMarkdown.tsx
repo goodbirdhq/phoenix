@@ -803,6 +803,7 @@ interface MarkdownFileLinkProps {
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   remoteTarget?: ReturnType<typeof buildRemoteEditorTarget> | undefined;
+  editorDisabled: boolean;
   settingsHydrated: boolean;
   className?: string | undefined;
 }
@@ -1108,6 +1109,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   onOpen,
   onOpenInBrowser,
   remoteTarget,
+  editorDisabled,
   settingsHydrated,
   className,
 }: MarkdownFileLinkProps) {
@@ -1115,6 +1117,16 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     void (async () => {
       try {
         if (!settingsHydrated) return;
+        if (editorDisabled) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title: "Editor opening is disabled",
+              description: "Use Phoenix preview or enable an editor handoff in Connections.",
+            }),
+          );
+          return;
+        }
         const result = await onOpen(targetPath);
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
           return;
@@ -1149,7 +1161,17 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
 
   const handleOpenRemoteEditor = useCallback(() => {
     if (!remoteTarget) return;
-    void launchRemoteEditor(remoteTarget);
+    void launchRemoteEditor(remoteTarget).then((opened) => {
+      if (!opened) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "VS Code did not open",
+            description: "Copy the Remote-SSH command or preview the file in Phoenix.",
+          }),
+        );
+      }
+    });
   }, [remoteTarget]);
 
   const handleOpenInFilePreview = useCallback(() => {
@@ -1383,6 +1405,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.onOpen === next.onOpen &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
     previous.remoteTarget === next.remoteTarget &&
+    previous.editorDisabled === next.editorDisabled &&
     previous.settingsHydrated === next.settingsHydrated &&
     previous.className === next.className
   );
@@ -1561,6 +1584,7 @@ function ChatMarkdown({
               : undefined
           }
           remoteTarget={remoteTarget ?? undefined}
+          editorDisabled={editorHandoff.mode === "disabled"}
           settingsHydrated={clientSettingsHydrated}
           className={className}
         />
@@ -1767,7 +1791,9 @@ function ChatMarkdown({
     };
   }, [
     cwd,
+    clientSettingsHydrated,
     diffThemeName,
+    editorHandoff,
     fileLinkParentSuffixByPath,
     inlineCodeFileLinkMetaByText,
     isStreaming,
