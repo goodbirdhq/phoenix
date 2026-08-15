@@ -334,6 +334,36 @@ describe("SessionSpawnReactor queued delivery", () => {
     ),
   );
 
+  it.effect(
+    "cancels a synthesized terminal report and a report with the legacy queue warning",
+    () =>
+      Effect.scoped(
+        Effect.forEach(
+          [
+            '[Phoenix] Spawned session "Child" ended without posting a report. Phoenix generated a failure report for it: Failed\n\nSummary.\n\n(spawned thread: child-thread)',
+            '[Phoenix] Spawned session "Child" posted a success report: Done\n\nSummary.\n\n(spawned thread: child-thread)\n\n[Phoenix] 2 queued messages were not consumed before this report was written: queued-a, queued-b.',
+          ],
+          (queuedMessageText) =>
+            createHarness({
+              status: "ready",
+              queued: [queued("legacy")],
+              queuedMessageText,
+              queuedMessageCreatedAt: "1960-01-01T00:00:00.000Z",
+            }).pipe(
+              Effect.map(({ commands }) => {
+                expect(
+                  commands.filter((command) => command.type === "thread.turn.queue.cancel"),
+                ).toHaveLength(1);
+                expect(
+                  commands.filter((command) => command.type === "thread.turn.start.queued"),
+                ).toHaveLength(0);
+              }),
+            ),
+          { concurrency: 1 },
+        ).pipe(Effect.provide(NodeServices.layer)),
+      ),
+  );
+
   it.effect("drains consecutive legacy rows and releases the following user message", () =>
     Effect.scoped(
       createHarness({

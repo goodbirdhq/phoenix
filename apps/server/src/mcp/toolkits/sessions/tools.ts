@@ -84,7 +84,7 @@ export const SendToSessionTool = Tool.make("send_to_session", {
 
 export const ReadSessionTool = Tool.make("read_session", {
   description:
-    "Read the status of a session this session spawned: live/settled state, its latest completion report as a compact envelope (title, status, origin, abstract, size, structured counts), and optionally its trailing messages. Use read_report to fetch a report's full body and full findings/validation. Use for on-demand progress checks; completion is pushed to you automatically, so avoid polling loops. messageLimit accepts 0-20 (default 5); each returned message is truncated to 16,384 characters.",
+    "Read the status of a session this session spawned: live/settled state, its latest completion report as a compact envelope (title, status, origin, abstract, size, structured counts), and optionally its trailing messages. Use read_report to fetch a report's full body and full findings/validation. Reports create a durable notification rather than starting your model; use this for on-demand progress checks when you choose to act. messageLimit accepts 0-20 (default 5); each returned message is truncated to 16,384 characters.",
   parameters: ReadSessionInput,
   success: ReadSessionResult,
   failure: SessionOrchestrationError,

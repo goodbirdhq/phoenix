@@ -152,7 +152,7 @@ const isLegacyQueuedReportMessage = (input: {
   readonly cutoverAt: string;
 }) =>
   input.createdAt < input.cutoverAt &&
-  /^\[Phoenix\] (?:AMENDED report \(supersedes [^)]+\)\. )?Spawned session "[^"]+" (?:posted a (?:success|failure|partial) report|ended without posting a report\. Phoenix generated a (?:success|failure|partial) report): [^\n]+\n\n[\s\S]+\n\n\(spawned thread: [^)]+\)(?:, report: [^)]+)?$/.test(
+  /^\[Phoenix\] (?:AMENDED report \(supersedes [^)]+\)\. )?Spawned session "[^"]+" (?:posted a (?:success|failure|partial) report:|ended without posting a report\. Phoenix generated a (?:success|failure|partial) report for it:) [^\n]+\n\n[\s\S]+\n\n\(spawned thread: [^)]+\)(?:, report: [^)]+)?(?:\n\n\[Phoenix\] \d+ queued messages? were not consumed before this report was written: [^\n]+\.)?$/.test(
     input.text,
   );
 
