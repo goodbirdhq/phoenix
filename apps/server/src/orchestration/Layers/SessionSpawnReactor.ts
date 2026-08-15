@@ -7,6 +7,7 @@ import {
   type OrchestrationSessionStatus,
   type OrchestrationThread,
   type SessionReport,
+  type SessionReportNotificationActivity,
   type SessionReportStatus,
   ThreadId,
   toSessionReportEnvelope,
@@ -108,6 +109,53 @@ export const formatReportMessage = (childTitle: string, report: SessionReport): 
   return `${lead}\n\nAbstract:\n${envelope.abstract}\n${recommendationLine}${structuredLine}\n[Full report is ${envelope.summaryChars} chars; this is a compact envelope. Call read_report with reportId "${report.reportId}" to read the rest.]${artifactLines}\n\n(spawned thread: ${report.threadId}, report: ${report.reportId})`;
 };
 
+export const reportNotificationActivity = (input: {
+  readonly parentThreadId: ThreadId;
+  readonly childThreadId: ThreadId;
+  readonly childTitle: string;
+  readonly report: SessionReport;
+  readonly notifiedAt: string;
+}): SessionReportNotificationActivity => {
+  const { report } = input;
+  const amendment = report.supersedesReportId
+    ? `Amended report (supersedes ${report.supersedesReportId})`
+    : "Report";
+  const source = report.origin === "system" ? "Phoenix generated" : "Child posted";
+  return {
+    // The report ID is immutable; this makes replay/restart delivery exactly
+    // once at the projection boundary as well as at the command receipt.
+    id: EventId.make(
+      `session-report-notification:${input.parentThreadId}:${input.childThreadId}:${report.reportId}`,
+    ),
+    tone: report.status === "failure" ? "error" : "info",
+    kind: "session-report.posted",
+    summary: `${source} ${amendment}: ${input.childTitle} — ${report.title}`,
+    payload: {
+      childThreadId: input.childThreadId,
+      childTitle: input.childTitle,
+      reportId: report.reportId,
+      status: report.status,
+      origin: report.origin,
+      ...(report.supersedesReportId ? { supersedesReportId: report.supersedesReportId } : {}),
+      createdAt: report.createdAt,
+    },
+    turnId: null,
+    // This is when the parent learned about the report, not when the child
+    // wrote it. The report's own timestamp remains in payload.createdAt.
+    createdAt: input.notifiedAt,
+  };
+};
+
+const isLegacyQueuedReportMessage = (input: {
+  readonly text: string;
+  readonly createdAt: string;
+  readonly cutoverAt: string;
+}) =>
+  input.createdAt < input.cutoverAt &&
+  /^\[Phoenix\] (?:AMENDED report \(supersedes [^)]+\)\. )?Spawned session "[^"]+" (?:posted a (?:success|failure|partial) report:|ended without posting a report\. Phoenix generated a (?:success|failure|partial) report for it:) [^\n]+\n\n[\s\S]+\n\n\(spawned thread: [^)]+\)(?:, report: [^)]+)?(?:\n\n\[Phoenix\] \d+ queued messages? were not consumed before this report was written: [^\n]+\.)?$/.test(
+    input.text,
+  );
+
 export const formatQueuedReportWarning = (messageIds: ReadonlyArray<MessageId>): string =>
   messageIds.length === 0
     ? ""
@@ -199,26 +247,61 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   // restarts). Synthesize at most one terminal report per episode; a later
   // healthy state re-arms.
   const terminalReportedThreads = new Set<string>();
+  // A legacy report message must predate this digest-capable reactor. Combined
+  // with the canonical envelope check, this prevents cancelling new messages
+  // that merely quote a report.
+  const legacyReportCutoverAt = yield* nowIso;
 
   const releaseNextQueuedTurn = Effect.fn("SessionSpawnReactor.releaseNextQueuedTurn")(function* (
     threadId: ThreadId,
   ) {
-    const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).find(
+    const queuedRows = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
       (entry) => entry.threadId === threadId && entry.state === "queued",
     );
-    if (queued === undefined) return;
-    yield* engine.dispatch({
-      type: "thread.turn.start.queued",
-      commandId: yield* serverCommandId("queued-turn-start"),
-      threadId,
-      messageId: queued.messageId,
-      createdAt: yield* nowIso,
-    });
+    for (const queued of queuedRows) {
+      // Single-row indexed lookup: recovery must not hydrate a whole thread
+      // just to distinguish a legacy envelope from a real user instruction.
+      const queuedMessage = snapshotQuery.getThreadMessageById
+        ? yield* snapshotQuery.getThreadMessageById(threadId, queued.messageId)
+        : Option.none();
+      const message = Option.getOrUndefined(queuedMessage);
+      if (
+        message?.role !== "user" ||
+        !isLegacyQueuedReportMessage({ ...message, cutoverAt: legacyReportCutoverAt })
+      ) {
+        yield* engine.dispatch({
+          type: "thread.turn.start.queued",
+          commandId: yield* serverCommandId("queued-turn-start"),
+          threadId,
+          messageId: queued.messageId,
+          createdAt: yield* nowIso,
+        });
+        return;
+      }
+      yield* engine.dispatch({
+        type: "thread.turn.queue.cancel",
+        commandId: yield* serverCommandId("legacy-report-turn-cancel"),
+        threadId,
+        messageId: queued.messageId,
+        reason: "legacy_report_notification",
+        createdAt: yield* nowIso,
+      });
+      yield* Effect.logInfo("cancelled legacy queued child report delivery", {
+        threadId,
+        messageId: queued.messageId,
+      });
+      // Drain adjacent legacy report rows now so a real message behind a
+      // report burst is released at this boundary, not one recovery tick later.
+    }
   });
 
   const cancelQueuedTurns = Effect.fn("SessionSpawnReactor.cancelQueuedTurns")(function* (input: {
     readonly threadId: ThreadId;
-    readonly reason: "session_terminal" | "interrupt_timeout" | "redelivery_limit_reached";
+    readonly reason:
+      | "session_terminal"
+      | "interrupt_timeout"
+      | "redelivery_limit_reached"
+      | "legacy_report_notification";
   }) {
     const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
       (entry) => entry.threadId === input.threadId && entry.state === "queued",
@@ -394,26 +477,55 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     if (event.type === "thread.turn-start-queued") return;
     if (event.type === "thread.report-posted") {
       const child = yield* snapshotQuery.getThreadShellById(event.payload.threadId);
-      const childTitle = Option.isSome(child) ? child.value.title : event.payload.threadId;
-      const pending = yield* projectionTurnRepository.listQueuedTurnStarts.pipe(
-        Effect.map((rows) =>
-          rows.filter(
-            (row) =>
-              row.threadId === event.payload.threadId &&
-              (row.state === "queued" || row.state === "releasing"),
-          ),
-        ),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("queued delivery report warning lookup failed", { cause }).pipe(
-            Effect.as([]),
-          ),
-        ),
-      );
-      const warning = formatQueuedReportWarning(pending.map((row) => row.messageId));
-      yield* notifyParent({
+      if (Option.isNone(child)) {
+        yield* Effect.logDebug(
+          "spawned-session report notification dropped: child thread not active",
+          {
+            childThreadId: event.payload.threadId,
+            reportId: event.payload.report.reportId,
+          },
+        );
+        return;
+      }
+      const parentThreadId = child.value.spawnedByThreadId ?? null;
+      if (parentThreadId === null) {
+        yield* Effect.logDebug("spawned-session report notification dropped: child has no parent", {
+          childThreadId: event.payload.threadId,
+          reportId: event.payload.report.reportId,
+        });
+        return;
+      }
+      const parent = yield* snapshotQuery.getThreadShellById(ThreadId.make(parentThreadId));
+      if (Option.isNone(parent)) {
+        yield* Effect.logDebug(
+          "spawned-session report notification dropped: parent thread not active",
+          {
+            childThreadId: event.payload.threadId,
+            parentThreadId,
+            reportId: event.payload.report.reportId,
+          },
+        );
+        return;
+      }
+      const notifiedAt = yield* nowIso;
+      const activity = reportNotificationActivity({
+        parentThreadId: parent.value.id,
         childThreadId: event.payload.threadId,
-        text: `${formatReportMessage(childTitle, event.payload.report)}${warning}`,
-        commandTag: "spawn-report-notify",
+        childTitle: child.value.title,
+        report: event.payload.report,
+        notifiedAt,
+      });
+      // Command ID and activity ID are both deterministic. A stream replay
+      // after a crash reuses the receipt; a partial projection retry replaces
+      // the same activity rather than making a second notification.
+      yield* engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make(
+          `session-report-notification:${parent.value.id}:${event.payload.threadId}:${event.payload.report.reportId}`,
+        ),
+        threadId: parent.value.id,
+        activity,
+        createdAt: notifiedAt,
       });
       return;
     }

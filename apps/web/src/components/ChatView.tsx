@@ -93,6 +93,7 @@ import {
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
 import { getAnchoredTurnMetrics, type TimelineScrollMode } from "./chat/timelineScrollAnchoring";
+import { SessionReportDigest } from "./chat/SessionReportDigest";
 import {
   buildPendingUserInputAnswers,
   derivePendingUserInputProgress,
@@ -6204,6 +6205,7 @@ function ChatViewContent(props: ChatViewProps) {
             </div>
             {/* Messages Wrapper */}
             <div className="relative flex min-h-0 flex-1 flex-col">
+              <SessionReportDigest activities={threadActivities} />
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 agentPanelModel={agentPanelModel}

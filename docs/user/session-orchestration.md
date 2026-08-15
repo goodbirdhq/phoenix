@@ -30,9 +30,10 @@ Every session has tools for orchestration alongside its other Phoenix tools:
   between messages.
 - **Post a report** — when a spawned session finishes, it posts a completion report: a status, a
   summary, and any artifacts (files, branches, PR links). The report shows as a card in the thread,
-  and the session that spawned it is woken automatically with the result — no polling. The report
-  also carries the same usage snapshot, captured at the moment it was posted, so the spawning
-  session can see what the work cost.
+  and creates a visible report update in the spawning thread — no polling and no surprise agent
+  turn. Several child reports are grouped together there; the parent can read the current report
+  or session when it is ready to act. The report also carries the same usage snapshot, captured at
+  the moment it was posted, so the spawning session can see what the work cost.
 - **Settle a session** — once the spawning session is done with a child, it marks it settled so the
   thread stops counting as live work — this is also what frees the spawn slot, once the child's
   process has actually stopped (a settle that could not stop the process in time keeps counting

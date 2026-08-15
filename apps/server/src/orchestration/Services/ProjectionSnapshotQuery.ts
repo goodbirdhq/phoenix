@@ -170,6 +170,17 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
 
+  /** A bounded message lookup for queue recovery paths. */
+  readonly getThreadMessageById?: (
+    threadId: ThreadId,
+    messageId: import("@t3tools/contracts").MessageId,
+  ) => Effect.Effect<
+    Option.Option<
+      Pick<import("@t3tools/contracts").OrchestrationMessage, "role" | "text" | "createdAt">
+    >,
+    ProjectionRepositoryError
+  >;
+
   /**
    * Read a single active thread detail together with the projection snapshot
    * sequence in one consistent transaction, so the returned `snapshotSequence`

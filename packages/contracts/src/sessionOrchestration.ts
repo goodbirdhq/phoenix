@@ -185,7 +185,12 @@ export const QueuedDeliveryReceipt = Schema.Struct({
   consumedAt: Schema.NullOr(IsoDateTime),
   cancelledAt: Schema.NullOr(IsoDateTime),
   cancelledReason: Schema.NullOr(
-    Schema.Literals(["session_terminal", "interrupt_timeout", "redelivery_limit_reached"]),
+    Schema.Literals([
+      "session_terminal",
+      "interrupt_timeout",
+      "redelivery_limit_reached",
+      "legacy_report_notification",
+    ]),
   ),
 });
 export type QueuedDeliveryReceipt = typeof QueuedDeliveryReceipt.Type;
