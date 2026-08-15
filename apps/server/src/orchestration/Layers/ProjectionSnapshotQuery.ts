@@ -1124,6 +1124,39 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const getThreadMessageRowById = SqlSchema.findAll({
+    Request: Schema.Struct({ threadId: ThreadId, messageId: MessageId }),
+    Result: ProjectionThreadMessageDbRowSchema,
+    execute: ({ threadId, messageId }) =>
+      sql`
+        SELECT message_id AS "messageId", thread_id AS "threadId", turn_id AS "turnId", role, text,
+          attachments_json AS "attachments", is_streaming AS "isStreaming", created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId} AND message_id = ${messageId}
+        LIMIT 1
+      `,
+  });
+
+  const getThreadMessageById: ProjectionSnapshotQueryShape["getThreadMessageById"] = (
+    threadId,
+    messageId,
+  ) =>
+    getThreadMessageRowById({ threadId, messageId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getThreadMessageById:query",
+          "ProjectionSnapshotQuery.getThreadMessageById:decodeRow",
+        ),
+      ),
+      Effect.map((rows) => {
+        const row = rows[0];
+        return row === undefined
+          ? Option.none()
+          : Option.some({ role: row.role, text: row.text, createdAt: row.createdAt });
+      }),
+    );
+
   const listThreadProposedPlanRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadProposedPlanDbRowSchema,
@@ -3058,6 +3091,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     );
 
   return {
+    getThreadMessageById,
     getCommandReadModel,
     getSnapshot,
     getShellSnapshot,

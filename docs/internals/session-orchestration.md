@@ -64,9 +64,10 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   desktop group current activities into a capped digest; mobile receives the same typed activity
   and lifecycle visibility, while its dedicated digest UI is deferred. The activity carries child/report IDs, status, origin,
   and the supersession edge; reports remain the source of truth and are pulled with `read_report`
-  or `read_session`. Its command and activity IDs are deterministic from parent/child/report IDs:
-  command receipts deduplicate a replay, and the projector replaces the same activity ID if it is
-  applied again. This survives restart without a report queue or synthetic user message.
+  or `read_session`. Its command and activity IDs are deterministic from parent/child/report IDs;
+  command receipt handling and projector replacement make duplicate processing harmless when it
+  occurs. Delivery after a reactor crash before dispatch acknowledgement remains the existing
+  event-stream/recovery concern and is intentionally not claimed as a new guarantee here.
 
   On upgrade, the queued-turn release path recognizes the exact legacy Phoenix report envelope and
   cancels that row with `legacy_report_notification`; ordinary queued user messages are never

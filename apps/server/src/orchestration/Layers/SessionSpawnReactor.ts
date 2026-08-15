@@ -146,8 +146,15 @@ export const reportNotificationActivity = (input: {
   };
 };
 
-const isLegacyQueuedReportMessage = (text: string) =>
-  text.startsWith("[Phoenix] ") && text.includes("report") && text.includes("(spawned thread:");
+const isLegacyQueuedReportMessage = (input: {
+  readonly text: string;
+  readonly createdAt: string;
+  readonly cutoverAt: string;
+}) =>
+  input.createdAt < input.cutoverAt &&
+  /^\[Phoenix\] (?:AMENDED report \(supersedes [^)]+\)\. )?Spawned session "[^"]+" (?:posted a (?:success|failure|partial) report|ended without posting a report\. Phoenix generated a (?:success|failure|partial) report): [^\n]+\n\n[\s\S]+\n\n\(spawned thread: [^)]+\)(?:, report: [^)]+)?$/.test(
+    input.text,
+  );
 
 export const formatQueuedReportWarning = (messageIds: ReadonlyArray<MessageId>): string =>
   messageIds.length === 0
@@ -240,22 +247,37 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   // restarts). Synthesize at most one terminal report per episode; a later
   // healthy state re-arms.
   const terminalReportedThreads = new Set<string>();
+  // A legacy report message must predate this digest-capable reactor. Combined
+  // with the canonical envelope check, this prevents cancelling new messages
+  // that merely quote a report.
+  const legacyReportCutoverAt = yield* nowIso;
 
   const releaseNextQueuedTurn = Effect.fn("SessionSpawnReactor.releaseNextQueuedTurn")(function* (
     threadId: ThreadId,
   ) {
-    const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).find(
+    const queuedRows = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
       (entry) => entry.threadId === threadId && entry.state === "queued",
     );
-    if (queued === undefined) return;
-    // Pre-digest servers queued report text as a parent user message. Never
-    // reinterpret a user-authored queued message, but cancel this exact old
-    // Phoenix envelope so upgrading cannot release a report into a new turn.
-    const detail = yield* snapshotQuery.getThreadDetailById(threadId);
-    const queuedMessage = Option.getOrUndefined(detail)?.messages.find(
-      (message) => message.id === queued.messageId,
-    );
-    if (queuedMessage?.role === "user" && isLegacyQueuedReportMessage(queuedMessage.text)) {
+    for (const queued of queuedRows) {
+      // Single-row indexed lookup: recovery must not hydrate a whole thread
+      // just to distinguish a legacy envelope from a real user instruction.
+      const queuedMessage = snapshotQuery.getThreadMessageById
+        ? yield* snapshotQuery.getThreadMessageById(threadId, queued.messageId)
+        : Option.none();
+      const message = Option.getOrUndefined(queuedMessage);
+      if (
+        message?.role !== "user" ||
+        !isLegacyQueuedReportMessage({ ...message, cutoverAt: legacyReportCutoverAt })
+      ) {
+        yield* engine.dispatch({
+          type: "thread.turn.start.queued",
+          commandId: yield* serverCommandId("queued-turn-start"),
+          threadId,
+          messageId: queued.messageId,
+          createdAt: yield* nowIso,
+        });
+        return;
+      }
       yield* engine.dispatch({
         type: "thread.turn.queue.cancel",
         commandId: yield* serverCommandId("legacy-report-turn-cancel"),
@@ -268,15 +290,9 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         threadId,
         messageId: queued.messageId,
       });
-      return;
+      // Drain adjacent legacy report rows now so a real message behind a
+      // report burst is released at this boundary, not one recovery tick later.
     }
-    yield* engine.dispatch({
-      type: "thread.turn.start.queued",
-      commandId: yield* serverCommandId("queued-turn-start"),
-      threadId,
-      messageId: queued.messageId,
-      createdAt: yield* nowIso,
-    });
   });
 
   const cancelQueuedTurns = Effect.fn("SessionSpawnReactor.cancelQueuedTurns")(function* (input: {

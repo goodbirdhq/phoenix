@@ -159,6 +159,10 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   readonly boundaryEvents?: ReadonlyArray<OrchestrationEvent>;
   readonly queuedRowsRef?: Ref.Ref<Array<ProjectionQueuedTurnStart>>;
   readonly queuedMessageText?: string;
+  readonly queuedMessageCreatedAt?: string;
+  readonly queuedMessages?: Readonly<
+    Record<string, { readonly text: string; readonly createdAt: string }>
+  >;
 }) {
   const commands = yield* Ref.make<Array<OrchestrationCommand>>([]);
   const queuedRows = input.queuedRowsRef ?? (yield* Ref.make([...input.queued]));
@@ -241,6 +245,19 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
             ),
           )
         : Effect.succeed(Option.none()),
+    getThreadMessageById: (_threadId: ThreadId, messageId: MessageId) =>
+      Effect.sync(() => {
+        const configured = input.queuedMessages?.[messageId];
+        return configured !== undefined
+          ? Option.some({ role: "user" as const, ...configured })
+          : input.queuedMessageText !== undefined && input.queued[0]?.messageId === messageId
+            ? Option.some({
+                role: "user" as const,
+                text: input.queuedMessageText,
+                createdAt: input.queuedMessageCreatedAt ?? NOW,
+              })
+            : Option.none();
+      }),
   } as unknown as ProjectionSnapshotQuery["Service"]);
   const turns = ProjectionTurnRepository.of({
     listQueuedTurnStarts: Ref.get(queuedRows),
@@ -279,7 +296,8 @@ describe("SessionSpawnReactor queued delivery", () => {
         status: "ready",
         queued: [queued("legacy")],
         queuedMessageText:
-          '[Phoenix] Spawned session "Child" posted a success report: Done\n\n(spawned thread: child-thread)',
+          '[Phoenix] Spawned session "Child" posted a success report: Done\n\nSummary.\n\n(spawned thread: child-thread)',
+        queuedMessageCreatedAt: "1960-01-01T00:00:00.000Z",
       }).pipe(
         Effect.map(({ commands }) => {
           expect(
@@ -288,6 +306,61 @@ describe("SessionSpawnReactor queued delivery", () => {
           const cancelled = commands.find((command) => command.type === "thread.turn.queue.cancel");
           expect(cancelled?.type === "thread.turn.queue.cancel" && cancelled.reason).toBe(
             "legacy_report_notification",
+          );
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("keeps a current user message that quotes a legacy report envelope", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [queued("quoted")],
+        queuedMessageText:
+          '[Phoenix] Spawned session "Child" posted a success report: Done\n\nSummary.\n\n(spawned thread: child-thread)',
+      }).pipe(
+        Effect.map(({ commands }) => {
+          expect(
+            commands.filter((command) => command.type === "thread.turn.queue.cancel"),
+          ).toHaveLength(0);
+          expect(
+            commands.filter((command) => command.type === "thread.turn.start.queued"),
+          ).toHaveLength(1);
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("drains consecutive legacy rows and releases the following user message", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [queued("legacy-1"), queued("legacy-2"), queued("real")],
+        queuedMessages: {
+          "queued-legacy-1": {
+            text: '[Phoenix] Spawned session "Child" posted a success report: Done\n\nSummary.\n\n(spawned thread: child-thread)',
+            createdAt: "1960-01-01T00:00:00.000Z",
+          },
+          "queued-legacy-2": {
+            text: '[Phoenix] Spawned session "Child" posted a success report: Done\n\nSummary.\n\n(spawned thread: child-thread)',
+            createdAt: "1960-01-01T00:00:00.000Z",
+          },
+          "queued-real": {
+            text: "Please review the reports.",
+            createdAt: "1960-01-01T00:00:00.000Z",
+          },
+        },
+      }).pipe(
+        Effect.map(({ commands }) => {
+          expect(
+            commands.filter((command) => command.type === "thread.turn.queue.cancel"),
+          ).toHaveLength(2);
+          const release = commands.find((command) => command.type === "thread.turn.start.queued");
+          expect(release?.type === "thread.turn.start.queued" && release.messageId).toBe(
+            MessageId.make("queued-real"),
           );
         }),
         Effect.provide(NodeServices.layer),
