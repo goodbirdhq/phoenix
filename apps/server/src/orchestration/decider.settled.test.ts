@@ -834,6 +834,47 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
     }),
   );
 
+  it.effect("makes a child report visible without requesting a provider turn", () =>
+    Effect.gen(function* () {
+      const base = makeReadModel("settled");
+      const readModel: OrchestrationReadModel = {
+        ...base,
+        threads: [
+          {
+            ...base.threads[0]!,
+            snoozedUntil: "2026-02-01T00:00:00.000Z",
+            snoozedAt: NOW,
+          },
+        ],
+      };
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.activity.append",
+          commandId: CommandId.make("cmd-report-visible"),
+          threadId: ThreadId.make("thread-1"),
+          activity: {
+            id: EventId.make("report-notification"),
+            tone: "info",
+            kind: "session-report.posted",
+            summary: "Child posted a report",
+            payload: { reportId: "report-1" },
+            turnId: null,
+            createdAt: NOW,
+          },
+          createdAt: NOW,
+        },
+        readModel,
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.unsettled",
+        "thread.unsnoozed",
+        "thread.activity-appended",
+      ]);
+      expect(events.some((event) => event.type === "thread.turn-start-requested")).toBe(false);
+    }),
+  );
+
   it.effect("drops an onlyIfSettled session stop when the thread was re-engaged", () =>
     Effect.gen(function* () {
       const stopCommand = (commandId: string) =>

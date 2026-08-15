@@ -1220,7 +1220,12 @@ const ThreadQueuedTurnCancelCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   messageId: MessageId,
-  reason: Schema.Literals(["session_terminal", "interrupt_timeout", "redelivery_limit_reached"]),
+  reason: Schema.Literals([
+    "session_terminal",
+    "interrupt_timeout",
+    "redelivery_limit_reached",
+    "legacy_report_notification",
+  ]),
   createdAt: IsoDateTime,
 });
 
@@ -1570,7 +1575,12 @@ export const ThreadTurnStartQueuedPayload = Schema.Struct({
 export const ThreadTurnStartCancelledPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
-  reason: Schema.Literals(["session_terminal", "interrupt_timeout", "redelivery_limit_reached"]),
+  reason: Schema.Literals([
+    "session_terminal",
+    "interrupt_timeout",
+    "redelivery_limit_reached",
+    "legacy_report_notification",
+  ]),
   createdAt: IsoDateTime,
 });
 

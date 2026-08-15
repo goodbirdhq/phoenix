@@ -59,12 +59,18 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   and `ProjectionSnapshotQuery`.
 - **Reactor** — `apps/server/src/orchestration/Layers/SessionSpawnReactor.ts` watches
   `thread.report-posted` and `thread.session-set` domain events. A report on a thread with
-  `spawnedByThreadId` appends a typed `session-report.posted` activity on the parent; web groups
-  those activities into a durable digest. The activity carries child/report IDs, status, origin,
+  `spawnedByThreadId` appends a typed `session-report.posted` activity on the parent; it wakes a
+  settled or snoozed parent in the client lifecycle but never requests a provider turn. Web and
+  desktop group current activities into a capped digest; mobile receives the same typed activity
+  and lifecycle visibility, while its dedicated digest UI is deferred. The activity carries child/report IDs, status, origin,
   and the supersession edge; reports remain the source of truth and are pulled with `read_report`
   or `read_session`. Its command and activity IDs are deterministic from parent/child/report IDs:
   command receipts deduplicate a replay, and the projector replaces the same activity ID if it is
   applied again. This survives restart without a report queue or synthetic user message.
+
+  On upgrade, the queued-turn release path recognizes the exact legacy Phoenix report envelope and
+  cancels that row with `legacy_report_notification`; ordinary queued user messages are never
+  inferred from report-like text and retain their existing delivery behavior.
 
   There is deliberately no report-to-turn delivery mode. Compatibility is explicit: an agent that
   wants the parent to act sends an ordinary, meaningful `send_to_session` instruction referring to

@@ -114,6 +114,7 @@ export const reportNotificationActivity = (input: {
   readonly childThreadId: ThreadId;
   readonly childTitle: string;
   readonly report: SessionReport;
+  readonly notifiedAt: string;
 }): SessionReportNotificationActivity => {
   const { report } = input;
   const amendment = report.supersedesReportId
@@ -139,9 +140,14 @@ export const reportNotificationActivity = (input: {
       createdAt: report.createdAt,
     },
     turnId: null,
-    createdAt: report.createdAt,
+    // This is when the parent learned about the report, not when the child
+    // wrote it. The report's own timestamp remains in payload.createdAt.
+    createdAt: input.notifiedAt,
   };
 };
+
+const isLegacyQueuedReportMessage = (text: string) =>
+  text.startsWith("[Phoenix] ") && text.includes("report") && text.includes("(spawned thread:");
 
 export const formatQueuedReportWarning = (messageIds: ReadonlyArray<MessageId>): string =>
   messageIds.length === 0
@@ -242,6 +248,28 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       (entry) => entry.threadId === threadId && entry.state === "queued",
     );
     if (queued === undefined) return;
+    // Pre-digest servers queued report text as a parent user message. Never
+    // reinterpret a user-authored queued message, but cancel this exact old
+    // Phoenix envelope so upgrading cannot release a report into a new turn.
+    const detail = yield* snapshotQuery.getThreadDetailById(threadId);
+    const queuedMessage = Option.getOrUndefined(detail)?.messages.find(
+      (message) => message.id === queued.messageId,
+    );
+    if (queuedMessage?.role === "user" && isLegacyQueuedReportMessage(queuedMessage.text)) {
+      yield* engine.dispatch({
+        type: "thread.turn.queue.cancel",
+        commandId: yield* serverCommandId("legacy-report-turn-cancel"),
+        threadId,
+        messageId: queued.messageId,
+        reason: "legacy_report_notification",
+        createdAt: yield* nowIso,
+      });
+      yield* Effect.logInfo("cancelled legacy queued child report delivery", {
+        threadId,
+        messageId: queued.messageId,
+      });
+      return;
+    }
     yield* engine.dispatch({
       type: "thread.turn.start.queued",
       commandId: yield* serverCommandId("queued-turn-start"),
@@ -253,7 +281,11 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
 
   const cancelQueuedTurns = Effect.fn("SessionSpawnReactor.cancelQueuedTurns")(function* (input: {
     readonly threadId: ThreadId;
-    readonly reason: "session_terminal" | "interrupt_timeout" | "redelivery_limit_reached";
+    readonly reason:
+      | "session_terminal"
+      | "interrupt_timeout"
+      | "redelivery_limit_reached"
+      | "legacy_report_notification";
   }) {
     const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
       (entry) => entry.threadId === input.threadId && entry.state === "queued",
@@ -429,16 +461,43 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     if (event.type === "thread.turn-start-queued") return;
     if (event.type === "thread.report-posted") {
       const child = yield* snapshotQuery.getThreadShellById(event.payload.threadId);
-      if (Option.isNone(child)) return;
+      if (Option.isNone(child)) {
+        yield* Effect.logDebug(
+          "spawned-session report notification dropped: child thread not active",
+          {
+            childThreadId: event.payload.threadId,
+            reportId: event.payload.report.reportId,
+          },
+        );
+        return;
+      }
       const parentThreadId = child.value.spawnedByThreadId ?? null;
-      if (parentThreadId === null) return;
+      if (parentThreadId === null) {
+        yield* Effect.logDebug("spawned-session report notification dropped: child has no parent", {
+          childThreadId: event.payload.threadId,
+          reportId: event.payload.report.reportId,
+        });
+        return;
+      }
       const parent = yield* snapshotQuery.getThreadShellById(ThreadId.make(parentThreadId));
-      if (Option.isNone(parent)) return;
+      if (Option.isNone(parent)) {
+        yield* Effect.logDebug(
+          "spawned-session report notification dropped: parent thread not active",
+          {
+            childThreadId: event.payload.threadId,
+            parentThreadId,
+            reportId: event.payload.report.reportId,
+          },
+        );
+        return;
+      }
+      const notifiedAt = yield* nowIso;
       const activity = reportNotificationActivity({
         parentThreadId: parent.value.id,
         childThreadId: event.payload.threadId,
         childTitle: child.value.title,
         report: event.payload.report,
+        notifiedAt,
       });
       // Command ID and activity ID are both deterministic. A stream replay
       // after a crash reuses the receipt; a partial projection retry replaces
@@ -450,7 +509,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         ),
         threadId: parent.value.id,
         activity,
-        createdAt: event.payload.report.createdAt,
+        createdAt: notifiedAt,
       });
       return;
     }

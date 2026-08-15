@@ -158,6 +158,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   readonly updatedAt?: string;
   readonly boundaryEvents?: ReadonlyArray<OrchestrationEvent>;
   readonly queuedRowsRef?: Ref.Ref<Array<ProjectionQueuedTurnStart>>;
+  readonly queuedMessageText?: string;
 }) {
   const commands = yield* Ref.make<Array<OrchestrationCommand>>([]);
   const queuedRows = input.queuedRowsRef ?? (yield* Ref.make([...input.queued]));
@@ -215,6 +216,31 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
         : threadId === PARENT_ID
           ? Effect.succeed(Option.some(makeShell(PARENT_ID, "ready")))
           : Effect.succeed(Option.none()),
+    getThreadDetailById: (threadId: string) =>
+      threadId === CHILD_ID
+        ? Ref.get(childShell).pipe(
+            Effect.map((shell) =>
+              Option.some({
+                ...shell,
+                messages:
+                  input.queuedMessageText === undefined
+                    ? []
+                    : [
+                        {
+                          id: input.queued[0]?.messageId ?? MessageId.make("queued-message"),
+                          role: "user",
+                          text: input.queuedMessageText,
+                          attachments: [],
+                          turnId: null,
+                          streaming: false,
+                          createdAt: NOW,
+                          updatedAt: NOW,
+                        },
+                      ],
+              } as unknown as OrchestrationThread),
+            ),
+          )
+        : Effect.succeed(Option.none()),
   } as unknown as ProjectionSnapshotQuery["Service"]);
   const turns = ProjectionTurnRepository.of({
     listQueuedTurnStarts: Ref.get(queuedRows),
@@ -247,6 +273,27 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
 });
 
 describe("SessionSpawnReactor queued delivery", () => {
+  it.effect("cancels a positively identified legacy queued report without releasing a turn", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [queued("legacy")],
+        queuedMessageText:
+          '[Phoenix] Spawned session "Child" posted a success report: Done\n\n(spawned thread: child-thread)',
+      }).pipe(
+        Effect.map(({ commands }) => {
+          expect(
+            commands.filter((command) => command.type === "thread.turn.start.queued"),
+          ).toHaveLength(0);
+          const cancelled = commands.find((command) => command.type === "thread.turn.queue.cancel");
+          expect(cancelled?.type === "thread.turn.queue.cancel" && cancelled.reason).toBe(
+            "legacy_report_notification",
+          );
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
   it.effect("releases the FIFO head at a ready turn boundary", () =>
     Effect.scoped(
       createHarness({ status: "ready", queued: [queued("first"), queued("second")] }).pipe(
@@ -708,12 +755,14 @@ describe("SessionSpawnReactor report notifications", () => {
       childThreadId: CHILD_ID,
       childTitle: "Child",
       report: { ...posted, threadId: CHILD_ID },
+      notifiedAt: NOW,
     });
     const replay = reportNotificationActivity({
       parentThreadId: PARENT_ID,
       childThreadId: CHILD_ID,
       childTitle: "Child",
       report: { ...posted, threadId: CHILD_ID },
+      notifiedAt: NOW,
     });
     expect(replay.id).toBe(first.id);
     expect(replay.payload).toMatchObject({ reportId: "report-restarted", origin: "system" });

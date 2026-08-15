@@ -98,7 +98,12 @@ export const ProjectionQueuedDeliveryReceipt = Schema.Struct({
   consumedAt: Schema.NullOr(IsoDateTime),
   cancelledAt: Schema.NullOr(IsoDateTime),
   cancelledReason: Schema.NullOr(
-    Schema.Literals(["session_terminal", "interrupt_timeout", "redelivery_limit_reached"]),
+    Schema.Literals([
+      "session_terminal",
+      "interrupt_timeout",
+      "redelivery_limit_reached",
+      "legacy_report_notification",
+    ]),
   ),
 });
 export type ProjectionQueuedDeliveryReceipt = typeof ProjectionQueuedDeliveryReceipt.Type;
@@ -119,7 +124,12 @@ export const ConsumeProjectionQueuedTurnInput = Schema.Struct({
 export const CancelProjectionQueuedTurnInput = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
-  reason: Schema.Literals(["session_terminal", "interrupt_timeout", "redelivery_limit_reached"]),
+  reason: Schema.Literals([
+    "session_terminal",
+    "interrupt_timeout",
+    "redelivery_limit_reached",
+    "legacy_report_notification",
+  ]),
   cancelledAt: IsoDateTime,
 });
 

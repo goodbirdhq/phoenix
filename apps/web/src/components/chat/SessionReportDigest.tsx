@@ -1,12 +1,17 @@
 import type { OrchestrationThreadActivity } from "@t3tools/contracts";
-import { deriveSessionReportNotifications } from "../../lib/sessionReportNotifications";
+import { useMemo } from "react";
+import {
+  deriveSessionReportNotifications,
+  visibleSessionReportNotifications,
+} from "../../lib/sessionReportNotifications";
 
 export function SessionReportDigest({
   activities,
 }: {
   readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
 }) {
-  const notifications = deriveSessionReportNotifications(activities);
+  const notifications = useMemo(() => deriveSessionReportNotifications(activities), [activities]);
+  const visible = useMemo(() => visibleSessionReportNotifications(notifications), [notifications]);
   if (notifications.length === 0) return null;
 
   return (
@@ -18,7 +23,7 @@ export function SessionReportDigest({
         {notifications.length} child report update{notifications.length === 1 ? "" : "s"} available
       </p>
       <ul className="mt-1 space-y-0.5 text-muted-foreground">
-        {notifications.map((notification) => (
+        {visible.map((notification) => (
           <li key={notification.id}>
             <span className="text-foreground">{notification.payload.childTitle}</span>:{" "}
             {notification.summary} <code className="text-xs">{notification.payload.reportId}</code>
@@ -28,6 +33,13 @@ export function SessionReportDigest({
           </li>
         ))}
       </ul>
+      {visible.length < notifications.length ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Showing the latest {visible.length}; {notifications.length - visible.length} earlier
+          report update{notifications.length - visible.length === 1 ? "" : "s"} remain available via
+          the spawned sessions.
+        </p>
+      ) : null}
       <p className="mt-1 text-xs text-muted-foreground">
         Read current details with <code>read_report</code> or <code>read_session</code>.
       </p>

@@ -1654,30 +1654,45 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           activity: command.activity,
         },
       };
-      // An approval or user-input request is blocked-on-you work — it must
-      // never stay hidden inside a settled slim row.
+      // Blocked-on-you work and child reports must never stay hidden inside a
+      // settled or snoozed row. A report wakes the human-visible parent only;
+      // it does not request a provider turn.
       const wakesSettledThread =
         command.activity.kind === "approval.requested" ||
-        command.activity.kind === "user-input.requested";
+        command.activity.kind === "user-input.requested" ||
+        command.activity.kind === "session-report.posted";
       // Real activity resets ANY override (settled wakes, active unpins).
-      if (thread.settledOverride === null || !wakesSettledThread) {
+      if (!wakesSettledThread) {
         return activityAppendedEvent;
       }
-      const unsettledEvent: Omit<OrchestrationEvent, "sequence"> = {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.unsettled",
-        payload: {
-          threadId: command.threadId,
-          reason: "activity",
-          updatedAt: command.createdAt,
-        },
-      };
-      return [unsettledEvent, activityAppendedEvent];
+      const visibilityEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      if (thread.settledOverride !== null) {
+        visibilityEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unsettled",
+          payload: { threadId: command.threadId, reason: "activity", updatedAt: command.createdAt },
+        });
+      }
+      if (thread.snoozedUntil != null) {
+        visibilityEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unsnoozed",
+          payload: { threadId: command.threadId, reason: "activity", updatedAt: command.createdAt },
+        });
+      }
+      return visibilityEvents.length === 0
+        ? activityAppendedEvent
+        : [...visibilityEvents, activityAppendedEvent];
     }
 
     default: {
