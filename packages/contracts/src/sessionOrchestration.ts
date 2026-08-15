@@ -28,6 +28,7 @@ import {
   SessionUsageSnapshot,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderAvailability } from "./providerAvailability.ts";
 
 /**
  * Contracts for the `sessions` MCP toolkit: tools a running agent session
@@ -131,6 +132,7 @@ export const SessionProviderDescriptor = Schema.Struct({
   driver: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   available: Schema.Boolean,
+  availability: ProviderAvailability,
   models: Schema.Array(SessionProviderModel),
 });
 export type SessionProviderDescriptor = typeof SessionProviderDescriptor.Type;

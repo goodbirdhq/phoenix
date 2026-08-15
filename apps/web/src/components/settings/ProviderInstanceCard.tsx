@@ -19,6 +19,7 @@ import {
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
   type ProviderDriverKind,
+  type ProviderAvailability,
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
@@ -52,6 +53,12 @@ import {
 } from "./providerStatus";
 
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+function availabilityWindowLabel(window: ProviderAvailability["windows"][number]): string {
+  if (window.windowDurationMins === 300) return "5-hour";
+  if (window.windowDurationMins === 10_080) return "Weekly";
+  return window.kind;
+}
 
 let environmentVariableDraftId = 0;
 const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
@@ -323,6 +330,7 @@ interface ProviderInstanceCardProps {
   readonly instance: ProviderInstanceConfig;
   readonly driverOption: DriverOption | undefined;
   readonly liveProvider: ServerProvider | undefined;
+  readonly availability?: ProviderAvailability | undefined;
   readonly isExpanded: boolean;
   readonly onExpandedChange: (open: boolean) => void;
   readonly onUpdate: (nextInstance: ProviderInstanceConfig) => void;
@@ -380,6 +388,7 @@ export function ProviderInstanceCard({
   instance,
   driverOption,
   liveProvider,
+  availability,
   isExpanded,
   onExpandedChange,
   onUpdate,
@@ -595,6 +604,24 @@ export function ProviderInstanceCard({
     </p>
   );
 
+  const availabilityNode = availability ? (
+    <p className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
+      <span>Subscription availability:</span>
+      {availability.windows.length > 0 ? (
+        availability.windows.map((window) => (
+          <span key={window.kind}>
+            {availabilityWindowLabel(window)} {100 - window.usedPercent}% left
+            {window.windowDurationMins ? ` · ${window.windowDurationMins} min` : ""}
+          </span>
+        ))
+      ) : (
+        <span>
+          {availability.source === "unsupported" ? "not available" : "awaiting native signal"}
+        </span>
+      )}
+    </p>
+  ) : null;
+
   const versionCodeNode = versionLabel ? (
     <code className="text-xs text-muted-foreground">{versionLabel}</code>
   ) : null;
@@ -705,6 +732,7 @@ export function ProviderInstanceCard({
               {titleTailNode}
             </div>
             {authRowNode}
+            {availabilityNode}
           </div>
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
             <Button

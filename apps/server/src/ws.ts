@@ -47,6 +47,8 @@ import {
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
   RpcClientId,
+  type ProviderAvailability,
+  type ProviderInstanceId,
   EnvironmentAuthorizationError,
   ThreadId,
   type TerminalAttachStreamEvent,
@@ -77,6 +79,7 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -344,6 +347,19 @@ const makeWsRpcLayer = (
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+      const providerService = yield* Effect.serviceOption(ProviderService.ProviderService);
+      const providerAvailabilityFor = (
+        instanceId: ProviderInstanceId,
+      ): Effect.Effect<ProviderAvailability> => {
+        if (Option.isSome(providerService) && providerService.value.getAvailability !== undefined) {
+          return providerService.value.getAvailability(instanceId);
+        }
+        return Effect.succeed({
+          status: "unknown",
+          source: "unsupported",
+          windows: [],
+        } satisfies ProviderAvailability);
+      };
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -1284,6 +1300,30 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetUsageSummary, usage.readSummary(input), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.serverGetProviderAvailability]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverGetProviderAvailability,
+            providerRegistry.getProviders.pipe(
+              Effect.flatMap((providers) =>
+                Effect.forEach(
+                  input.instanceId === undefined
+                    ? providers
+                    : providers.filter((provider) => provider.instanceId === input.instanceId),
+                  (provider) =>
+                    providerAvailabilityFor(provider.instanceId).pipe(
+                      Effect.map((availability) => ({
+                        instanceId: provider.instanceId,
+                        driver: provider.driver,
+                        ...(provider.displayName ? { displayName: provider.displayName } : {}),
+                        availability,
+                      })),
+                    ),
+                ),
+              ),
+              Effect.map((providers) => ({ providers })),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) =>
           observeRpcEffect(WS_METHODS.serverRetryResourceTelemetry, resourceTelemetry.retry, {
             "rpc.aggregate": "server",

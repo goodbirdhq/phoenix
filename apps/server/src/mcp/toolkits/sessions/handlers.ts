@@ -11,6 +11,7 @@ import {
   type OrchestrationSessionStatus,
   type OrchestrationThreadShell,
   type PingSessionResult,
+  type ProviderAvailability,
   type PostReportInput,
   type QueuedDeliveryReceipt,
   READ_REPORT_MAX_CHARS,
@@ -64,6 +65,7 @@ import {
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import { ProjectionTurnRepository } from "../../../persistence/Services/ProjectionTurns.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "../../../provider/Services/ProviderService.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as SourceControlProviderRegistry from "../../../sourceControl/SourceControlProviderRegistry.ts";
@@ -498,6 +500,22 @@ export const make = Effect.gen(function* () {
   const bootstrap = yield* ThreadTurnBootstrap.ThreadTurnBootstrap;
   const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+  // Older focused handler tests intentionally construct this toolkit without
+  // the process-facing provider layer. Availability is optional enrichment,
+  // never a reason that listing spawnable providers should fail.
+  const providerService = yield* Effect.serviceOption(ProviderService.ProviderService);
+  const availabilityFor = (
+    instanceId: ServerProvider["instanceId"],
+  ): Effect.Effect<ProviderAvailability> => {
+    if (Option.isSome(providerService) && providerService.value.getAvailability !== undefined) {
+      return providerService.value.getAvailability(instanceId);
+    }
+    return Effect.succeed({
+      status: "unknown",
+      source: "unsupported",
+      windows: [],
+    } satisfies ProviderAvailability);
+  };
   const reportRepository = yield* ProjectionThreadReportRepository;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const providerSessionDirectory = yield* ProviderSessionDirectory;
@@ -673,20 +691,25 @@ export const make = Effect.gen(function* () {
     const providers =
       input.onlyAvailable === true ? allProviders.filter(isProviderAvailable) : allProviders;
     return {
-      providers: providers.map((provider) => ({
-        instanceId: provider.instanceId,
-        driver: provider.driver,
-        displayName: provider.displayName ?? provider.driver,
-        available: isProviderAvailable(provider),
-        models: provider.models.map((model) => ({
-          id: model.slug,
-          displayName: model.name,
-          isDefault: model.isDefault === true,
-          ...(model.capabilities?.optionDescriptors
-            ? { options: model.capabilities.optionDescriptors }
-            : {}),
-        })),
-      })),
+      providers: yield* Effect.forEach(providers, (provider) =>
+        availabilityFor(provider.instanceId).pipe(
+          Effect.map((availability) => ({
+            instanceId: provider.instanceId,
+            driver: provider.driver,
+            displayName: provider.displayName ?? provider.driver,
+            available: isProviderAvailable(provider),
+            availability,
+            models: provider.models.map((model) => ({
+              id: model.slug,
+              displayName: model.name,
+              isDefault: model.isDefault === true,
+              ...(model.capabilities?.optionDescriptors
+                ? { options: model.capabilities.optionDescriptors }
+                : {}),
+            })),
+          })),
+        ),
+      ),
     };
   });
 

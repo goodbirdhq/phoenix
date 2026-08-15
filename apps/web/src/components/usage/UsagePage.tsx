@@ -1,4 +1,4 @@
-import type { UsageProviderKind } from "@t3tools/contracts";
+import type { ProviderAvailabilityEntry, UsageProviderKind } from "@t3tools/contracts";
 import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -33,6 +33,14 @@ const WINDOW_OPTIONS = [
   { days: 90, label: "90 days" },
 ] as const;
 
+function availabilityWindowLabel(
+  window: ProviderAvailabilityEntry["availability"]["windows"][number],
+) {
+  if (window.windowDurationMins === 300) return "5-hour";
+  if (window.windowDurationMins === 10_080) return "Weekly";
+  return window.kind;
+}
+
 export function UsagePage() {
   const [windowSelection, setWindowSelection] = useState(() => ({
     days: 30,
@@ -42,7 +50,8 @@ export function UsagePage() {
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
-  const { merged, environments, isPending, isPartial, refresh } = useUsage(window);
+  const { merged, environments, isPending, isPartial, refresh, providerAvailability } =
+    useUsage(window);
 
   // Hold the content until every environment is terminal. Rendering merged
   // totals while devices are still answering makes every number on the page
@@ -170,6 +179,7 @@ export function UsagePage() {
             {settling ? (
               <>
                 {environments.length > 1 ? <UsageDeviceStrip environments={environments} /> : null}
+                <SubscriptionAvailabilityRows availability={providerAvailability} />
                 <UsageSkeleton resolution={isPast24Hours ? "hour" : "day"} />
               </>
             ) : (
@@ -179,6 +189,7 @@ export function UsagePage() {
                   duplicateSources={merged.duplicateSources}
                   staleEnvironments={merged.staleEnvironments}
                 />
+                <SubscriptionAvailabilityRows availability={providerAvailability} />
 
                 {/* Cost first: the financial answer, then the provider split. */}
                 <section className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
@@ -565,6 +576,54 @@ function UsageDeviceStrip({
           : `${scanning.length} devices still scanning`}
       </span>
     </div>
+  );
+}
+
+function SubscriptionAvailabilityRows({
+  availability,
+}: {
+  readonly availability: readonly {
+    readonly environmentId: string;
+    readonly label: string;
+    readonly providers: readonly ProviderAvailabilityEntry[];
+  }[];
+}) {
+  const entries = availability.flatMap((environment) =>
+    environment.providers.map((provider) => ({ ...provider, environmentLabel: environment.label })),
+  );
+  if (entries.length === 0) return null;
+  return (
+    <section className="rounded-lg border border-border bg-card px-4 py-3">
+      <h2 className="text-sm font-medium text-foreground">Subscription availability</h2>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        Per provider account. Phoenix never combines subscription limits.
+      </p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {entries.map((entry) => (
+          <div
+            key={`${entry.environmentLabel}:${entry.instanceId}`}
+            className="rounded-md bg-muted/50 px-3 py-2"
+          >
+            <div className="truncate text-sm text-foreground">
+              {entry.displayName ?? entry.driver}
+              {availability.length > 1 ? ` · ${entry.environmentLabel}` : ""}
+            </div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              {entry.availability.windows.length > 0
+                ? entry.availability.windows
+                    .map(
+                      (window) =>
+                        `${availabilityWindowLabel(window)}: ${100 - window.usedPercent}% left`,
+                    )
+                    .join(" · ")
+                : entry.availability.source === "unsupported"
+                  ? "Not available from this provider"
+                  : "Awaiting a native provider signal"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

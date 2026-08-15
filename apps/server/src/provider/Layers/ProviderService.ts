@@ -23,6 +23,7 @@ import {
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type ProviderAvailability,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
@@ -204,6 +205,72 @@ const correlateRuntimeEventWithInstance = (
   return { ...event, providerInstanceId: source.instanceId };
 };
 
+const unsupportedAvailability = (): ProviderAvailability => ({
+  status: "unknown",
+  source: "unsupported",
+  windows: [],
+});
+
+const toIsoDateTime = (unixSeconds: unknown): string | undefined => {
+  if (typeof unixSeconds !== "number" || !Number.isFinite(unixSeconds)) return undefined;
+  return DateTime.formatIso(DateTime.makeUnsafe(unixSeconds * 1000));
+};
+
+// Codex's app-server schema is authoritative here. It calls the two windows
+// primary/secondary, so we preserve that wording instead of guessing that a
+// given plan always means five-hour/weekly.
+export const availabilityFromRuntimeEvent = (
+  event: ProviderRuntimeEvent,
+): ProviderAvailability | undefined => {
+  if (event.type !== "account.rate-limits.updated") return undefined;
+  if (event.provider === "codex") {
+    const payload = event.payload.rateLimits;
+    if (typeof payload !== "object" || payload === null || !("rateLimits" in payload))
+      return undefined;
+    const snapshot = payload.rateLimits;
+    if (typeof snapshot !== "object" || snapshot === null) return undefined;
+    const windows = (["primary", "secondary"] as const).flatMap((kind) => {
+      const candidate = (snapshot as Record<string, unknown>)[kind];
+      if (typeof candidate !== "object" || candidate === null) return [];
+      const fields = candidate as Record<string, unknown>;
+      const usedPercent = fields.usedPercent;
+      if (typeof usedPercent !== "number" || usedPercent < 0 || usedPercent > 100) return [];
+      const resetsAt = toIsoDateTime(fields.resetsAt);
+      const windowDurationMins = fields.windowDurationMins;
+      return [
+        {
+          kind,
+          usedPercent,
+          ...(resetsAt ? { resetsAt } : {}),
+          ...(typeof windowDurationMins === "number" &&
+          Number.isInteger(windowDurationMins) &&
+          windowDurationMins >= 0
+            ? { windowDurationMins }
+            : {}),
+        },
+      ];
+    });
+    return {
+      status: windows.some((window) => window.usedPercent >= 100) ? "limited" : "available",
+      source: "codex_app_server",
+      observedAt: event.createdAt,
+      windows,
+    };
+  }
+  // Claude's SDK event is deliberately less stable than Codex's documented
+  // app-server schema. Preserve its native provenance but do not invent a
+  // percentage or a five-hour/weekly interpretation from it.
+  if (event.provider === "claudeAgent") {
+    return {
+      status: "unknown",
+      source: "claude_agent_sdk",
+      observedAt: event.createdAt,
+      windows: [],
+    };
+  }
+  return undefined;
+};
+
 const makeProviderService = Effect.fn("makeProviderService")(function* (
   options?: ProviderServiceLiveOptions,
 ) {
@@ -219,6 +286,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+  const availabilityByInstance = yield* Ref.make(
+    new Map<ProviderInstanceId, ProviderAvailability>(),
+  );
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     McpSessionRegistry.issueActiveMcpCredential({ threadId, providerInstanceId }).pipe(
@@ -295,6 +365,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     event: ProviderRuntimeEvent,
   ): Effect.Effect<void> =>
     Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
+      Effect.tap((canonicalEvent) => {
+        const availability = availabilityFromRuntimeEvent(canonicalEvent);
+        return availability
+          ? Ref.update(availabilityByInstance, (entries) =>
+              new Map(entries).set(source.instanceId, availability),
+            )
+          : Effect.void;
+      }),
       Effect.flatMap((canonicalEvent) =>
         increment(providerRuntimeEventsTotal, {
           provider: canonicalEvent.provider,
@@ -1155,6 +1233,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getSessionRuntimeLiveness,
     getCapabilities,
     getInstanceInfo,
+    getAvailability: (instanceId) =>
+      Ref.get(availabilityByInstance).pipe(
+        Effect.map((entries) => entries.get(instanceId) ?? unsupportedAvailability()),
+      ),
     rollbackConversation,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
