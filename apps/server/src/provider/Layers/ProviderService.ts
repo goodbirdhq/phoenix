@@ -231,7 +231,9 @@ export const mergeProviderAvailability = (
     return incoming;
   }
   const windows = new Map(previous.windows.map((window) => [window.kind, window]));
-  for (const window of incoming.windows) windows.set(window.kind, window);
+  for (const window of incoming.windows) {
+    windows.set(window.kind, { ...windows.get(window.kind), ...window });
+  }
   const mergedWindows = [...windows.values()];
   return {
     status: mergedWindows.some((window) => window.usedPercent >= 100)
@@ -251,6 +253,9 @@ export const availabilityAt = (
   nowMs: number,
 ): ProviderAvailability => {
   if (cached === undefined) return unknownAvailabilityForDriver(provider);
+  if (cached.availability.source !== unknownAvailabilityForDriver(provider).source) {
+    return unknownAvailabilityForDriver(provider);
+  }
   if (nowMs - cached.receivedAtMs <= PROVIDER_AVAILABILITY_MAX_AGE_MS) {
     return cached.availability;
   }
@@ -260,6 +265,18 @@ export const availabilityAt = (
     ...(cached.availability.observedAt ? { observedAt: cached.availability.observedAt } : {}),
     windows: [],
   };
+};
+
+export const clearAvailabilityForReconciledAdapters = <Adapter>(
+  entries: ReadonlyMap<ProviderInstanceId, CachedProviderAvailability>,
+  previous: ReadonlyMap<ProviderInstanceId, Adapter>,
+  next: ReadonlyMap<ProviderInstanceId, Adapter>,
+): Map<ProviderInstanceId, CachedProviderAvailability> => {
+  const nextAvailability = new Map(entries);
+  for (const [id, previousAdapter] of previous) {
+    if (next.get(id) !== previousAdapter) nextAvailability.delete(id);
+  }
+  return nextAvailability;
 };
 
 const toIsoDateTime = (unixSeconds: unknown): string | undefined => {
@@ -491,6 +508,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ).pipe(Effect.forkScoped);
       }
     }
+    // A rebuilt instance may point at a different home, environment, or
+    // account while retaining its configured id. Quota snapshots belong to
+    // that adapter identity, never to the id alone.
+    yield* Ref.update(availabilityByInstance, (entries) =>
+      clearAvailabilityForReconciledAdapters(entries, previous, next),
+    );
     yield* Ref.set(subscribedAdapters, next);
   });
 

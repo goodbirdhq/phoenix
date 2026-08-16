@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   availabilityAt,
   availabilityFromRuntimeEvent,
+  clearAvailabilityForReconciledAdapters,
   mergeProviderAvailability,
 } from "./ProviderService.ts";
 
@@ -56,7 +57,7 @@ describe("availabilityFromRuntimeEvent", () => {
     });
   });
 
-  it("keeps the other Codex window when sparse runtime updates arrive", () => {
+  it("keeps omitted Codex windows and fields when sparse runtime updates arrive", () => {
     const initial = availabilityFromRuntimeEvent(codexRateLimitEvent)!;
     const primaryOnly = availabilityFromRuntimeEvent({
       ...codexRateLimitEvent,
@@ -64,7 +65,7 @@ describe("availabilityFromRuntimeEvent", () => {
       payload: {
         rateLimits: {
           rateLimits: {
-            primary: { usedPercent: 55, resetsAt: 1_786_272_000, windowDurationMins: 300 },
+            primary: { usedPercent: 55 },
           },
         },
       },
@@ -76,7 +77,12 @@ describe("availabilityFromRuntimeEvent", () => {
     } satisfies ProviderRuntimeEvent)!;
 
     expect(mergeProviderAvailability(initial, primaryOnly).windows).toMatchObject([
-      { kind: "primary", usedPercent: 55 },
+      {
+        kind: "primary",
+        usedPercent: 55,
+        resetsAt: initial.windows[0]!.resetsAt,
+        windowDurationMins: 300,
+      },
       { kind: "secondary", usedPercent: 100 },
     ]);
     expect(mergeProviderAvailability(initial, metadataOnly)).toMatchObject({
@@ -104,5 +110,29 @@ describe("availabilityFromRuntimeEvent", () => {
       observedAt: snapshot.observedAt,
       windows: [],
     });
+    expect(
+      availabilityAt(
+        { availability: snapshot, receivedAtMs: 0 },
+        ProviderDriverKind.make("claudeAgent"),
+        0,
+      ),
+    ).toEqual({
+      status: "unknown",
+      source: "claude_agent_sdk",
+      windows: [],
+    });
+  });
+
+  it("forgets an account snapshot when its configured adapter is rebuilt", () => {
+    const instanceId = ProviderInstanceId.make("codex-personal");
+    const oldAdapter = {};
+    const replacementAdapter = {};
+    const snapshot = availabilityFromRuntimeEvent(codexRateLimitEvent)!;
+    const retained = clearAvailabilityForReconciledAdapters(
+      new Map([[instanceId, { availability: snapshot, receivedAtMs: 0 }]]),
+      new Map([[instanceId, oldAdapter]]),
+      new Map([[instanceId, replacementAdapter]]),
+    );
+    expect(retained.get(instanceId)).toBeUndefined();
   });
 });
