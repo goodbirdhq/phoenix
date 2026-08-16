@@ -433,10 +433,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     source: {
       readonly instanceId: ProviderInstanceId;
       readonly provider: ProviderDriverKind;
+      readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
     },
     event: ProviderRuntimeEvent,
-  ): Effect.Effect<void> =>
-    Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
+  ): Effect.Effect<void> => {
+    const ingest = Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
       Effect.tap((canonicalEvent) => {
         const availability = availabilityFromRuntimeEvent(canonicalEvent);
         return availability
@@ -462,6 +463,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent))),
       ),
     );
+    return Ref.get(subscribedAdapters).pipe(
+      Effect.flatMap((adapters) =>
+        adapters.get(source.instanceId) === source.adapter ? ingest : Effect.void,
+      ),
+    );
+  };
 
   // `subscribedAdapters` is our source-of-truth for "which instance adapters
   // are currently wired into the runtime event bus". It both tracks the set
@@ -496,25 +503,28 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       if (Option.isNone(adapterOption)) continue;
       const adapter = adapterOption.value;
       next.set(id, adapter);
+    }
+    // Publish the next adapter identities before admitting any events. That
+    // makes late buffered events from a replaced adapter harmless, then the
+    // cache reset cannot erase an initial signal from its replacement.
+    yield* Ref.set(subscribedAdapters, next);
+    yield* Ref.update(availabilityByInstance, (entries) =>
+      clearAvailabilityForReconciledAdapters(entries, previous, next),
+    );
+    for (const [id, adapter] of next) {
       if (previous.get(id) !== adapter) {
         yield* Stream.runForEach(adapter.streamEvents, (event) =>
           processRuntimeEvent(
             {
               instanceId: id,
               provider: adapter.provider,
+              adapter,
             },
             event,
           ),
         ).pipe(Effect.forkScoped);
       }
     }
-    // A rebuilt instance may point at a different home, environment, or
-    // account while retaining its configured id. Quota snapshots belong to
-    // that adapter identity, never to the id alone.
-    yield* Ref.update(availabilityByInstance, (entries) =>
-      clearAvailabilityForReconciledAdapters(entries, previous, next),
-    );
-    yield* Ref.set(subscribedAdapters, next);
   });
 
   const instanceChanges = yield* registry.subscribeChanges;

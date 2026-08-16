@@ -260,6 +260,22 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
 const advanceTestClock = (ms: number) =>
   TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
 
+const rateLimitEvent = (eventId: string, usedPercent: number): LegacyProviderRuntimeEvent => ({
+  type: "account.rate-limits.updated",
+  eventId: asEventId(eventId),
+  provider: CODEX_DRIVER,
+  providerInstanceId: codexInstanceId,
+  threadId: asThreadId("availability-thread"),
+  createdAt: "2026-08-16T12:00:00.000Z",
+  payload: {
+    rateLimits: {
+      rateLimits: {
+        primary: { usedPercent, resetsAt: 1_786_272_000, windowDurationMins: 300 },
+      },
+    },
+  },
+});
+
 const hasMetricSnapshot = (
   snapshots: ReadonlyArray<Metric.Metric.Snapshot>,
   id: string,
@@ -1552,6 +1568,83 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+it.effect("ProviderServiceLive ignores late availability events from a replaced adapter", () =>
+  Effect.gen(function* () {
+    const oldAdapter = makeFakeCodexAdapter();
+    const replacementAdapter = makeFakeCodexAdapter();
+    const changes = yield* PubSub.unbounded<void>();
+    let currentAdapter = oldAdapter.adapter;
+    const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
+      getByInstance: () => Effect.succeed(currentAdapter),
+      getInstanceInfo: () =>
+        Effect.succeed({
+          instanceId: codexInstanceId,
+          driverKind: CODEX_DRIVER,
+          displayName: undefined,
+          enabled: true,
+          continuationIdentity: {
+            driverKind: CODEX_DRIVER,
+            continuationKey: "codex:availability-test",
+          },
+        }),
+      listInstances: () => Effect.succeed([codexInstanceId]),
+      listProviders: () => Effect.succeed([CODEX_DRIVER]),
+      streamChanges: Stream.fromPubSub(changes),
+      subscribeChanges: PubSub.subscribe(changes),
+    };
+    const providerAdapterLayer = Layer.succeed(
+      ProviderAdapterRegistry.ProviderAdapterRegistry,
+      registry,
+    );
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const providerLayer = Layer.mergeAll(
+      makeProviderServiceLive().pipe(
+        Layer.provide(providerAdapterLayer),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(serverConfigTestLayer),
+        Layer.provideMerge(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      ),
+      directoryLayer,
+      runtimeRepositoryLayer,
+      NodeServices.layer,
+    );
+    const scope = yield* Scope.make();
+    const services = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
+    const provider = yield* ProviderService.ProviderService.pipe(Effect.provide(services));
+
+    yield* Effect.yieldNow;
+    oldAdapter.emit(rateLimitEvent("old-availability", 40));
+    yield* Effect.yieldNow;
+    assert.equal(
+      (yield* provider.getAvailability!(codexInstanceId, CODEX_DRIVER)).windows[0]?.usedPercent,
+      40,
+    );
+
+    currentAdapter = replacementAdapter.adapter;
+    yield* PubSub.publish(changes, undefined);
+    yield* Effect.yieldNow;
+    oldAdapter.emit(rateLimitEvent("late-old-availability", 5));
+    replacementAdapter.emit(rateLimitEvent("replacement-availability", 55));
+    yield* Effect.yieldNow;
+
+    assert.equal(
+      (yield* provider.getAvailability!(codexInstanceId, CODEX_DRIVER)).windows[0]?.usedPercent,
+      55,
+    );
+    yield* Scope.close(scope, Exit.void);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 const fanout = makeProviderServiceLayer();
 fanout.layer("ProviderServiceLive fanout", (it) => {
