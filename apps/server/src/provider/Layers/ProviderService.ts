@@ -205,11 +205,62 @@ const correlateRuntimeEventWithInstance = (
   return { ...event, providerInstanceId: source.instanceId };
 };
 
-const unsupportedAvailability = (): ProviderAvailability => ({
+const unknownAvailabilityForDriver = (provider: ProviderDriverKind): ProviderAvailability => ({
   status: "unknown",
-  source: "unsupported",
+  source:
+    provider === "codex"
+      ? "codex_app_server"
+      : provider === "claudeAgent"
+        ? "claude_agent_sdk"
+        : "unsupported",
   windows: [],
 });
+
+const PROVIDER_AVAILABILITY_MAX_AGE_MS = 15 * 60 * 1_000;
+
+export type CachedProviderAvailability = {
+  readonly availability: ProviderAvailability;
+  readonly receivedAtMs: number;
+};
+
+export const mergeProviderAvailability = (
+  previous: ProviderAvailability | undefined,
+  incoming: ProviderAvailability,
+): ProviderAvailability => {
+  if (incoming.source !== "codex_app_server" || previous?.source !== incoming.source) {
+    return incoming;
+  }
+  const windows = new Map(previous.windows.map((window) => [window.kind, window]));
+  for (const window of incoming.windows) windows.set(window.kind, window);
+  const mergedWindows = [...windows.values()];
+  return {
+    status: mergedWindows.some((window) => window.usedPercent >= 100)
+      ? "limited"
+      : mergedWindows.length > 0
+        ? "available"
+        : "unknown",
+    source: incoming.source,
+    observedAt: incoming.observedAt,
+    windows: mergedWindows,
+  };
+};
+
+export const availabilityAt = (
+  cached: CachedProviderAvailability | undefined,
+  provider: ProviderDriverKind,
+  nowMs: number,
+): ProviderAvailability => {
+  if (cached === undefined) return unknownAvailabilityForDriver(provider);
+  if (nowMs - cached.receivedAtMs <= PROVIDER_AVAILABILITY_MAX_AGE_MS) {
+    return cached.availability;
+  }
+  return {
+    status: "unknown",
+    source: cached.availability.source,
+    ...(cached.availability.observedAt ? { observedAt: cached.availability.observedAt } : {}),
+    windows: [],
+  };
+};
 
 const toIsoDateTime = (unixSeconds: unknown): string | undefined => {
   if (typeof unixSeconds !== "number" || !Number.isFinite(unixSeconds)) return undefined;
@@ -251,7 +302,11 @@ export const availabilityFromRuntimeEvent = (
       ];
     });
     return {
-      status: windows.some((window) => window.usedPercent >= 100) ? "limited" : "available",
+      status: windows.some((window) => window.usedPercent >= 100)
+        ? "limited"
+        : windows.length > 0
+          ? "available"
+          : "unknown",
       source: "codex_app_server",
       observedAt: event.createdAt,
       windows,
@@ -287,7 +342,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const availabilityByInstance = yield* Ref.make(
-    new Map<ProviderInstanceId, ProviderAvailability>(),
+    new Map<ProviderInstanceId, CachedProviderAvailability>(),
   );
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
@@ -368,8 +423,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       Effect.tap((canonicalEvent) => {
         const availability = availabilityFromRuntimeEvent(canonicalEvent);
         return availability
-          ? Ref.update(availabilityByInstance, (entries) =>
-              new Map(entries).set(source.instanceId, availability),
+          ? Effect.flatMap(DateTime.now, (now) =>
+              Ref.update(availabilityByInstance, (entries) => {
+                const next = new Map(entries);
+                next.set(source.instanceId, {
+                  availability: mergeProviderAvailability(
+                    entries.get(source.instanceId)?.availability,
+                    availability,
+                  ),
+                  receivedAtMs: DateTime.toEpochMillis(now),
+                });
+                return next;
+              }),
             )
           : Effect.void;
       }),
@@ -1233,9 +1298,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getSessionRuntimeLiveness,
     getCapabilities,
     getInstanceInfo,
-    getAvailability: (instanceId) =>
-      Ref.get(availabilityByInstance).pipe(
-        Effect.map((entries) => entries.get(instanceId) ?? unsupportedAvailability()),
+    getAvailability: (instanceId, provider) =>
+      Effect.flatMap(DateTime.now, (now) =>
+        Ref.get(availabilityByInstance).pipe(
+          Effect.map((entries) =>
+            availabilityAt(entries.get(instanceId), provider, DateTime.toEpochMillis(now)),
+          ),
+        ),
       ),
     rollbackConversation,
     // Each access creates a fresh PubSub subscription so that multiple

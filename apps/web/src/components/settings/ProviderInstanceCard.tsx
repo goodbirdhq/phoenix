@@ -60,6 +60,18 @@ function availabilityWindowLabel(window: ProviderAvailability["windows"][number]
   return window.kind;
 }
 
+function availabilityTimeLabel(isoDateTime: string): string {
+  const date = new Date(isoDateTime);
+  return Number.isNaN(date.getTime())
+    ? isoDateTime
+    : new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+        month: "short",
+        day: "numeric",
+      }).format(date);
+}
+
 let environmentVariableDraftId = 0;
 const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
 
@@ -612,11 +624,16 @@ export function ProviderInstanceCard({
           <span key={window.kind}>
             {availabilityWindowLabel(window)} {100 - window.usedPercent}% left
             {window.windowDurationMins ? ` · ${window.windowDurationMins} min` : ""}
+            {window.resetsAt ? ` · resets ${availabilityTimeLabel(window.resetsAt)}` : ""}
           </span>
         ))
       ) : (
         <span>
-          {availability.source === "unsupported" ? "not available" : "awaiting native signal"}
+          {availability.source === "unsupported"
+            ? "not available"
+            : availability.observedAt
+              ? `native signal is stale (last seen ${availabilityTimeLabel(availability.observedAt)})`
+              : "awaiting native signal"}
         </span>
       )}
     </p>

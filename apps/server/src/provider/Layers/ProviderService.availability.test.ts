@@ -7,7 +7,11 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { availabilityFromRuntimeEvent } from "./ProviderService.ts";
+import {
+  availabilityAt,
+  availabilityFromRuntimeEvent,
+  mergeProviderAvailability,
+} from "./ProviderService.ts";
 
 const codexRateLimitEvent = {
   type: "account.rate-limits.updated",
@@ -48,6 +52,56 @@ describe("availabilityFromRuntimeEvent", () => {
       status: "unknown",
       source: "claude_agent_sdk",
       observedAt: "2026-08-15T12:00:00.000Z",
+      windows: [],
+    });
+  });
+
+  it("keeps the other Codex window when sparse runtime updates arrive", () => {
+    const initial = availabilityFromRuntimeEvent(codexRateLimitEvent)!;
+    const primaryOnly = availabilityFromRuntimeEvent({
+      ...codexRateLimitEvent,
+      createdAt: "2026-08-15T12:01:00.000Z",
+      payload: {
+        rateLimits: {
+          rateLimits: {
+            primary: { usedPercent: 55, resetsAt: 1_786_272_000, windowDurationMins: 300 },
+          },
+        },
+      },
+    } satisfies ProviderRuntimeEvent)!;
+    const metadataOnly = availabilityFromRuntimeEvent({
+      ...codexRateLimitEvent,
+      createdAt: "2026-08-15T12:02:00.000Z",
+      payload: { rateLimits: { rateLimits: {} } },
+    } satisfies ProviderRuntimeEvent)!;
+
+    expect(mergeProviderAvailability(initial, primaryOnly).windows).toMatchObject([
+      { kind: "primary", usedPercent: 55 },
+      { kind: "secondary", usedPercent: 100 },
+    ]);
+    expect(mergeProviderAvailability(initial, metadataOnly)).toMatchObject({
+      status: "limited",
+      windows: initial.windows,
+    });
+  });
+
+  it("keeps cold native providers unknown and expires old percentages", () => {
+    expect(availabilityAt(undefined, ProviderDriverKind.make("codex"), 0)).toEqual({
+      status: "unknown",
+      source: "codex_app_server",
+      windows: [],
+    });
+    const snapshot = availabilityFromRuntimeEvent(codexRateLimitEvent)!;
+    expect(
+      availabilityAt(
+        { availability: snapshot, receivedAtMs: 0 },
+        ProviderDriverKind.make("codex"),
+        15 * 60 * 1_000 + 1,
+      ),
+    ).toEqual({
+      status: "unknown",
+      source: "codex_app_server",
+      observedAt: snapshot.observedAt,
       windows: [],
     });
   });

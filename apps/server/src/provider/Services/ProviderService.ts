@@ -13,6 +13,7 @@
  */
 import type {
   ProviderInterruptTurnInput,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -110,6 +111,7 @@ export interface ProviderServiceShape {
    */
   readonly getAvailability?: (
     instanceId: ProviderInstanceId,
+    provider: ProviderDriverKind,
   ) => Effect.Effect<ProviderAvailability>;
 
   /**

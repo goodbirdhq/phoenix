@@ -41,6 +41,18 @@ function availabilityWindowLabel(
   return window.kind;
 }
 
+function availabilityTimeLabel(isoDateTime: string): string {
+  const date = new Date(isoDateTime);
+  return Number.isNaN(date.getTime())
+    ? isoDateTime
+    : new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+        month: "short",
+        day: "numeric",
+      }).format(date);
+}
+
 export function UsagePage() {
   const [windowSelection, setWindowSelection] = useState(() => ({
     days: 30,
@@ -589,7 +601,11 @@ function SubscriptionAvailabilityRows({
   }[];
 }) {
   const entries = availability.flatMap((environment) =>
-    environment.providers.map((provider) => ({ ...provider, environmentLabel: environment.label })),
+    environment.providers.map((provider) => ({
+      ...provider,
+      environmentId: environment.environmentId,
+      environmentLabel: environment.label,
+    })),
   );
   if (entries.length === 0) return null;
   return (
@@ -601,7 +617,7 @@ function SubscriptionAvailabilityRows({
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {entries.map((entry) => (
           <div
-            key={`${entry.environmentLabel}:${entry.instanceId}`}
+            key={`${entry.environmentId}:${entry.instanceId}`}
             className="rounded-md bg-muted/50 px-3 py-2"
           >
             <div className="truncate text-sm text-foreground">
@@ -613,12 +629,14 @@ function SubscriptionAvailabilityRows({
                 ? entry.availability.windows
                     .map(
                       (window) =>
-                        `${availabilityWindowLabel(window)}: ${100 - window.usedPercent}% left`,
+                        `${availabilityWindowLabel(window)}: ${100 - window.usedPercent}% left${window.resetsAt ? ` · resets ${availabilityTimeLabel(window.resetsAt)}` : ""}`,
                     )
                     .join(" · ")
                 : entry.availability.source === "unsupported"
                   ? "Not available from this provider"
-                  : "Awaiting a native provider signal"}
+                  : entry.availability.observedAt
+                    ? `Native signal is stale (last seen ${availabilityTimeLabel(entry.availability.observedAt)})`
+                    : "Awaiting a native provider signal"}
             </div>
           </div>
         ))}

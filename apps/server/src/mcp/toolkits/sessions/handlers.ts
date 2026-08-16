@@ -506,13 +506,19 @@ export const make = Effect.gen(function* () {
   const providerService = yield* Effect.serviceOption(ProviderService.ProviderService);
   const availabilityFor = (
     instanceId: ServerProvider["instanceId"],
+    provider: ServerProvider["driver"],
   ): Effect.Effect<ProviderAvailability> => {
     if (Option.isSome(providerService) && providerService.value.getAvailability !== undefined) {
-      return providerService.value.getAvailability(instanceId);
+      return providerService.value.getAvailability(instanceId, provider);
     }
     return Effect.succeed({
       status: "unknown",
-      source: "unsupported",
+      source:
+        provider === "codex"
+          ? "codex_app_server"
+          : provider === "claudeAgent"
+            ? "claude_agent_sdk"
+            : "unsupported",
       windows: [],
     } satisfies ProviderAvailability);
   };
@@ -692,7 +698,7 @@ export const make = Effect.gen(function* () {
       input.onlyAvailable === true ? allProviders.filter(isProviderAvailable) : allProviders;
     return {
       providers: yield* Effect.forEach(providers, (provider) =>
-        availabilityFor(provider.instanceId).pipe(
+        availabilityFor(provider.instanceId, provider.driver).pipe(
           Effect.map((availability) => ({
             instanceId: provider.instanceId,
             driver: provider.driver,
