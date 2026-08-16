@@ -22,6 +22,8 @@ import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import * as Result from "effect/Result";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/unstable/reactivity";
 import {
   CloudIcon,
   LaptopIcon,
@@ -371,6 +373,21 @@ export function EnvironmentProviderSettings({
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const serverProviders =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  const availabilityResult = useAtomValue(
+    serverEnvironment.providerAvailability({ environmentId, input: {} }),
+  );
+  const availabilityByInstanceId = useMemo(
+    () =>
+      new Map(
+        (
+          (availabilityResult === null
+            ? null
+            : Option.getOrNull(AsyncResult.value(availabilityResult))
+          )?.providers ?? []
+        ).map((entry) => [entry.instanceId, entry.availability]),
+      ),
+    [availabilityResult],
+  );
   const refreshServerProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
@@ -832,6 +849,7 @@ export function EnvironmentProviderSettings({
                 instance={row.instance}
                 driverOption={driverOption}
                 liveProvider={liveProvider}
+                availability={availabilityByInstanceId.get(row.instanceId)}
                 isExpanded={openInstanceDetails[row.instanceId] ?? false}
                 onExpandedChange={(open) =>
                   setOpenInstanceDetails((existing) => ({

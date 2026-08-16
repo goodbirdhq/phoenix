@@ -13,6 +13,7 @@
  */
 import type {
   ProviderInterruptTurnInput,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -21,6 +22,7 @@ import type {
   ProviderSession,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  ProviderAvailability,
   ThreadId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
@@ -102,6 +104,15 @@ export interface ProviderServiceShape {
   readonly getInstanceInfo: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderServiceError>;
+
+  /**
+   * Last native subscription/quota signal for one configured instance.
+   * Missing data is represented as an explicit unknown snapshot.
+   */
+  readonly getAvailability?: (
+    instanceId: ProviderInstanceId,
+    provider: ProviderDriverKind,
+  ) => Effect.Effect<ProviderAvailability>;
 
   /**
    * Roll back provider conversation state by a number of turns.

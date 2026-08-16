@@ -10,6 +10,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
+  type ProviderAvailabilityEntry,
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
@@ -29,6 +30,31 @@ export interface EnvironmentUsageStatus {
   readonly error: string | null;
   readonly summary: UsageSummary | null;
 }
+
+export interface EnvironmentProviderAvailabilityStatus {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly providers: readonly ProviderAvailabilityEntry[];
+}
+
+const providerAvailabilityAtom = Atom.make(
+  (get): readonly EnvironmentProviderAvailabilityStatus[] => {
+    const presentations = get(environmentPresentations.presentationsAtom);
+    const statuses: EnvironmentProviderAvailabilityStatus[] = [];
+    for (const [environmentId, presentation] of presentations) {
+      const result = get(serverEnvironment.providerAvailability({ environmentId, input: {} }));
+      const value = Option.getOrNull(AsyncResult.value(result));
+      if (value !== null) {
+        statuses.push({
+          environmentId,
+          label: presentation.entry.target.label,
+          providers: value.providers,
+        });
+      }
+    }
+    return statuses;
+  },
+).pipe(Atom.withLabel("web-usage:provider-availability"));
 
 /**
  * Reads every environment's summary for one window.
@@ -69,6 +95,7 @@ export interface UsageView {
    */
   readonly isPartial: boolean;
   readonly refresh: () => void;
+  readonly providerAvailability: readonly EnvironmentProviderAvailabilityStatus[];
 }
 
 export function useUsage(input: UsageSummaryInput): UsageView {
@@ -93,6 +120,7 @@ export function useUsage(input: UsageSummaryInput): UsageView {
   );
   const atom = usageByWindowAtom(windowKey);
   const environments = useAtomValue(atom);
+  const providerAvailability = useAtomValue(providerAvailabilityAtom);
 
   // Refreshing only the derived atom would re-read the per-environment SWR
   // queries within their stale window and change nothing. Refresh each
@@ -102,6 +130,12 @@ export function useUsage(input: UsageSummaryInput): UsageView {
     for (const environment of environments) {
       appAtomRegistry.refresh(
         serverEnvironment.usageSummary({ environmentId: environment.environmentId, input }),
+      );
+      appAtomRegistry.refresh(
+        serverEnvironment.providerAvailability({
+          environmentId: environment.environmentId,
+          input: {},
+        }),
       );
     }
   }, [environments, windowKey]);
@@ -132,5 +166,6 @@ export function useUsage(input: UsageSummaryInput): UsageView {
     isPending: answeredCount === 0 && stillReporting > 0,
     isPartial: answeredCount > 0 && stillReporting > 0,
     refresh,
+    providerAvailability,
   };
 }
