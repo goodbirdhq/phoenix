@@ -737,9 +737,9 @@ function workEntryHeading(workEntry: WorkLogEntry): string {
       workEntry.toolLifecycleStatus === "declined" ||
       workEntry.toolLifecycleStatus === "stopped"
     ) {
-      return "Failed to spawn agent";
+      return "Failed to spawn session";
     }
-    return workEntry.spawnedSession.threadId ? "Spawned agent" : "Spawning agent";
+    return workEntry.spawnedSession.threadId ? "Spawned session" : "Spawning session";
   }
   if (!workEntry.toolTitle) {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));

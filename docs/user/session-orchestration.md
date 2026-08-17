@@ -67,6 +67,21 @@ a time, because git allows only one writer per repository. If a git process else
 machine is holding the repository open, Phoenix says which lock file is in the way instead of
 forcing its way through.
 
+## The Sessions Panel
+
+Everything a session spawns is also visible to you, not just to the agent that spawned it. Open the
+right-hand panel and choose **Sessions** to see that thread's own roster:
+
+- **Active** lists the sessions still in play — what each one is working on, whether it is waiting
+  on you, and its provider, model, and branch.
+- **Settled** is the history: the sessions that finished, and whether their worktree has been
+  reclaimed (a session whose worktree is gone cannot be resumed). Archiving a session removes it
+  from this list, as it does from the sidebar.
+
+Every row opens that session's chat, so you can drop into a spawned session, read what it did, and
+come back. The panel is per thread — it shows the sessions that thread spawned, not every session
+in the environment. A spawn also leaves a row in the chat itself, which links to the same place.
+
 ## Limits
 
 Orchestration is bounded so a runaway agent cannot overwhelm your machine:

@@ -2260,7 +2260,11 @@ const SessionSpawnCtaRow = memo(function SessionSpawnCtaRow(props: {
   const canOpen = !failed && session.threadId !== undefined;
   const openThreadId = canOpen ? session.threadId : null;
   const starting = !failed && !canOpen;
-  const lead = failed ? "Failed to spawn agent" : starting ? "Spawning agent" : "Spawned agent";
+  const lead = failed
+    ? "Failed to spawn session"
+    : starting
+      ? "Spawning session"
+      : "Spawned session";
   const className =
     "-mx-1 flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px]";
   const content = (
@@ -2299,7 +2303,7 @@ const SessionSpawnCtaRow = memo(function SessionSpawnCtaRow(props: {
     <button
       type="button"
       onClick={() => onOpenThread(openThreadId)}
-      aria-label={`Open spawned agent: ${session.title}`}
+      aria-label={`Open spawned session: ${session.title}`}
       className={cn(className, "transition hover:bg-accent/50")}
     >
       {content}

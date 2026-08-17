@@ -364,7 +364,7 @@ describe("buildThreadFeed", () => {
     }
 
     expect(group.activities[0]).toMatchObject({
-      summary: "Spawned agent",
+      summary: "Spawned session",
       detail: "Review mobile",
       icon: "agent",
       toolLike: false,

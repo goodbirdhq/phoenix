@@ -151,6 +151,88 @@ describe("projectActivityPayload agent-field survival", () => {
     expect(JSON.stringify(projected.payload).length).toBeLessThan(500);
   });
 
+  it("carries the spawned child's identity past the Codex-shaped result summary", () => {
+    const spawnResult = JSON.stringify({
+      threadId: "child-thread-1",
+      title: "Fix PR #27 final provider review ledger",
+      projectId: "project-1",
+      modelSelection: { instanceId: "claudeAgent", model: "claude-opus-5" },
+      worktreePath: "/tmp/worktree",
+    });
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          item: {
+            type: "mcpToolCall",
+            id: "item-1",
+            tool: "spawn_session",
+            server: "phoenix",
+            status: "completed",
+            arguments: { title: "Fix PR #27 final provider review ledger" },
+            result: {
+              content: [{ type: "text", text: spawnResult }],
+              structuredContent: JSON.parse(spawnResult),
+            },
+          },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    // The summary alone truncates mid-JSON, so the id has to survive separately.
+    expect((data.item as Record<string, unknown>).result).toEqual({
+      content: `${spawnResult.slice(0, 83)}…`,
+    });
+    expect(data.spawnedSession).toEqual({
+      title: "Fix PR #27 final provider review ledger",
+      threadId: "child-thread-1",
+      model: "claude-opus-5",
+    });
+  });
+
+  it("carries the spawned child's identity past the Claude-shaped result summary", () => {
+    const spawnResult = JSON.stringify({
+      threadId: "child-thread-2",
+      title: "Fix PR #27 final inbox retention ledger",
+      modelSelection: { instanceId: "codex", model: "gpt-5.6-terra" },
+    });
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          toolName: "mcp__phoenix__spawn_session",
+          input: { title: "Fix PR #27 final inbox retention ledger" },
+          result: { type: "tool_result", tool_use_id: "toolu_1", content: spawnResult },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.spawnedSession).toEqual({
+      title: "Fix PR #27 final inbox retention ledger",
+      threadId: "child-thread-2",
+      model: "gpt-5.6-terra",
+    });
+  });
+
+  it("leaves an in-flight spawn without a child id (the row stays 'Spawning session')", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          item: {
+            type: "mcpToolCall",
+            tool: "spawn_session",
+            server: "phoenix",
+            status: "inProgress",
+            arguments: { title: "Not started yet" },
+          },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.spawnedSession).toBeUndefined();
+  });
+
   it("passes task lifecycle payloads (no data field) through untouched", () => {
     const source = activity({
       taskId: "task-9",

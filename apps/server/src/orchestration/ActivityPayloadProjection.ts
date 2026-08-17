@@ -3,6 +3,7 @@ import type {
   OrchestrationThreadActivity,
   OrchestrationThreadDetailSnapshot,
 } from "@t3tools/contracts";
+import { deriveSpawnedSessionToolActivity } from "@t3tools/shared/toolActivity";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -241,6 +242,16 @@ function projectMcpToolCallData(data: Record<string, unknown>): Record<string, u
   }
   if ("kind" in data) {
     projectedData.kind = data.kind;
+  }
+
+  // Phoenix's own spawn_session is the one MCP result whose *fields* a client
+  // renders rather than previews: the chat row links to the spawned thread.
+  // Summarizing the result to its first 84 characters cuts the child's thread
+  // id out of the JSON, which leaves the row stuck on "Spawning…" forever, so
+  // derive the identity from the full payload and carry it explicitly.
+  const spawnedSession = deriveSpawnedSessionToolActivity(data);
+  if (spawnedSession?.threadId !== undefined) {
+    projectedData.spawnedSession = spawnedSession;
   }
 
   const changedFiles: string[] = [];
