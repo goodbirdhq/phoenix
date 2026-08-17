@@ -34,6 +34,14 @@ const CLAUDE_USAGE_PROBE_TIMEOUT_MS = 20_000;
 const CLAUDE_AUTH_STATUS_TIMEOUT_MS = 10_000;
 /** The rendered panel is ~2 KB; anything larger is not a panel we understand. */
 const MAX_OUTPUT_CHARS = 64_000;
+/**
+ * Hard cap on what is retained from the child's pipes, applied while reading
+ * rather than after. A timeout alone does not bound memory: a CLI that streams
+ * megabytes a second would be fully buffered before the deadline fires. The
+ * cap is generous relative to `MAX_OUTPUT_CHARS` so that oversized-but-honest
+ * output is still recognised as oversized instead of read as malformed JSON.
+ */
+export const CLAUDE_USAGE_MAX_OUTPUT_BYTES = 4 * MAX_OUTPUT_CHARS;
 
 const ANSI_ESCAPE = /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\))/g;
 
@@ -181,6 +189,9 @@ export const parseClaudeUsageReset = (value: string, observedAt: Date): string |
 
 type UsageWindowIdentity = Pick<ProviderAvailabilityWindow, "kind" | "label" | "scope">;
 
+/** The pool every model draws from, however the panel words that row. */
+const ALL_MODELS_WEEKLY_SCOPE = "all-models";
+
 const slugify = (value: string): string =>
   value
     .toLowerCase()
@@ -197,15 +208,19 @@ const windowIdentity = (label: string): UsageWindowIdentity | undefined => {
   if (/^current session$/i.test(normalized)) {
     return { kind: "session", label: "Current session" };
   }
+  // A panel may render the pooled weekly row either way, and both name the same
+  // pool. Every weekly identity carries an explicit scope so the shared pool can
+  // never collide with a per-model pool in the dedupe key or in a client's
+  // render key — a collision would silently drop a real quota row.
   if (/^current week$/i.test(normalized)) {
-    return { kind: "weekly", label: "Current week" };
+    return { kind: "weekly", label: "Current week", scope: ALL_MODELS_WEEKLY_SCOPE };
   }
   const weekly = normalized.match(/^current week\s*\(([^)]+)\)$/i);
   if (!weekly) return undefined;
   const pool = (weekly[1] ?? "").trim();
   if (pool.length === 0) return undefined;
   if (/^all models$/i.test(pool)) {
-    return { kind: "weekly", label: "All models" };
+    return { kind: "weekly", label: "All models", scope: ALL_MODELS_WEEKLY_SCOPE };
   }
   const scope = slugify(pool);
   return scope.length > 0 ? { kind: "model-weekly", label: pool, scope } : undefined;
@@ -213,8 +228,22 @@ const windowIdentity = (label: string): UsageWindowIdentity | undefined => {
 
 // One rendered quota row: `Current week (all models): 77% used · resets ...`.
 // The percentage and its reset must come from this row; nothing is borrowed
-// from a neighbouring line.
-const USAGE_ROW = /^\s*([^:]{1,80}):\s*(\d{1,3})%\s+used\b(.*)$/i;
+// from a neighbouring line. The CLI renders whole percents today and a fraction
+// (`0.5% used`, and `0,5% used` in a comma-decimal locale) is still a reading,
+// so the row shape accepts one rather than skipping the row entirely.
+const USAGE_ROW = /^\s*([^:]{1,80}):\s*(\d{1,3}(?:[.,]\d{1,4})?)\s*%\s+used\b(.*)$/i;
+
+/**
+ * A rendered percentage as a number in 0–100, or undefined when the row does
+ * not carry one. Fractions are kept to a tenth: that is the finest reading a
+ * panel plausibly renders, and it keeps a client from printing a float artefact
+ * such as `12.299999999999999% used`.
+ */
+export const parseUsedPercent = (value: string): number | undefined => {
+  const parsed = Number(value.trim().replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return undefined;
+  return Math.round(parsed * 10) / 10;
+};
 
 /**
  * Windows rendered by one `/usage` panel, in panel order and deduplicated by
@@ -231,8 +260,8 @@ const parseClaudeUsageWindows = (
     if (!row) continue;
     const identity = windowIdentity(row[1] ?? "");
     if (!identity) continue;
-    const usedPercent = Number(row[2]);
-    if (!Number.isInteger(usedPercent) || usedPercent < 0 || usedPercent > 100) continue;
+    const usedPercent = parseUsedPercent(row[2] ?? "");
+    if (usedPercent === undefined) continue;
     const key = `${identity.kind}:${identity.scope ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -294,9 +323,20 @@ const readJsonRecord = (value: string): Record<string, unknown> | undefined => {
 };
 
 /**
- * The `--output-format json` envelope around the panel. The turn counters are
- * checked rather than trusted: if a CLI ever answers `/usage` with a model
- * turn, the result is rejected instead of being presented as free quota data.
+ * True only for a JSON number that is exactly zero. A missing counter, a
+ * stringified one, `NaN`, and an infinity are all "the CLI did not tell us this
+ * was free", which is the case this guard exists to catch.
+ */
+const isReportedZero = (value: unknown): boolean =>
+  typeof value === "number" && Number.isFinite(value) && value === 0;
+
+/**
+ * The `--output-format json` envelope around the panel. The turn and cost
+ * counters are required rather than trusted: the whole claim that reading quota
+ * is free rests on the CLI answering `/usage` locally, so the panel is only
+ * accepted when the envelope positively reports `num_turns: 0` *and*
+ * `total_cost_usd: 0`. A CLI version that stops reporting either one reads as
+ * unknown instead of being presented as free quota data.
  */
 export const readClaudeUsageEnvelope = (stdout: string): ClaudeUsageEnvelope => {
   if (stdout.length > MAX_OUTPUT_CHARS) {
@@ -309,11 +349,11 @@ export const readClaudeUsageEnvelope = (stdout: string): ClaudeUsageEnvelope => 
   if (envelope.is_error === true) {
     return { _tag: "rejected", reason: "CLI reported an error for /usage" };
   }
-  if (typeof envelope.num_turns === "number" && envelope.num_turns > 0) {
-    return { _tag: "rejected", reason: "CLI answered /usage with an agent turn" };
+  if (!isReportedZero(envelope.num_turns)) {
+    return { _tag: "rejected", reason: "CLI did not report /usage as a zero-turn read" };
   }
-  if (typeof envelope.total_cost_usd === "number" && envelope.total_cost_usd > 0) {
-    return { _tag: "rejected", reason: "CLI billed the /usage request" };
+  if (!isReportedZero(envelope.total_cost_usd)) {
+    return { _tag: "rejected", reason: "CLI did not report /usage as a zero-cost read" };
   }
   const text = envelope.result;
   if (typeof text !== "string" || text.trim().length === 0) {
@@ -373,10 +413,12 @@ const isSubscriptionCapableAuth = (status: ClaudeAuthStatus): boolean =>
   status.loggedIn && (status.apiProvider === undefined || status.apiProvider === "firstParty");
 
 /**
- * One bounded CLI call. `resolveSpawnCommand` is what turns the configured
- * `binaryPath` into something spawnable on every host: it resolves the command
- * against PATH/PATHEXT on Windows and falls back to shell mode for `.cmd`
- * launcher shims. Timing out closes the scope, which kills the child.
+ * One bounded CLI call, bounded in both directions: the collector stops
+ * retaining output at `CLAUDE_USAGE_MAX_OUTPUT_BYTES`, and timing out closes
+ * the scope, which kills the child. `resolveSpawnCommand` is what turns the
+ * configured `binaryPath` into something spawnable on every host: it resolves
+ * the command against PATH/PATHEXT on Windows and falls back to shell mode for
+ * `.cmd` launcher shims.
  */
 const runClaudeCli = Effect.fn("runClaudeCli")(function* (input: {
   readonly binaryPath: string;
@@ -394,6 +436,7 @@ const runClaudeCli = Effect.fn("runClaudeCli")(function* (input: {
       env: input.env,
       shell: spawnCommand.shell,
     }),
+    { maxOutputBytes: CLAUDE_USAGE_MAX_OUTPUT_BYTES },
   );
 });
 
@@ -415,9 +458,10 @@ export const probeClaudeUsage = Effect.fn("probeClaudeUsage")(function* (input: 
     env: input.env,
   }).pipe(Effect.timeoutOption(CLAUDE_AUTH_STATUS_TIMEOUT_MS));
 
-  const status = Option.isSome(authResult)
-    ? parseClaudeAuthStatus(authResult.value.stdout)
-    : undefined;
+  const status =
+    Option.isSome(authResult) && authResult.value.truncated !== true
+      ? parseClaudeAuthStatus(authResult.value.stdout)
+      : undefined;
   if (!status) {
     yield* Effect.logDebug("Claude usage probe skipped: authentication status unavailable.");
     return unknownClaudeUsage(input.observedAt);
@@ -461,6 +505,15 @@ export const probeClaudeUsage = Effect.fn("probeClaudeUsage")(function* (input: 
     yield* Effect.logWarning("Claude usage probe exited with a non-zero status.", {
       code: usageResult.value.code,
       stderr: usageResult.value.stderr.slice(0, 500),
+    });
+    return unknownClaudeUsage(input.observedAt, account);
+  }
+
+  if (usageResult.value.truncated === true) {
+    // The collector stopped retaining output, so what is in hand is a prefix of
+    // whatever the CLI decided to print. A prefix is not a panel.
+    yield* Effect.logWarning("Claude usage probe output exceeded its byte budget.", {
+      maxOutputBytes: CLAUDE_USAGE_MAX_OUTPUT_BYTES,
     });
     return unknownClaudeUsage(input.observedAt, account);
   }

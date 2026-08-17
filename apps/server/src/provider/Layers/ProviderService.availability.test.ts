@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  type ProviderAvailability,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -10,10 +11,12 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   availabilityAt,
   availabilityFromRuntimeEvent,
+  cacheProviderAvailability,
   claimAvailabilityRefresh,
   clearAvailabilityForReconciledAdapters,
   mergeProviderAvailability,
   retainStateForReconciledAdapters,
+  unknownRefreshAvailability,
 } from "./ProviderService.ts";
 
 const claudeInstanceId = ProviderInstanceId.make("claude-work");
@@ -225,5 +228,110 @@ describe("claimAvailabilityRefresh", () => {
       new Map([[claudeInstanceId, adapter]]),
     );
     expect([...retained.entries()]).toEqual([[claudeInstanceId, 1_000]]);
+  });
+});
+
+const emptySdkUpdate = availabilityFromRuntimeEvent({
+  ...codexRateLimitEvent,
+  provider: ProviderDriverKind.make("claudeAgent"),
+  providerInstanceId: claudeInstanceId,
+  createdAt: "2026-08-17T20:50:00.000Z",
+} satisfies ProviderRuntimeEvent)!;
+
+describe("mergeProviderAvailability window identity", () => {
+  it("keeps two pools of one kind apart when they carry different scopes", () => {
+    const previous = {
+      status: "available",
+      source: "codex_app_server",
+      observedAt: "2026-08-17T20:45:00.000Z",
+      windows: [
+        { kind: "weekly", scope: "all-models", usedPercent: 40, windowDurationMins: 10_080 },
+        { kind: "weekly", scope: "fable", usedPercent: 12 },
+      ],
+    } satisfies ProviderAvailability;
+    const incoming = {
+      ...previous,
+      observedAt: "2026-08-17T20:50:00.000Z",
+      windows: [{ kind: "weekly", scope: "fable", usedPercent: 15 }],
+    } satisfies ProviderAvailability;
+
+    expect(mergeProviderAvailability(previous, incoming).windows).toEqual([
+      { kind: "weekly", scope: "all-models", usedPercent: 40, windowDurationMins: 10_080 },
+      { kind: "weekly", scope: "fable", usedPercent: 15 },
+    ]);
+  });
+});
+
+describe("cacheProviderAvailability", () => {
+  it("keeps a Claude /usage reading when an empty SDK update arrives", () => {
+    expect(emptySdkUpdate.windows).toEqual([]);
+    expect(mergeProviderAvailability(claudeCliSnapshot, emptySdkUpdate)).toEqual(claudeCliSnapshot);
+  });
+
+  it("does not let an empty SDK update pass a stale reading off as fresh", () => {
+    const cached = { availability: claudeCliSnapshot, receivedAtMs: 1_000 };
+    const next = cacheProviderAvailability(cached, emptySdkUpdate, 14 * 60 * 1_000);
+    // Same entry, same age: the ping carried no reading, so it cannot renew one.
+    expect(next).toBe(cached);
+    expect(
+      availabilityAt(next, ProviderDriverKind.make("claudeAgent"), 16 * 60 * 1_000).windows,
+    ).toEqual([]);
+  });
+
+  it("takes an SDK snapshot that actually carries windows", () => {
+    const sdkWithWindows = {
+      ...emptySdkUpdate,
+      status: "available",
+      windows: [{ kind: "session", usedPercent: 10 }],
+    } satisfies ProviderAvailability;
+    const cached = { availability: claudeCliSnapshot, receivedAtMs: 1_000 };
+    const next = cacheProviderAvailability(cached, sdkWithWindows, 5_000);
+    expect(next).toEqual({ availability: sdkWithWindows, receivedAtMs: 5_000 });
+  });
+
+  it("advances freshness for a new /usage reading", () => {
+    const cached = { availability: claudeCliSnapshot, receivedAtMs: 1_000 };
+    const newer = {
+      ...claudeCliSnapshot,
+      observedAt: "2026-08-17T21:05:00.000Z",
+      windows: [{ kind: "session", label: "Current session", usedPercent: 9 }],
+    } satisfies ProviderAvailability;
+    expect(cacheProviderAvailability(cached, newer, 5_000)).toEqual({
+      availability: newer,
+      receivedAtMs: 5_000,
+    });
+  });
+});
+
+describe("unknownRefreshAvailability", () => {
+  it("names the channel the refresh actually ran on", () => {
+    // A Claude refresh runs the CLI's `/usage` panel, so a failed one must not
+    // report itself as a quiet Agent SDK.
+    expect(unknownRefreshAvailability(ProviderDriverKind.make("claudeAgent"))).toEqual({
+      status: "unknown",
+      source: "claude_cli_usage",
+      windows: [],
+    });
+    expect(unknownRefreshAvailability(ProviderDriverKind.make("codex"))).toEqual({
+      status: "unknown",
+      source: "codex_app_server",
+      windows: [],
+    });
+    expect(unknownRefreshAvailability(ProviderDriverKind.make("opencode"))).toEqual({
+      status: "unknown",
+      source: "unsupported",
+      windows: [],
+    });
+  });
+
+  it("stays a snapshot a Claude instance will present rather than discard", () => {
+    const failed = unknownRefreshAvailability(ProviderDriverKind.make("claudeAgent"));
+    expect(
+      availabilityAt(
+        { availability: failed, receivedAtMs: 0 },
+        ProviderDriverKind.make("claudeAgent"),
+        0,
+      ),
+    ).toEqual(failed);
   });
 });

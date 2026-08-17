@@ -36,6 +36,16 @@ import type { ProviderSessionRuntimeLiveness } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 
 /**
+ * How many configured instances one availability request may collect from at
+ * once. A refresh runs a provider's own CLI, so an environment with several
+ * configured instances must neither start them all at once (a burst of child
+ * processes, on the machine the user is working on) nor walk them strictly one
+ * at a time (a slow instance would hold up every other instance's answer, up to
+ * each probe's own timeout). Reads that hit only the cache are unaffected.
+ */
+export const PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY = 4;
+
+/**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
@@ -114,7 +124,11 @@ export interface ProviderServiceShape {
     provider: ProviderDriverKind,
   ) => Effect.Effect<ProviderAvailability>;
 
-  /** Explicit, deduplicated native quota refresh for one configured instance. */
+  /**
+   * Explicit, deduplicated native quota refresh for one configured instance.
+   * Callers that fan this out over every configured instance must bound the
+   * fan-out with `PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY`.
+   */
   readonly refreshAvailability?: (
     instanceId: ProviderInstanceId,
     provider: ProviderDriverKind,

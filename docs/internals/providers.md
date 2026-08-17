@@ -77,21 +77,47 @@ The Claude probe is the only collector that starts a process, so it is deliberat
   is never started into a login flow, and a Bedrock/Vertex instance is never asked about a
   subscription it does not have.
 - **Never a turn.** It runs `claude --print /usage --output-format json`, which the CLI answers
-  locally. The returned envelope is only accepted when it reports `num_turns: 0` and no cost, so a
-  CLI version that ever answered `/usage` with a model turn reads as unknown instead of as free
-  quota data. Print mode also skips the interactive workspace-trust dialog, which an interactive PTY
-  probe would otherwise answer on the user's behalf.
+  locally. The whole claim that reading quota is free rests on that, so the envelope is only accepted
+  when it positively reports both `num_turns: 0` and `total_cost_usd: 0` as finite numbers. A counter
+  that is missing, non-numeric, or non-zero reads as unknown rather than as free quota data — a CLI
+  version that stopped reporting them is exactly the case worth catching. Print mode also skips the
+  interactive workspace-trust dialog, which an interactive PTY probe would otherwise answer on the
+  user's behalf.
 - **Contained.** The CLI runs in a cache-owned directory with `--safe-mode` (no hooks, MCP servers,
   plugins, or `CLAUDE.md`) and `--no-session-persistence`, under a timeout that kills the child.
+  Output is capped while it is read, not after: a timeout alone would let a CLI that streams
+  megabytes a second fill the heap before the deadline fires. A capped read is reported as truncated
+  and treated as no reading, never as a panel that happens to parse.
 - **Strict.** Only rendered quota rows (`Current session: 5% used · resets Aug 18, 1am
 (Europe/Berlin)`) become windows, each row's percentage and reset read from that row alone. The
-  panel's prose percentages ("75% of your usage was at >150k context") are never windows.
-  `testFixtures/claudeUsagePrint.json` is a live capture that pins this.
+  panel's prose percentages ("75% of your usage was at >150k context") are never windows. Fractional
+  readings (`0.5% used`, and `0,5%` in a comma-decimal locale) are read rather than skipped. Every
+  weekly row carries an explicit `scope` — the shared pool is `all-models` however the panel words
+  it, and each per-model pool gets its own — so the pooled and per-model quotas can never collapse
+  into one identity in a dedupe or a render key. `testFixtures/claudeUsagePrint.json` is a live
+  capture that pins this.
 
-Reads apply two more rules. Refreshes are claimed atomically per instance under a 30s cooldown, so
-two clients clicking at once run the CLI once; and a snapshot older than 15 minutes drops its
-windows but keeps its source, observation time, and account, so an account card stays put instead of
-flickering away.
+Reads apply three more rules:
+
+- Refreshes are claimed atomically per instance under a 30s cooldown, so two clients clicking at once
+  run the CLI once, and a request that fans out over configured instances collects from at most
+  `PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY` of them at a time — neither a burst of CLIs on the
+  user's machine nor one slow instance holding up every other answer.
+- Freshness is server-owned. A snapshot older than 15 minutes drops its windows but keeps its source,
+  observation time, and account, so an account card stays put instead of flickering away. A merge
+  that kept the older snapshot keeps its age too: Claude's SDK notifications carry no quota rows, so
+  an empty one neither replaces a `/usage` reading nor makes a stale one look freshly observed. A
+  refresh answers with what the cache now holds rather than with the snapshot it collected.
+- A snapshot names the channel it came from, including when it failed. A failed Claude refresh
+  reports `claude_cli_usage`, because that is what ran — not `claude_agent_sdk`, which never went
+  quiet.
+
+**Account subjects and MCP.** `ProviderAvailabilityAccount` exists so a person sees one Usage card
+per real account; for Claude both its id and display name are the signed-in email address, read from
+`claude auth status`. Clients receive it over the RPC the person is already authenticated to.
+`list_session_providers` deliberately does not carry it: an agent picks a configured instance, quota
+windows are per instance, and MCP output is written to transcripts and reports that other agents
+read. Dropping the subject there costs the caller nothing it acts on.
 
 ## Server-side workers
 

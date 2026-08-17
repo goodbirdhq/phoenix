@@ -494,6 +494,30 @@ export function assessGitLockStaleness(stat: {
   };
 }
 
+/**
+ * The availability an MCP caller sees. Deliberate decision: the account subject
+ * is dropped here and only here.
+ *
+ * `ProviderAvailabilityAccount` exists so a person looking at Usage sees one
+ * card per real account, and for Claude it is built from the CLI's own
+ * `claude auth status` — both its id and its display name are the signed-in
+ * email address. Clients read it over the authenticated RPC the person is
+ * already using, so nothing a user sees is concealed by this.
+ *
+ * `list_session_providers` is a different audience: an agent choosing which
+ * configured instance to spawn into, whose transcript is written to disk,
+ * summarised into reports, and read by other agents. That decision needs the
+ * instance id, whether it is available, and its quota windows — never the
+ * owner's email address. Windows are per instance, and the tool's own
+ * description already tells callers that two instances are two accounts, so
+ * dropping the subject costs the caller nothing it acts on.
+ */
+const withoutAccountSubject = (availability: ProviderAvailability): ProviderAvailability => {
+  if (availability.account === undefined) return availability;
+  const { account: _account, ...rest } = availability;
+  return rest;
+};
+
 // Exported so tests can drive the real handlers against stub services; the
 // wiring between them (stop → settle → cleanup ordering) is exactly what pure
 // helper tests cannot see.
@@ -713,24 +737,29 @@ export const make = Effect.gen(function* () {
     const providers =
       input.onlyAvailable === true ? allProviders.filter(isProviderAvailable) : allProviders;
     return {
-      providers: yield* Effect.forEach(providers, (provider) =>
-        availabilityFor(provider, input.refreshAvailability === true).pipe(
-          Effect.map((availability) => ({
-            instanceId: provider.instanceId,
-            driver: provider.driver,
-            displayName: provider.displayName ?? provider.driver,
-            available: isProviderAvailable(provider),
-            availability,
-            models: provider.models.map((model) => ({
-              id: model.slug,
-              displayName: model.name,
-              isDefault: model.isDefault === true,
-              ...(model.capabilities?.optionDescriptors
-                ? { options: model.capabilities.optionDescriptors }
-                : {}),
+      providers: yield* Effect.forEach(
+        providers,
+        (provider) =>
+          availabilityFor(provider, input.refreshAvailability === true).pipe(
+            Effect.map((availability) => ({
+              instanceId: provider.instanceId,
+              driver: provider.driver,
+              displayName: provider.displayName ?? provider.driver,
+              available: isProviderAvailable(provider),
+              availability: withoutAccountSubject(availability),
+              models: provider.models.map((model) => ({
+                id: model.slug,
+                displayName: model.name,
+                isDefault: model.isDefault === true,
+                ...(model.capabilities?.optionDescriptors
+                  ? { options: model.capabilities.optionDescriptors }
+                  : {}),
+              })),
             })),
-          })),
-        ),
+          ),
+        // Refreshing runs provider CLIs, so an environment with several
+        // configured instances collects from a bounded number at a time.
+        { concurrency: ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY },
       ),
     };
   });

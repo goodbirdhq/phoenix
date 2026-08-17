@@ -132,6 +132,11 @@ export const SessionProviderDescriptor = Schema.Struct({
   driver: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   available: Schema.Boolean,
+  // Quota as the provider reports it for this instance. The optional account
+  // subject is deliberately omitted on this surface: it is the signed-in user's
+  // email address, an agent picks an instance rather than an account, and MCP
+  // output ends up in transcripts and reports. Clients that present accounts
+  // read availability over the client RPC instead.
   availability: ProviderAvailability,
   models: Schema.Array(SessionProviderModel),
 });

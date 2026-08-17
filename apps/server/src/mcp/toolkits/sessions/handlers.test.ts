@@ -1788,6 +1788,79 @@ describe("list_session_providers availability refresh (handler)", () => {
     }),
   );
 
+  it.effect("never publishes the signed-in account subject to an MCP caller", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler(
+        (handlers) => handlers.list_session_providers({ refreshAvailability: true }),
+        {
+          getProviders: Effect.succeed([providerSnapshot({ instanceId: "claude-signed-in" })]),
+          providerService: {
+            refreshAvailability: () =>
+              Effect.succeed({
+                status: "available",
+                source: "claude_cli_usage",
+                observedAt: now,
+                account: {
+                  id: "claude:org-1:maintainer@example.com",
+                  verification: "native_verified",
+                  displayName: "maintainer@example.com",
+                },
+                windows: [{ kind: "session", label: "Current session", usedPercent: 5 }],
+              }),
+            getAvailability: () => Effect.succeed(unknownAvailability),
+          },
+        },
+      );
+
+      const availability = result.providers[0]!.availability;
+      // The quota an agent acts on survives; the owner's email address, which
+      // it has no decision to make with, does not reach a transcript.
+      expect(availability).toEqual({
+        status: "available",
+        source: "claude_cli_usage",
+        observedAt: now,
+        windows: [{ kind: "session", label: "Current session", usedPercent: 5 }],
+      });
+      expect(availability).not.toHaveProperty("account");
+    }),
+  );
+
+  it.effect("collects from several instances at once, but not from all of them", () =>
+    Effect.gen(function* () {
+      let inFlight = 0;
+      let peakInFlight = 0;
+      const result = yield* runHandler(
+        (handlers) => handlers.list_session_providers({ refreshAvailability: true }),
+        {
+          getProviders: Effect.succeed(
+            Array.from({ length: 12 }, (_unused, index) =>
+              providerSnapshot({ instanceId: `claude-${index}` }),
+            ),
+          ),
+          providerService: {
+            refreshAvailability: () =>
+              Effect.gen(function* () {
+                inFlight += 1;
+                peakInFlight = Math.max(peakInFlight, inFlight);
+                // Each probe spawns a CLI and waits on it; yielding lets every
+                // fiber the fan-out is willing to start reach this point.
+                for (let tick = 0; tick < 24; tick += 1) yield* Effect.yieldNow;
+                inFlight -= 1;
+                return unknownAvailability;
+              }),
+            getAvailability: () => Effect.succeed(unknownAvailability),
+          },
+        },
+      );
+
+      expect(peakInFlight).toBe(ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY);
+      // Bounding the fan-out must not drop or reorder an instance's answer.
+      expect(result.providers.map((provider) => provider.instanceId)).toEqual(
+        Array.from({ length: 12 }, (_unused, index) => `claude-${index}`),
+      );
+    }),
+  );
+
   it.effect("never runs the provider CLI when a caller did not ask for a refresh", () =>
     Effect.gen(function* () {
       const refreshed: Array<string> = [];

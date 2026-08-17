@@ -14,6 +14,7 @@ import { describe, expect } from "vite-plus/test";
 
 import usageFixture from "../testFixtures/claudeUsagePrint.json" with { type: "json" };
 import {
+  CLAUDE_USAGE_MAX_OUTPUT_BYTES,
   claudeUsageAccount,
   parseClaudeAuthStatus,
   parseClaudeUsagePanel,
@@ -55,6 +56,7 @@ describe("parseClaudeUsagePanel", () => {
         {
           kind: "weekly",
           label: "All models",
+          scope: "all-models",
           usedPercent: 77,
           resetsAt: "2026-08-18T19:00:00.000Z",
         },
@@ -93,6 +95,7 @@ describe("parseClaudeUsagePanel", () => {
         {
           kind: "weekly",
           label: "All models",
+          scope: "all-models",
           usedPercent: 100,
           resetsAt: "2026-08-17T22:45:00.000Z",
         },
@@ -129,6 +132,67 @@ describe("parseClaudeUsagePanel", () => {
 
   it("carries a verified account onto the snapshot", () => {
     expect(parseClaudeUsagePanel(panel, observedAt, account).account).toEqual(account);
+  });
+
+  it("reads fractional percentages instead of dropping the row", () => {
+    expect(
+      parseClaudeUsagePanel(
+        [
+          "Current session: 0.5% used",
+          "Current week (all models): 33.333% used",
+          // A comma-decimal locale renders the same reading this way.
+          "Current week (Fable): 7,25% used",
+        ].join("\n"),
+        observedAt,
+      ).windows,
+    ).toEqual([
+      { kind: "session", label: "Current session", usedPercent: 0.5 },
+      { kind: "weekly", label: "All models", scope: "all-models", usedPercent: 33.3 },
+      { kind: "model-weekly", label: "Fable", scope: "fable", usedPercent: 7.3 },
+    ]);
+  });
+
+  it("still reads a fractional row as reaching the limit", () => {
+    expect(parseClaudeUsagePanel("Current session: 100.0% used", observedAt)).toMatchObject({
+      status: "limited",
+      windows: [{ kind: "session", usedPercent: 100 }],
+    });
+    expect(parseClaudeUsagePanel("Current session: 100.4% used", observedAt).windows).toEqual([]);
+  });
+
+  it("keeps every weekly pool the panel renders", () => {
+    // The shared weekly pool and a per-model pool are different quotas. Before
+    // weekly rows carried a scope, they shared one dedupe identity and the
+    // second row rendered was silently dropped.
+    expect(
+      parseClaudeUsagePanel(
+        [
+          "Current week: 40% used",
+          "Current week (Fable): 12% used",
+          "Current week (Opus 4.5): 3% used",
+        ].join("\n"),
+        observedAt,
+      ).windows,
+    ).toEqual([
+      { kind: "weekly", label: "Current week", scope: "all-models", usedPercent: 40 },
+      { kind: "model-weekly", label: "Fable", scope: "fable", usedPercent: 12 },
+      { kind: "model-weekly", label: "Opus 4.5", scope: "opus-4-5", usedPercent: 3 },
+    ]);
+  });
+
+  it("treats both wordings of the shared weekly pool as one pool", () => {
+    expect(
+      parseClaudeUsagePanel(
+        ["Current week: 40% used", "Current week (all models): 41% used"].join("\n"),
+        observedAt,
+      ).windows,
+    ).toEqual([{ kind: "weekly", label: "Current week", scope: "all-models", usedPercent: 40 }]);
+  });
+
+  it("gives every window a render key no other window shares", () => {
+    const windows = parseClaudeUsagePanel(panel, observedAt).windows;
+    const keys = windows.map((window) => `${window.kind}:${window.scope ?? ""}`);
+    expect(new Set(keys).size).toBe(windows.length);
   });
 });
 
@@ -176,7 +240,47 @@ describe("readClaudeUsageEnvelope", () => {
       readClaudeUsageEnvelope(
         JSON.stringify({ ...usageFixture.usageEnvelope, num_turns: 1, total_cost_usd: 0.02 }),
       ),
-    ).toEqual({ _tag: "rejected", reason: "CLI answered /usage with an agent turn" });
+    ).toEqual({ _tag: "rejected", reason: "CLI did not report /usage as a zero-turn read" });
+    expect(
+      readClaudeUsageEnvelope(JSON.stringify({ ...usageFixture.usageEnvelope, total_cost_usd: 1 })),
+    ).toEqual({ _tag: "rejected", reason: "CLI did not report /usage as a zero-cost read" });
+  });
+
+  it("requires both counters to be reported, as finite numeric zeroes", () => {
+    // The claim "reading quota is free" rests entirely on these two counters,
+    // so a counter the CLI stopped reporting — or reported in a shape this
+    // parser would have to interpret — is not evidence of anything.
+    const withoutTurns = { ...usageFixture.usageEnvelope } as Record<string, unknown>;
+    delete withoutTurns.num_turns;
+    expect(readClaudeUsageEnvelope(JSON.stringify(withoutTurns))).toEqual({
+      _tag: "rejected",
+      reason: "CLI did not report /usage as a zero-turn read",
+    });
+
+    const withoutCost = { ...usageFixture.usageEnvelope } as Record<string, unknown>;
+    delete withoutCost.total_cost_usd;
+    expect(readClaudeUsageEnvelope(JSON.stringify(withoutCost))).toEqual({
+      _tag: "rejected",
+      reason: "CLI did not report /usage as a zero-cost read",
+    });
+
+    for (const num_turns of ["0", null, true, [], {}]) {
+      expect(
+        readClaudeUsageEnvelope(JSON.stringify({ ...usageFixture.usageEnvelope, num_turns })),
+      ).toEqual({ _tag: "rejected", reason: "CLI did not report /usage as a zero-turn read" });
+    }
+    for (const total_cost_usd of ["0", null, -0.01]) {
+      expect(
+        readClaudeUsageEnvelope(JSON.stringify({ ...usageFixture.usageEnvelope, total_cost_usd })),
+      ).toEqual({ _tag: "rejected", reason: "CLI did not report /usage as a zero-cost read" });
+    }
+    // JSON has no literal for a non-finite number, but a CLI can still print
+    // one through a lenient encoder.
+    expect(
+      readClaudeUsageEnvelope(
+        JSON.stringify(usageFixture.usageEnvelope).replace('"num_turns":0', '"num_turns":1e999'),
+      ),
+    ).toEqual({ _tag: "rejected", reason: "CLI did not report /usage as a zero-turn read" });
   });
 
   it("rejects error envelopes, non-JSON output, and oversized output", () => {
@@ -311,6 +415,7 @@ describe("probeClaudeUsage", () => {
           {
             kind: "weekly",
             label: "All models",
+            scope: "all-models",
             usedPercent: 77,
             resetsAt: "2026-08-18T19:00:00.000Z",
           },
@@ -355,6 +460,28 @@ describe("probeClaudeUsage", () => {
   it.effect("reads an unusable panel as unknown, never as an empty quota", () =>
     Effect.gen(function* () {
       const cli = makeFakeCli([{ stdout: authStatusJson }, { stdout: "Invalid API key" }]);
+      const availability = yield* runProbe(cli);
+
+      expect(availability).toEqual({
+        status: "unknown",
+        source: "claude_cli_usage",
+        observedAt: "2026-08-17T20:45:00.000Z",
+        account,
+        windows: [],
+      });
+    }),
+  );
+
+  it.effect("stops retaining output from a CLI that will not stop writing", () =>
+    Effect.gen(function* () {
+      // A prefix of an envelope is not an envelope: the reading is unknown, and
+      // the collector never held more than its cap regardless of how much the
+      // CLI printed before its timeout.
+      const flood = `{"num_turns":0,"total_cost_usd":0,"result":"${"Current session: 4% used ".repeat(
+        200_000,
+      )}"}`;
+      expect(flood.length).toBeGreaterThan(CLAUDE_USAGE_MAX_OUTPUT_BYTES);
+      const cli = makeFakeCli([{ stdout: authStatusJson }, { stdout: flood }]);
       const availability = yield* runProbe(cli);
 
       expect(availability).toEqual({

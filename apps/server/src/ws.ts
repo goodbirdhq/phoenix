@@ -1345,6 +1345,10 @@ const makeWsRpcLayer = (
                         availability,
                       })),
                     ),
+                  // A refresh spawns provider CLIs, so the fan-out over
+                  // configured instances is bounded rather than unbounded or
+                  // strictly serial.
+                  { concurrency: ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY },
                 ),
               ),
               Effect.map((providers) => ({ providers })),
