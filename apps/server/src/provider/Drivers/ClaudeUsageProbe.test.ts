@@ -16,6 +16,7 @@ import usageFixture from "../testFixtures/claudeUsagePrint.json" with { type: "j
 import {
   CLAUDE_USAGE_MAX_OUTPUT_BYTES,
   claudeUsageAccount,
+  claudeUsageProbeArgs,
   parseClaudeAuthStatus,
   parseClaudeUsagePanel,
   parseClaudeUsageReset,
@@ -28,6 +29,11 @@ const observedAt = new Date("2026-08-17T20:45:00.000Z");
 const panel = usageFixture.usageEnvelope.result;
 const usageEnvelopeJson = JSON.stringify(usageFixture.usageEnvelope);
 const authStatusJson = JSON.stringify(usageFixture.authStatus);
+/** The same captured panel as a Windows CLI would print it. */
+const crlfUsageEnvelopeJson = JSON.stringify({
+  ...usageFixture.usageEnvelope,
+  result: usageFixture.usageEnvelope.result.replace(/\n/g, "\r\n"),
+});
 
 const LOGGED_OUT_STATUS_JSON = '{"loggedIn": false}';
 const BEDROCK_STATUS_JSON =
@@ -307,6 +313,57 @@ describe("stripTerminalFormatting", () => {
       "Current session: 4% used",
     );
   });
+
+  it("reads a CRLF panel as lines, not as lines rewritten to nothing", () => {
+    // A Windows CLI ends every line with CRLF. Treating that trailing carriage
+    // return as a redraw would leave the empty string after it as each line's
+    // final frame and erase the whole panel.
+    expect(stripTerminalFormatting("Current session: 4% used\r\nCurrent week: 10% used\r\n")).toBe(
+      "Current session: 4% used\nCurrent week: 10% used\n",
+    );
+    expect(
+      stripTerminalFormatting("Current session: 99% used\rCurrent session: 4% used\r\nrest"),
+    ).toBe("Current session: 4% used\nrest");
+  });
+
+  it("keeps the text of a line that ends by returning the cursor", () => {
+    expect(stripTerminalFormatting("Current session: 4% used\r")).toBe("Current session: 4% used");
+  });
+});
+
+describe("parseClaudeUsagePanel on a CRLF host", () => {
+  it("reads the same quota rows a LF host reads", () => {
+    const windows = parseClaudeUsagePanel(panel.replace(/\n/g, "\r\n"), observedAt).windows;
+    expect(windows).toEqual(parseClaudeUsagePanel(panel, observedAt).windows);
+    expect(windows.length).toBeGreaterThan(0);
+  });
+});
+
+describe("claudeUsageProbeArgs", () => {
+  it("keeps the variadic --tools last so nothing can be read as a tool name", () => {
+    const args = claudeUsageProbeArgs();
+    // `--tools` swallows every following argument. Anything after its single
+    // empty value would silently become a tool the quota read may run.
+    expect(args.filter((arg) => arg === "--tools")).toHaveLength(1);
+    expect(args.indexOf("--tools")).toBe(args.length - 2);
+    expect(args.at(-1)).toBe("");
+    // ...and the prompt has to be read as the prompt, not as a tool name.
+    expect(args.indexOf("/usage")).toBeLessThan(args.indexOf("--tools"));
+    expect(args.indexOf("/usage")).toBeGreaterThan(-1);
+  });
+
+  it("asks for a read that cannot touch the user's project or history", () => {
+    expect(claudeUsageProbeArgs()).toEqual([
+      "--print",
+      "/usage",
+      "--output-format",
+      "json",
+      "--safe-mode",
+      "--no-session-persistence",
+      "--tools",
+      "",
+    ]);
+  });
 });
 
 describe("claudeUsageAccount", () => {
@@ -509,6 +566,39 @@ describe("probeClaudeUsage", () => {
         account,
         windows: [],
       });
+    }),
+  );
+
+  it.effect("never trusts an auth status the CLI reported as failed", () =>
+    Effect.gen(function* () {
+      // A failed `auth status` can still print something that parses as JSON -
+      // a cached or half-written answer. Publishing a verified account from it,
+      // and then running `/usage` on the strength of it, is exactly what the
+      // exit code is there to prevent.
+      const cli = makeFakeCli([
+        { stdout: authStatusJson, stderr: "not logged in", code: 1 },
+        { stdout: usageEnvelopeJson },
+      ]);
+      const availability = yield* runProbe(cli);
+
+      expect(cli.commands).toEqual([["claude", "auth", "status", "--json"]]);
+      expect(availability).toEqual({
+        status: "unknown",
+        source: "claude_cli_usage",
+        observedAt: "2026-08-17T20:45:00.000Z",
+        windows: [],
+      });
+      expect(availability.account).toBe(undefined);
+    }),
+  );
+
+  it.effect("reads a CRLF panel exactly as it reads a LF one", () =>
+    Effect.gen(function* () {
+      const cli = makeFakeCli([{ stdout: authStatusJson }, { stdout: crlfUsageEnvelopeJson }]);
+      const availability = yield* runProbe(cli);
+
+      expect(availability.status).toBe("available");
+      expect(availability.windows).toEqual(parseClaudeUsagePanel(panel, observedAt).windows);
     }),
   );
 });

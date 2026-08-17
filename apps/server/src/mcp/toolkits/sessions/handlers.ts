@@ -533,34 +533,30 @@ export const make = Effect.gen(function* () {
   const providerService = yield* Effect.serviceOption(ProviderService.ProviderService);
   // A refresh runs the provider's own CLI, so it is only offered for an
   // instance that is installed, enabled and already signed in; everything else
-  // reads the cached snapshot.
+  // reads the cached snapshot. Contained per instance: an agent asking which
+  // instances it can spawn into must still be told about the healthy ones when
+  // one adapter fails or throws.
   const availabilityFor = (
     snapshot: ServerProvider,
     refresh = false,
   ): Effect.Effect<ProviderAvailability> => {
     const instanceId = snapshot.instanceId;
     const provider = snapshot.driver;
-    if (
-      refresh &&
-      canRefreshProviderAvailability(snapshot) &&
-      Option.isSome(providerService) &&
-      providerService.value.refreshAvailability !== undefined
-    ) {
-      return providerService.value.refreshAvailability(instanceId, provider);
-    }
-    if (Option.isSome(providerService) && providerService.value.getAvailability !== undefined) {
-      return providerService.value.getAvailability(instanceId, provider);
-    }
-    return Effect.succeed({
-      status: "unknown",
-      source:
-        provider === "codex"
-          ? "codex_app_server"
-          : provider === "claudeAgent"
-            ? "claude_agent_sdk"
-            : "unsupported",
-      windows: [],
-    } satisfies ProviderAvailability);
+    const read = (): Effect.Effect<ProviderAvailability> => {
+      if (
+        refresh &&
+        canRefreshProviderAvailability(snapshot) &&
+        Option.isSome(providerService) &&
+        providerService.value.refreshAvailability !== undefined
+      ) {
+        return providerService.value.refreshAvailability(instanceId, provider);
+      }
+      if (Option.isSome(providerService) && providerService.value.getAvailability !== undefined) {
+        return providerService.value.getAvailability(instanceId, provider);
+      }
+      return Effect.succeed(ProviderService.unknownAvailabilityForDriver(provider));
+    };
+    return ProviderService.containedAvailability({ instanceId, provider }, read);
   };
   const reportRepository = yield* ProjectionThreadReportRepository;
   const projectionTurnRepository = yield* ProjectionTurnRepository;

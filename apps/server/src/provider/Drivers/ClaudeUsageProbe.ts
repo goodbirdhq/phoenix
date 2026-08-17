@@ -51,14 +51,22 @@ const ANSI_ESCAPE = /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\
  * line feed rewrites the current line, so the surviving text is the final
  * frame of that line — never a mixture of a stale percentage and a fresh
  * heading.
+ *
+ * CRLF is normalised to LF *before* any redraw handling. A Windows CLI ends
+ * every line with `\r\n`, and a `\r` that is only a line terminator is not a
+ * rewrite: splitting redraw frames first would read the empty string after the
+ * trailing `\r` as that line's final frame and silently erase every rendered
+ * quota row on that host. A trailing bare `\r` is dropped for the same reason:
+ * returning the cursor and then ending the line rewrote nothing.
  */
 export const stripTerminalFormatting = (value: string): string =>
   value
     .replace(ANSI_ESCAPE, "")
     .replace(/\u0007/g, "")
+    .replace(/\r\n/g, "\n")
     .split("\n")
     .map((line) => {
-      const frames = line.split("\r");
+      const frames = line.replace(/\r+$/, "").split("\r");
       return (frames[frames.length - 1] ?? "").replace(/[\u0000-\u0008\u000B-\u001F]/g, "");
     })
     .join("\n");
@@ -413,6 +421,38 @@ const isSubscriptionCapableAuth = (status: ClaudeAuthStatus): boolean =>
   status.loggedIn && (status.apiProvider === undefined || status.apiProvider === "firstParty");
 
 /**
+ * `--tools` is variadic: the CLI keeps reading following arguments as tool
+ * names until the next option. Denying every tool therefore has to be the
+ * *last* thing on the command line — an argument appended after it silently
+ * becomes a tool name, and moving it ahead of the `/usage` prompt would feed
+ * the prompt itself to `--tools` and leave the CLI with nothing to answer.
+ *
+ * Appending it is the only way this module builds an argv, so no caller can
+ * place anything after it; `claudeUsageProbeArgs` proves the resulting order.
+ */
+const withNoTools = (args: ReadonlyArray<string>): ReadonlyArray<string> => [
+  ...args,
+  "--tools",
+  "",
+];
+
+/**
+ * The exact argv of a quota read. `--safe-mode` keeps hooks, MCP servers,
+ * plugins and CLAUDE.md out of it; `--no-session-persistence` keeps it out of
+ * the user's resumable history; the terminal `--tools ""` leaves the CLI
+ * nothing to run even if a future version stopped answering `/usage` locally.
+ */
+export const claudeUsageProbeArgs = (): ReadonlyArray<string> =>
+  withNoTools([
+    "--print",
+    "/usage",
+    "--output-format",
+    "json",
+    "--safe-mode",
+    "--no-session-persistence",
+  ]);
+
+/**
  * One bounded CLI call, bounded in both directions: the collector stops
  * retaining output at `CLAUDE_USAGE_MAX_OUTPUT_BYTES`, and timing out closes
  * the scope, which kills the child. `resolveSpawnCommand` is what turns the
@@ -458,12 +498,20 @@ export const probeClaudeUsage = Effect.fn("probeClaudeUsage")(function* (input: 
     env: input.env,
   }).pipe(Effect.timeoutOption(CLAUDE_AUTH_STATUS_TIMEOUT_MS));
 
+  // A non-zero exit is the CLI telling us the answer is not an answer. Its
+  // stdout on a failed `auth status` can still parse as a JSON object — a
+  // cached or partially written one — and trusting that would publish a
+  // verified account, and then run `/usage`, on the strength of a call that
+  // failed. The exit code is the only signal that covers every such shape.
+  const authExitCode = Option.isSome(authResult) ? authResult.value.code : undefined;
   const status =
-    Option.isSome(authResult) && authResult.value.truncated !== true
+    Option.isSome(authResult) && authResult.value.truncated !== true && authExitCode === 0
       ? parseClaudeAuthStatus(authResult.value.stdout)
       : undefined;
   if (!status) {
-    yield* Effect.logDebug("Claude usage probe skipped: authentication status unavailable.");
+    yield* Effect.logDebug("Claude usage probe skipped: authentication status unavailable.", {
+      exitCode: authExitCode ?? null,
+    });
     return unknownClaudeUsage(input.observedAt);
   }
   const account = claudeUsageAccount(status);
@@ -477,20 +525,7 @@ export const probeClaudeUsage = Effect.fn("probeClaudeUsage")(function* (input: 
 
   const usageResult = yield* runClaudeCli({
     binaryPath: input.binaryPath,
-    // `--safe-mode` keeps hooks, MCP servers, plugins and CLAUDE.md out of a
-    // quota read; `--no-session-persistence` keeps it out of the user's
-    // resumable history; `--tools ""` leaves the CLI nothing to run even if a
-    // future version stopped answering `/usage` locally.
-    args: [
-      "--print",
-      "/usage",
-      "--output-format",
-      "json",
-      "--safe-mode",
-      "--no-session-persistence",
-      "--tools",
-      "",
-    ],
+    args: claudeUsageProbeArgs(),
     cwd: input.cwd,
     env: input.env,
   }).pipe(Effect.timeoutOption(CLAUDE_USAGE_PROBE_TIMEOUT_MS));

@@ -1770,6 +1770,59 @@ it.effect(
       // Agent SDK, which never went quiet.
       assert.equal(failed.source, "claude_cli_usage");
       assert.equal(failed.status, "unknown");
+      // It is still an observation: "asked just now, learned nothing". Without
+      // a time a client cannot tell it from an instance never read at all.
+      assert.equal(typeof failed.observedAt, "string");
+
+      // An adapter that throws arrives as a defect, which a typed-error handler
+      // would let straight through and fail the caller's whole fan-out over one
+      // instance. Refreshing has a per-instance cooldown, so let it lapse first.
+      yield* advanceTestClock(31 * 1_000);
+      refreshResult = Effect.sync(() => {
+        throw new Error("claude CLI spawn blew up");
+      });
+      const afterDefect = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      );
+      assert.equal(afterDefect.source, "claude_cli_usage");
+      assert.equal(afterDefect.status, "unknown");
+      assert.equal(typeof afterDefect.observedAt, "string");
+
+      // A refresh that fails while a fresh reading is on screen keeps that
+      // reading rather than blanking the bars the person just asked about…
+      yield* advanceTestClock(31 * 1_000);
+      refreshResult = Effect.succeed(usageSnapshot);
+      const repopulated = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      );
+      assert.equal(repopulated.windows[0]?.usedPercent, 5);
+
+      yield* advanceTestClock(31 * 1_000);
+      refreshResult = Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: String(CLAUDE_AGENT_DRIVER),
+          method: "refreshAvailability",
+          detail: "usage probe failed again",
+        }),
+      );
+      const retained = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      );
+      assert.equal(retained.windows[0]?.usedPercent, 5);
+      assert.equal(retained.account?.id, usageSnapshot.account.id);
+      // …but it says plainly that the numbers are no longer confirmed.
+      assert.equal(retained.stale?.reason, "refresh_failed");
+      assert.equal(retained.status, "available");
+
+      // And it still ages out on the clock of the reading it kept, not on the
+      // clock of the attempt that failed.
+      yield* advanceTestClock(15 * 60 * 1_000);
+      const expired = yield* provider.getAvailability!(claudeAgentInstanceId, CLAUDE_AGENT_DRIVER);
+      assert.deepEqual([...expired.windows], []);
+      assert.equal(expired.stale, undefined);
 
       yield* Scope.close(scope, Exit.void);
     }).pipe(Effect.provide(NodeServices.layer)),

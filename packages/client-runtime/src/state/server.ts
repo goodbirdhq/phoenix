@@ -1,5 +1,7 @@
 import {
+  PROVIDER_AVAILABILITY_CONTRACT_VERSION,
   type EnvironmentId,
+  type ProviderAvailabilityInput,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
@@ -680,6 +682,12 @@ export function createServerEnvironmentAtoms<R, E>(
     ),
   );
 
+  const providerAvailabilityQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:server:provider-availability",
+    tag: WS_METHODS.serverGetProviderAvailability,
+    staleTimeMs: 15_000,
+  });
+
   return {
     configValueAtom,
     updateStateAtom,
@@ -714,11 +722,20 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetUsageSummary,
       staleTimeMs: 60_000,
     }),
-    providerAvailability: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:provider-availability",
-      tag: WS_METHODS.serverGetProviderAvailability,
-      staleTimeMs: 15_000,
-    }),
+    // Every caller declares the availability vocabulary this build can decode,
+    // here rather than at each call site: a server newer than the app answers
+    // in the caller's words, and a caller that forgot to say would be told a
+    // `source` or window `kind` its schema rejects, failing the whole response
+    // instead of one card. The family key stays structural, so callers keep
+    // addressing (and refreshing) the same atom with a plain input literal.
+    providerAvailability: (target: {
+      readonly environmentId: EnvironmentId;
+      readonly input: ProviderAvailabilityInput;
+    }) =>
+      providerAvailabilityQuery({
+        environmentId: target.environmentId,
+        input: { ...target.input, contractVersion: PROVIDER_AVAILABILITY_CONTRACT_VERSION },
+      }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",

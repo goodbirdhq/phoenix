@@ -26,6 +26,7 @@ import {
   type ProviderAvailability,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -228,11 +229,9 @@ const isNativeAvailabilitySource = (
   source: ProviderAvailability["source"],
 ): boolean => (NATIVE_AVAILABILITY_SOURCES[provider] ?? ["unsupported"]).includes(source);
 
-const unknownAvailabilityForDriver = (provider: ProviderDriverKind): ProviderAvailability => ({
-  status: "unknown",
-  source: NATIVE_AVAILABILITY_SOURCES[provider]?.[0] ?? "unsupported",
-  windows: [],
-});
+// Which channel a silent driver is silent on is one fact, shared with the
+// transports that build the same fallback when an instance cannot answer.
+const unknownAvailabilityForDriver = ProviderService.unknownAvailabilityForDriver;
 
 // The channel an explicit refresh speaks through, which is not always the
 // channel a driver reports passively. Claude's passive source is the Agent SDK,
@@ -243,10 +242,20 @@ const REFRESH_AVAILABILITY_SOURCES: Partial<Record<string, ProviderAvailability[
   claudeAgent: "claude_cli_usage",
 };
 
-/** What a refresh reports when the driver could not produce a reading at all. */
-export const unknownRefreshAvailability = (provider: ProviderDriverKind): ProviderAvailability => ({
+/**
+ * What a refresh reports when the driver could not produce a reading at all.
+ * It is still an observation — "at this instant the channel had nothing to
+ * say" — so it carries `observedAt`. Without it a client cannot tell a refresh
+ * that just failed from an instance that has never been read, and the retained
+ * reading it replaces cannot say when the attempt behind it happened.
+ */
+export const unknownRefreshAvailability = (
+  provider: ProviderDriverKind,
+  observedAt: string,
+): ProviderAvailability => ({
   status: "unknown",
   source: REFRESH_AVAILABILITY_SOURCES[provider] ?? unknownAvailabilityForDriver(provider).source,
+  observedAt,
   windows: [],
 });
 
@@ -266,22 +275,65 @@ export type CachedProviderAvailability = {
 export const windowIdentityKey = (window: ProviderAvailability["windows"][number]): string =>
   `${window.kind}:${window.scope ?? ""}`;
 
+/**
+ * Whether `incoming` is a non-answer that must not displace the reading
+ * already in hand. Two cases, both "we learned nothing new on a channel that
+ * previously told us something":
+ *
+ *  - A passive `claude_agent_sdk` ping over a `/usage` reading. The SDK carries
+ *    no quota rows today, so it says "the runtime spoke", not "the quota is
+ *    unknown"; letting it through would blank the bars a person just asked for,
+ *    seconds after they asked.
+ *  - A refresh on the *same* channel that came back with nothing. A timed-out
+ *    or non-zero-exit CLI call is a fact about the call, not about the
+ *    subscription, and throwing away a reading that is still inside its normal
+ *    fifteen-minute life would punish a person for pressing refresh.
+ *
+ * Codex is excluded from the second case because its snapshots merge per
+ * window identity below, which already keeps windows a sparse update omitted.
+ *
+ * An incoming reading that names a *different* account always wins, however
+ * empty: showing one account's bars while naming another is worse than showing
+ * none. The retained reading is marked stale by the caller and still ages out
+ * on its original clock, so a signed-out instance cannot hold bars indefinitely.
+ */
+const retainsPreviousReading = (
+  previous: ProviderAvailability,
+  incoming: ProviderAvailability,
+): boolean => {
+  if (incoming.windows.length > 0) return false;
+  if (previous.source === "claude_cli_usage" && incoming.source === "claude_agent_sdk") return true;
+  if (previous.source !== incoming.source || incoming.source === "codex_app_server") return false;
+  if (previous.windows.length === 0) return false;
+  return incoming.account === undefined || incoming.account.id === previous.account?.id;
+};
+
+/** Whether a retained reading has to tell clients it is no longer confirmed. */
+const staleMarkerFor = (
+  previous: ProviderAvailability,
+  incoming: ProviderAvailability,
+): ProviderAvailability["stale"] | undefined => {
+  // A passive ping is not a failed reading: nothing was asked, so nothing
+  // failed, and the reading in hand is as good as it was a moment ago.
+  if (incoming.source !== previous.source) return undefined;
+  return {
+    // An attempt that came back with an account reached the provider and simply
+    // rendered no rows; one that came back with neither told us nothing at all.
+    reason: incoming.account === undefined ? "refresh_failed" : "refresh_empty",
+    ...(incoming.observedAt ? { attemptedAt: incoming.observedAt } : {}),
+  };
+};
+
 export const mergeProviderAvailability = (
   previous: ProviderAvailability | undefined,
   incoming: ProviderAvailability,
 ): ProviderAvailability => {
-  // Claude's SDK notifications carry no quota rows today, so an incoming
-  // `claude_agent_sdk` snapshot with no windows says "the runtime spoke", not
-  // "the quota is unknown". Letting it replace a `/usage` reading would blank
-  // the bars a person just asked for, seconds after they asked. The reading is
-  // returned unchanged — identity matters, because the caller uses it to keep
-  // the older snapshot's age (see `cacheProviderAvailability`).
-  if (
-    previous?.source === "claude_cli_usage" &&
-    incoming.source === "claude_agent_sdk" &&
-    incoming.windows.length === 0
-  ) {
-    return previous;
+  if (previous !== undefined && retainsPreviousReading(previous, incoming)) {
+    const stale = staleMarkerFor(previous, incoming);
+    // Returned unchanged when there is nothing new to say — identity matters,
+    // because the caller uses it to keep the older snapshot's age (see
+    // `cacheProviderAvailability`).
+    return stale === undefined ? previous : { ...previous, stale };
   }
   if (incoming.source !== "codex_app_server" || previous?.source !== incoming.source) {
     return incoming;
@@ -323,9 +375,14 @@ export const cacheProviderAvailability = (
   nowMs: number,
 ): CachedProviderAvailability => {
   const availability = mergeProviderAvailability(cached?.availability, incoming);
-  return cached !== undefined && availability === cached.availability
-    ? cached
-    : { availability, receivedAtMs: nowMs };
+  if (cached === undefined) return { availability, receivedAtMs: nowMs };
+  // A retained reading keeps the age it already had, whether or not it picked
+  // up a stale marker on the way through. Restamping it would let a run of
+  // failed refreshes keep a single old panel alive forever.
+  if (retainsPreviousReading(cached.availability, incoming)) {
+    return availability === cached.availability ? cached : { ...cached, availability };
+  }
+  return { availability, receivedAtMs: nowMs };
 };
 
 export const availabilityAt = (
@@ -661,11 +718,28 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       if (!claimed) {
         return yield* cachedAt();
       }
-      const availability = yield* adapter.value
-        .refreshAvailability()
+      const availability = yield* adapter.value.refreshAvailability().pipe(
         // A refresh that failed reports the channel it failed on, not the
-        // driver's passive one.
-        .pipe(Effect.catch(() => Effect.succeed(unknownRefreshAvailability(provider))));
+        // driver's passive one. The whole cause is caught, not just the typed
+        // error: an adapter that throws while shelling out to its CLI is a
+        // defect, and a defect escaping here would take down the caller's
+        // whole availability fan-out over one misbehaving instance.
+        // Interruption is the caller going away and stays a cancellation.
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause as Cause.Cause<never>)
+            : Effect.logWarning("provider availability refresh failed", {
+                instanceId,
+                provider,
+                cause,
+              }).pipe(
+                Effect.andThen(DateTime.now),
+                Effect.map((failedAt) =>
+                  unknownRefreshAvailability(provider, DateTime.formatIso(failedAt)),
+                ),
+              ),
+        ),
+      );
       // Stamped when the reading came back rather than when the request
       // started: the CLI call itself can take seconds. Answering through
       // `availabilityAt` keeps one owner of freshness — a refresh reports what

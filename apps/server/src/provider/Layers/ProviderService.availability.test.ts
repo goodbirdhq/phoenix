@@ -20,6 +20,8 @@ import {
 } from "./ProviderService.ts";
 
 const claudeInstanceId = ProviderInstanceId.make("claude-work");
+/** When a refresh that produced nothing ran. */
+const failedAt = "2026-08-17T20:51:00.000Z";
 
 const claudeCliSnapshot = {
   status: "available",
@@ -307,25 +309,36 @@ describe("unknownRefreshAvailability", () => {
   it("names the channel the refresh actually ran on", () => {
     // A Claude refresh runs the CLI's `/usage` panel, so a failed one must not
     // report itself as a quiet Agent SDK.
-    expect(unknownRefreshAvailability(ProviderDriverKind.make("claudeAgent"))).toEqual({
+    expect(unknownRefreshAvailability(ProviderDriverKind.make("claudeAgent"), failedAt)).toEqual({
       status: "unknown",
       source: "claude_cli_usage",
+      observedAt: failedAt,
       windows: [],
     });
-    expect(unknownRefreshAvailability(ProviderDriverKind.make("codex"))).toEqual({
+    expect(unknownRefreshAvailability(ProviderDriverKind.make("codex"), failedAt)).toEqual({
       status: "unknown",
       source: "codex_app_server",
+      observedAt: failedAt,
       windows: [],
     });
-    expect(unknownRefreshAvailability(ProviderDriverKind.make("opencode"))).toEqual({
+    expect(unknownRefreshAvailability(ProviderDriverKind.make("opencode"), failedAt)).toEqual({
       status: "unknown",
       source: "unsupported",
+      observedAt: failedAt,
       windows: [],
     });
   });
 
+  it("says when the failed attempt happened", () => {
+    // Without it a client cannot tell an instance that was just asked and had
+    // nothing to say from one that has never been read at all.
+    expect(
+      unknownRefreshAvailability(ProviderDriverKind.make("claudeAgent"), failedAt).observedAt,
+    ).toBe(failedAt);
+  });
+
   it("stays a snapshot a Claude instance will present rather than discard", () => {
-    const failed = unknownRefreshAvailability(ProviderDriverKind.make("claudeAgent"));
+    const failed = unknownRefreshAvailability(ProviderDriverKind.make("claudeAgent"), failedAt);
     expect(
       availabilityAt(
         { availability: failed, receivedAtMs: 0 },
@@ -333,5 +346,106 @@ describe("unknownRefreshAvailability", () => {
         0,
       ),
     ).toEqual(failed);
+  });
+});
+
+describe("a refresh that came back with nothing", () => {
+  const claudeAgent = ProviderDriverKind.make("claudeAgent");
+  const failedRefresh = unknownRefreshAvailability(claudeAgent, failedAt);
+
+  it("keeps the reading a person is looking at instead of blanking it", () => {
+    const merged = mergeProviderAvailability(claudeCliSnapshot, failedRefresh);
+    expect(merged.windows).toEqual(claudeCliSnapshot.windows);
+    expect(merged.account).toEqual(claudeCliSnapshot.account);
+    // The windows are still the ones read at 20:45, and they say so.
+    expect(merged.observedAt).toBe(claudeCliSnapshot.observedAt);
+  });
+
+  it("marks the kept reading stale rather than passing it off as confirmed", () => {
+    expect(mergeProviderAvailability(claudeCliSnapshot, failedRefresh).stale).toEqual({
+      reason: "refresh_failed",
+      attemptedAt: failedAt,
+    });
+  });
+
+  it("calls a panel that rendered no rows empty, not failed", () => {
+    // The CLI answered and named the account; it simply had no quota rows.
+    const emptyPanel = {
+      status: "unknown",
+      source: "claude_cli_usage",
+      observedAt: failedAt,
+      account: claudeCliSnapshot.account,
+      windows: [],
+    } satisfies ProviderAvailability;
+    expect(mergeProviderAvailability(claudeCliSnapshot, emptyPanel).stale).toEqual({
+      reason: "refresh_empty",
+      attemptedAt: failedAt,
+    });
+  });
+
+  it("lets the kept reading expire on its original clock", () => {
+    const cached = { availability: claudeCliSnapshot, receivedAtMs: 1_000 };
+    const afterOneFailure = cacheProviderAvailability(cached, failedRefresh, 10 * 60 * 1_000);
+    expect(afterOneFailure.receivedAtMs).toBe(1_000);
+    // A run of failures cannot keep one old panel alive for ever.
+    const afterTwo = cacheProviderAvailability(
+      afterOneFailure,
+      unknownRefreshAvailability(claudeAgent, "2026-08-17T20:56:00.000Z"),
+      14 * 60 * 1_000,
+    );
+    expect(afterTwo.receivedAtMs).toBe(1_000);
+    expect(availabilityAt(afterTwo, claudeAgent, 14 * 60 * 1_000).windows).toEqual(
+      claudeCliSnapshot.windows,
+    );
+    // Fifteen minutes after it was *received*, not after the last attempt.
+    expect(availabilityAt(afterTwo, claudeAgent, 1_000 + 15 * 60 * 1_000 + 1)).toEqual({
+      status: "unknown",
+      source: "claude_cli_usage",
+      observedAt: claudeCliSnapshot.observedAt,
+      account: claudeCliSnapshot.account,
+      windows: [],
+    });
+  });
+
+  it("gives way to a reading that names a different account", () => {
+    // Whatever else happens, one account's bars are never shown under another's
+    // name.
+    const otherAccount = {
+      status: "unknown",
+      source: "claude_cli_usage",
+      observedAt: failedAt,
+      account: {
+        id: "claude:org-2:someone-else@example.com",
+        verification: "native_verified",
+        displayName: "someone-else@example.com",
+      },
+      windows: [],
+    } satisfies ProviderAvailability;
+    expect(mergeProviderAvailability(claudeCliSnapshot, otherAccount)).toEqual(otherAccount);
+    expect(
+      cacheProviderAvailability(
+        { availability: claudeCliSnapshot, receivedAtMs: 1 },
+        otherAccount,
+        5_000,
+      ),
+    ).toEqual({ availability: otherAccount, receivedAtMs: 5_000 });
+  });
+
+  it("is replaced outright by the next reading that carries windows", () => {
+    const stale = mergeProviderAvailability(claudeCliSnapshot, failedRefresh);
+    expect(stale.stale).toBeDefined();
+    const recovered = {
+      ...claudeCliSnapshot,
+      observedAt: "2026-08-17T21:05:00.000Z",
+      windows: [{ kind: "session", label: "Current session", usedPercent: 9 }],
+    } satisfies ProviderAvailability;
+    const merged = mergeProviderAvailability(stale, recovered);
+    expect(merged).toEqual(recovered);
+    expect(merged.stale).toBe(undefined);
+  });
+
+  it("does not mark a passive SDK ping as a failed refresh", () => {
+    // Nothing was asked of the SDK, so nothing failed.
+    expect(mergeProviderAvailability(claudeCliSnapshot, emptySdkUpdate)).toBe(claudeCliSnapshot);
   });
 });

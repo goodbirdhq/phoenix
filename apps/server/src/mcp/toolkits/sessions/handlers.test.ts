@@ -5,6 +5,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationThreadShell,
   type ProjectId,
+  type ProviderAvailability,
   ProviderDriverKind,
   ProviderInstanceId,
   READ_REPORT_MAX_CHARS,
@@ -40,7 +41,10 @@ import {
   type ProjectionThreadReportRepositoryShape,
 } from "../../../persistence/Services/ProjectionThreadReports.ts";
 import { ProjectionTurnRepository } from "../../../persistence/Services/ProjectionTurns.ts";
-import { ProviderSessionDirectoryPersistenceError } from "../../../provider/Errors.ts";
+import {
+  ProviderAdapterRequestError,
+  ProviderSessionDirectoryPersistenceError,
+} from "../../../provider/Errors.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "../../../provider/Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
@@ -1858,6 +1862,68 @@ describe("list_session_providers availability refresh (handler)", () => {
       expect(result.providers.map((provider) => provider.instanceId)).toEqual(
         Array.from({ length: 12 }, (_unused, index) => `claude-${index}`),
       );
+    }),
+  );
+
+  // `ProviderService.refreshAvailability` declares no error channel, so a
+  // typed adapter failure reaching this fan-out can only be expressed by
+  // asserting past that declaration - which is the point: the transport must
+  // hold even when the declaration turns out to be optimistic.
+  const typedRefreshFailure = Effect.fail(
+    new ProviderAdapterRequestError({
+      provider: "claudeAgent",
+      method: "refreshAvailability",
+      detail: "usage probe failed",
+    }),
+  ) as unknown as Effect.Effect<ProviderAvailability>;
+
+  it.effect("lets one broken instance cost only its own numbers", () =>
+    Effect.gen(function* () {
+      // The three failure shapes an adapter can present: a typed error, a
+      // thrown exception (a defect, which a typed-error handler never sees),
+      // and an honest answer. An agent asking which instances it can spawn
+      // into must still be told about the healthy ones.
+      const result = yield* runHandler(
+        (handlers) => handlers.list_session_providers({ refreshAvailability: true }),
+        {
+          getProviders: Effect.succeed([
+            providerSnapshot({ instanceId: "claude-fails" }),
+            providerSnapshot({ instanceId: "claude-throws" }),
+            providerSnapshot({ instanceId: "claude-healthy" }),
+          ]),
+          providerService: {
+            refreshAvailability: (instanceId) => {
+              if (instanceId === "claude-fails") {
+                return typedRefreshFailure;
+              }
+              if (instanceId === "claude-throws") {
+                return Effect.sync(() => {
+                  throw new Error("claude CLI spawn blew up");
+                });
+              }
+              return Effect.succeed({
+                status: "available",
+                source: "claude_cli_usage",
+                observedAt: now,
+                windows: [{ kind: "session", label: "Current session", usedPercent: 5 }],
+              } satisfies ProviderAvailability);
+            },
+            getAvailability: () => Effect.succeed(unknownAvailability),
+          },
+        },
+      );
+
+      expect(result.providers.map((provider) => provider.instanceId)).toEqual([
+        "claude-fails",
+        "claude-throws",
+        "claude-healthy",
+      ]);
+      // A broken instance reports what it honestly knows: nothing.
+      expect(result.providers[0]?.availability).toEqual(unknownAvailability);
+      expect(result.providers[1]?.availability).toEqual(unknownAvailability);
+      expect(result.providers[2]?.availability.windows).toEqual([
+        { kind: "session", label: "Current session", usedPercent: 5 },
+      ]);
     }),
   );
 
