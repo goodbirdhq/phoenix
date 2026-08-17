@@ -25,7 +25,7 @@ The monitor is intentionally not a Node native addon.
 - A monitor crash cannot corrupt the Node runtime.
 - The server can supervise, restart, version-check, and measure the monitor as a
   normal child process.
-- The same protocol works for the desktop app and the published CLI.
+- The same protocol works for the desktop app and the source-built CLI.
 - Packaging is a single platform executable instead of an addon toolchain plus
   Node/Electron ABI matrix.
 

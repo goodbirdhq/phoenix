@@ -15,6 +15,11 @@ server_port="$3"
 base_dir="$4"
 url_scheme="${5:-phoenix-dev}"
 
+if [[ ! "$url_scheme" =~ ^[A-Za-z][A-Za-z0-9+.-]*$ ]]; then
+  echo "URL scheme must follow RFC 3986 scheme syntax." >&2
+  exit 2
+fi
+
 case "$platform" in
   ios)
     mobile_origin="http://127.0.0.1:${server_port}"
@@ -64,7 +69,7 @@ case "$platform" in
     # adb shell re-joins its arguments and evaluates them through the device
     # shell, so the deep link's `?`/`&` must be quoted once more for that shell.
     adb -s "$device_id" shell \
-      "am start -W -a android.intent.action.VIEW -d '$deep_link' com.goodbird.phoenix.dev" \
+      "am start -W -a android.intent.action.VIEW -d '$deep_link'" \
       >/dev/null
     ;;
 esac

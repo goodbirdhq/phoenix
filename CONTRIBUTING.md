@@ -54,7 +54,7 @@ If we have to guess what changed, we are much less likely to review it.
 
 ## Discuss Changes First
 
-If you are thinking about a non-trivial change, start a discussion first. Issues are reserved for bug reports.
+If you are thinking about a non-trivial change, open one focused issue first and explain the user problem. Use the bug form for broken behavior and a blank issue for feature or product direction.
 
 That still does not mean we will want the PR, but it gives you a chance to avoid wasting your time.
 

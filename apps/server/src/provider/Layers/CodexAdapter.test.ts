@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import {
   ApprovalRequestId,
   CodexSettings,
+  EnvironmentId,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -37,6 +38,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -310,6 +312,37 @@ const sessionErrorLayer = it.layer(
 );
 
 sessionErrorLayer("CodexAdapterLive session errors", (it) => {
+  it.effect("reads browser access settings for every turn", () => {
+    const threadId = asThreadId("sess-browser-setting");
+    McpProviderSession.setMcpProviderSession({
+      environmentId: EnvironmentId.make("environment-browser-setting"),
+      threadId,
+      providerSessionId: "provider-session-browser-setting",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      endpoint: "http://127.0.0.1:1234/mcp",
+      authorizationHeader: "Bearer test-token",
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const settings = yield* ServerSettingsService;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime?.options.browserToolsAvailable);
+      NodeAssert.equal(yield* runtime.options.browserToolsAvailable, true);
+
+      yield* settings.updateSettings({ enableAgentBrowserAccess: false });
+      NodeAssert.equal(yield* runtime.options.browserToolsAvailable, false);
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+    );
+  });
+
   it.effect("maps missing adapter sessions to ProviderAdapterSessionNotFoundError", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

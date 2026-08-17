@@ -65,7 +65,6 @@ export class DesktopSshEnvironment extends Context.Service<
 >()("@t3tools/desktop/ssh/DesktopSshEnvironment") {}
 
 export interface DesktopSshEnvironmentLayerOptions {
-  readonly resolveCliPackageSpec?: () => string;
   readonly resolveCliRunner?: Effect.Effect<SshTunnel.RemoteT3RunnerOptions>;
 }
 
@@ -157,14 +156,5 @@ export const make = Effect.gen(function* () {
 
 export const layer = (options: DesktopSshEnvironmentLayerOptions = {}) =>
   Layer.effect(DesktopSshEnvironment, make).pipe(
-    Layer.provide(
-      SshTunnel.SshEnvironmentManager.layer({
-        ...(options.resolveCliPackageSpec === undefined
-          ? {}
-          : { resolveCliPackageSpec: options.resolveCliPackageSpec }),
-        ...(options.resolveCliRunner === undefined
-          ? {}
-          : { resolveCliRunner: options.resolveCliRunner }),
-      }),
-    ),
+    Layer.provide(SshTunnel.SshEnvironmentManager.layer(options)),
   );

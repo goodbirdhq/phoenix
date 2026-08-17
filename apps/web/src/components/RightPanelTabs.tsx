@@ -106,6 +106,10 @@ const LAUNCHER_SHORTCUT_BLOCKING_LAYERS = [
   '[data-slot="autocomplete-popup"]',
 ].join(",");
 
+export function isLauncherShortcutTypingElement(element: HTMLElement): boolean {
+  return element.closest("input, textarea, select, [contenteditable]") !== null;
+}
+
 /** One-line unavailability hints for the empty-state cards. */
 const SURFACE_UNAVAILABLE_HINTS = {
   browser: "Only available in the desktop app.",
@@ -255,11 +259,7 @@ function RightPanelEmptyState(props: {
       if (document.querySelector(LAUNCHER_SHORTCUT_BLOCKING_LAYERS)) return;
       const target = event.target;
       if (target instanceof HTMLElement) {
-        if (target.closest("input, textarea, select")) return;
-        // An empty contenteditable (the chat composer at rest) does not
-        // count as typing; letters only become text once a draft exists.
-        const editable = target.isContentEditable ? target : target.closest("[contenteditable]");
-        if (editable && (editable.textContent ?? "").trim().length > 0) return;
+        if (isLauncherShortcutTypingElement(target)) return;
       }
       const action = shortcutActionsRef.current.find(
         (candidate) => candidate.shortcut.toLowerCase() === event.key.toLowerCase(),

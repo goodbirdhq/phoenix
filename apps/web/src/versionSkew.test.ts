@@ -94,17 +94,31 @@ describe("versionSkew", () => {
       }),
     ).toBe("desktop-managed");
     expect(resolveServerSelfUpdateCapability(null)).toBeNull();
+    expect(
+      resolveServerSelfUpdateCapability({
+        environment: {
+          environmentId: EnvironmentId.make("environment-legacy-update"),
+          label: "Legacy",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "9.9.9",
+          capabilities: {
+            repositoryIdentity: true,
+            serverSelfUpdate: "boot-service",
+          },
+        },
+      }),
+    ).toBeNull();
   });
 
   it("matches version-drift guidance to the advertised update path", () => {
     expect(serverUpdateGuidance("respawn", "Remote server")).toBe(
-      "Update the Remote server so they stay in sync.",
+      "Build and relaunch Phoenix from source on the Remote server to sync them.",
     );
     expect(serverUpdateGuidance("desktop-managed", "Desktop server")).toBe(
       "Update the Phoenix desktop app that runs the Desktop server.",
     );
     expect(serverUpdateGuidance(null, "Local server")).toBe(
-      "Relaunch the Local server with the copied command to sync them.",
+      "Build and relaunch Phoenix from source on the Local server to sync them.",
     );
   });
 });

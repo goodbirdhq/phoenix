@@ -78,6 +78,7 @@ minimumReleaseAgeExclude:
   - "@legendapp/list@3.3.5"
 
 overrides:
+  "brace-expansion@1.1.15": "1.1.18"
   "@clerk/backend": "catalog:"
   "@clerk/clerk-js": "catalog:"
   "@clerk/clerk-js>@base-org/account": "-"

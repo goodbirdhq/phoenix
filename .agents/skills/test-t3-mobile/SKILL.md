@@ -135,7 +135,7 @@ Use the bundled helper from the repository root. It issues a fresh credential ag
   android <emulator-serial> <server-port> <base-dir>
 ```
 
-Run only the command for the selected platform. The helper uses `http://127.0.0.1:<server-port>` for iOS and `http://10.0.2.2:<server-port>` for Android. Pass a fifth argument only when testing a non-development URL scheme.
+Run only the command for the selected platform. The helper uses `http://127.0.0.1:<server-port>` for iOS and `http://10.0.2.2:<server-port>` for Android. Pass a fifth argument only when testing a non-development URL scheme. Android resolves that scheme to its registered app instead of assuming the development package.
 
 The helper opens this registered route:
 

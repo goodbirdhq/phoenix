@@ -1,16 +1,6 @@
 import type { EnvironmentId, ServerSelfUpdateCapability } from "@t3tools/contracts";
 import type { ServerUpdateStage, ServerUpdateState } from "@t3tools/client-runtime/state/server";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
 
-import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { serverEnvironment } from "~/state/server";
-import { useAtomCommand } from "~/state/use-atom-command";
-import { manualServerUpdateCommand } from "~/versionSkew";
-import { Button } from "./ui/button";
-import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 // The wire "installing" stage is a sub-second launcher handoff, so the UI
@@ -21,14 +11,9 @@ const UPDATE_STAGE_LABELS: Record<ServerUpdateStage, string> = {
   installing: "Downloading…",
   resuming: "Restarting…",
 };
-const pendingUpdateEnvironmentIds = new Set<EnvironmentId>();
 
 export function serverUpdateStageLabel(stage: ServerUpdateStage): string {
   return UPDATE_STAGE_LABELS[stage];
-}
-
-function updateFailureMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Server update failed.";
 }
 
 /**
@@ -84,78 +69,21 @@ export function ServerUpdateAction({
   readonly targetVersion: string;
   readonly label?: string;
 }) {
-  const updateServer = useAtomCommand(serverEnvironment.updateServer, {
-    reportFailure: false,
-  });
-  const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
-    target: "update command",
-    onCopy: ({ command }) => {
-      toastManager.add({
-        type: "success",
-        title: "Update command copied",
-        description: `Run \`${command}\` on ${serverLabel} to update it.`,
-      });
-    },
-    onError: (error) => {
-      toastManager.add({
-        type: "error",
-        title: "Could not copy update command",
-        description: error.message,
-      });
-    },
-  });
-
-  const handleUpdate = async () => {
-    if (pendingUpdateEnvironmentIds.has(environmentId)) {
-      return;
-    }
-    pendingUpdateEnvironmentIds.add(environmentId);
-    try {
-      const result = await updateServer({
-        environmentId,
-        input: { targetVersion },
-      });
-      if (result._tag === "Failure") {
-        if (isAtomCommandInterrupted(result)) {
-          return;
-        }
-        toastManager.add({
-          type: "error",
-          title: "Server update failed",
-          description: updateFailureMessage(squashAtomCommandFailure(result)),
-        });
-        return;
-      }
-      toastManager.add({
-        type: "success",
-        title: `${serverLabel} updated`,
-        description: `Reconnected on t3@${result.value.targetVersion}.`,
-      });
-    } finally {
-      pendingUpdateEnvironmentIds.delete(environmentId);
-    }
-  };
+  void environmentId;
+  void targetVersion;
+  void label;
 
   if (selfUpdate === "desktop-managed") {
     return (
       <span className="text-muted-foreground text-xs">
-        Update the desktop app on that machine to update this server.
+        Update the desktop app on the machine that runs {serverLabel}.
       </span>
     );
   }
 
-  if (selfUpdate === null) {
-    const command = manualServerUpdateCommand(targetVersion);
-    return (
-      <Button size="xs" variant="outline" onClick={() => copyToClipboard(command, { command })}>
-        Copy update command
-      </Button>
-    );
-  }
-
   return (
-    <Button size="xs" onClick={() => void handleUpdate()}>
-      {label}
-    </Button>
+    <span className="text-muted-foreground text-xs">
+      Build and relaunch Phoenix from source on that machine to update this server.
+    </span>
   );
 }

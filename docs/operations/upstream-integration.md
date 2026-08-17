@@ -116,6 +116,9 @@ Walk the overlapping-file queue after textual conflicts are gone. Pay particular
 - Test fixtures whose inferred types changed without producing a conflict.
 - Documentation, issue templates, package metadata, release artwork, and download links that can
   silently point Phoenix users back to upstream infrastructure.
+- Release-owned values such as mobile app versions, deployment triggers, signing identities, Expo
+  project IDs, npm package names, and updater repository URLs. A clean version change can trigger a
+  real build or submission even when no workflow file conflicts.
 - Duplicate implementations of the same feature. Decide precedence and fallback behavior rather
   than shipping two accidental defaults.
 
@@ -189,6 +192,24 @@ The August 17, 2026 integration demonstrated why both review queues are required
 - The existing Phoenix install guide already linked to upstream distribution channels, and the
   merge added another one without a conflict. Reviewing the resulting user journey—not only newly
   added lines—caught and corrected the stale guidance.
+- A browser-access setting was initially applied by withholding the entire shared MCP credential.
+  That also removed Phoenix's independent session-orchestration tools and did not revoke access for
+  an already-running process. Shared transports must stay attached; each capability needs its own
+  dynamic authorization check at the tool boundary.
+- An upstream mobile version bump merged cleanly, but Phoenix's push-triggered EAS workflow treated
+  that value as a release command. App versions and deployment triggers are release-owned identity,
+  not ordinary source updates. The upstream EAS workflow remains quarantined until every Expo and
+  signing identifier is Phoenix-owned.
+- A bare-letter right-panel shortcut checked whether a contenteditable contained text instead of
+  whether the event originated in an editor. Empty composers are still typing targets. Shortcut
+  guards should use element semantics, then be verified with a physical key event.
+- Browser custom-protocol dispatch cannot report whether the external editor accepted the URL.
+  Treating a dispatched navigation as a definite failure produced a false error on every successful
+  Remote-SSH handoff. Model dispatched, refused, and unavailable outcomes separately when the host
+  APIs can distinguish them.
+- The dev runner and Vite proxy used different names for the same backend port. Unit tests covered
+  environment construction but not the consumer. A real-client launch with the documented command
+  caught the producer/consumer mismatch.
 
 These examples are not a fixed list of expected conflicts. They illustrate the recurring decision:
 preserve Phoenix intent, adopt the upstream improvement, and verify the combined behavior.

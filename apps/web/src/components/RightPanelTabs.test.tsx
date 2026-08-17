@@ -1,8 +1,8 @@
 import type { DesktopPreviewFavicon, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
-import { RightPanelTabs } from "./RightPanelTabs";
+import { isLauncherShortcutTypingElement, RightPanelTabs } from "./RightPanelTabs";
 
 const previewSurface = {
   id: "browser:tab-1" as const,
@@ -111,5 +111,15 @@ describe("RightPanelTabs preview favicon", () => {
   it("hides a capture while the server session still describes another origin", () => {
     const html = renderTabs(favicon("data:image/png;base64,AAAA", "https://example.com/"));
     expect(html).not.toContain("data:image/png;base64,AAAA");
+  });
+});
+
+describe("RightPanelTabs launcher shortcuts", () => {
+  it("treats an empty contenteditable composer as a typing target", () => {
+    const closest = vi.fn().mockReturnValue({ contentEditable: "true", textContent: "" });
+    const target = { closest } as unknown as HTMLElement;
+
+    expect(isLauncherShortcutTypingElement(target)).toBe(true);
+    expect(closest).toHaveBeenCalledWith("input, textarea, select, [contenteditable]");
   });
 });

@@ -10,9 +10,11 @@ import type {
   PreviewAutomationStatus,
   PreviewTabId,
 } from "@t3tools/contracts";
+import { PreviewAutomationUnavailableError } from "@t3tools/contracts";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
 /**
@@ -34,6 +36,29 @@ export function normalizePreviewOpenInput(
   };
 }
 
+export const requirePreviewCapability = Effect.fn("mcp.requirePreviewCapability")(function* () {
+  const scope = yield* McpInvocationContext.requireMcpCapability("preview");
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const enabled = yield* serverSettings.getSettings.pipe(
+    Effect.map((settings) => settings.enableAgentBrowserAccess),
+    Effect.catch((cause) =>
+      Effect.logWarning("Could not read server settings; denying agent browser access.", {
+        cause,
+      }).pipe(Effect.as(false)),
+    ),
+  );
+  if (!enabled) {
+    return yield* new PreviewAutomationUnavailableError({
+      capability: "preview",
+      environmentId: scope.environmentId,
+      threadId: scope.threadId,
+      providerSessionId: scope.providerSessionId,
+      providerInstanceId: scope.providerInstanceId,
+    });
+  }
+  return scope;
+});
+
 const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   operation: PreviewAutomationOperation,
   input: unknown,
@@ -42,9 +67,11 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
 ): Effect.fn.Return<
   A,
   import("@t3tools/contracts").PreviewAutomationError,
-  McpInvocationContext.McpInvocationContext | PreviewAutomationBroker.PreviewAutomationBroker
+  | McpInvocationContext.McpInvocationContext
+  | PreviewAutomationBroker.PreviewAutomationBroker
+  | ServerSettings.ServerSettingsService
 > {
-  const scope = yield* McpInvocationContext.requireMcpCapability("preview");
+  const scope = yield* requirePreviewCapability();
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   return yield* broker.invoke<A>({
     scope,

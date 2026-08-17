@@ -23,10 +23,12 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
   PreviewAutomationBroker.PreviewAutomationBroker,
+  ServerSettings.ServerSettingsService,
 ];
 
 const PreviewActionResult = Schema.Record(Schema.String, Schema.Never).annotate({

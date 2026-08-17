@@ -54,6 +54,7 @@ import {
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   CodexResumeCursorSchema,
   CodexSessionRuntimeThreadIdMissingError,
@@ -1630,6 +1631,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const crypto = yield* Crypto.Crypto;
   const serverConfig = yield* Effect.service(ServerConfig);
+  const serverSettings = yield* ServerSettingsService;
   const nativeEventLogger =
     options?.nativeEventLogger ??
     (options?.nativeEventLogPath !== undefined
@@ -1691,6 +1693,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   "-c",
                   'mcp_servers.phoenix.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
                 ],
+                browserToolsAvailable: serverSettings.getSettings.pipe(
+                  Effect.map((settings) => settings.enableAgentBrowserAccess),
+                  Effect.catch((cause) =>
+                    Effect.logWarning(
+                      "Could not read server settings; omitting agent browser instructions.",
+                      { cause },
+                    ).pipe(Effect.as(false)),
+                  ),
+                ),
               }
             : {}),
         };

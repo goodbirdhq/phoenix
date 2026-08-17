@@ -7,7 +7,7 @@ const status = {
   installed: true,
   current: true,
   unitPath: "/home/me/.config/systemd/user/phoenix.service",
-  logPath: "/home/me/.t3/userdata/logs/boot-service.log",
+  logPath: "/home/me/.phoenix/userdata/logs/boot-service.log",
 } as const;
 
 it("reports the installed service version and host paths", () => {
@@ -17,16 +17,22 @@ it("reports the installed service version and host paths", () => {
       "Phoenix service",
       "  Status: installed · phoenix@0.0.29",
       "  Unit: /home/me/.config/systemd/user/phoenix.service",
-      "  Logs: /home/me/.t3/userdata/logs/boot-service.log",
+      "  Logs: /home/me/.phoenix/userdata/logs/boot-service.log",
     ].join("\n"),
   );
 });
 
-it("gives a direct repair command for a stale service", () => {
+it("gives source-build guidance for a stale service", () => {
   assert.include(
     formatServiceStatus({ ...status, current: false }, "0.0.29"),
-    "Next: Run `phoenix service update`.",
+    "Next: rebuild Phoenix from source and relaunch the service manually.",
   );
+});
+
+it("does not advertise installation for a missing service", () => {
+  const output = formatServiceStatus({ ...status, installed: false }, "0.0.29");
+  assert.include(output, "Automatic installation is unavailable in this source distribution.");
+  assert.notInclude(output, "service install");
 });
 
 it("explains service availability without systemd", () => {
