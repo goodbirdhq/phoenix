@@ -369,7 +369,76 @@ describe("buildThreadFeed", () => {
       icon: "agent",
       toolLike: false,
       status: null,
+      alwaysVisible: true,
     });
+
+    const spawnActivity = group.activities[0]!;
+    const feed: ThreadFeedEntry[] = [
+      {
+        type: "message",
+        id: "assistant-commentary",
+        createdAt: "2026-04-01T00:00:01.000Z",
+        message: {
+          id: MessageId.make("assistant-commentary"),
+          role: "assistant",
+          text: "Starting a reviewer.",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:01.000Z",
+          updatedAt: "2026-04-01T00:00:01.000Z",
+        },
+      },
+      {
+        type: "activity-group",
+        id: "spawn-work-group",
+        createdAt: "2026-04-01T00:00:02.000Z",
+        turnId,
+        activities: [
+          spawnActivity,
+          {
+            ...spawnActivity,
+            id: "ordinary-tool",
+            summary: "Read file",
+            detail: "package.json",
+            icon: "eye",
+            toolLike: true,
+            status: "success",
+            alwaysVisible: false,
+          },
+        ],
+      },
+      {
+        type: "message",
+        id: "assistant-final",
+        createdAt: "2026-04-01T00:00:05.000Z",
+        message: {
+          id: MessageId.make("assistant-final"),
+          role: "assistant",
+          text: "The reviewer is running.",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:05.000Z",
+          updatedAt: "2026-04-01T00:00:05.000Z",
+        },
+      },
+    ];
+    const presented = deriveThreadFeedPresentation(
+      feed,
+      {
+        turnId,
+        state: "completed",
+        startedAt: "2026-04-01T00:00:00.000Z",
+        completedAt: "2026-04-01T00:00:05.000Z",
+      },
+      new Set(),
+    );
+
+    expect(presented.map((entry) => entry.id)).toEqual([
+      "turn-fold:turn-spawn-session",
+      "spawn-session-completed",
+      "ordinary-tool",
+      "assistant-final",
+    ]);
   });
 
   it("defers large tool output expansion until a work row is opened or copied", () => {

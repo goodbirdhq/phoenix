@@ -2296,6 +2296,7 @@ const SessionSpawnCtaRow = memo(function SessionSpawnCtaRow(props: {
     <button
       type="button"
       onClick={() => onOpenThread(openThreadId)}
+      aria-label={`Open spawned agent: ${session.title}`}
       className={cn(className, "transition hover:bg-accent/50")}
     >
       {content}

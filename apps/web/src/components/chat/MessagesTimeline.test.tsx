@@ -715,6 +715,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("claude-opus-5");
     expect(markup).toContain("Open ▸");
     expect(markup).toContain("lucide-bot");
+    expect(markup).toContain('aria-label="Open spawned agent: Review the timeline"');
     expect(markup).not.toContain("MCP tool call");
   });
 
