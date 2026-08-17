@@ -1495,7 +1495,7 @@ describe("ProviderCommandReactor", () => {
         type: "thread.meta.update",
         commandId: CommandId.make("cmd-thread-branch"),
         threadId: ThreadId.make("thread-1"),
-        branch: "t3code/1234abcd",
+        branch: "phoenix/1234abcd",
         worktreePath: "/tmp/provider-project-worktree",
       }),
     );
@@ -1536,6 +1536,10 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.refreshStatus.mock.calls.length === 1);
     expect(harness.generateBranchName.mock.calls[0]?.[0]).toMatchObject({
       message: "Add a safer reconnect backoff.",
+    });
+    expect(harness.renameBranch.mock.calls[0]?.[0]).toMatchObject({
+      oldBranch: "phoenix/1234abcd",
+      newBranch: expect.stringMatching(/^phoenix\/feature\//),
     });
     expect(harness.refreshStatus.mock.calls[0]?.[0]).toBe("/tmp/provider-project-worktree");
   });

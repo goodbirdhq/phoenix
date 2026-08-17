@@ -66,6 +66,7 @@ describe("isTemporaryWorktreeBranch", () => {
   });
 
   it("matches generated temporary worktree refs", () => {
+    expect(WORKTREE_BRANCH_PREFIX).toBe("phoenix");
     expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/deadbeef`)).toBe(true);
     expect(isTemporaryWorktreeBranch(` ${WORKTREE_BRANCH_PREFIX}/deadbeef `)).toBe(true);
     expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/DEADBEEF`)).toBe(true);
@@ -78,9 +79,15 @@ describe("isTemporaryWorktreeBranch", () => {
   });
 
   it("matches legacy UUID-shaped temporary worktree refs from older mobile builds", () => {
-    expect(
-      isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/f4ae4e0e-f971-4d48-b4f2-9cf0aa54ab12`),
-    ).toBe(true);
+    expect(isTemporaryWorktreeBranch("t3code/f4ae4e0e-f971-4d48-b4f2-9cf0aa54ab12")).toBe(true);
+  });
+
+  it("matches legacy 8-hex temporary worktree refs", () => {
+    expect(isTemporaryWorktreeBranch("t3code/deadbeef")).toBe(true);
+  });
+
+  it("does not treat a UUID-shaped Phoenix ref as temporary", () => {
+    expect(isTemporaryWorktreeBranch("phoenix/f4ae4e0e-f971-4d48-b4f2-9cf0aa54ab12")).toBe(false);
   });
 
   it("rejects UUID-shaped refs that are not RFC 4122 v4", () => {

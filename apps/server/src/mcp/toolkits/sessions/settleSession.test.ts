@@ -956,7 +956,7 @@ it.effect(
 it.effect("settle_session keeps a TEMPORARY branch another worktree has checked out", () =>
   Effect.gen(function* () {
     // The auto-cleanup path, not just cleanupBranch: nothing stops a user
-    // from checking out a t3code/… branch, and Phoenix deleting it would
+    // from checking out a phoenix/… branch, and Phoenix deleting it would
     // dangle their worktree exactly the same way.
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -976,14 +976,14 @@ it.effect("settle_session keeps a TEMPORARY branch another worktree has checked 
       yield* fileSystem.makeTempDirectoryScoped({ prefix: "settle-temp-linked-" }),
       "linked",
     );
-    yield* run(["worktree", "add", "-b", "t3code/1a2b3c4d", linkedPath]);
+    yield* run(["worktree", "add", "-b", "phoenix/1a2b3c4d", linkedPath]);
 
     // Records every delete git is actually asked for, so "the guard
     // short-circuited" is observable rather than assumed.
     const deleteAttempts: Array<string> = [];
     const harnessOptions = {
       sessionStatus: "stopped" as const,
-      branch: "t3code/1a2b3c4d",
+      branch: "phoenix/1a2b3c4d",
       gitOverrides: {
         listWorktrees: () => driver.listWorktrees({ cwd }),
         deleteRef: (input: { readonly refName: string }) =>
@@ -1004,19 +1004,19 @@ it.effect("settle_session keeps a TEMPORARY branch another worktree has checked 
     expect(deleteAttempts).toEqual([]);
     expect(refused.worktree.removedBranch).toBeNull();
     expect(refused.worktree.branchRefusal).toMatchObject({
-      branch: "t3code/1a2b3c4d",
+      branch: "phoenix/1a2b3c4d",
       reason: "branch_checked_out_elsewhere",
     });
     expect(refused.worktree.branchRefusal?.conflictingWorktreePath ?? "").toContain("linked");
-    expect(yield* driver.listLocalBranchNames(cwd)).toContain("t3code/1a2b3c4d");
+    expect(yield* driver.listLocalBranchNames(cwd)).toContain("phoenix/1a2b3c4d");
 
     yield* driver.removeWorktree({ cwd, path: linkedPath });
 
     const deleted = yield* makeHarness(harnessOptions).settle({ cleanupWorktree: true });
 
-    expect(deleteAttempts).toEqual(["t3code/1a2b3c4d"]);
-    expect(deleted.worktree.removedBranch).toBe("t3code/1a2b3c4d");
-    expect(yield* driver.listLocalBranchNames(cwd)).not.toContain("t3code/1a2b3c4d");
+    expect(deleteAttempts).toEqual(["phoenix/1a2b3c4d"]);
+    expect(deleted.worktree.removedBranch).toBe("phoenix/1a2b3c4d");
+    expect(yield* driver.listLocalBranchNames(cwd)).not.toContain("phoenix/1a2b3c4d");
   }).pipe(Effect.provide(GitDriverLayer)),
 );
 

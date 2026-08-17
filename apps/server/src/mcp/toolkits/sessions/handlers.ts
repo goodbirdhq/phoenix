@@ -343,10 +343,11 @@ export function assessWorktreeCleanupRisk(
 /**
  * Decide whether settle_session may delete the child's branch.
  *
- * Only the throwaway `t3code/…` branches Phoenix creates for worktree
- * isolation are ours to delete on sight. A branch the user named is deleted
- * only when the caller asked for it (`cleanupBranch`) *and* the merge proof
- * below holds; otherwise it is preserved and reported.
+ * Only the throwaway `phoenix/…` branches Phoenix creates for worktree
+ * isolation (and legacy `t3code/…` temporary branches) are ours to delete on
+ * sight. A branch the user named is deleted only when the caller asked for it
+ * (`cleanupBranch`) *and* the merge proof below holds; otherwise it is
+ * preserved and reported.
  */
 export function decideBranchCleanup(
   branch: string | null,
@@ -1607,7 +1608,7 @@ export const make = Effect.gen(function* () {
           // closes this race. The explicit check exists so the caller gets a
           // structured refusal naming the directory instead of a raw git
           // error, and it covers every deletion, temporary branches included:
-          // a user can check out a t3code/… branch just as easily.
+          // a user can check out a phoenix/… branch just as easily.
           const worktrees = yield* Effect.option(gitWorkflow.listWorktrees({ cwd: workspaceRoot }));
           if (Option.isNone(worktrees)) {
             // Fails closed: the guard's whole job is to establish that no
