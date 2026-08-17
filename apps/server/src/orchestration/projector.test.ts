@@ -128,66 +128,88 @@ describe("orchestration projector", () => {
     }),
   );
 
-  effectIt.effect("evicts consumed child-report activity pairs while preserving the durable event", () =>
-    Effect.gen(function* () {
-      const createdAt = "2026-03-01T10:00:00.000Z";
-      const parent = yield* projectEvent(
-        createEmptyReadModel(createdAt),
-        makeEvent({
-          sequence: 1,
-          type: "thread.created",
+  effectIt.effect(
+    "evicts consumed child-report activity pairs while preserving the durable event",
+    () =>
+      Effect.gen(function* () {
+        const createdAt = "2026-03-01T10:00:00.000Z";
+        const parent = yield* projectEvent(
+          createEmptyReadModel(createdAt),
+          makeEvent({
+            sequence: 1,
+            type: "thread.created",
+            aggregateKind: "thread",
+            aggregateId: "parent-thread",
+            occurredAt: createdAt,
+            commandId: "cmd-parent-create",
+            payload: {
+              threadId: "parent-thread",
+              projectId: "project-1",
+              title: "Parent",
+              modelSelection: { provider: ProviderDriverKind.make("codex"), model: "gpt-5-codex" },
+              runtimeMode: "full-access",
+              branch: null,
+              worktreePath: null,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          }),
+        );
+        const posted = makeEvent({
+          sequence: 2,
+          type: "thread.activity-appended",
           aggregateKind: "thread",
           aggregateId: "parent-thread",
           occurredAt: createdAt,
-          commandId: "cmd-parent-create",
+          commandId: "posted",
           payload: {
             threadId: "parent-thread",
-            projectId: "project-1",
-            title: "Parent",
-            modelSelection: { provider: ProviderDriverKind.make("codex"), model: "gpt-5-codex" },
-            runtimeMode: "full-access",
-            branch: null,
-            worktreePath: null,
-            createdAt,
-            updatedAt: createdAt,
+            activity: {
+              id: "posted",
+              tone: "info",
+              kind: "session-report.posted",
+              summary: "Posted",
+              payload: {
+                childThreadId: "child-thread",
+                childTitle: "Child",
+                reportId: "report-1",
+                status: "success",
+                origin: "agent",
+                createdAt,
+              },
+              turnId: null,
+              createdAt,
+            },
           },
-        }),
-      );
-      const posted = makeEvent({
-        sequence: 2,
-        type: "thread.activity-appended",
-        aggregateKind: "thread",
-        aggregateId: "parent-thread",
-        occurredAt: createdAt,
-        commandId: "posted",
-        payload: {
-          threadId: "parent-thread",
-          activity: {
-            id: "posted", tone: "info", kind: "session-report.posted", summary: "Posted",
-            payload: { childThreadId: "child-thread", childTitle: "Child", reportId: "report-1", status: "success", origin: "agent", createdAt },
-            turnId: null, createdAt,
+        });
+        const read = makeEvent({
+          sequence: 3,
+          type: "thread.activity-appended",
+          aggregateKind: "thread",
+          aggregateId: "parent-thread",
+          occurredAt: "2026-03-01T10:01:00.000Z",
+          commandId: "read",
+          payload: {
+            threadId: "parent-thread",
+            activity: {
+              id: "read",
+              tone: "info",
+              kind: "session-report.read",
+              summary: "Read",
+              payload: {
+                childThreadId: "child-thread",
+                reportId: "report-1",
+                readByThreadId: "parent-thread",
+                readAt: "2026-03-01T10:01:00.000Z",
+              },
+              turnId: null,
+              createdAt: "2026-03-01T10:01:00.000Z",
+            },
           },
-        },
-      });
-      const read = makeEvent({
-        sequence: 3,
-        type: "thread.activity-appended",
-        aggregateKind: "thread",
-        aggregateId: "parent-thread",
-        occurredAt: "2026-03-01T10:01:00.000Z",
-        commandId: "read",
-        payload: {
-          threadId: "parent-thread",
-          activity: {
-            id: "read", tone: "info", kind: "session-report.read", summary: "Read",
-            payload: { childThreadId: "child-thread", reportId: "report-1", readByThreadId: "parent-thread", readAt: "2026-03-01T10:01:00.000Z" },
-            turnId: null, createdAt: "2026-03-01T10:01:00.000Z",
-          },
-        },
-      });
-      const finalState = yield* projectEvent(yield* projectEvent(parent, posted), read);
-      expect(finalState.threads[0]?.activities).toEqual([]);
-    }),
+        });
+        const finalState = yield* projectEvent(yield* projectEvent(parent, posted), read);
+        expect(finalState.threads[0]?.activities).toEqual([]);
+      }),
   );
 
   it("applies thread.created events", async () => {
