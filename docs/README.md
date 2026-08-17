@@ -8,6 +8,7 @@
 - [Organizing threads](./user/thread-sidebar.md)
 - [Review usage](./user/usage.md)
 - [Customize a project icon](./user/project-settings.md)
+- [Mobile appearance](./user/mobile-appearance.md)
 - [Remote access](./user/remote-access.md)
 - [Keeping app and server in sync](./user/updating.md)
 - [Source control integrations](./user/source-control.md)
@@ -38,6 +39,7 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 
 ### Runbooks
 
+- [Integrating upstream T3 Code](./operations/upstream-integration.md)
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
 - [Relay observability](./operations/relay-observability.md)
