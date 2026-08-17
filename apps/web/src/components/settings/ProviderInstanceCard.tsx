@@ -42,6 +42,7 @@ import type { DriverOption } from "./providerDriverMeta";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { SubscriptionAvailabilityBars } from "../subscriptions/SubscriptionAvailability";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import {
@@ -53,24 +54,6 @@ import {
 } from "./providerStatus";
 
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
-
-function availabilityWindowLabel(window: ProviderAvailability["windows"][number]): string {
-  if (window.windowDurationMins === 300) return "5-hour";
-  if (window.windowDurationMins === 10_080) return "Weekly";
-  return window.kind;
-}
-
-function availabilityTimeLabel(isoDateTime: string): string {
-  const date = new Date(isoDateTime);
-  return Number.isNaN(date.getTime())
-    ? isoDateTime
-    : new Intl.DateTimeFormat(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-        month: "short",
-        day: "numeric",
-      }).format(date);
-}
 
 let environmentVariableDraftId = 0;
 const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
@@ -424,8 +407,8 @@ export function ProviderInstanceCard({
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   const rawSummary = getProviderSummary(liveProvider);
   const authEmail = liveProvider?.auth.email;
-  const hasAuthenticatedEmail =
-    liveProvider?.auth.status === "authenticated" && Boolean(authEmail?.trim());
+  const isAuthenticated = liveProvider?.auth.status === "authenticated";
+  const hasAuthenticatedEmail = isAuthenticated && Boolean(authEmail?.trim());
   const authenticatedDetail = hasAuthenticatedEmail
     ? (liveProvider?.auth.label ?? liveProvider?.auth.type ?? null)
     : null;
@@ -616,28 +599,16 @@ export function ProviderInstanceCard({
     </p>
   );
 
-  const availabilityNode = availability ? (
-    <p className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
-      <span>Subscription availability:</span>
-      {availability.windows.length > 0 ? (
-        availability.windows.map((window) => (
-          <span key={window.kind}>
-            {availabilityWindowLabel(window)} {100 - window.usedPercent}% left
-            {window.windowDurationMins ? ` · ${window.windowDurationMins} min` : ""}
-            {window.resetsAt ? ` · resets ${availabilityTimeLabel(window.resetsAt)}` : ""}
-          </span>
-        ))
-      ) : (
-        <span>
-          {availability.source === "unsupported"
-            ? "not available"
-            : availability.observedAt
-              ? `native signal is stale (last seen ${availabilityTimeLabel(availability.observedAt)})`
-              : "awaiting native signal"}
-        </span>
-      )}
-    </p>
-  ) : null;
+  // Do not turn disabled, unauthenticated, or unsupported providers into
+  // misleading quota rows. A concrete native window is the only honest UI.
+  const availabilityNode =
+    enabled &&
+    isAuthenticated &&
+    availability?.source !== "unsupported" &&
+    availability !== undefined &&
+    availability.windows.length > 0 ? (
+      <SubscriptionAvailabilityBars availability={availability} compact />
+    ) : null;
 
   const versionCodeNode = versionLabel ? (
     <code className="text-xs text-muted-foreground">{versionLabel}</code>

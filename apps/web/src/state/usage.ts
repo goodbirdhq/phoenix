@@ -11,6 +11,7 @@ import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
   type ProviderAvailabilityEntry,
+  type ServerProvider,
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
@@ -35,6 +36,8 @@ export interface EnvironmentProviderAvailabilityStatus {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly providers: readonly ProviderAvailabilityEntry[];
+  /** Provider snapshots carry enabled/auth facts used for account presentation. */
+  readonly serverProviders: readonly ServerProvider[];
 }
 
 const providerAvailabilityAtom = Atom.make(
@@ -49,6 +52,7 @@ const providerAvailabilityAtom = Atom.make(
           environmentId,
           label: presentation.entry.target.label,
           providers: value.providers,
+          serverProviders: get(serverEnvironment.providersValueAtom(environmentId)) ?? [],
         });
       }
     }
