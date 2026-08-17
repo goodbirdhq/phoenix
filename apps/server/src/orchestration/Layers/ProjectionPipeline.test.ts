@@ -239,6 +239,93 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       assert.deepEqual(unsettledRows, [{ settledOverride: "active", settledAt: null }]);
     }),
   );
+
+  it.effect("evicts a consumed child-report pair from the persisted activity projection", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+      const threadId = ThreadId.make("thread-child-report-retention");
+      const now = "2026-03-01T10:00:00.000Z";
+
+      yield* appendAndProject({
+        type: "thread.activity-appended",
+        eventId: EventId.make("event-child-report-posted"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("command-child-report-posted"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("command-child-report-posted"),
+        metadata: {},
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.make("activity-child-report-posted"),
+            tone: "info",
+            kind: "session-report.posted",
+            summary: "Child posted report",
+            payload: {
+              childThreadId: "child-thread",
+              childTitle: "Child",
+              reportId: "report-1",
+              status: "success",
+              origin: "agent",
+              createdAt: now,
+            },
+            turnId: null,
+            createdAt: now,
+          },
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.activity-appended",
+        eventId: EventId.make("event-child-report-read"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-03-01T10:01:00.000Z",
+        commandId: CommandId.make("command-child-report-read"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("command-child-report-read"),
+        metadata: {},
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.make("activity-child-report-read"),
+            tone: "info",
+            kind: "session-report.read",
+            summary: "Parent agent read child report",
+            payload: {
+              childThreadId: "child-thread",
+              reportId: "report-1",
+              readByThreadId: threadId,
+              readAt: "2026-03-01T10:01:00.000Z",
+            },
+            turnId: null,
+            createdAt: "2026-03-01T10:01:00.000Z",
+          },
+        },
+      });
+
+      const activityRows = yield* sql<{ readonly activityId: string }>`
+        SELECT activity_id AS "activityId"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+      `;
+      assert.deepEqual(activityRows, []);
+      const eventRows = yield* sql<{ readonly count: number }>`
+        SELECT count(*) AS count
+        FROM orchestration_events
+        WHERE stream_id = ${threadId}
+          AND event_type = 'thread.activity-appended'
+      `;
+      assert.deepEqual(eventRows, [{ count: 2 }]);
+    }),
+  );
 });
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(

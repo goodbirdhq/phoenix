@@ -12,6 +12,7 @@ import {
   NonNegativeInt,
   OrchestrationThreadActivityTone,
   ThreadId,
+  TrimmedNonEmptyString,
   TurnId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -44,6 +45,13 @@ export const DeleteProjectionThreadActivitiesInput = Schema.Struct({
 export type DeleteProjectionThreadActivitiesInput =
   typeof DeleteProjectionThreadActivitiesInput.Type;
 
+export const DeleteProjectionSessionReportActivityPairInput = Schema.Struct({
+  threadId: ThreadId,
+  reportId: TrimmedNonEmptyString,
+});
+export type DeleteProjectionSessionReportActivityPairInput =
+  typeof DeleteProjectionSessionReportActivityPairInput.Type;
+
 /**
  * ProjectionThreadActivityRepositoryShape - Service API for projected thread activity.
  */
@@ -72,6 +80,11 @@ export interface ProjectionThreadActivityRepositoryShape {
    */
   readonly deleteByThreadId: (
     input: DeleteProjectionThreadActivitiesInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /** Remove the non-actionable notification and receipt after a report read. */
+  readonly deleteSessionReportActivityPair: (
+    input: DeleteProjectionSessionReportActivityPairInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 

@@ -1123,7 +1123,25 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       "applyThreadActivitiesProjection",
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
-        case "thread.activity-appended":
+        case "thread.activity-appended": {
+          const reportId =
+            event.payload.activity.kind === "session-report.read" &&
+            typeof event.payload.activity.payload === "object" &&
+            event.payload.activity.payload !== null &&
+            "reportId" in event.payload.activity.payload &&
+            typeof event.payload.activity.payload.reportId === "string"
+              ? event.payload.activity.payload.reportId
+              : null;
+          if (reportId !== null) {
+            // The journal retains this read receipt. The activity projection
+            // is only the current inbox, so neither it nor the consumed post
+            // should return in a snapshot after a restart.
+            yield* projectionThreadActivityRepository.deleteSessionReportActivityPair({
+              threadId: event.payload.threadId,
+              reportId,
+            });
+            return;
+          }
           yield* projectionThreadActivityRepository.upsert({
             activityId: event.payload.activity.id,
             threadId: event.payload.threadId,
@@ -1138,6 +1156,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: event.payload.activity.createdAt,
           });
           return;
+        }
 
         case "thread.reverted": {
           const existingRows = yield* projectionThreadActivityRepository.listByThreadId({
