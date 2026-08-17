@@ -50,6 +50,10 @@ export interface SessionReportInboxChild {
   readonly unreadCount: number;
 }
 
+export const visibleSessionReportInboxChildren = (
+  children: ReadonlyArray<SessionReportInboxChild>,
+) => children.slice(0, SESSION_REPORT_DIGEST_MAX_ITEMS);
+
 // The chat surface gets one notification per child. Multiple independent
 // reports remain unread individually, but a burst from one child cannot grow
 // the composer area into a transcript; its count is visible in the popover.

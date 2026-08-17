@@ -34,6 +34,12 @@ Every session has tools for orchestration alongside its other Phoenix tools:
   turn. Several child reports are grouped together there; the parent can read the current report
   or session when it is ready to act. The report also carries the same usage snapshot, captured at
   the moment it was posted, so the spawning session can see what the work cost.
+
+  Opening the report inbox or a child thread does not mark a report as read. An update clears only
+  when the parent agent reads that exact report. Both the report and that read activity stay in the
+  session history. The parent can still read a direct child's report after the child is archived;
+  archived sibling reports are not available through this shortcut.
+
 - **Settle a session** — once the spawning session is done with a child, it marks it settled so the
   thread stops counting as live work — this is also what frees the spawn slot, once the child's
   process has actually stopped (a settle that could not stop the process in time keeps counting

@@ -5,9 +5,12 @@ import { formatRelativeTimeLabel } from "../../timestampFormat";
 import {
   deriveSessionReportInboxChildren,
   deriveSessionReportNotifications,
-  SESSION_REPORT_DIGEST_MAX_ITEMS,
+  visibleSessionReportInboxChildren,
 } from "../../lib/sessionReportNotifications";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+
+export const SESSION_REPORT_INBOX_PASSIVE_COPY =
+  "Opening this inbox or a child thread does not mark a report as read. Only the parent agent's read_report call clears an update.";
 
 export function SessionReportDigest({
   activities,
@@ -18,14 +21,14 @@ export function SessionReportDigest({
 }) {
   const notifications = useMemo(() => deriveSessionReportNotifications(activities), [activities]);
   const children = useMemo(() => deriveSessionReportInboxChildren(notifications), [notifications]);
-  const visibleChildren = children.slice(0, SESSION_REPORT_DIGEST_MAX_ITEMS);
+  const visibleChildren = visibleSessionReportInboxChildren(children);
   const failedCount = notifications.filter(
     (notification) => notification.payload.status === "failure",
   ).length;
 
   if (notifications.length === 0) return null;
 
-  const countLabel = `${notifications.length} child report${notifications.length === 1 ? "" : "s"} ready`;
+  const countLabel = `${notifications.length} child report${notifications.length === 1 ? "" : "s"} awaiting parent review`;
   const needsAttentionLabel =
     failedCount === 0 ? null : `${failedCount} ${failedCount === 1 ? "needs" : "need"} attention`;
 
@@ -33,6 +36,7 @@ export function SessionReportDigest({
     <Popover>
       <PopoverTrigger
         aria-label={`Open child report inbox: ${countLabel}${needsAttentionLabel ? `, ${needsAttentionLabel}` : ""}`}
+        aria-description="Opening this inbox does not mark reports as read."
         className="chat-composer-glass mb-2 flex w-full items-center justify-between gap-3 rounded-xl border border-border/60 px-3 py-2 text-left text-sm shadow-sm transition-colors hover:border-border hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="flex min-w-0 items-center gap-2">
@@ -46,7 +50,7 @@ export function SessionReportDigest({
         {needsAttentionLabel ? (
           <span className="shrink-0 text-destructive text-xs">{needsAttentionLabel}</span>
         ) : (
-          <span className="shrink-0 text-muted-foreground text-xs">View inbox</span>
+          <span className="shrink-0 text-muted-foreground text-xs">Open inbox</span>
         )}
       </PopoverTrigger>
       <PopoverPopup
@@ -59,9 +63,7 @@ export function SessionReportDigest({
             <InboxIcon aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
               <p className="font-medium text-foreground text-sm">Child report inbox</p>
-              <p className="text-muted-foreground text-xs">
-                The parent agent clears an update after it reads the report.
-              </p>
+              <p className="text-muted-foreground text-xs">{SESSION_REPORT_INBOX_PASSIVE_COPY}</p>
             </div>
           </div>
           <ul className="space-y-1" aria-label="Unread child reports">

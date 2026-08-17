@@ -1466,6 +1466,10 @@ describe("read_report child-report inbox consumption (handler)", () => {
                 return { sequence: 1 };
               }),
             enqueueCommand: (effect) => effect,
+            // Consumption must not load the full parent thread just to search
+            // for an existing activity; receipt deduplication is the atomic
+            // boundary instead.
+            getThreadDetailById: () => Effect.die("parent detail must not be loaded"),
           },
         );
 
@@ -1473,6 +1477,7 @@ describe("read_report child-report inbox consumption (handler)", () => {
         expect(dispatched).toHaveLength(1);
         expect(dispatched[0]).toMatchObject({
           type: "thread.activity.append",
+          commandId: "session-report-read:parent-1:direct-child-report",
           threadId: parentThreadId,
           activity: {
             kind: "session-report.read",
@@ -1486,7 +1491,137 @@ describe("read_report child-report inbox consumption (handler)", () => {
       }),
   );
 
-  it.effect("never consumes a sibling report or a threadId-only read", () =>
+  it.effect("uses one deterministic receipt across concurrent and replayed reads", () =>
+    Effect.gen(function* () {
+      const persisted: Array<OrchestrationCommand> = [];
+      const receipts = new Map<string, number>();
+      const results = yield* runHandler(
+        (handlers) =>
+          Effect.all(
+            [
+              handlers.read_report({ reportId: "direct-child-report" }),
+              handlers.read_report({ reportId: "direct-child-report" }),
+              // A later delivery replay must use the same receipt too.
+              handlers.read_report({ reportId: "direct-child-report" }),
+            ],
+            { concurrency: "unbounded" },
+          ),
+        {
+          findByReportId: () =>
+            Effect.succeed(
+              Option.some(
+                projectedReport({ reportId: "direct-child-report", threadId: childThreadId }),
+              ),
+            ),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              const existing = receipts.get(command.commandId);
+              if (existing !== undefined) return { sequence: existing };
+              const sequence = 41 + persisted.length;
+              receipts.set(command.commandId, sequence);
+              persisted.push(command);
+              return { sequence };
+            }),
+          enqueueCommand: (effect) => effect,
+          getThreadDetailById: () => Effect.die("parent detail must not be loaded"),
+        },
+      );
+
+      expect(results.map((result) => result.reportId)).toEqual([
+        "direct-child-report",
+        "direct-child-report",
+        "direct-child-report",
+      ]);
+      expect(persisted).toHaveLength(1);
+      const consumption = persisted[0];
+      if (consumption?.type !== "thread.activity.append") {
+        throw new Error("Expected the durable consumption command.");
+      }
+      expect(consumption.commandId).toBe("session-report-read:parent-1:direct-child-report");
+      expect(consumption.activity.id).toBe("session-report-read:parent-1:direct-child-report");
+    }),
+  );
+
+  it.effect("allows a direct archived child report and still consumes its report-id read", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      const archivedChild = { ...childShell, archivedAt: now };
+      const result = yield* runHandler(
+        (handlers) => handlers.read_report({ reportId: "archived-child-report" }),
+        {
+          findByReportId: () =>
+            Effect.succeed(
+              Option.some(
+                projectedReport({ reportId: "archived-child-report", threadId: childThreadId }),
+              ),
+            ),
+          getThreadShellById: (threadId) =>
+            Effect.succeed(threadId === parentThreadId ? Option.some(parentShell) : Option.none()),
+          getArchivedShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [],
+              threads: [archivedChild],
+              updatedAt: now,
+            }),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command);
+              return { sequence: 1 };
+            }),
+          enqueueCommand: (effect) => effect,
+        },
+      );
+
+      expect(result.reportId).toBe("archived-child-report");
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0]?.commandId).toBe("session-report-read:parent-1:archived-child-report");
+    }),
+  );
+
+  it.effect("keeps archived siblings outside the direct-child exception", () =>
+    Effect.gen(function* () {
+      const rootThreadId = "root-thread" as ThreadId;
+      const siblingThreadId = "archived-sibling" as ThreadId;
+      const archivedSibling = {
+        ...childShell,
+        id: siblingThreadId,
+        spawnedByThreadId: rootThreadId,
+        archivedAt: now,
+      };
+      const error = yield* runHandler(
+        (handlers) => handlers.read_report({ reportId: "archived-sibling-report" }),
+        {
+          findByReportId: () =>
+            Effect.succeed(
+              Option.some(
+                projectedReport({ reportId: "archived-sibling-report", threadId: siblingThreadId }),
+              ),
+            ),
+          getThreadShellById: (threadId) =>
+            Effect.succeed(
+              threadId === parentThreadId
+                ? Option.some({ ...parentShell, spawnedByThreadId: rootThreadId })
+                : Option.none(),
+            ),
+          getArchivedShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [],
+              threads: [archivedSibling],
+              updatedAt: now,
+            }),
+        },
+      ).pipe(Effect.flip);
+
+      expect(error).toMatchObject({
+        _tag: "SessionOrchestrationDeniedError",
+        reason: "report_not_accessible",
+      });
+    }),
+  );
+
+  it.effect("never consumes a sibling, self, or threadId-only read", () =>
     Effect.gen(function* () {
       const rootThreadId = "root-thread" as ThreadId;
       const siblingThreadId = "sibling-thread" as ThreadId;
@@ -1524,6 +1659,11 @@ describe("read_report child-report inbox consumption (handler)", () => {
           Effect.succeed([
             projectedReport({ reportId: "thread-only-report", threadId: childThreadId }),
           ]),
+        ...noConsume,
+      });
+      yield* runHandler((handlers) => handlers.read_report({ reportId: "self-report" }), {
+        findByReportId: () =>
+          Effect.succeed(Option.some(projectedReport({ reportId: "self-report" }))),
         ...noConsume,
       });
 

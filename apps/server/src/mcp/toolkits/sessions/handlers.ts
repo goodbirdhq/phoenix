@@ -33,7 +33,6 @@ import {
   SessionOrchestrationWorktreeNotEmptyError,
   type ServerProvider,
   type SessionUsageSnapshot,
-  isSessionReportReadActivity,
   supersededReportNotice,
   type SettleSessionBranchRefusal,
   type SettleSessionInput,
@@ -589,10 +588,9 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.mapError(operationError("Failed to read thread state")));
 
   // getThreadShellById/getShellSnapshot only ever resolve non-archived
-  // threads, so an already-archived child needs its own lookup — used only
-  // by archive_session's idempotency check (a fallback path, not the hot
-  // one), never for authorization on any other tool. Scoped to threads this
-  // caller spawned, same as every other mutating lookup.
+  // threads, so an already-archived child needs its own lookup. This is a
+  // fallback path for archive_session retries and for a parent reading one of
+  // its archived child's durable reports; it never broadens sibling access.
   const findArchivedSpawnedChild = (parentThreadId: ThreadId, threadId: ThreadId) =>
     snapshotQuery.getArchivedShellSnapshot().pipe(
       Effect.mapError(operationError("Failed to read archived thread snapshot")),
@@ -2152,19 +2150,28 @@ export const make = Effect.gen(function* () {
         reason: "report_not_accessible",
         message: REPORT_NOT_ACCESSIBLE_MESSAGE,
       });
-    const mayReadThread = (targetThreadId: ThreadId) =>
-      getShell(targetThreadId).pipe(
-        Effect.map(
-          (shell) =>
-            Option.isSome(shell) &&
-            canReadThreadReports({
-              callerThreadId: scope.threadId,
-              callerSpawnedByThreadId: caller.spawnedByThreadId ?? null,
-              targetThreadId,
-              targetSpawnedByThreadId: shell.value.spawnedByThreadId ?? null,
-            }),
-        ),
-      );
+    // Reports outlive an archived thread. A parent may therefore still read
+    // an archived direct child's report (and consume its matching inbox
+    // update), but archiving does not turn archived siblings into readable
+    // targets. Active targets retain the normal self/child/sibling policy.
+    const resolveReadableReportTarget = (targetThreadId: ThreadId) =>
+      Effect.gen(function* () {
+        const activeTarget = yield* getShell(targetThreadId);
+        if (Option.isSome(activeTarget)) {
+          const isDirectChild = activeTarget.value.spawnedByThreadId === scope.threadId;
+          return canReadThreadReports({
+            callerThreadId: scope.threadId,
+            callerSpawnedByThreadId: caller.spawnedByThreadId ?? null,
+            targetThreadId,
+            targetSpawnedByThreadId: activeTarget.value.spawnedByThreadId ?? null,
+          })
+            ? { isDirectChild }
+            : null;
+        }
+
+        const archivedDirectChild = yield* findArchivedSpawnedChild(scope.threadId, targetThreadId);
+        return Option.isSome(archivedDirectChild) ? { isDirectChild: true } : null;
+      });
 
     // When the target thread is named, authorize it before touching any
     // report rows; only the reportId-only path has to resolve the row first
@@ -2173,9 +2180,9 @@ export const make = Effect.gen(function* () {
     // residual signal in that path is timing (a row lookup happens before the
     // denial); acceptable only because reportIds are server-generated v4
     // UUIDs — unguessable, so there is nothing to probe by dictionary.
-    if (input.threadId !== undefined && !(yield* mayReadThread(input.threadId))) {
-      return yield* reportNotAccessible();
-    }
+    let target =
+      input.threadId === undefined ? undefined : yield* resolveReadableReportTarget(input.threadId);
+    if (input.threadId !== undefined && target === null) return yield* reportNotAccessible();
 
     let report: ProjectionThreadReport;
     if (input.reportId !== undefined) {
@@ -2189,8 +2196,9 @@ export const make = Effect.gen(function* () {
         if (found.value.threadId !== input.threadId) {
           return yield* reportNotAccessible();
         }
-      } else if (!(yield* mayReadThread(found.value.threadId))) {
-        return yield* reportNotAccessible();
+      } else if (target === undefined) {
+        target = yield* resolveReadableReportTarget(found.value.threadId);
+        if (target === null) return yield* reportNotAccessible();
       }
       report = found.value;
     } else {
@@ -2213,54 +2221,35 @@ export const make = Effect.gen(function* () {
     // A child-report inbox belongs to the parent, not to any person looking
     // at the child in the UI. The only consumption path is the parent agent's
     // explicit read_report(reportId): sibling reads, self reads, and the
-    // convenience threadId form are observations only. The activity is an
-    // append-only audit record, so old reports remain retrievable forever.
-    const directChild =
-      input.reportId !== undefined && report.threadId !== scope.threadId
-        ? yield* getShell(report.threadId).pipe(
-            Effect.map(
-              (shell) => Option.isSome(shell) && shell.value.spawnedByThreadId === scope.threadId,
-            ),
-          )
-        : false;
-    if (directChild) {
-      const parentDetail = yield* snapshotQuery
-        .getThreadDetailById(scope.threadId)
-        .pipe(Effect.mapError(operationError("Failed to read parent report inbox")));
-      const alreadyRead = Option.isSome(parentDetail)
-        ? parentDetail.value.activities.some(
-            (activity) =>
-              isSessionReportReadActivity(activity) &&
-              activity.payload.reportId === report.reportId,
-          )
-        : false;
-      if (!alreadyRead) {
-        const readAt = yield* nowIso;
-        yield* enqueue(
-          engine.dispatch({
-            type: "thread.activity.append",
-            commandId: yield* serverCommandId("mcp-read-child-report"),
-            threadId: scope.threadId,
-            activity: {
-              // Stable across retries/replays, so the activity projection is
-              // idempotent even if a client repeats the successful read.
-              id: EventId.make(`session-report-read:${scope.threadId}:${report.reportId}`),
-              tone: "info",
-              kind: "session-report.read",
-              summary: "Parent agent read child report",
-              payload: {
-                childThreadId: report.threadId,
-                reportId: report.reportId,
-                readByThreadId: scope.threadId,
-                readAt,
-              },
-              turnId: null,
-              createdAt: readAt,
+    // convenience threadId form are observations only. The stable command ID
+    // is the concurrency boundary: the event store receipt returns the same
+    // sequence to duplicate/replayed reads, without loading parent detail or
+    // racing an activity-list check. The resulting activity is append-only,
+    // so report and read history remain durable.
+    if (input.reportId !== undefined && target?.isDirectChild === true) {
+      const readAt = yield* nowIso;
+      yield* enqueue(
+        engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(`session-report-read:${scope.threadId}:${report.reportId}`),
+          threadId: scope.threadId,
+          activity: {
+            id: EventId.make(`session-report-read:${scope.threadId}:${report.reportId}`),
+            tone: "info",
+            kind: "session-report.read",
+            summary: "Parent agent read child report",
+            payload: {
+              childThreadId: report.threadId,
+              reportId: report.reportId,
+              readByThreadId: scope.threadId,
+              readAt,
             },
+            turnId: null,
             createdAt: readAt,
-          }),
-        );
-      }
+          },
+          createdAt: readAt,
+        }),
+      );
     }
     return {
       reportId: report.reportId,

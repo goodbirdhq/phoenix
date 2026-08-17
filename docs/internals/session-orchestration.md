@@ -460,6 +460,23 @@ matching child, which matters once retention is only capped at 32 instead of 8.
 - Spawned threads participate in normal archive/settle session cleanup, so orchestration cannot
   leak provider processes.
 
+## Child-report inbox reads
+
+Posting a report appends a `session-report.posted` activity to the active parent's thread. The web
+inbox is deliberately passive: opening it or navigating to a child emits no command. Only the
+parent's `read_report({ reportId })` for a direct child appends the corresponding
+`session-report.read` activity. Both the activity ID and its command ID are derived from
+`parentThreadId + reportId`, so the orchestration command-receipt table makes concurrent calls and
+event-stream replay return the same receipt rather than write a second consumption event. This
+keeps consumption event-sourced and avoids materializing the parent's full thread detail just to
+check whether an earlier read exists.
+
+Reports and read activities are retained projections of their events. A parent may read a direct
+child's report by id even after that child is archived, including consuming its matching inbox
+update; this is the narrow archived exception because report history is durable. Archived targets
+never gain sibling access, and the `threadId` convenience form remains observational for every
+target. The UI copy must continue to state that opening the inbox does not mark anything read.
+
 ## Gotcha worth remembering
 
 Every MCP tool here must declare at least one (optional) parameter. An empty `Schema.Struct({})`

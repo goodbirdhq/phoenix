@@ -10,6 +10,7 @@ import {
   deriveSessionReportInboxChildren,
   deriveSessionReportNotifications,
   SESSION_REPORT_DIGEST_MAX_ITEMS,
+  visibleSessionReportInboxChildren,
   visibleSessionReportNotifications,
 } from "./sessionReportNotifications";
 
@@ -98,6 +99,26 @@ describe("deriveSessionReportNotifications", () => {
     expect(notifications.map((entry) => entry.payload.reportId)).toEqual(["legacy-report"]);
   });
 
+  it("consumes an amendment only when its own report id is read", () => {
+    const original = activity("report-original", 1);
+    const amendment = {
+      ...activity("report-amendment", 2),
+      payload: {
+        ...activity("report-amendment", 2).payload,
+        supersedesReportId: "report-original",
+      },
+    };
+
+    expect(
+      deriveSessionReportNotifications([original, amendment, consumed("report-original", 3)]).map(
+        (entry) => entry.payload.reportId,
+      ),
+    ).toEqual(["report-amendment"]);
+    expect(
+      deriveSessionReportNotifications([original, amendment, consumed("report-amendment", 3)]),
+    ).toEqual([]);
+  });
+
   it("collapses the compact inbox to the latest unread report per child without losing count", () => {
     const latest = {
       ...activity("report-2", 2),
@@ -140,5 +161,23 @@ describe("deriveSessionReportNotifications", () => {
         latest,
       }),
     ]);
+  });
+
+  it("keeps a large inbox bounded to the newest children", () => {
+    const children = deriveSessionReportInboxChildren(
+      Array.from({ length: SESSION_REPORT_DIGEST_MAX_ITEMS + 3 }, (_unused, index) => ({
+        ...activity(`report-${index}`, index),
+        payload: {
+          ...activity(`report-${index}`, index).payload,
+          childThreadId: ThreadId.make(`child-${index}`),
+          childTitle: `Child ${index}`,
+        },
+      })),
+    );
+
+    const visible = visibleSessionReportInboxChildren(children);
+    expect(visible).toHaveLength(SESSION_REPORT_DIGEST_MAX_ITEMS);
+    expect(visible[0]?.childThreadId).toBe("child-22");
+    expect(visible.at(-1)?.childThreadId).toBe("child-3");
   });
 });
