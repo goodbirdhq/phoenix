@@ -266,6 +266,14 @@ describe("assessWorktreeCleanupRisk", () => {
 
 describe("decideBranchCleanup", () => {
   it("deletes a Phoenix temporary worktree branch", () => {
+    expect(decideBranchCleanup("phoenix/1a2b3c4d")).toEqual({
+      deleteBranch: true,
+      requiresMergeProof: false,
+      detail: null,
+    });
+  });
+
+  it("deletes a legacy T3 Code temporary worktree branch", () => {
     expect(decideBranchCleanup("t3code/1a2b3c4d")).toEqual({
       deleteBranch: true,
       requiresMergeProof: false,
@@ -288,9 +296,9 @@ describe("decideBranchCleanup", () => {
     });
     // Phoenix's own throwaway branches never need the proof: nothing but this
     // worktree ever pointed at them.
-    expect(decideBranchCleanup("t3code/1a2b3c4d", { cleanupBranch: true }).requiresMergeProof).toBe(
-      false,
-    );
+    expect(
+      decideBranchCleanup("phoenix/1a2b3c4d", { cleanupBranch: true }).requiresMergeProof,
+    ).toBe(false);
   });
 
   it("has nothing to do when the thread has no branch", () => {

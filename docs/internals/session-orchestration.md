@@ -232,7 +232,8 @@ could not have reported already. Waiting one out would only delay the settle and
 `cleanupWorktree: true` is the only thing in the server that reclaims a spawned worktree; without
 it a long orchestration run leaks a directory per child. Deletion is permanent, so it is refused —
 with the specific dirty files and unpushed commit count — unless the work is committed and pushed,
-or `force: true` is passed. Only `t3code/…` temporary branches are ours to delete on sight; any
+or `force: true` is passed. Only `phoenix/…` temporary branches (and legacy `t3code/…` temporary
+branches) are ours to delete on sight; any
 other branch is kept and reported unless `cleanupBranch: true` comes with a merge proof (below).
 Note that `deleteRef` itself is a dumb primitive: the safety lives in `decideBranchCleanup` at the
 call site, not in the driver. The result always names what was removed, what was kept, and the
@@ -325,7 +326,7 @@ re-proof stays as the merged-safety check, with the residual stated where the co
 between that check and the delete, an external ref move can lose a pointer.
 
 The explicit `git worktree list --porcelain` check still runs first, inside the critical section
-and for **every** branch deletion — temporary `t3code/…` branches included, since nothing stops a
+and for **every** branch deletion — temporary `phoenix/…` branches included, since nothing stops a
 user checking one out. git would refuse anyway; the check exists so the caller gets a structured
 refusal naming the conflicting directory instead of a raw git error. An unreadable worktree list
 fails closed for the same reason the check exists at all. When a worktree appears in the gap
