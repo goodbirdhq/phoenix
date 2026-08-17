@@ -8,6 +8,10 @@ import type {
   UserInputQuestion,
 } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import {
+  deriveSpawnedSessionToolActivity,
+  type SpawnedSessionToolActivity,
+} from "@t3tools/shared/toolActivity";
 
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -75,6 +79,7 @@ interface WorkLogEntry {
   requestKind?: PendingApproval["requestKind"];
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   toolData?: unknown;
+  spawnedSession?: SpawnedSessionToolActivity;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -416,6 +421,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (itemType === "mcp_tool_call") {
     const data = asRecord(payload?.data);
+    const spawnedSession = deriveSpawnedSessionToolActivity(data);
+    if (spawnedSession) {
+      entry.spawnedSession = spawnedSession;
+    }
     if (data?.item !== undefined) {
       entry.toolData = data.item;
     }
@@ -503,6 +512,9 @@ function mergeDerivedWorkLogEntries(
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolLifecycleStatus = next.toolLifecycleStatus ?? previous.toolLifecycleStatus;
   const toolData = next.toolData ?? previous.toolData;
+  const spawnedSession = next.spawnedSession
+    ? { ...previous.spawnedSession, ...next.spawnedSession }
+    : previous.spawnedSession;
   return {
     ...previous,
     ...next,
@@ -516,6 +528,7 @@ function mergeDerivedWorkLogEntries(
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolLifecycleStatus ? { toolLifecycleStatus } : {}),
     ...(toolData !== undefined ? { toolData } : {}),
+    ...(spawnedSession !== undefined ? { spawnedSession } : {}),
   };
 }
 
@@ -548,6 +561,9 @@ function normalizeCompactToolLabel(value: string): string {
 }
 
 function workLogEntryIsToolLike(entry: WorkLogEntry): boolean {
+  if (entry.spawnedSession) {
+    return false;
+  }
   if (entry.tone === "tool" || entry.tone === "thinking" || entry.tone === "error") {
     return true;
   }
@@ -629,6 +645,7 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
     return "message";
   }
   if (entry.activityKind === "runtime.warning") return "warning";
+  if (entry.spawnedSession) return "agent";
   if (entry.requestKind === "command") return "command";
   if (entry.requestKind === "file-read") return "eye";
   if (entry.requestKind === "file-change") return "edit";
@@ -689,8 +706,9 @@ function memoizeValue<T>(build: () => T): () => T {
 }
 
 function workEntryPreview(
-  workEntry: Pick<WorkLogEntry, "detail" | "command" | "changedFiles">,
+  workEntry: Pick<WorkLogEntry, "detail" | "command" | "changedFiles" | "spawnedSession">,
 ): string | null {
+  if (workEntry.spawnedSession) return workEntry.spawnedSession.title;
   if (workEntry.command) return workEntry.command;
   if (workEntry.detail) return workEntry.detail;
   if ((workEntry.changedFiles?.length ?? 0) === 0) return null;
@@ -710,6 +728,17 @@ function capitalizePhrase(value: string): string {
 }
 
 function workEntryHeading(workEntry: WorkLogEntry): string {
+  if (workEntry.spawnedSession) {
+    if (
+      workEntry.tone === "error" ||
+      workEntry.toolLifecycleStatus === "failed" ||
+      workEntry.toolLifecycleStatus === "declined" ||
+      workEntry.toolLifecycleStatus === "stopped"
+    ) {
+      return "Failed to spawn agent";
+    }
+    return workEntry.spawnedSession.threadId ? "Spawned agent" : "Spawning agent";
+  }
   if (!workEntry.toolTitle) {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
   }

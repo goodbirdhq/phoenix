@@ -1011,6 +1011,143 @@ describe("deriveMessagesTimelineRows", () => {
       expanded: true,
     });
   });
+
+  it("keeps an in-progress spawned-session card outside work-log overflow", () => {
+    const timelineEntries = [
+      {
+        id: "work-entry-1",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:01Z",
+        entry: {
+          id: "work-1",
+          createdAt: "2026-01-01T00:00:01Z",
+          label: "Read file",
+          tone: "tool" as const,
+        },
+      },
+      {
+        id: "spawn-session-entry",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:02Z",
+        entry: {
+          id: "spawn-session",
+          createdAt: "2026-01-01T00:00:02Z",
+          label: "MCP tool call",
+          tone: "tool" as const,
+          itemType: "mcp_tool_call" as const,
+          toolLifecycleStatus: "inProgress" as const,
+          spawnedSession: { title: "Review the renderer" },
+        },
+      },
+      {
+        id: "work-entry-3",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:03Z",
+        entry: {
+          id: "work-3",
+          createdAt: "2026-01-01T00:00:03Z",
+          label: "Run tests",
+          tone: "tool" as const,
+        },
+      },
+    ];
+
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries,
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "spawn-session",
+      "work-3",
+      "work-toggle:work-entry-1",
+      "working-indicator-row",
+    ]);
+    expect(rows.find((row) => row.id === "spawn-session")).toMatchObject({
+      kind: "work",
+      groupedEntries: [{ spawnedSession: { title: "Review the renderer" } }],
+    });
+  });
+
+  it("keeps a spawned-session card visible when its launching turn folds", () => {
+    const turnId = "turn-spawn-session" as never;
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "user-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-1" as never,
+            role: "user",
+            text: "Delegate this",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "spawn-session-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:02Z",
+          entry: {
+            id: "spawn-session",
+            createdAt: "2026-01-01T00:00:02Z",
+            turnId,
+            label: "MCP tool call",
+            tone: "tool",
+            itemType: "mcp_tool_call",
+            toolLifecycleStatus: "completed",
+            spawnedSession: {
+              title: "Review the renderer",
+              threadId: "child-thread",
+            },
+          },
+        },
+        {
+          id: "ordinary-work-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:03Z",
+          entry: {
+            id: "ordinary-work",
+            createdAt: "2026-01-01T00:00:03Z",
+            turnId,
+            label: "Read file",
+            tone: "tool",
+          },
+        },
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:05Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "The reviewer is running.",
+            turnId,
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:05Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "user-entry",
+      "turn-fold:turn-spawn-session",
+      "spawn-session-entry",
+      "assistant-final-entry",
+    ]);
+  });
 });
 
 describe("computeStableMessagesTimelineRows", () => {

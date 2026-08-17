@@ -325,6 +325,53 @@ describe("buildThreadFeed", () => {
     expect(group.activities[0]?.getFullDetail()).toContain("repository.search");
   });
 
+  it("presents session MCP spawns as agent activity", () => {
+    const turnId = TurnId.make("turn-spawn-session");
+    const thread = makeThread({
+      id: ThreadId.make("thread-spawn-session"),
+      projectId: ProjectId.make("project-1"),
+      title: "Spawn an agent",
+      activities: [
+        makeActivity({
+          id: EventId.make("spawn-session-completed"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "MCP tool call",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          turnId,
+          payload: {
+            itemType: "mcp_tool_call",
+            status: "completed",
+            data: {
+              toolName: "mcp__phoenix__spawn_session",
+              input: { title: "Review mobile" },
+              result: {
+                content: JSON.stringify({
+                  threadId: "child-thread",
+                  title: "Review mobile",
+                }),
+              },
+            },
+          },
+        }),
+      ],
+    });
+
+    const group = buildThreadFeed(thread)[0];
+    expect(group).toMatchObject({ type: "activity-group" });
+    if (!group || group.type !== "activity-group") {
+      return;
+    }
+
+    expect(group.activities[0]).toMatchObject({
+      summary: "Spawned agent",
+      detail: "Review mobile",
+      icon: "agent",
+      toolLike: false,
+      status: null,
+    });
+  });
+
   it("defers large tool output expansion until a work row is opened or copied", () => {
     let serializedToolOutputs = 0;
     const activities = Array.from({ length: 5_000 }, (_, index) =>
