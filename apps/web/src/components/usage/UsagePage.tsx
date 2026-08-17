@@ -57,13 +57,14 @@ export function UsagePage() {
     refresh,
     providerAvailability,
     isProviderAvailabilityPending,
+    hasProviderAvailabilityError,
   } = useUsage(window);
   const subscriptionAccounts = useMemo(
     () =>
       deriveSubscriptionAccounts(
         providerAvailability.flatMap((environment) =>
           environment.providers.map((entry) => {
-            const provider = environment.serverProviders.find(
+            const provider = environment.serverProviders?.find(
               (candidate) => candidate.instanceId === entry.instanceId,
             );
             return {
@@ -208,6 +209,7 @@ export function UsagePage() {
                 <SubscriptionAvailabilitySection
                   accounts={subscriptionAccounts}
                   isPending={isProviderAvailabilityPending}
+                  hasError={hasProviderAvailabilityError}
                 />
                 <UsageSkeleton resolution={isPast24Hours ? "hour" : "day"} />
               </>
@@ -221,6 +223,7 @@ export function UsagePage() {
                 <SubscriptionAvailabilitySection
                   accounts={subscriptionAccounts}
                   isPending={isProviderAvailabilityPending}
+                  hasError={hasProviderAvailabilityError}
                 />
 
                 {/* Cost first: the financial answer, then the provider split. */}

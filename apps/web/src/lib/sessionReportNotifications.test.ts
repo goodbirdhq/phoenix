@@ -11,7 +11,6 @@ import {
   deriveSessionReportNotifications,
   SESSION_REPORT_DIGEST_MAX_ITEMS,
   visibleSessionReportInboxChildren,
-  visibleSessionReportNotifications,
 } from "./sessionReportNotifications";
 
 const activity = (id: string, sequence: number): SessionReportNotificationActivity =>
@@ -65,7 +64,7 @@ describe("deriveSessionReportNotifications", () => {
     expect(notifications.map((entry) => entry.payload.reportId)).toEqual(["report-1", "report-2"]);
   });
 
-  it("keeps only current reports and caps the rendered digest", () => {
+  it("keeps only current reports", () => {
     const amended = activity("report-amended", 99);
     const notifications = deriveSessionReportNotifications(
       Array.from({ length: SESSION_REPORT_DIGEST_MAX_ITEMS + 2 }, (_unused, index) =>
@@ -84,9 +83,7 @@ describe("deriveSessionReportNotifications", () => {
       }),
     );
     expect(notifications.some((entry) => entry.payload.reportId === "report-0")).toBe(false);
-    expect(visibleSessionReportNotifications(notifications)).toHaveLength(
-      SESSION_REPORT_DIGEST_MAX_ITEMS,
-    );
+    expect(notifications).toHaveLength(SESSION_REPORT_DIGEST_MAX_ITEMS + 2);
   });
 
   it("keeps legacy posted reports unread until the parent agent consumes their report id", () => {

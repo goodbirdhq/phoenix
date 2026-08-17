@@ -38,7 +38,25 @@ export type SubscriptionLimit = {
   readonly hasDivergentSnapshots: boolean;
   /** The provider retained identity metadata, but its quota windows expired. */
   readonly isStale: boolean;
+  /** The provider could not confirm that the displayed reading is current. */
+  readonly isCurrentAvailabilityUnknown: boolean;
 };
+
+/**
+ * Separates an empty availability result from a not-yet-loaded provider
+ * projection. The availability RPC deliberately omits enabled/auth facts, so
+ * clients must wait for both reads before describing the result as final.
+ */
+export function subscriptionAvailabilityPresentationState(input: {
+  readonly availabilityQueryPending: boolean;
+  readonly availabilityQueryFailed: boolean;
+  readonly providerProjectionReady: boolean;
+}): { readonly isPending: boolean; readonly hasError: boolean } {
+  return {
+    isPending: input.availabilityQueryPending || !input.providerProjectionReady,
+    hasError: input.availabilityQueryFailed,
+  };
+}
 
 /** Presents an unknown extension driver without exposing its implementation slug. */
 export function providerLimitSourceName(driver: string): string {
@@ -144,7 +162,9 @@ export function deriveSubscriptionLimits(
         isAccount: account?.verification === "native_verified",
         hasDivergentSnapshots:
           new Set(members.map((member) => snapshotSignature(member.availability))).size > 1,
-        isStale: newest.availability.windows.length === 0,
+        isStale:
+          newest.availability.status === "unknown" && newest.availability.windows.length === 0,
+        isCurrentAvailabilityUnknown: newest.availability.status === "unknown",
       } satisfies SubscriptionLimit;
     })
     .toSorted(

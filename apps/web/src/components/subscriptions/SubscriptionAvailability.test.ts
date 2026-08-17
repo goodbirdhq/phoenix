@@ -107,6 +107,19 @@ describe("deriveSubscriptionAccounts", () => {
 
     expect(accounts).toEqual([]);
   });
+
+  it("retains a legacy unknown reading but labels it as unconfirmed", () => {
+    const accounts = deriveSubscriptionAccounts([
+      source({
+        availability: {
+          ...source().availability,
+          status: "unknown",
+        },
+      }),
+    ]);
+
+    expect(accounts).toMatchObject([{ isCurrentAvailabilityUnknown: true, isStale: false }]);
+  });
 });
 
 describe("subscriptionWindowLabel", () => {

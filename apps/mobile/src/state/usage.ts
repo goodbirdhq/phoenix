@@ -19,6 +19,7 @@ import {
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
+import { subscriptionAvailabilityPresentationState } from "@t3tools/client-runtime/usage/subscription-availability";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -39,8 +40,9 @@ export interface EnvironmentProviderAvailabilityStatus {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly isPending: boolean;
+  readonly hasError: boolean;
   readonly providers: readonly ProviderAvailabilityEntry[];
-  readonly serverProviders: readonly ServerProvider[];
+  readonly serverProviders: readonly ServerProvider[] | null;
 }
 
 const providerAvailabilityAtom = Atom.family((refresh: boolean) =>
@@ -55,12 +57,21 @@ const providerAvailabilityAtom = Atom.family((refresh: boolean) =>
         }),
       );
       const value = Option.getOrNull(AsyncResult.value(result));
+      const serverProviders = get(serverEnvironment.providersValueAtom(environmentId));
+      const presentationState = subscriptionAvailabilityPresentationState({
+        availabilityQueryPending: result.waiting,
+        availabilityQueryFailed: result._tag === "Failure",
+        providerProjectionReady: serverProviders !== null,
+      });
       statuses.push({
         environmentId,
         label: presentation.entry.target.label,
-        isPending: result.waiting,
+        // Availability does not carry enabled/auth facts. Keep the loading
+        // state until the separate provider projection is ready, otherwise a
+        // fast availability response briefly reads as a final empty result.
+        ...presentationState,
         providers: value?.providers ?? [],
-        serverProviders: get(serverEnvironment.providersValueAtom(environmentId)) ?? [],
+        serverProviders,
       });
     }
     return statuses;
@@ -109,6 +120,7 @@ export interface UsageView {
   readonly refresh: (input?: UsageSummaryInput) => void;
   readonly providerAvailability: readonly EnvironmentProviderAvailabilityStatus[];
   readonly isProviderAvailabilityPending: boolean;
+  readonly hasProviderAvailabilityError: boolean;
 }
 
 export function useUsage(input: UsageSummaryInput): UsageView {
@@ -208,5 +220,6 @@ export function useUsage(input: UsageSummaryInput): UsageView {
     isProviderAvailabilityPending: providerAvailability.some(
       (environment) => environment.isPending,
     ),
+    hasProviderAvailabilityError: providerAvailability.some((environment) => environment.hasError),
   };
 }

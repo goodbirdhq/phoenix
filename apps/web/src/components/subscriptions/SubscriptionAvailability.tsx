@@ -90,9 +90,11 @@ export function SubscriptionAvailabilityBars({
 export function SubscriptionAvailabilitySection({
   accounts,
   isPending = false,
+  hasError = false,
 }: {
   readonly accounts: readonly SubscriptionLimit[];
   readonly isPending?: boolean;
+  readonly hasError?: boolean;
 }) {
   return (
     <section className="rounded-xl border border-border bg-card p-4">
@@ -107,7 +109,9 @@ export function SubscriptionAvailabilitySection({
         <p className="mt-4 text-sm text-muted-foreground">
           {isPending
             ? "Checking connected providers for subscription limits…"
-            : "No subscription limits are available. Some providers do not report limits to Phoenix, and others report them only after you sign in."}
+            : hasError
+              ? "Subscription limits could not be checked for every connected environment. Refresh Usage to try again."
+              : "No subscription limits are available. Some providers do not report limits to Phoenix, and others report them only after you sign in."}
         </p>
       ) : (
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
@@ -130,12 +134,21 @@ export function SubscriptionAvailabilitySection({
                   <span className="rounded-full bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning">
                     Limit reached
                   </span>
+                ) : account.isCurrentAvailabilityUnknown ? (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                    Availability unknown
+                  </span>
                 ) : null}
               </div>
               <SubscriptionAvailabilityBars availability={account.availability} />
               {account.isStale ? (
                 <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
                   This provider's previous quota reading has expired. Refresh Usage to check again.
+                </p>
+              ) : account.isCurrentAvailabilityUnknown ? (
+                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                  This provider could not confirm that these quota limits are current. Refresh Usage
+                  to check again.
                 </p>
               ) : null}
               {account.hasDivergentSnapshots ? (

@@ -39,10 +39,6 @@ export const deriveSessionReportNotifications = (
 
 export const SESSION_REPORT_DIGEST_MAX_ITEMS = 20;
 
-export const visibleSessionReportNotifications = (
-  notifications: ReadonlyArray<SessionReportNotificationActivity>,
-) => notifications.slice(-SESSION_REPORT_DIGEST_MAX_ITEMS);
-
 export interface SessionReportInboxChild {
   readonly childThreadId: ThreadId;
   readonly childTitle: string;

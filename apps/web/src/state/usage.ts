@@ -20,6 +20,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
+import { subscriptionAvailabilityPresentationState } from "@t3tools/client-runtime/usage/subscription-availability";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
@@ -35,10 +36,13 @@ export interface EnvironmentUsageStatus {
 export interface EnvironmentProviderAvailabilityStatus {
   readonly environmentId: EnvironmentId;
   readonly label: string;
+  /** True until the availability RPC and provider-status projection both settle. */
   readonly isPending: boolean;
+  /** An availability RPC failed after the provider-status projection had loaded. */
+  readonly hasError: boolean;
   readonly providers: readonly ProviderAvailabilityEntry[];
   /** Provider snapshots carry enabled/auth facts used for account presentation. */
-  readonly serverProviders: readonly ServerProvider[];
+  readonly serverProviders: readonly ServerProvider[] | null;
 }
 
 const providerAvailabilityAtom = Atom.family((refresh: boolean) =>
@@ -53,12 +57,21 @@ const providerAvailabilityAtom = Atom.family((refresh: boolean) =>
         }),
       );
       const value = Option.getOrNull(AsyncResult.value(result));
+      const serverProviders = get(serverEnvironment.providersValueAtom(environmentId));
+      const presentationState = subscriptionAvailabilityPresentationState({
+        availabilityQueryPending: result.waiting,
+        availabilityQueryFailed: result._tag === "Failure",
+        providerProjectionReady: serverProviders !== null,
+      });
       statuses.push({
         environmentId,
         label: presentation.entry.target.label,
-        isPending: result.waiting,
+        // A valid quota snapshot alone does not say whether an instance is
+        // enabled or authenticated. Wait for that projection instead of
+        // flashing the final empty state while it is still loading.
+        ...presentationState,
         providers: value?.providers ?? [],
-        serverProviders: get(serverEnvironment.providersValueAtom(environmentId)) ?? [],
+        serverProviders,
       });
     }
     return statuses;
@@ -107,6 +120,7 @@ export interface UsageView {
   readonly refresh: (input?: UsageSummaryInput) => void;
   readonly providerAvailability: readonly EnvironmentProviderAvailabilityStatus[];
   readonly isProviderAvailabilityPending: boolean;
+  readonly hasProviderAvailabilityError: boolean;
 }
 
 export function useUsage(input: UsageSummaryInput): UsageView {
@@ -210,5 +224,6 @@ export function useUsage(input: UsageSummaryInput): UsageView {
     isProviderAvailabilityPending: providerAvailability.some(
       (environment) => environment.isPending,
     ),
+    hasProviderAvailabilityError: providerAvailability.some((environment) => environment.hasError),
   };
 }

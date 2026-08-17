@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   deriveSubscriptionLimits,
   providerLimitSourceName,
+  subscriptionAvailabilityPresentationState,
   type SubscriptionAvailabilitySource,
 } from "./subscriptionAvailability.ts";
 
@@ -90,7 +91,22 @@ describe("deriveSubscriptionLimits", () => {
       }),
     ]);
 
-    expect(limits).toMatchObject([{ name: "Neil", isStale: true }]);
+    expect(limits).toMatchObject([
+      { name: "Neil", isStale: true, isCurrentAvailabilityUnknown: true },
+    ]);
+  });
+
+  it("marks legacy unknown snapshots with windows as unconfirmed instead of current", () => {
+    const limits = deriveSubscriptionLimits([
+      source({
+        availability: {
+          ...source().availability,
+          status: "unknown",
+        },
+      }),
+    ]);
+
+    expect(limits).toMatchObject([{ isStale: false, isCurrentAvailabilityUnknown: true }]);
   });
 
   it("does not render an unknown authentication state as signed in", () => {
@@ -116,6 +132,28 @@ describe("deriveSubscriptionLimits", () => {
     ]);
 
     expect(limits[0]?.hasDivergentSnapshots).toBe(true);
+  });
+});
+
+describe("subscriptionAvailabilityPresentationState", () => {
+  it("keeps the loading copy visible until the provider projection supplies auth facts", () => {
+    expect(
+      subscriptionAvailabilityPresentationState({
+        availabilityQueryPending: false,
+        availabilityQueryFailed: false,
+        providerProjectionReady: false,
+      }),
+    ).toEqual({ isPending: true, hasError: false });
+  });
+
+  it("reports a settled availability failure without calling it an empty result", () => {
+    expect(
+      subscriptionAvailabilityPresentationState({
+        availabilityQueryPending: false,
+        availabilityQueryFailed: true,
+        providerProjectionReady: true,
+      }),
+    ).toEqual({ isPending: false, hasError: true });
   });
 });
 

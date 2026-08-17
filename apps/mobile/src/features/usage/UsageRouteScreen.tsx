@@ -60,13 +60,14 @@ export function UsageRouteScreen() {
     refresh,
     providerAvailability,
     isProviderAvailabilityPending,
+    hasProviderAvailabilityError,
   } = useUsage(window);
   const subscriptionLimits = useMemo(
     () =>
       deriveSubscriptionLimits(
         providerAvailability.flatMap((environment) =>
           environment.providers.map((entry) => {
-            const provider = environment.serverProviders.find(
+            const provider = environment.serverProviders?.find(
               (candidate) => candidate.instanceId === entry.instanceId,
             );
             return {
@@ -158,6 +159,7 @@ export function UsageRouteScreen() {
         <SubscriptionLimitsSection
           limits={subscriptionLimits}
           isPending={isProviderAvailabilityPending}
+          hasError={hasProviderAvailabilityError}
           nowMs={resetClockMs}
         />
 
@@ -207,6 +209,7 @@ function useMinuteClock(active: boolean): number {
 function SubscriptionLimitsSection(props: {
   readonly limits: readonly SubscriptionLimit[];
   readonly isPending: boolean;
+  readonly hasError: boolean;
   readonly nowMs: number;
 }) {
   return (
@@ -221,7 +224,9 @@ function SubscriptionLimitsSection(props: {
         <Text className="px-4 pb-4 pt-3 text-sm text-foreground-muted">
           {props.isPending
             ? "Checking connected providers for subscription limits…"
-            : "No subscription limits are available. Some providers do not report limits to Phoenix, and others report them only after you sign in."}
+            : props.hasError
+              ? "Subscription limits could not be checked for every connected environment. Refresh Usage to try again."
+              : "No subscription limits are available. Some providers do not report limits to Phoenix, and others report them only after you sign in."}
         </Text>
       ) : (
         <View className="gap-3 p-4">
@@ -242,6 +247,10 @@ function SubscriptionLimitsSection(props: {
                 {limit.availability.status === "limited" ? (
                   <Text className="rounded-full bg-warning/15 px-2 py-0.5 text-xs font-t3-medium text-warning">
                     Limit reached
+                  </Text>
+                ) : limit.isCurrentAvailabilityUnknown ? (
+                  <Text className="rounded-full bg-subtle px-2 py-0.5 text-xs font-t3-medium text-foreground-muted">
+                    Availability unknown
                   </Text>
                 ) : null}
               </View>
@@ -290,6 +299,11 @@ function SubscriptionLimitsSection(props: {
               {limit.isStale ? (
                 <Text className="text-xs leading-relaxed text-foreground-muted">
                   This provider's previous quota reading has expired. Refresh Usage to check again.
+                </Text>
+              ) : limit.isCurrentAvailabilityUnknown ? (
+                <Text className="text-xs leading-relaxed text-foreground-muted">
+                  This provider could not confirm that these quota limits are current. Refresh Usage
+                  to check again.
                 </Text>
               ) : null}
               {limit.hasDivergentSnapshots ? (
