@@ -210,6 +210,10 @@ The August 17, 2026 integration demonstrated why both review queues are required
 - The dev runner and Vite proxy used different names for the same backend port. Unit tests covered
   environment construction but not the consumer. A real-client launch with the documented command
   caught the producer/consumer mismatch.
+- Phoenix deliberately stopped honoring `T3CODE_HOME`, but several desktop tests still configured
+  that upstream-only variable. Most passed while silently writing below a different temporary root;
+  CI exposed the mismatch in the WSL cleanup test. When an identity boundary changes, migrate test
+  fixtures as well as runtime code and assert the resolved path where isolation matters.
 
 These examples are not a fixed list of expected conflicts. They illustrate the recurring decision:
 preserve Phoenix intent, adopt the upstream improvement, and verify the combined behavior.
