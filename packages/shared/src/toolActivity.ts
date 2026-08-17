@@ -14,6 +14,94 @@ function asTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {
+  const text = asTrimmedString(value);
+  if (!text) {
+    return undefined;
+  }
+  try {
+    return asRecord(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
+}
+
+function spawnedSessionResult(value: unknown): Record<string, unknown> | undefined {
+  const direct = asRecord(value) ?? parseJsonRecord(value);
+  if (!direct) {
+    return undefined;
+  }
+  if (asTrimmedString(direct.threadId)) {
+    return direct;
+  }
+
+  for (const key of ["structuredContent", "structured_content"]) {
+    const structured = asRecord(direct[key]) ?? parseJsonRecord(direct[key]);
+    if (structured && asTrimmedString(structured.threadId)) {
+      return structured;
+    }
+  }
+
+  const content = direct.content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      const parsed = parseJsonRecord(asRecord(block)?.text);
+      if (parsed && asTrimmedString(parsed.threadId)) {
+        return parsed;
+      }
+    }
+    return undefined;
+  }
+  const parsedContent = parseJsonRecord(content);
+  return parsedContent && asTrimmedString(parsedContent.threadId) ? parsedContent : undefined;
+}
+
+function isPhoenixSpawnSessionTool(data: Record<string, unknown>, item: Record<string, unknown>) {
+  const server = asTrimmedString(item.server)?.toLowerCase();
+  const itemTool = asTrimmedString(item.tool)?.toLowerCase();
+  const name = asTrimmedString(data.toolName)?.toLowerCase();
+  return (
+    (server === "phoenix" && itemTool === "spawn_session") || name === "mcp__phoenix__spawn_session"
+  );
+}
+
+export interface SpawnedSessionToolActivity {
+  readonly title: string;
+  readonly threadId?: string | undefined;
+  readonly model?: string | undefined;
+}
+
+/**
+ * Recognizes Phoenix's session-spawn MCP call across provider payload shapes.
+ * The child thread id only appears after the tool result lands, while the
+ * requested title is available during the in-progress lifecycle update.
+ */
+export function deriveSpawnedSessionToolActivity(
+  value: unknown,
+): SpawnedSessionToolActivity | undefined {
+  const data = asRecord(value);
+  if (!data) {
+    return undefined;
+  }
+  const item = asRecord(data.item);
+  if (!isPhoenixSpawnSessionTool(data, item ?? {})) {
+    return undefined;
+  }
+
+  const input = asRecord(item?.arguments) ?? asRecord(item?.input) ?? asRecord(data.input);
+  const result = spawnedSessionResult(item?.result ?? data.result);
+  const modelSelection = asRecord(result?.modelSelection);
+  const title = asTrimmedString(result?.title) ?? asTrimmedString(input?.title);
+  const threadId = asTrimmedString(result?.threadId);
+  const model = asTrimmedString(modelSelection?.model) ?? asTrimmedString(input?.model);
+
+  return {
+    title: title ?? "New agent session",
+    ...(threadId ? { threadId } : {}),
+    ...(model ? { model } : {}),
+  };
+}
+
 function normalizeCommandValue(value: unknown): string | undefined {
   const direct = asTrimmedString(value);
   if (direct) {

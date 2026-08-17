@@ -828,4 +828,68 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("lucide-x");
     expect(markup).toContain('aria-label="Tool call failed"');
   });
+
+  it("renders session MCP spawns as agent cards with a child-thread action", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-spawn-session",
+            kind: "work",
+            createdAt: MESSAGE_CREATED_AT,
+            entry: {
+              id: "work-spawn-session",
+              createdAt: MESSAGE_CREATED_AT,
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "mcp_tool_call",
+              toolLifecycleStatus: "completed",
+              spawnedSession: {
+                title: "Review the timeline",
+                threadId: "child-thread",
+                model: "claude-opus-5",
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Spawned agent");
+    expect(markup).toContain("Review the timeline");
+    expect(markup).toContain("claude-opus-5");
+    expect(markup).toContain("Open ▸");
+    expect(markup).toContain("lucide-bot");
+    expect(markup).toContain('aria-label="Open spawned agent: Review the timeline"');
+    expect(markup).not.toContain("MCP tool call");
+  });
+
+  it("announces an in-progress session spawn without exposing an inert button", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-spawning-session",
+            kind: "work",
+            createdAt: MESSAGE_CREATED_AT,
+            entry: {
+              id: "work-spawning-session",
+              createdAt: MESSAGE_CREATED_AT,
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "mcp_tool_call",
+              toolLifecycleStatus: "inProgress",
+              spawnedSession: { title: "Review the timeline" },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Spawning agent");
+    expect(markup).toContain('role="status"');
+    expect(markup).not.toContain("<button");
+  });
 });

@@ -2,6 +2,10 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
+  deriveSpawnedSessionToolActivity,
+  type SpawnedSessionToolActivity,
+} from "@t3tools/shared/toolActivity";
+import {
   ApprovalRequestId,
   isToolLifecycleItemType,
   type OrchestrationLatestTurn,
@@ -78,6 +82,8 @@ export interface WorkLogEntry {
   requestKind?: PendingApproval["requestKind"];
   /** From runtime item / task payload `status` when present (e.g. tool.updated). */
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
+  /** Dedicated presentation for Phoenix `spawn_session` MCP calls. */
+  spawnedSession?: SpawnedSessionToolActivity;
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
   /** Grouping key for subagent lifecycle rows (one row per agent). */
@@ -282,10 +288,9 @@ export function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
 
 /** Tool-like row with neither clear success nor failure (empty, incomplete, in progress, etc.). */
 export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolean {
-  // Spawn CTA rows are never neutral-hidden: mid-run they derive from
-  // task.progress (tone "thinking") and the neutral filter was swallowing
-  // them exactly while the fleet ran — the one moment they matter most.
-  if (entry.agentSpawn !== undefined) {
+  // Spawn CTA rows are never neutral-hidden: their in-progress lifecycle is
+  // exactly when the user needs the route/status affordance most.
+  if (entry.agentSpawn !== undefined || entry.spawnedSession !== undefined) {
     return false;
   }
   if (!workLogEntryIsToolLike(entry)) {
@@ -874,6 +879,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (itemType === "mcp_tool_call") {
     const data = asRecord(payload?.data);
+    const spawnedSession = deriveSpawnedSessionToolActivity(data);
+    if (spawnedSession) {
+      entry.spawnedSession = spawnedSession;
+    }
     if (data?.item !== undefined) {
       entry.toolData = data.item;
     }
@@ -1053,6 +1062,9 @@ function mergeDerivedWorkLogEntries(
   const toolCallId = next.toolCallId ?? previous.toolCallId;
   const toolLifecycleStatus = next.toolLifecycleStatus ?? previous.toolLifecycleStatus;
   const toolData = next.toolData ?? previous.toolData;
+  const spawnedSession = next.spawnedSession
+    ? { ...previous.spawnedSession, ...next.spawnedSession }
+    : previous.spawnedSession;
   return {
     ...previous,
     ...next,
@@ -1067,6 +1079,7 @@ function mergeDerivedWorkLogEntries(
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolLifecycleStatus !== undefined ? { toolLifecycleStatus } : {}),
     ...(toolData !== undefined ? { toolData } : {}),
+    ...(spawnedSession !== undefined ? { spawnedSession } : {}),
   };
 }
 

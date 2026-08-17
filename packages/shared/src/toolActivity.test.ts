@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { deriveToolActivityPresentation } from "./toolActivity.ts";
+import {
+  deriveSpawnedSessionToolActivity,
+  deriveToolActivityPresentation,
+} from "./toolActivity.ts";
 
 describe("toolActivity", () => {
   it("normalizes command tools to a stable ran-command label", () => {
@@ -18,6 +21,74 @@ describe("toolActivity", () => {
       summary: "Ran command",
       detail: "bun run lint",
     });
+  });
+
+  it("recognizes a Claude-style Phoenix session spawn before and after its result", () => {
+    const input = {
+      toolName: "mcp__phoenix__spawn_session",
+      input: { title: "Audit the renderer", model: "claude-opus-5", prompt: "Do the work" },
+    };
+    expect(deriveSpawnedSessionToolActivity(input)).toEqual({
+      title: "Audit the renderer",
+      model: "claude-opus-5",
+    });
+
+    expect(
+      deriveSpawnedSessionToolActivity({
+        ...input,
+        result: {
+          type: "text",
+          content: JSON.stringify({
+            threadId: "child-thread",
+            title: "Audit the renderer",
+            modelSelection: { model: "claude-opus-5" },
+          }),
+        },
+      }),
+    ).toEqual({
+      title: "Audit the renderer",
+      threadId: "child-thread",
+      model: "claude-opus-5",
+    });
+  });
+
+  it("recognizes a Codex-style session spawn with structured MCP content", () => {
+    expect(
+      deriveSpawnedSessionToolActivity({
+        item: {
+          type: "mcpToolCall",
+          server: "phoenix",
+          tool: "spawn_session",
+          arguments: { title: "Check mobile" },
+          result: {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ threadId: "child-thread", title: "Check mobile" }),
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      title: "Check mobile",
+      threadId: "child-thread",
+    });
+  });
+
+  it("does not classify unrelated MCP tools as session spawns", () => {
+    expect(
+      deriveSpawnedSessionToolActivity({
+        toolName: "mcp__phoenix__read_session",
+        input: { title: "Not a spawn" },
+      }),
+    ).toBeUndefined();
+    expect(
+      deriveSpawnedSessionToolActivity({
+        toolName: "mcp__third_party__spawn_session",
+        input: { title: "Not a Phoenix session" },
+      }),
+    ).toBeUndefined();
   });
 
   it("uses structured file paths for read-file tools when available", () => {

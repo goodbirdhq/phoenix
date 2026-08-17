@@ -8,6 +8,10 @@ import type {
   UserInputQuestion,
 } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import {
+  deriveSpawnedSessionToolActivity,
+  type SpawnedSessionToolActivity,
+} from "@t3tools/shared/toolActivity";
 
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -54,6 +58,8 @@ export interface ThreadFeedActivity {
     | "zap";
   readonly toolLike: boolean;
   readonly status: "success" | "failure" | "neutral" | null;
+  /** Keep navigation/status affordances visible through work and turn folding. */
+  readonly alwaysVisible?: boolean;
 }
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
@@ -75,6 +81,7 @@ interface WorkLogEntry {
   requestKind?: PendingApproval["requestKind"];
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   toolData?: unknown;
+  spawnedSession?: SpawnedSessionToolActivity;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -416,6 +423,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (itemType === "mcp_tool_call") {
     const data = asRecord(payload?.data);
+    const spawnedSession = deriveSpawnedSessionToolActivity(data);
+    if (spawnedSession) {
+      entry.spawnedSession = spawnedSession;
+    }
     if (data?.item !== undefined) {
       entry.toolData = data.item;
     }
@@ -503,6 +514,9 @@ function mergeDerivedWorkLogEntries(
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolLifecycleStatus = next.toolLifecycleStatus ?? previous.toolLifecycleStatus;
   const toolData = next.toolData ?? previous.toolData;
+  const spawnedSession = next.spawnedSession
+    ? { ...previous.spawnedSession, ...next.spawnedSession }
+    : previous.spawnedSession;
   return {
     ...previous,
     ...next,
@@ -516,6 +530,7 @@ function mergeDerivedWorkLogEntries(
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolLifecycleStatus ? { toolLifecycleStatus } : {}),
     ...(toolData !== undefined ? { toolData } : {}),
+    ...(spawnedSession !== undefined ? { spawnedSession } : {}),
   };
 }
 
@@ -548,6 +563,9 @@ function normalizeCompactToolLabel(value: string): string {
 }
 
 function workLogEntryIsToolLike(entry: WorkLogEntry): boolean {
+  if (entry.spawnedSession) {
+    return false;
+  }
   if (entry.tone === "tool" || entry.tone === "thinking" || entry.tone === "error") {
     return true;
   }
@@ -629,6 +647,7 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
     return "message";
   }
   if (entry.activityKind === "runtime.warning") return "warning";
+  if (entry.spawnedSession) return "agent";
   if (entry.requestKind === "command") return "command";
   if (entry.requestKind === "file-read") return "eye";
   if (entry.requestKind === "file-change") return "edit";
@@ -689,8 +708,9 @@ function memoizeValue<T>(build: () => T): () => T {
 }
 
 function workEntryPreview(
-  workEntry: Pick<WorkLogEntry, "detail" | "command" | "changedFiles">,
+  workEntry: Pick<WorkLogEntry, "detail" | "command" | "changedFiles" | "spawnedSession">,
 ): string | null {
+  if (workEntry.spawnedSession) return workEntry.spawnedSession.title;
   if (workEntry.command) return workEntry.command;
   if (workEntry.detail) return workEntry.detail;
   if ((workEntry.changedFiles?.length ?? 0) === 0) return null;
@@ -710,6 +730,17 @@ function capitalizePhrase(value: string): string {
 }
 
 function workEntryHeading(workEntry: WorkLogEntry): string {
+  if (workEntry.spawnedSession) {
+    if (
+      workEntry.tone === "error" ||
+      workEntry.toolLifecycleStatus === "failed" ||
+      workEntry.toolLifecycleStatus === "declined" ||
+      workEntry.toolLifecycleStatus === "stopped"
+    ) {
+      return "Failed to spawn agent";
+    }
+    return workEntry.spawnedSession.threadId ? "Spawned agent" : "Spawning agent";
+  }
   if (!workEntry.toolTitle) {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
   }
@@ -1196,7 +1227,16 @@ function deriveThreadFeedTurnFolds(
 
     const terminalAssistantMessageId = terminalAssistantMessageIdByTurn.get(turnId);
     const hiddenEntryIds = new Set(
-      entries.filter((entry) => entry.id !== terminalAssistantMessageId).map((entry) => entry.id),
+      entries
+        .filter(
+          (entry) =>
+            entry.id !== terminalAssistantMessageId &&
+            !(
+              entry.type === "activity-group" &&
+              entry.activities.some((activity) => activity.alwaysVisible)
+            ),
+        )
+        .map((entry) => entry.id),
     );
     if (hiddenEntryIds.size === 0) {
       continue;
@@ -1317,8 +1357,13 @@ function appendPresentedFeedEntry(
 
   const groupId = entry.id;
   const expanded = expandedWorkGroupIds.has(groupId);
-  const hiddenCount = activities.length - MAX_VISIBLE_WORK_LOG_ENTRIES;
-  const visibleActivities = expanded ? activities : activities.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES);
+  const overflowCandidates = activities.filter((activity) => !activity.alwaysVisible);
+  const hiddenActivities = overflowCandidates.slice(0, -MAX_VISIBLE_WORK_LOG_ENTRIES);
+  const hiddenIds = new Set(hiddenActivities.map((activity) => activity.id));
+  const hiddenCount = hiddenActivities.length;
+  const visibleActivities = expanded
+    ? activities
+    : activities.filter((activity) => activity.alwaysVisible || !hiddenIds.has(activity.id));
 
   for (const activity of visibleActivities) {
     result.push({
@@ -1329,16 +1374,18 @@ function appendPresentedFeedEntry(
       activities: [activity],
     });
   }
-  result.push({
-    type: "work-toggle",
-    id: `work-toggle:${groupId}`,
-    createdAt: entry.createdAt,
-    turnId: entry.turnId,
-    groupId,
-    hiddenCount,
-    expanded,
-    onlyToolActivities: activities.every((activity) => activity.toolLike),
-  });
+  if (hiddenCount > 0) {
+    result.push({
+      type: "work-toggle",
+      id: `work-toggle:${groupId}`,
+      createdAt: entry.createdAt,
+      turnId: entry.turnId,
+      groupId,
+      hiddenCount,
+      expanded,
+      onlyToolActivities: activities.every((activity) => activity.toolLike),
+    });
+  }
 }
 
 /**
@@ -1566,6 +1613,7 @@ export function buildThreadFeed(
               icon: workEntryIcon(entry),
               toolLike: workLogEntryIsToolLike(entry),
               status: workEntryStatus(entry),
+              alwaysVisible: entry.spawnedSession !== undefined,
             },
           };
         }),
