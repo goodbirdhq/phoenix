@@ -2,6 +2,7 @@ import type { ContextMenuItem, PreviewSessionSnapshot, PullRequestState } from "
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
   Bot,
+  Boxes,
   FileDiff,
   Files,
   GitPullRequest,
@@ -65,15 +66,19 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
+  onAddSessions: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
+  sessionsAvailable: boolean;
   pullRequestStatuses?: Readonly<Record<string, PullRequestTabStatus>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
+  /** Unsettled spawned sessions; badges the Sessions card in the empty state. */
+  liveSessionCount: number;
   children: ReactNode;
 }
 
@@ -92,6 +97,7 @@ const SURFACE_DISABLED_REASONS = {
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
   agents: "Agents are only available from a thread.",
+  sessions: "Sessions are only available from a thread.",
 } as const;
 
 /** Overlays that must win over the launcher's letter shortcuts. */
@@ -118,6 +124,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   diff: "Available for Git repositories.",
   pullRequest: "No pull request on this branch yet.",
   agents: "Available from a thread.",
+  sessions: "Available from a thread.",
 } as const;
 
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
@@ -164,13 +171,16 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
+  onAddSessions: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
+  sessionsAvailable: boolean;
   liveAgentCount: number;
+  liveSessionCount: number;
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
   const [highlight, setHighlight] = useState(-1);
@@ -235,6 +245,16 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.agents,
       onClick: props.onAddAgents,
       badgeCount: props.liveAgentCount,
+    },
+    {
+      label: "Sessions",
+      description: "Jump into the sessions this thread spawned.",
+      icon: Boxes,
+      shortcut: "S",
+      available: props.sessionsAvailable,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.sessions,
+      onClick: props.onAddSessions,
+      badgeCount: props.liveSessionCount,
     },
   ] as const;
 
@@ -426,6 +446,8 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "agents":
       return "Agents";
+    case "sessions":
+      return "Sessions";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -511,6 +533,8 @@ function SurfaceIcon({
     }
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "sessions":
+      return <Boxes className="size-3 shrink-0" />;
   }
 }
 
@@ -743,6 +767,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <Bot />
                     Agents
                   </SurfaceMenuItem>
+                  <SurfaceMenuItem
+                    available={props.sessionsAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.sessions}
+                    onClick={props.onAddSessions}
+                  >
+                    <Boxes />
+                    Sessions
+                  </SurfaceMenuItem>
                 </MenuPopup>
               </Menu>
             ) : null}
@@ -759,13 +791,16 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddAgents={props.onAddAgents}
+            onAddSessions={props.onAddSessions}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             agentsAvailable={props.agentsAvailable}
+            sessionsAvailable={props.sessionsAvailable}
             liveAgentCount={props.liveAgentCount}
+            liveSessionCount={props.liveSessionCount}
           />
         ) : (
           props.children

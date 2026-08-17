@@ -153,6 +153,7 @@ import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
+import { SessionsPanelSurface } from "./SessionsPanel";
 import {
   deriveAgentPanelModel,
   foldSubagentActivities,
@@ -234,7 +235,7 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
-import { threadEnvironment, useEnvironmentThread } from "../state/threads";
+import { threadEnvironment, useEnvironmentThread, useSpawnedSessionCount } from "../state/threads";
 import {
   requestOlderThreadTurns,
   threadHasOlderTurns,
@@ -2231,6 +2232,9 @@ function ChatViewContent(props: ChatViewProps) {
       }),
     [agentSessionLive, threadActivities],
   );
+  // Only the count here: the roster itself is subscribed by the Sessions
+  // surface while it is mounted, so a streaming child never repaints ChatView.
+  const activeSpawnedSessionCount = useSpawnedSessionCount(activeThreadRef);
   const pendingApprovals = useMemo(
     () => derivePendingApprovals(threadActivities),
     [threadActivities],
@@ -3307,6 +3311,10 @@ function ChatViewContent(props: ChatViewProps) {
   const addAgentsSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
+  }, [activeThreadRef]);
+  const addSessionsSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "sessions");
   }, [activeThreadRef]);
   const openSpawnedThread = useCallback(
     (threadId: string) => {
@@ -6191,6 +6199,8 @@ function ChatViewContent(props: ChatViewProps) {
         environmentId={activeThreadRef?.environmentId ?? null}
         threadId={activeThreadRef?.threadId ?? null}
       />
+    ) : activeRightPanelSurface?.kind === "sessions" ? (
+      <SessionsPanelSurface threadRef={activeThreadRef} onOpenThread={openSpawnedThread} />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
       activeWorkspaceRoot ? (
@@ -6669,14 +6679,17 @@ function ChatViewContent(props: ChatViewProps) {
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
           onAddAgents={addAgentsSurface}
+          onAddSessions={addSessionsSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           agentsAvailable
+          sessionsAvailable
           pullRequestStatuses={pullRequestTabStatuses}
           liveAgentCount={agentPanelModel.liveCount}
+          liveSessionCount={activeSpawnedSessionCount}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -6708,14 +6721,17 @@ function ChatViewContent(props: ChatViewProps) {
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddAgents={addAgentsSurface}
+            onAddSessions={addSessionsSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             agentsAvailable
+            sessionsAvailable
             pullRequestStatuses={pullRequestTabStatuses}
             liveAgentCount={agentPanelModel.liveCount}
+            liveSessionCount={activeSpawnedSessionCount}
           >
             {rightPanelContent}
           </RightPanelTabs>

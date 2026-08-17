@@ -1576,13 +1576,16 @@ function PullRequestsRouteView() {
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
             onAddAgents={() => undefined}
+            onAddSessions={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
             agentsAvailable={false}
+            sessionsAvailable={false}
             liveAgentCount={0}
+            liveSessionCount={0}
             pullRequestStatuses={pullRequestTabStatuses}
           >
             <PullRequestDetailPanel

@@ -29,6 +29,18 @@ const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ReadonlyArray<ScopedThreadRef>
 > = new Map();
 
+/**
+ * Whether a spawned child still counts as live work, in the same terms the
+ * `sessions` MCP toolkit uses: a child is active until its parent settles it.
+ * Shared so the Sessions surface and its tab badge cannot drift apart.
+ *
+ * Archived children never appear here to be classified — the shell snapshot
+ * only carries active rows, and archiving emits `thread-removed`.
+ */
+export function isActiveSpawnedSession(shell: OrchestrationThreadShell): boolean {
+  return shell.settledAt === null;
+}
+
 export function createEnvironmentThreadShellAtoms(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
   readonly snapshotAtom: (
@@ -115,6 +127,64 @@ export function createEnvironmentThreadShellAtoms(input: {
     }).pipe(Atom.withLabel(`environment-thread-shell:${key}`));
   });
 
+  /**
+   * Threads a session spawned, in snapshot order. Direct children only: the
+   * Sessions surface reads one parent's own roster, and deeper descendants
+   * belong to their own parent's roster. Recomputes only when the
+   * environment's thread list changes, and returns the previous array when
+   * the child set is unchanged so the panel does not repaint on every
+   * unrelated thread update.
+   */
+  const childThreadShellsAtomFamily = Atom.family((key: string) => {
+    const ref = parseThreadKey(key);
+    let previous: ReadonlyArray<EnvironmentThreadShell> = [];
+    return Atom.make((get) => {
+      const next: EnvironmentThreadShell[] = [];
+      for (const thread of get(environmentThreadsAtom(ref.environmentId))) {
+        // Self-parenting is corrupt data, not a link — it would list a thread
+        // as its own child.
+        if (thread.spawnedByThreadId !== ref.threadId || thread.id === ref.threadId) {
+          continue;
+        }
+        const child = get(
+          threadShellAtomFamily(
+            threadKey({ environmentId: ref.environmentId, threadId: thread.id }),
+          ),
+        );
+        if (child !== null) {
+          next.push(child);
+        }
+      }
+      if (arrayElementsEqual(previous, next)) {
+        return previous;
+      }
+      previous = next;
+      return previous;
+    }).pipe(Atom.withLabel(`environment-child-thread-shells:${key}`));
+  });
+
+  /**
+   * How many of a thread's spawned children are still unsettled. A number, not
+   * the roster: the tab badge lives in ChatView, which must not re-render at
+   * the children's streaming cadence just to show a count.
+   */
+  const activeChildThreadCountAtomFamily = Atom.family((key: string) => {
+    const ref = parseThreadKey(key);
+    return Atom.make((get) => {
+      let count = 0;
+      for (const thread of get(environmentThreadsAtom(ref.environmentId))) {
+        if (
+          thread.spawnedByThreadId === ref.threadId &&
+          thread.id !== ref.threadId &&
+          isActiveSpawnedSession(thread)
+        ) {
+          count += 1;
+        }
+      }
+      return count;
+    }).pipe(Atom.withLabel(`environment-active-child-thread-count:${key}`));
+  });
+
   const threadShellsForProjectRefsAtomFamily = Atom.family((key: string) => {
     const projectRefs = parseProjectRefCollectionKey(key);
     let previous: ReadonlyArray<EnvironmentThreadShell> = [];
@@ -182,5 +252,8 @@ export function createEnvironmentThreadShellAtoms(input: {
     threadShellsForProjectRefsAtom: (refs: ReadonlyArray<ScopedProjectRef>) =>
       threadShellsForProjectRefsAtomFamily(projectRefCollectionKey(refs)),
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),
+    childThreadShellsAtom: (ref: ScopedThreadRef) => childThreadShellsAtomFamily(threadKey(ref)),
+    activeChildThreadCountAtom: (ref: ScopedThreadRef) =>
+      activeChildThreadCountAtomFamily(threadKey(ref)),
   };
 }
