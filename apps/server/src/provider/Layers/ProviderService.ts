@@ -212,14 +212,25 @@ const correlateRuntimeEventWithInstance = (
   return { ...event, providerInstanceId: source.instanceId };
 };
 
+// The native channels each driver is allowed to speak through. A driver may
+// own more than one: Claude reports sparse SDK notifications and, on explicit
+// request, the CLI's own `/usage` panel. A cached snapshot whose source is not
+// in this list belongs to some other driver and is never presented.
+const NATIVE_AVAILABILITY_SOURCES: Partial<
+  Record<string, ReadonlyArray<ProviderAvailability["source"]>>
+> = {
+  codex: ["codex_app_server"],
+  claudeAgent: ["claude_agent_sdk", "claude_cli_usage"],
+};
+
+const isNativeAvailabilitySource = (
+  provider: ProviderDriverKind,
+  source: ProviderAvailability["source"],
+): boolean => (NATIVE_AVAILABILITY_SOURCES[provider] ?? ["unsupported"]).includes(source);
+
 const unknownAvailabilityForDriver = (provider: ProviderDriverKind): ProviderAvailability => ({
   status: "unknown",
-  source:
-    provider === "codex"
-      ? "codex_app_server"
-      : provider === "claudeAgent"
-        ? "claude_agent_sdk"
-        : "unsupported",
+  source: NATIVE_AVAILABILITY_SOURCES[provider]?.[0] ?? "unsupported",
   windows: [],
 });
 
@@ -251,6 +262,9 @@ export const mergeProviderAvailability = (
         : "unknown",
     source: incoming.source,
     observedAt: incoming.observedAt,
+    // An account identity is only ever as fresh as the snapshot that carried
+    // it; a merge never keeps an account the newest reading did not confirm.
+    ...(incoming.account ? { account: incoming.account } : {}),
     windows: mergedWindows,
   };
 };
@@ -261,36 +275,72 @@ export const availabilityAt = (
   nowMs: number,
 ): ProviderAvailability => {
   if (cached === undefined) return unknownAvailabilityForDriver(provider);
-  // Claude can legitimately switch from the SDK's sparse notification to the
-  // explicit CLI /usage probe. Both are Claude-native; do not discard the
-  // better source merely because the initial unknown used another label.
-  if (
-    cached.availability.source !== unknownAvailabilityForDriver(provider).source &&
-    !(provider === "claudeAgent" && cached.availability.source === "claude_cli_usage")
-  ) {
+  if (!isNativeAvailabilitySource(provider, cached.availability.source)) {
     return unknownAvailabilityForDriver(provider);
   }
   if (nowMs - cached.receivedAtMs <= PROVIDER_AVAILABILITY_MAX_AGE_MS) {
     return cached.availability;
   }
+  // Aged out: the quota numbers are dropped, but which channel observed them,
+  // when, and for which account stay — those facts did not expire, and clients
+  // use them to keep an account card in place instead of flickering it away.
   return {
     status: "unknown",
     source: cached.availability.source,
     ...(cached.availability.observedAt ? { observedAt: cached.availability.observedAt } : {}),
+    ...(cached.availability.account ? { account: cached.availability.account } : {}),
     windows: [],
   };
+};
+
+/**
+ * Drop per-instance state for adapters that were replaced or removed, so a
+ * rebuilt instance never inherits the previous process's quota reading or its
+ * refresh cooldown. Entries are keyed by instance id in both maps.
+ */
+export const retainStateForReconciledAdapters = <Value, Adapter>(
+  entries: ReadonlyMap<ProviderInstanceId, Value>,
+  previous: ReadonlyMap<ProviderInstanceId, Adapter>,
+  next: ReadonlyMap<ProviderInstanceId, Adapter>,
+): Map<ProviderInstanceId, Value> => {
+  const retained = new Map(entries);
+  for (const [id, previousAdapter] of previous) {
+    if (next.get(id) !== previousAdapter) retained.delete(id);
+  }
+  for (const id of retained.keys()) {
+    if (!next.has(id)) retained.delete(id);
+  }
+  return retained;
 };
 
 export const clearAvailabilityForReconciledAdapters = <Adapter>(
   entries: ReadonlyMap<ProviderInstanceId, CachedProviderAvailability>,
   previous: ReadonlyMap<ProviderInstanceId, Adapter>,
   next: ReadonlyMap<ProviderInstanceId, Adapter>,
-): Map<ProviderInstanceId, CachedProviderAvailability> => {
-  const nextAvailability = new Map(entries);
-  for (const [id, previousAdapter] of previous) {
-    if (next.get(id) !== previousAdapter) nextAvailability.delete(id);
+): Map<ProviderInstanceId, CachedProviderAvailability> =>
+  retainStateForReconciledAdapters(entries, previous, next);
+
+/**
+ * Decide, in one step, whether this caller owns the next refresh of
+ * `instanceId` and what the cooldown map becomes. Callers apply it inside a
+ * single `Ref.modify`: a read-then-write would let two clients that clicked at
+ * the same moment both pass the check and spawn the provider CLI twice.
+ */
+export const claimAvailabilityRefresh = (
+  entries: ReadonlyMap<ProviderInstanceId, number>,
+  instanceId: ProviderInstanceId,
+  nowMs: number,
+): readonly [claimed: boolean, entries: ReadonlyMap<ProviderInstanceId, number>] => {
+  const lastRefreshMs = entries.get(instanceId);
+  if (
+    lastRefreshMs !== undefined &&
+    nowMs - lastRefreshMs < PROVIDER_AVAILABILITY_REFRESH_COOLDOWN_MS
+  ) {
+    return [false, entries];
   }
-  return nextAvailability;
+  const next = new Map(entries);
+  next.set(instanceId, nowMs);
+  return [true, next];
 };
 
 const toIsoDateTime = (unixSeconds: unknown): string | undefined => {
@@ -377,7 +427,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const availabilityByInstance = yield* Ref.make(
     new Map<ProviderInstanceId, CachedProviderAvailability>(),
   );
-  const lastAvailabilityRefreshAt = yield* Ref.make(new Map<ProviderInstanceId, number>());
+  const lastAvailabilityRefreshAt = yield* Ref.make<ReadonlyMap<ProviderInstanceId, number>>(
+    new Map(),
+  );
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   /**
    * Attach the `phoenix` MCP server to the session that is about to start.
@@ -528,23 +580,26 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const refreshAvailability = (instanceId: ProviderInstanceId, provider: ProviderDriverKind) =>
     Effect.gen(function* () {
       const now = DateTime.toEpochMillis(yield* DateTime.now);
-      const lastRefreshes = yield* Ref.get(lastAvailabilityRefreshAt);
-      const cached = yield* Ref.get(availabilityByInstance);
-      if (now - (lastRefreshes.get(instanceId) ?? 0) < PROVIDER_AVAILABILITY_REFRESH_COOLDOWN_MS) {
-        return availabilityAt(cached.get(instanceId), provider, now);
-      }
-      yield* Ref.update(lastAvailabilityRefreshAt, (entries) => {
-        const next = new Map(entries);
-        next.set(instanceId, now);
-        return next;
-      });
+      const cachedAt = () =>
+        Effect.map(Ref.get(availabilityByInstance), (entries) =>
+          availabilityAt(entries.get(instanceId), provider, now),
+        );
+      // Resolve the adapter before claiming the cooldown: an instance whose
+      // driver cannot refresh should not burn the next thirty seconds of the
+      // one that can.
       const adapter = yield* registry.getByInstance(instanceId).pipe(Effect.option);
       if (
         Option.isNone(adapter) ||
         adapter.value.provider !== provider ||
         !adapter.value.refreshAvailability
       ) {
-        return availabilityAt(cached.get(instanceId), provider, now);
+        return yield* cachedAt();
+      }
+      const claimed = yield* Ref.modify(lastAvailabilityRefreshAt, (entries) =>
+        claimAvailabilityRefresh(entries, instanceId, now),
+      );
+      if (!claimed) {
+        return yield* cachedAt();
       }
       const availability = yield* adapter.value
         .refreshAvailability()
@@ -577,6 +632,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     yield* Ref.set(subscribedAdapters, next);
     yield* Ref.update(availabilityByInstance, (entries) =>
       clearAvailabilityForReconciledAdapters(entries, previous, next),
+    );
+    // The cooldown map is keyed by instance id too; without the same pruning it
+    // keeps a timestamp per instance that ever existed and would silence the
+    // first refresh of a rebuilt instance.
+    yield* Ref.update(lastAvailabilityRefreshAt, (entries) =>
+      retainStateForReconciledAdapters(entries, previous, next),
     );
     for (const [id, adapter] of next) {
       if (previous.get(id) !== adapter) {

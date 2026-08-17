@@ -4,6 +4,7 @@ import {
   CommandId,
   EventId,
   GitCommandError,
+  canRefreshProviderAvailability,
   isProviderAvailable,
   LIST_SESSIONS_MAX_ENTRIES,
   type ListSessionsInput,
@@ -506,13 +507,18 @@ export const make = Effect.gen(function* () {
   // the process-facing provider layer. Availability is optional enrichment,
   // never a reason that listing spawnable providers should fail.
   const providerService = yield* Effect.serviceOption(ProviderService.ProviderService);
+  // A refresh runs the provider's own CLI, so it is only offered for an
+  // instance that is installed, enabled and already signed in; everything else
+  // reads the cached snapshot.
   const availabilityFor = (
-    instanceId: ServerProvider["instanceId"],
-    provider: ServerProvider["driver"],
+    snapshot: ServerProvider,
     refresh = false,
   ): Effect.Effect<ProviderAvailability> => {
+    const instanceId = snapshot.instanceId;
+    const provider = snapshot.driver;
     if (
       refresh &&
+      canRefreshProviderAvailability(snapshot) &&
       Option.isSome(providerService) &&
       providerService.value.refreshAvailability !== undefined
     ) {
@@ -708,11 +714,7 @@ export const make = Effect.gen(function* () {
       input.onlyAvailable === true ? allProviders.filter(isProviderAvailable) : allProviders;
     return {
       providers: yield* Effect.forEach(providers, (provider) =>
-        availabilityFor(
-          provider.instanceId,
-          provider.driver,
-          input.refreshAvailability === true,
-        ).pipe(
+        availabilityFor(provider, input.refreshAvailability === true).pipe(
           Effect.map((availability) => ({
             instanceId: provider.instanceId,
             driver: provider.driver,

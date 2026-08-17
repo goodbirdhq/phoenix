@@ -114,8 +114,11 @@ export interface ProviderAdapterShape<TError> {
   ) => Effect.Effect<ProviderSessionRuntimeLiveness>;
 
   /**
-   * Explicitly refresh a provider-native subscription snapshot. This must not
-   * create an agent session or turn; adapters without an honest source omit it.
+   * Explicitly refresh a provider-native subscription snapshot, on request
+   * only. An implementation must not create an agent session or turn, and must
+   * decide for itself whether its runtime is authenticated enough to be asked;
+   * adapters without an honest source omit this entirely. Callers additionally
+   * gate on the instance snapshot (see `canRefreshProviderAvailability`).
    */
   readonly refreshAvailability?: () => Effect.Effect<ProviderAvailability, TError>;
 

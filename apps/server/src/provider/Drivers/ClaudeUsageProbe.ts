@@ -1,141 +1,258 @@
 /**
  * ClaudeUsageProbe - bounded, read-only Claude Code `/usage` collection.
  *
- * Claude does not expose the rendered subscription bars through the Agent SDK.
- * The CLI's own `/usage` command is therefore the narrowest honest source: it
- * runs in the configured instance's CLAUDE_CONFIG_DIR and has no allowed tools.
- * It is deliberately on-demand, never a provider health check or agent turn.
+ * Claude does not expose the rendered subscription bars through the Agent SDK,
+ * so the CLI's own `/usage` command is the narrowest honest source. It is run
+ * non-interactively (`claude --print /usage --output-format json`), which the
+ * CLI answers locally: the returned envelope reports `num_turns: 0` and
+ * `total_cost_usd: 0`, so reading quota never becomes an agent turn. Print mode
+ * also skips the interactive workspace-trust dialog, so the probe never answers
+ * a consent prompt on the user's behalf.
+ *
+ * Collection is explicit and on-demand: it is never a provider health check.
+ *
+ * @module provider/Drivers/ClaudeUsageProbe
  */
-// @effect-diagnostics globalDate:off globalTimers:off
-/* eslint-disable no-control-regex -- parsing PTY control sequences is the boundary's purpose. */
-import type { ProviderAvailability, ProviderAvailabilityWindow } from "@t3tools/contracts";
+// @effect-diagnostics globalDate:off
+/* eslint-disable no-control-regex -- stripping stray CLI control sequences is this boundary's job. */
+import type {
+  ProviderAvailability,
+  ProviderAvailabilityAccount,
+  ProviderAvailabilityWindow,
+} from "@t3tools/contracts";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { ChildProcess } from "effect/unstable/process";
 
-import * as PtyAdapter from "../../terminal/PtyAdapter.ts";
+import { spawnAndCollect } from "../providerSnapshot.ts";
 
+/** Budget for one CLI invocation. `/usage` normally answers in ~2s. */
+const CLAUDE_USAGE_PROBE_TIMEOUT_MS = 20_000;
+const CLAUDE_AUTH_STATUS_TIMEOUT_MS = 10_000;
+/** The rendered panel is ~2 KB; anything larger is not a panel we understand. */
 const MAX_OUTPUT_CHARS = 64_000;
-export const CLAUDE_USAGE_PROBE_TIMEOUT_MS = 15_000;
 
 const ANSI_ESCAPE = /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\))/g;
 
+/**
+ * Removes formatting the CLI may still emit when a host forces colour, and
+ * keeps only the last write of a redrawn line. A carriage return without a
+ * line feed rewrites the current line, so the surviving text is the final
+ * frame of that line — never a mixture of a stale percentage and a fresh
+ * heading.
+ */
 export const stripTerminalFormatting = (value: string): string =>
   value
     .replace(ANSI_ESCAPE, "")
-    // Progress redraws use CR without LF. Keeping only the final visual line
-    // avoids accidentally joining stale percentage values to fresh headings.
-    .replace(/\r(?!\n)/g, "\n")
     .replace(/\u0007/g, "")
-    .replace(/\u001b/g, "");
+    .split("\n")
+    .map((line) => {
+      const frames = line.split("\r");
+      return (frames[frames.length - 1] ?? "").replace(/[\u0000-\u0008\u000B-\u001F]/g, "");
+    })
+    .join("\n");
 
-const relativeReset = (value: string, observedAt: Date): string | undefined => {
-  const match = value.match(
-    /(?:in\s+)?(?:(\d+)\s*(?:h|hr|hour)s?)?\s*(?:(\d+)\s*(?:m|min|minute)s?)?/i,
-  );
-  if (!match || (!match[1] && !match[2])) return undefined;
-  const milliseconds = (Number(match[1] ?? 0) * 60 + Number(match[2] ?? 0)) * 60_000;
-  return new Date(observedAt.getTime() + milliseconds).toISOString();
+const MONTHS = [
+  "jan",
+  "feb",
+  "mar",
+  "apr",
+  "may",
+  "jun",
+  "jul",
+  "aug",
+  "sep",
+  "oct",
+  "nov",
+  "dec",
+] as const;
+
+/**
+ * Offset of `timeZone` from UTC at `instant`, or undefined when the zone is
+ * not one this runtime knows. Reading the parts back out of `Intl` is the only
+ * way to resolve a wall-clock reading (`Aug 18, 9pm (Europe/Berlin)`) without
+ * shipping a timezone table.
+ */
+const timeZoneOffsetMs = (timeZone: string, instant: Date): number | undefined => {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).formatToParts(instant);
+    const read = (type: Intl.DateTimeFormatPartTypes): number =>
+      Number(parts.find((part) => part.type === type)?.value ?? Number.NaN);
+    const asUtc = Date.UTC(
+      read("year"),
+      read("month") - 1,
+      read("day"),
+      read("hour"),
+      read("minute"),
+      read("second"),
+    );
+    return Number.isFinite(asUtc) ? asUtc - instant.getTime() : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
-const weekdayReset = (value: string, observedAt: Date): string | undefined => {
+/**
+ * Wall-clock reading in `timeZone` (or the host zone when the CLI omits one)
+ * as an instant. The offset is resolved twice so a reading that lands on a DST
+ * transition settles on the offset actually in force at the result.
+ */
+const instantFromWallClock = (
+  wall: {
+    readonly year: number;
+    readonly monthIndex: number;
+    readonly day: number;
+    readonly hour: number;
+    readonly minute: number;
+  },
+  timeZone: string | undefined,
+): Date | undefined => {
+  if (timeZone === undefined) {
+    const local = new Date(wall.year, wall.monthIndex, wall.day, wall.hour, wall.minute, 0, 0);
+    return Number.isNaN(local.getTime()) ? undefined : local;
+  }
+  const utcGuess = Date.UTC(wall.year, wall.monthIndex, wall.day, wall.hour, wall.minute);
+  const firstOffset = timeZoneOffsetMs(timeZone, new Date(utcGuess));
+  if (firstOffset === undefined) return undefined;
+  const firstGuess = new Date(utcGuess - firstOffset);
+  const secondOffset = timeZoneOffsetMs(timeZone, firstGuess) ?? firstOffset;
+  return new Date(utcGuess - secondOffset);
+};
+
+/**
+ * `Aug 18, 9pm (Europe/Berlin)` / `Aug 18, 12:59am (Europe/Berlin)`. The CLI
+ * omits the year, so the first reading at or after the observation wins.
+ */
+const absoluteReset = (value: string, observedAt: Date): string | undefined => {
   const match = value.match(
-    /(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\s+(\d{1,2}):(\d{2})\s*(am|pm)/i,
+    /\b([A-Za-z]{3,9})\s+(\d{1,2}),?\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)\b\s*(?:\(([^)]+)\))?/i,
   );
   if (!match) return undefined;
-  const weekday = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"].indexOf(
-    value.slice(0, 3).toLowerCase(),
+  const monthIndex = MONTHS.indexOf(
+    (match[1] ?? "").slice(0, 3).toLowerCase() as (typeof MONTHS)[number],
   );
-  if (weekday < 0) return undefined;
-  let hour = Number(match[1]);
-  if (hour === 12) hour = 0;
-  if (match[3]?.toLowerCase() === "pm") hour += 12;
-  const result = new Date(observedAt);
-  const offset = (weekday - observedAt.getDay() + 7) % 7;
-  result.setDate(result.getDate() + (offset === 0 && result.getHours() >= hour ? 7 : offset));
-  result.setHours(hour, Number(match[2]), 0, 0);
-  return result.toISOString();
+  const day = Number(match[2]);
+  if (monthIndex < 0 || !Number.isInteger(day) || day < 1 || day > 31) return undefined;
+  const rawHour = Number(match[3]);
+  if (!Number.isInteger(rawHour) || rawHour < 1 || rawHour > 12) return undefined;
+  const minute = match[4] === undefined ? 0 : Number(match[4]);
+  if (!Number.isInteger(minute) || minute > 59) return undefined;
+  const meridiem = (match[5] ?? "").toLowerCase();
+  const hour = meridiem === "pm" ? (rawHour % 12) + 12 : rawHour % 12;
+  const timeZone = match[6]?.trim();
+
+  const observedYear = observedAt.getFullYear();
+  for (const year of [observedYear, observedYear + 1]) {
+    const instant = instantFromWallClock({ year, monthIndex, day, hour, minute }, timeZone);
+    if (!instant || Number.isNaN(instant.getTime())) continue;
+    // A rendered reset is always ahead of the reading; only a year boundary can
+    // make the same wall clock look like the past.
+    if (instant.getTime() >= observedAt.getTime()) return instant.toISOString();
+  }
+  return undefined;
 };
 
-const parseReset = (value: string, observedAt: Date): string | undefined =>
-  relativeReset(value, observedAt) ?? weekdayReset(value, observedAt);
-
-type UsageWindowDefinition = {
-  readonly kind: string;
-  readonly label: string;
-  readonly scope?: string;
-  readonly heading: RegExp;
+/** `in 4h 52m` / `in 3 hours` — the relative wording older CLIs render. */
+const relativeReset = (value: string, observedAt: Date): string | undefined => {
+  const match = value.match(
+    /\bin\s+(?:(\d{1,3})\s*(?:h|hr|hrs|hour|hours)\b)?\s*(?:(\d{1,3})\s*(?:m|min|mins|minute|minutes)\b)?/i,
+  );
+  if (!match || (match[1] === undefined && match[2] === undefined)) return undefined;
+  const minutes = Number(match[1] ?? 0) * 60 + Number(match[2] ?? 0);
+  if (!Number.isFinite(minutes) || minutes <= 0) return undefined;
+  return new Date(observedAt.getTime() + minutes * 60_000).toISOString();
 };
 
-const BASE_WINDOWS: ReadonlyArray<UsageWindowDefinition> = [
-  { kind: "session", label: "Current session", heading: /Current\s+session/i },
-  { kind: "weekly", label: "All models", heading: /All\s+models/i },
-];
+/** Reset wording from one rendered row. Unknown wording yields no timestamp. */
+export const parseClaudeUsageReset = (value: string, observedAt: Date): string | undefined =>
+  absoluteReset(value, observedAt) ?? relativeReset(value, observedAt);
 
-const readWindow = (
-  output: string,
-  definition: UsageWindowDefinition,
+type UsageWindowIdentity = Pick<ProviderAvailabilityWindow, "kind" | "label" | "scope">;
+
+const slugify = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+/**
+ * The rendered row label → a provider-native window identity. Only labels the
+ * CLI actually renders as quota rows are mapped; anything else is skipped so a
+ * prose line can never become a window.
+ */
+const windowIdentity = (label: string): UsageWindowIdentity | undefined => {
+  const normalized = label.trim().replace(/\s+/g, " ");
+  if (/^current session$/i.test(normalized)) {
+    return { kind: "session", label: "Current session" };
+  }
+  if (/^current week$/i.test(normalized)) {
+    return { kind: "weekly", label: "Current week" };
+  }
+  const weekly = normalized.match(/^current week\s*\(([^)]+)\)$/i);
+  if (!weekly) return undefined;
+  const pool = (weekly[1] ?? "").trim();
+  if (pool.length === 0) return undefined;
+  if (/^all models$/i.test(pool)) {
+    return { kind: "weekly", label: "All models" };
+  }
+  const scope = slugify(pool);
+  return scope.length > 0 ? { kind: "model-weekly", label: pool, scope } : undefined;
+};
+
+// One rendered quota row: `Current week (all models): 77% used · resets ...`.
+// The percentage and its reset must come from this row; nothing is borrowed
+// from a neighbouring line.
+const USAGE_ROW = /^\s*([^:]{1,80}):\s*(\d{1,3})%\s+used\b(.*)$/i;
+
+/**
+ * Windows rendered by one `/usage` panel, in panel order and deduplicated by
+ * identity. A row Phoenix cannot name is dropped rather than guessed.
+ */
+const parseClaudeUsageWindows = (
+  panel: string,
   observedAt: Date,
-): ProviderAvailabilityWindow | undefined => {
-  const headingMatch = definition.heading.exec(output);
-  if (!headingMatch || headingMatch.index === undefined) return undefined;
-  // Restrict a window to its nearby visual block. This prevents the current
-  // session label from accidentally borrowing the next weekly percentage.
-  const block = output.slice(headingMatch.index, headingMatch.index + 600);
-  const percent = block.match(/(\d{1,3})\s*%\s*used/i);
-  if (!percent) return undefined;
-  const usedPercent = Number(percent[1]);
-  if (!Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100) return undefined;
-  const reset = block.match(/Resets?\s+([^\n]+)/i);
-  const resetsAt = reset ? parseReset(reset[1] ?? "", observedAt) : undefined;
-  return {
-    kind: definition.kind,
-    label: definition.label,
-    ...(definition.scope ? { scope: definition.scope } : {}),
-    usedPercent,
-    ...(resetsAt ? { resetsAt } : {}),
-  };
-};
-
-/** Parse the CLI's rendered `/usage` panel without deriving quota from tokens. */
-export const parseClaudeUsage = (
-  rawOutput: string,
-  observedAt = new Date(),
-): ProviderAvailability => {
-  const output = stripTerminalFormatting(rawOutput);
-  const windows: ProviderAvailabilityWindow[] = BASE_WINDOWS.flatMap((definition) => {
-    const window = readWindow(output, definition, observedAt);
-    return window ? [window] : [];
-  });
-
-  // Model-specific weekly rows are intentionally discovered from rendered
-  // headings rather than a hard-coded model list: a future plan can add a
-  // named pool without Phoenix claiming it is the all-models weekly quota.
-  const modelPattern =
-    /(?:^|\n)\s*([A-Za-z][A-Za-z0-9 ._-]{1,60})\s*\n[\s\S]{0,220}?(\d{1,3})\s*%\s*used[\s\S]{0,160}?Resets?\s+([^\n]+)/g;
-  for (const match of output.matchAll(modelPattern)) {
-    const label = match[1]?.trim();
-    const usedPercent = Number(match[2]);
-    if (
-      !label ||
-      /^(Current session|Weekly limits|All models|Plan usage limits)$/i.test(label) ||
-      !Number.isFinite(usedPercent) ||
-      usedPercent < 0 ||
-      usedPercent > 100
-    ) {
-      continue;
-    }
-    const scope = label.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    if (windows.some((window) => window.kind === "model-weekly" && window.scope === scope))
-      continue;
-    const resetsAt = parseReset(match[3] ?? "", observedAt);
+): ReadonlyArray<ProviderAvailabilityWindow> => {
+  const windows: ProviderAvailabilityWindow[] = [];
+  const seen = new Set<string>();
+  for (const line of stripTerminalFormatting(panel).split("\n")) {
+    const row = line.match(USAGE_ROW);
+    if (!row) continue;
+    const identity = windowIdentity(row[1] ?? "");
+    if (!identity) continue;
+    const usedPercent = Number(row[2]);
+    if (!Number.isInteger(usedPercent) || usedPercent < 0 || usedPercent > 100) continue;
+    const key = `${identity.kind}:${identity.scope ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const resetsAt = parseClaudeUsageReset(row[3] ?? "", observedAt);
     windows.push({
-      kind: "model-weekly",
-      label,
-      scope,
+      ...identity,
       usedPercent,
       ...(resetsAt ? { resetsAt } : {}),
     });
   }
+  return windows;
+};
+
+/** Parse the CLI's rendered `/usage` panel without deriving quota from tokens. */
+export const parseClaudeUsagePanel = (
+  panel: string,
+  observedAt: Date,
+  account?: ProviderAvailabilityAccount,
+): ProviderAvailability => {
+  const windows = parseClaudeUsageWindows(panel, observedAt);
   return {
     status: windows.some((window) => window.usedPercent >= 100)
       ? "limited"
@@ -144,54 +261,216 @@ export const parseClaudeUsage = (
         : "unknown",
     source: "claude_cli_usage",
     observedAt: observedAt.toISOString(),
+    ...(account ? { account } : {}),
     windows,
   };
 };
 
+/** An availability snapshot that reports "we did not learn anything". */
+export const unknownClaudeUsage = (
+  observedAt: Date,
+  account?: ProviderAvailabilityAccount,
+): ProviderAvailability => ({
+  status: "unknown",
+  source: "claude_cli_usage",
+  observedAt: observedAt.toISOString(),
+  ...(account ? { account } : {}),
+  windows: [],
+});
+
+export type ClaudeUsageEnvelope =
+  | { readonly _tag: "panel"; readonly text: string }
+  | { readonly _tag: "rejected"; readonly reason: string };
+
+const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
+
+const readJsonRecord = (value: string): Record<string, unknown> | undefined => {
+  const decoded = decodeUnknownJsonStringExit(value);
+  if (!Exit.isSuccess(decoded)) return undefined;
+  const parsed = decoded.value;
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : undefined;
+};
+
+/**
+ * The `--output-format json` envelope around the panel. The turn counters are
+ * checked rather than trusted: if a CLI ever answers `/usage` with a model
+ * turn, the result is rejected instead of being presented as free quota data.
+ */
+export const readClaudeUsageEnvelope = (stdout: string): ClaudeUsageEnvelope => {
+  if (stdout.length > MAX_OUTPUT_CHARS) {
+    return { _tag: "rejected", reason: "usage output exceeded the expected size" };
+  }
+  const envelope = readJsonRecord(stdout.trim());
+  if (!envelope) {
+    return { _tag: "rejected", reason: "usage output was not a JSON envelope" };
+  }
+  if (envelope.is_error === true) {
+    return { _tag: "rejected", reason: "CLI reported an error for /usage" };
+  }
+  if (typeof envelope.num_turns === "number" && envelope.num_turns > 0) {
+    return { _tag: "rejected", reason: "CLI answered /usage with an agent turn" };
+  }
+  if (typeof envelope.total_cost_usd === "number" && envelope.total_cost_usd > 0) {
+    return { _tag: "rejected", reason: "CLI billed the /usage request" };
+  }
+  const text = envelope.result;
+  if (typeof text !== "string" || text.trim().length === 0) {
+    return { _tag: "rejected", reason: "usage envelope carried no rendered panel" };
+  }
+  return { _tag: "panel", text };
+};
+
+export interface ClaudeAuthStatus {
+  readonly loggedIn: boolean;
+  readonly email: string | undefined;
+  readonly orgId: string | undefined;
+  readonly apiProvider: string | undefined;
+  readonly subscriptionType: string | undefined;
+}
+
+const readString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+
+/** `claude auth status --json`. Anything unparseable reads as "not known". */
+export const parseClaudeAuthStatus = (stdout: string): ClaudeAuthStatus | undefined => {
+  if (stdout.length > MAX_OUTPUT_CHARS) return undefined;
+  const status = readJsonRecord(stripTerminalFormatting(stdout).trim());
+  if (!status || typeof status.loggedIn !== "boolean") return undefined;
+  return {
+    loggedIn: status.loggedIn,
+    email: readString(status.email),
+    orgId: readString(status.orgId),
+    apiProvider: readString(status.apiProvider),
+    subscriptionType: readString(status.subscriptionType),
+  };
+};
+
+/**
+ * The account subject Phoenix is allowed to publish. It exists only when the
+ * CLI itself reports a signed-in first-party account, and it is scoped by the
+ * reported organisation so two accounts in different orgs never collapse into
+ * one card.
+ */
+export const claudeUsageAccount = (
+  status: ClaudeAuthStatus | undefined,
+): ProviderAvailabilityAccount | undefined => {
+  if (!status?.loggedIn || status.email === undefined) return undefined;
+  if (status.apiProvider !== undefined && status.apiProvider !== "firstParty") return undefined;
+  return {
+    id: `claude:${status.orgId ?? "no-org"}:${status.email.toLowerCase()}`,
+    verification: "native_verified",
+    displayName: status.email,
+  };
+};
+
+/**
+ * Subscription quota is a first-party Anthropic concept. Bedrock/Vertex/Foundry
+ * instances bill through the cloud account instead, so they are not probed.
+ */
+const isSubscriptionCapableAuth = (status: ClaudeAuthStatus): boolean =>
+  status.loggedIn && (status.apiProvider === undefined || status.apiProvider === "firstParty");
+
+/**
+ * One bounded CLI call. `resolveSpawnCommand` is what turns the configured
+ * `binaryPath` into something spawnable on every host: it resolves the command
+ * against PATH/PATHEXT on Windows and falls back to shell mode for `.cmd`
+ * launcher shims. Timing out closes the scope, which kills the child.
+ */
+const runClaudeCli = Effect.fn("runClaudeCli")(function* (input: {
+  readonly binaryPath: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+}) {
+  const spawnCommand = yield* resolveSpawnCommand(input.binaryPath, input.args, {
+    env: input.env,
+  });
+  return yield* spawnAndCollect(
+    input.binaryPath,
+    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+      cwd: input.cwd,
+      env: input.env,
+      shell: spawnCommand.shell,
+    }),
+  );
+});
+
+/**
+ * Read the instance's subscription quota. The CLI is only asked for `/usage`
+ * once it has confirmed a signed-in first-party account, so an unauthenticated
+ * or cloud-provider instance is never spawned into an interactive login flow.
+ */
 export const probeClaudeUsage = Effect.fn("probeClaudeUsage")(function* (input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
-  readonly observedAt?: Date;
+  readonly observedAt: Date;
 }) {
-  const pty = yield* PtyAdapter.PtyAdapter;
-  const process = yield* pty.spawn({
-    shell: input.binaryPath,
-    args: ["--allowed-tools", ""],
+  const authResult = yield* runClaudeCli({
+    binaryPath: input.binaryPath,
+    args: ["auth", "status", "--json"],
     cwd: input.cwd,
-    cols: 120,
-    rows: 40,
     env: input.env,
-  });
-  const output: string[] = [];
-  const result = yield* Effect.callback<ProviderAvailability>((resume) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      unsubscribeData();
-      unsubscribeExit();
-      process.kill();
-      resume(Effect.succeed(parseClaudeUsage(output.join(""), input.observedAt)));
-    };
-    const unsubscribeData = process.onData((chunk) => {
-      if (output.join("").length < MAX_OUTPUT_CHARS) output.push(chunk.slice(0, MAX_OUTPUT_CHARS));
-      // The panel is rendered after /usage. Its footer is a stable completion
-      // marker, so we do not wait for a provider turn or a polling timer.
-      if (/Last updated:/i.test(output.join(""))) finish();
+  }).pipe(Effect.timeoutOption(CLAUDE_AUTH_STATUS_TIMEOUT_MS));
+
+  const status = Option.isSome(authResult)
+    ? parseClaudeAuthStatus(authResult.value.stdout)
+    : undefined;
+  if (!status) {
+    yield* Effect.logDebug("Claude usage probe skipped: authentication status unavailable.");
+    return unknownClaudeUsage(input.observedAt);
+  }
+  const account = claudeUsageAccount(status);
+  if (!isSubscriptionCapableAuth(status)) {
+    yield* Effect.logDebug("Claude usage probe skipped: no first-party subscription session.", {
+      loggedIn: status.loggedIn,
+      apiProvider: status.apiProvider,
     });
-    const unsubscribeExit = process.onExit(() => finish());
-    process.write("/usage\r");
-    return Effect.sync(() => {
-      if (!settled) process.kill();
-      unsubscribeData();
-      unsubscribeExit();
+    return unknownClaudeUsage(input.observedAt, account);
+  }
+
+  const usageResult = yield* runClaudeCli({
+    binaryPath: input.binaryPath,
+    // `--safe-mode` keeps hooks, MCP servers, plugins and CLAUDE.md out of a
+    // quota read; `--no-session-persistence` keeps it out of the user's
+    // resumable history; `--tools ""` leaves the CLI nothing to run even if a
+    // future version stopped answering `/usage` locally.
+    args: [
+      "--print",
+      "/usage",
+      "--output-format",
+      "json",
+      "--safe-mode",
+      "--no-session-persistence",
+      "--tools",
+      "",
+    ],
+    cwd: input.cwd,
+    env: input.env,
+  }).pipe(Effect.timeoutOption(CLAUDE_USAGE_PROBE_TIMEOUT_MS));
+
+  if (Option.isNone(usageResult)) {
+    yield* Effect.logWarning("Claude usage probe timed out.", {
+      timeoutMs: CLAUDE_USAGE_PROBE_TIMEOUT_MS,
     });
-  }).pipe(
-    Effect.timeoutOption(CLAUDE_USAGE_PROBE_TIMEOUT_MS),
-    Effect.map((value) =>
-      Option.isSome(value) ? value.value : parseClaudeUsage("", input.observedAt),
-    ),
-  );
-  return result;
+    return unknownClaudeUsage(input.observedAt, account);
+  }
+  if (usageResult.value.code !== 0) {
+    yield* Effect.logWarning("Claude usage probe exited with a non-zero status.", {
+      code: usageResult.value.code,
+      stderr: usageResult.value.stderr.slice(0, 500),
+    });
+    return unknownClaudeUsage(input.observedAt, account);
+  }
+
+  const envelope = readClaudeUsageEnvelope(usageResult.value.stdout);
+  if (envelope._tag === "rejected") {
+    yield* Effect.logWarning("Claude usage probe returned an unusable panel.", {
+      reason: envelope.reason,
+    });
+    return unknownClaudeUsage(input.observedAt, account);
+  }
+  return parseClaudeUsagePanel(envelope.text, input.observedAt, account);
 });

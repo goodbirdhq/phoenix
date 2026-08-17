@@ -33,7 +33,7 @@ const dependencies = [McpInvocationContext.McpInvocationContext];
 
 export const ListSessionProvidersTool = Tool.make("list_session_providers", {
   description:
-    "List the provider instances and models this Phoenix environment can start a new agent session with. Each instance includes an honest subscription-availability snapshot when its native provider runtime has supplied one. Set refreshAvailability=true to explicitly refresh supported native sources (never creates a session or turn); do not poll it. Instances are separate accounts; never add their quotas together. Call before spawn_session to offer real choices instead of guessing.",
+    "List the provider instances and models this Phoenix environment can start a new agent session with. Each instance includes an honest subscription-availability snapshot when its native provider runtime has supplied one. Set refreshAvailability=true to explicitly refresh supported native sources; it runs the provider's own read-only quota command for signed-in instances only, never creates a session or turn, and is rate-limited per instance, so do not poll it. Instances are separate accounts; never add their quotas together. Call before spawn_session to offer real choices instead of guessing.",
   parameters: ListSessionProvidersInput,
   success: ListSessionProvidersResult,
   failure: SessionOrchestrationError,

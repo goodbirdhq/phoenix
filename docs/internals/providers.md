@@ -53,6 +53,46 @@ Provider output comes back as internal commands such as `thread.message.assistan
 `thread.session.set`, which clients observe through `orchestration.subscribeThread`. See
 [overview.md](./overview.md) for the command/event loop.
 
+## Subscription availability
+
+`ProviderAvailability` ([`providerAvailability.ts`][availability]) is a per-instance snapshot of a
+provider's own quota: a `status`, the native `source` that observed it, an optional verified
+`account`, and zero or more `windows`. Two configured instances are two accounts, so Phoenix never
+adds their quotas together and never infers a plan from token counts.
+
+Snapshots reach [`ProviderService`][service] two ways:
+
+- Passively, from native runtime events. Codex publishes `account.rate-limits.updated`; sparse
+  updates merge window-by-window into the cached snapshot.
+- Actively, when a client asks for `refresh`. `ProviderService.refreshAvailability` calls the
+  adapter's optional `refreshAvailability`, which for Claude runs
+  [`ClaudeUsageProbe`][usageprobe].
+
+The Claude probe is the only collector that starts a process, so it is deliberately narrow:
+
+- **Gated.** `serverGetProviderAvailability` and the `list_session_providers` MCP tool both refresh
+  only an instance that passes `canRefreshProviderAvailability` — installed, enabled, and reported
+  authenticated by its snapshot. The probe then re-checks with the CLI's own `claude auth status
+--json` and stops there unless it reports a signed-in first-party account. An unauthenticated CLI
+  is never started into a login flow, and a Bedrock/Vertex instance is never asked about a
+  subscription it does not have.
+- **Never a turn.** It runs `claude --print /usage --output-format json`, which the CLI answers
+  locally. The returned envelope is only accepted when it reports `num_turns: 0` and no cost, so a
+  CLI version that ever answered `/usage` with a model turn reads as unknown instead of as free
+  quota data. Print mode also skips the interactive workspace-trust dialog, which an interactive PTY
+  probe would otherwise answer on the user's behalf.
+- **Contained.** The CLI runs in a cache-owned directory with `--safe-mode` (no hooks, MCP servers,
+  plugins, or `CLAUDE.md`) and `--no-session-persistence`, under a timeout that kills the child.
+- **Strict.** Only rendered quota rows (`Current session: 5% used · resets Aug 18, 1am
+(Europe/Berlin)`) become windows, each row's percentage and reset read from that row alone. The
+  panel's prose percentages ("75% of your usage was at >150k context") are never windows.
+  `testFixtures/claudeUsagePrint.json` is a live capture that pins this.
+
+Reads apply two more rules. Refreshes are claimed atomically per instance under a 30s cooldown, so
+two clients clicking at once run the CLI once; and a snapshot older than 15 minutes drops its
+windows but keeps its source, observation time, and account, so an account card stays put instead of
+flickering away.
+
 ## Server-side workers
 
 Provider work flows through three queue-backed workers. All three are built with
@@ -85,6 +125,8 @@ when a request opens (approval) or user input is requested, via
 [instances]: ../../apps/server/src/provider/Services/ProviderInstanceRegistry.ts
 [registry]: ../../apps/server/src/provider/Services/ProviderAdapterRegistry.ts
 [service]: ../../apps/server/src/provider/Layers/ProviderService.ts
+[availability]: ../../packages/contracts/src/providerAvailability.ts
+[usageprobe]: ../../apps/server/src/provider/Drivers/ClaudeUsageProbe.ts
 [contracts]: ../../packages/contracts/src/orchestration.ts
 [worker]: ../../packages/shared/src/DrainableWorker.ts
 [ingest]: ../../apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts

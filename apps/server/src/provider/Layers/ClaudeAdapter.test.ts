@@ -4623,4 +4623,23 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  it.effect("reports unknown availability for a disabled instance without running the CLI", () => {
+    // A disabled instance has no CLI to ask, and the probe must not be the
+    // thing that discovers that: it returns the honest unknown snapshot and
+    // never spawns.
+    const harness = makeHarness({ claudeConfig: { enabled: false } });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const availability = yield* adapter.refreshAvailability!();
+
+      assert.equal(availability.status, "unknown");
+      assert.equal(availability.source, "claude_cli_usage");
+      assert.deepEqual([...availability.windows], []);
+      assert.equal(availability.account, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 });

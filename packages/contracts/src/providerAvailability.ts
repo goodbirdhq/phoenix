@@ -1,6 +1,11 @@
 import { Schema } from "effect";
 
-import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleArray,
+  IsoDateTime,
+  NonNegativeInt,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 // Availability is intentionally per configured provider instance. Two
@@ -13,6 +18,9 @@ export const ProviderAvailabilityWindow = Schema.Struct({
   // give clients optional display metadata rather than guessing a plan.
   kind: TrimmedNonEmptyString,
   label: Schema.optional(TrimmedNonEmptyString),
+  // Distinguishes two windows of the same kind, such as one weekly pool per
+  // model. Windows of one kind without a scope are the provider's only window
+  // of that kind.
   scope: Schema.optional(TrimmedNonEmptyString),
   usedPercent: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
   resetsAt: Schema.optional(IsoDateTime),
@@ -21,9 +29,10 @@ export const ProviderAvailabilityWindow = Schema.Struct({
 export type ProviderAvailabilityWindow = typeof ProviderAvailabilityWindow.Type;
 
 // Present only when the native provider runtime supplies a stable account
-// subject. Clients may group matching verified ids across environments, but
-// MUST leave absent identities per configured instance (never merge by email,
-// display name, provider kind, or plan).
+// subject — for Claude, the CLI's own `claude auth status` reading of the
+// signed-in first-party account. Clients may group matching verified ids
+// across environments, but MUST leave absent identities per configured
+// instance (never merge by email, display name, provider kind, or plan).
 export const ProviderAvailabilityAccount = Schema.Struct({
   id: TrimmedNonEmptyString,
   verification: Schema.Literal("native_verified"),
@@ -44,7 +53,10 @@ export const ProviderAvailability = Schema.Struct({
   ]),
   observedAt: Schema.optional(IsoDateTime),
   account: Schema.optional(ProviderAvailabilityAccount),
-  windows: Schema.Array(ProviderAvailabilityWindow),
+  // Window kinds grow as providers add pools, and an expired snapshot keeps
+  // its source and account while dropping windows. A client that cannot read
+  // one window must still render the rest.
+  windows: ForwardCompatibleArray(ProviderAvailabilityWindow),
 });
 export type ProviderAvailability = typeof ProviderAvailability.Type;
 
@@ -52,8 +64,8 @@ export type ProviderAvailability = typeof ProviderAvailability.Type;
 // clients discard the whole server schema.
 export const ProviderAvailabilityInput = Schema.Struct({
   instanceId: Schema.optional(ProviderInstanceId),
-  // Explicit only: CLI quota probing is never tied to background health
-  // checks. A typeless input also makes some strict MCP clients drop a server.
+  // Explicit only. A refresh runs the provider's own CLI, so it is requested by
+  // a person looking at the numbers and never by a background health check.
   refresh: Schema.optional(Schema.Boolean),
 });
 export type ProviderAvailabilityInput = typeof ProviderAvailabilityInput.Type;
@@ -67,6 +79,8 @@ export const ProviderAvailabilityEntry = Schema.Struct({
 export type ProviderAvailabilityEntry = typeof ProviderAvailabilityEntry.Type;
 
 export const ProviderAvailabilityResult = Schema.Struct({
-  providers: Schema.Array(ProviderAvailabilityEntry),
+  // One instance a client cannot decode (a driver or source it does not know
+  // yet) must not blank the whole Usage page.
+  providers: ForwardCompatibleArray(ProviderAvailabilityEntry),
 });
 export type ProviderAvailabilityResult = typeof ProviderAvailabilityResult.Type;

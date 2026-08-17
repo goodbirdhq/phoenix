@@ -213,6 +213,20 @@ export type ServerProviders = typeof ServerProviders.Type;
 export const isProviderAvailable = (snapshot: ServerProvider): boolean =>
   snapshot.availability !== "unavailable";
 
+/**
+ * Whether asking this instance for a fresh native quota reading is safe.
+ * A refresh runs the provider's own CLI, so it is only offered for an
+ * instance that is present, switched on, and already signed in — an
+ * unauthenticated CLI has nothing to report and must never be started into a
+ * login flow on a user's behalf. Servers gate on this; clients use it to keep
+ * a refresh affordance honest.
+ */
+export const canRefreshProviderAvailability = (snapshot: ServerProvider): boolean =>
+  snapshot.enabled &&
+  snapshot.installed &&
+  isProviderAvailable(snapshot) &&
+  snapshot.auth.status === "authenticated";
+
 export const ServerObservability = Schema.Struct({
   logsDirectoryPath: TrimmedNonEmptyString,
   localTracingEnabled: Schema.Boolean,

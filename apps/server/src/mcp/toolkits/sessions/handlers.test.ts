@@ -5,6 +5,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationThreadShell,
   type ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   READ_REPORT_MAX_CHARS,
   ReadReportInput,
@@ -13,6 +14,7 @@ import {
   SessionOrchestrationInvalidInputError,
   SessionOrchestrationReportAlreadySupersededError,
   type SessionReport,
+  type ServerProvider,
   type SessionUsageSnapshot,
   supersededReportNotice,
   ThreadId,
@@ -40,6 +42,7 @@ import {
 import { ProjectionTurnRepository } from "../../../persistence/Services/ProjectionTurns.ts";
 import { ProviderSessionDirectoryPersistenceError } from "../../../provider/Errors.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "../../../provider/Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import { layerTest as serverSettingsLayerTest } from "../../../serverSettings.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
@@ -832,6 +835,10 @@ const runHandler = <A, E, R>(
     // dispatch.
     dispatch?: OrchestrationEngine.OrchestrationEngineShape["dispatch"];
     enqueueCommand?: ServerRuntimeStartup.ServerRuntimeStartup["Service"]["enqueueCommand"];
+    getProviders?: ProviderRegistry.ProviderRegistryShape["getProviders"];
+    // Absent by default: the toolkit reads ProviderService optionally, and
+    // most handler tests run without the process-facing provider layer.
+    providerService?: Partial<ProviderService.ProviderServiceShape>;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -884,7 +891,12 @@ const runHandler = <A, E, R>(
           getProjectShellById:
             overrides.getProjectShellById ?? (() => Effect.succeed(Option.none())),
         }),
-        Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+        Layer.mock(ProviderRegistry.ProviderRegistry)(
+          overrides.getProviders ? { getProviders: overrides.getProviders } : {},
+        ),
+        overrides.providerService
+          ? Layer.mock(ProviderService.ProviderService)(overrides.providerService)
+          : Layer.empty,
         Layer.mock(ProviderSessionDirectory)({
           listBindings: overrides.listBindings ?? (() => Effect.succeed([])),
         }),
@@ -1668,6 +1680,85 @@ describe("read_report child-report inbox consumption (handler)", () => {
       });
 
       expect(dispatched).toEqual([]);
+    }),
+  );
+});
+
+describe("list_session_providers availability refresh (handler)", () => {
+  const providerSnapshot = (input: {
+    readonly instanceId: string;
+    readonly enabled?: boolean;
+    readonly installed?: boolean;
+    readonly authStatus?: "authenticated" | "unauthenticated" | "unknown";
+  }): ServerProvider => ({
+    instanceId: ProviderInstanceId.make(input.instanceId),
+    driver: ProviderDriverKind.make("claudeAgent"),
+    enabled: input.enabled ?? true,
+    installed: input.installed ?? true,
+    version: "2.1.233",
+    status: "ready",
+    auth: { status: input.authStatus ?? "authenticated" },
+    checkedAt: now,
+    models: [],
+    slashCommands: [],
+    skills: [],
+  });
+
+  const unknownAvailability = {
+    status: "unknown",
+    source: "claude_agent_sdk",
+    windows: [],
+  } as const;
+
+  it.effect("only runs the provider CLI for an installed, enabled, signed-in instance", () =>
+    Effect.gen(function* () {
+      const refreshed: Array<string> = [];
+      const result = yield* runHandler(
+        (handlers) => handlers.list_session_providers({ refreshAvailability: true }),
+        {
+          getProviders: Effect.succeed([
+            providerSnapshot({ instanceId: "claude-signed-in" }),
+            providerSnapshot({ instanceId: "claude-logged-out", authStatus: "unauthenticated" }),
+            providerSnapshot({ instanceId: "claude-disabled", enabled: false }),
+            providerSnapshot({ instanceId: "claude-missing", installed: false }),
+          ]),
+          providerService: {
+            refreshAvailability: (instanceId) =>
+              Effect.sync(() => {
+                refreshed.push(instanceId);
+                return unknownAvailability;
+              }),
+            getAvailability: () => Effect.succeed(unknownAvailability),
+          },
+        },
+      );
+
+      expect(refreshed).toEqual(["claude-signed-in"]);
+      expect(result.providers.map((provider) => provider.instanceId)).toEqual([
+        "claude-signed-in",
+        "claude-logged-out",
+        "claude-disabled",
+        "claude-missing",
+      ]);
+    }),
+  );
+
+  it.effect("never runs the provider CLI when a caller did not ask for a refresh", () =>
+    Effect.gen(function* () {
+      const refreshed: Array<string> = [];
+      yield* runHandler((handlers) => handlers.list_session_providers({}), {
+        getProviders: Effect.succeed([providerSnapshot({ instanceId: "claude-signed-in" })]),
+        providerService: {
+          refreshAvailability: (instanceId) =>
+            Effect.sync(() => {
+              refreshed.push(instanceId);
+              return unknownAvailability;
+            }),
+          getAvailability: () => Effect.succeed(unknownAvailability),
+        },
+      });
+
+      expect(refreshed).toEqual([]);
     }),
   );
 });

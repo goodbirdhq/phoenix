@@ -47,6 +47,7 @@ import {
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
   RpcClientId,
+  canRefreshProviderAvailability,
   type ProviderAvailability,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -1324,7 +1325,11 @@ const makeWsRpcLayer = (
                     ? providers
                     : providers.filter((provider) => provider.instanceId === input.instanceId),
                   (provider) =>
+                    // Refreshing runs the provider's own CLI, so only an
+                    // instance that is installed, enabled and already signed in
+                    // is asked.
                     (input.refresh === true &&
+                    canRefreshProviderAvailability(provider) &&
                     Option.isSome(providerService) &&
                     providerService.value.refreshAvailability !== undefined
                       ? providerService.value.refreshAvailability(

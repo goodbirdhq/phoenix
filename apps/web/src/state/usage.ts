@@ -40,12 +40,24 @@ export interface EnvironmentProviderAvailabilityStatus {
   readonly serverProviders: readonly ServerProvider[];
 }
 
+/**
+ * The Usage page is where a person goes to read their limits, so it asks for a
+ * fresh native reading rather than whatever last arrived on its own — Claude
+ * publishes nothing passively, so a cached-only read would leave its bars
+ * permanently unknown. The server gates the refresh to signed-in instances and
+ * runs the provider CLI at most once every thirty seconds per instance; other
+ * surfaces (Settings) keep reading the cached snapshot.
+ */
+const USAGE_AVAILABILITY_INPUT = { refresh: true } as const;
+
 const providerAvailabilityAtom = Atom.make(
   (get): readonly EnvironmentProviderAvailabilityStatus[] => {
     const presentations = get(environmentPresentations.presentationsAtom);
     const statuses: EnvironmentProviderAvailabilityStatus[] = [];
     for (const [environmentId, presentation] of presentations) {
-      const result = get(serverEnvironment.providerAvailability({ environmentId, input: {} }));
+      const result = get(
+        serverEnvironment.providerAvailability({ environmentId, input: USAGE_AVAILABILITY_INPUT }),
+      );
       const value = Option.getOrNull(AsyncResult.value(result));
       if (value !== null) {
         statuses.push({
@@ -138,7 +150,7 @@ export function useUsage(input: UsageSummaryInput): UsageView {
       appAtomRegistry.refresh(
         serverEnvironment.providerAvailability({
           environmentId: environment.environmentId,
-          input: {},
+          input: USAGE_AVAILABILITY_INPUT,
         }),
       );
     }
