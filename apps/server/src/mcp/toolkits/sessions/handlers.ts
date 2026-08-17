@@ -2,6 +2,7 @@ import {
   type ArchiveSessionInput,
   checkReportSupersession,
   CommandId,
+  EventId,
   GitCommandError,
   isProviderAvailable,
   LIST_SESSIONS_MAX_ENTRIES,
@@ -32,6 +33,7 @@ import {
   SessionOrchestrationWorktreeNotEmptyError,
   type ServerProvider,
   type SessionUsageSnapshot,
+  isSessionReportReadActivity,
   supersededReportNotice,
   type SettleSessionBranchRefusal,
   type SettleSessionInput,
@@ -2207,6 +2209,59 @@ export const make = Effect.gen(function* () {
       offset: input.offset,
       maxChars: input.maxChars,
     });
+
+    // A child-report inbox belongs to the parent, not to any person looking
+    // at the child in the UI. The only consumption path is the parent agent's
+    // explicit read_report(reportId): sibling reads, self reads, and the
+    // convenience threadId form are observations only. The activity is an
+    // append-only audit record, so old reports remain retrievable forever.
+    const directChild =
+      input.reportId !== undefined && report.threadId !== scope.threadId
+        ? yield* getShell(report.threadId).pipe(
+            Effect.map(
+              (shell) => Option.isSome(shell) && shell.value.spawnedByThreadId === scope.threadId,
+            ),
+          )
+        : false;
+    if (directChild) {
+      const parentDetail = yield* snapshotQuery
+        .getThreadDetailById(scope.threadId)
+        .pipe(Effect.mapError(operationError("Failed to read parent report inbox")));
+      const alreadyRead = Option.isSome(parentDetail)
+        ? parentDetail.value.activities.some(
+            (activity) =>
+              isSessionReportReadActivity(activity) &&
+              activity.payload.reportId === report.reportId,
+          )
+        : false;
+      if (!alreadyRead) {
+        const readAt = yield* nowIso;
+        yield* enqueue(
+          engine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* serverCommandId("mcp-read-child-report"),
+            threadId: scope.threadId,
+            activity: {
+              // Stable across retries/replays, so the activity projection is
+              // idempotent even if a client repeats the successful read.
+              id: EventId.make(`session-report-read:${scope.threadId}:${report.reportId}`),
+              tone: "info",
+              kind: "session-report.read",
+              summary: "Parent agent read child report",
+              payload: {
+                childThreadId: report.threadId,
+                reportId: report.reportId,
+                readByThreadId: scope.threadId,
+                readAt,
+              },
+              turnId: null,
+              createdAt: readAt,
+            },
+            createdAt: readAt,
+          }),
+        );
+      }
+    }
     return {
       reportId: report.reportId,
       threadId: report.threadId,

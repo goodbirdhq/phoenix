@@ -816,6 +816,7 @@ const runHandler = <A, E, R>(
   run: (handlers: Effect.Success<typeof make>) => Effect.Effect<A, E, R>,
   overrides: {
     getThreadShellById?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadShellById"];
+    getThreadDetailById?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadDetailById"];
     getThreadHasReport?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadHasReport"];
     getLastAssistantMessage?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getLastAssistantMessage"];
     getLatestUsageActivity?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getLatestUsageActivity"];
@@ -870,7 +871,8 @@ const runHandler = <A, E, R>(
           getThreadTurnCount: overrides.getThreadTurnCount ?? (() => Effect.succeed(0)),
           // read_session's pre-existing report/messages fetch; not under test
           // here, so a fixed empty response is enough to keep it from dying.
-          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailById:
+            overrides.getThreadDetailById ?? (() => Effect.succeed(Option.none())),
           getShellSnapshot:
             overrides.getShellSnapshot ??
             (() =>
@@ -1439,6 +1441,93 @@ describe("read_report supersession (handler)", () => {
       expect(result.supersedesReportId).toBeUndefined();
       expect(result.supersededByReportId).toBeUndefined();
       expect(result.supersededNotice).toBeUndefined();
+    }),
+  );
+});
+
+describe("read_report child-report inbox consumption (handler)", () => {
+  it.effect(
+    "records one durable parent activity after the parent reads a direct child's report id",
+    () =>
+      Effect.gen(function* () {
+        const dispatched: Array<OrchestrationCommand> = [];
+        const result = yield* runHandler(
+          (handlers) => handlers.read_report({ reportId: "direct-child-report" }),
+          {
+            findByReportId: () =>
+              Effect.succeed(
+                Option.some(
+                  projectedReport({ reportId: "direct-child-report", threadId: childThreadId }),
+                ),
+              ),
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatched.push(command);
+                return { sequence: 1 };
+              }),
+            enqueueCommand: (effect) => effect,
+          },
+        );
+
+        expect(result.reportId).toBe("direct-child-report");
+        expect(dispatched).toHaveLength(1);
+        expect(dispatched[0]).toMatchObject({
+          type: "thread.activity.append",
+          threadId: parentThreadId,
+          activity: {
+            kind: "session-report.read",
+            payload: {
+              childThreadId,
+              reportId: "direct-child-report",
+              readByThreadId: parentThreadId,
+            },
+          },
+        });
+      }),
+  );
+
+  it.effect("never consumes a sibling report or a threadId-only read", () =>
+    Effect.gen(function* () {
+      const rootThreadId = "root-thread" as ThreadId;
+      const siblingThreadId = "sibling-thread" as ThreadId;
+      const dispatched: Array<OrchestrationCommand> = [];
+      const noConsume = {
+        dispatch: (command: OrchestrationCommand) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: 1 };
+          }),
+        enqueueCommand: <A, E>(effect: Effect.Effect<A, E>) => effect,
+      };
+      const siblingShell = {
+        ...childShell,
+        id: siblingThreadId,
+        spawnedByThreadId: rootThreadId,
+      };
+      yield* runHandler((handlers) => handlers.read_report({ reportId: "sibling-report" }), {
+        findByReportId: () =>
+          Effect.succeed(
+            Option.some(projectedReport({ reportId: "sibling-report", threadId: siblingThreadId })),
+          ),
+        getThreadShellById: (threadId) =>
+          Effect.succeed(
+            threadId === siblingThreadId
+              ? Option.some(siblingShell)
+              : threadId === parentThreadId
+                ? Option.some({ ...parentShell, spawnedByThreadId: rootThreadId })
+                : Option.none(),
+          ),
+        ...noConsume,
+      });
+      yield* runHandler((handlers) => handlers.read_report({ threadId: childThreadId }), {
+        listByThreadId: () =>
+          Effect.succeed([
+            projectedReport({ reportId: "thread-only-report", threadId: childThreadId }),
+          ]),
+        ...noConsume,
+      });
+
+      expect(dispatched).toEqual([]);
     }),
   );
 });

@@ -134,6 +134,7 @@ export const reportNotificationActivity = (input: {
       childThreadId: input.childThreadId,
       childTitle: input.childTitle,
       reportId: report.reportId,
+      reportTitle: report.title,
       status: report.status,
       origin: report.origin,
       ...(report.supersedesReportId ? { supersedesReportId: report.supersedesReportId } : {}),

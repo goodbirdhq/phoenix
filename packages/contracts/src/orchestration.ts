@@ -540,6 +540,10 @@ export const SessionReportNotificationPayload = Schema.Struct({
   childThreadId: ThreadId,
   childTitle: TrimmedNonEmptyString,
   reportId: TrimmedNonEmptyString,
+  // Additive so activity rows written before the compact inbox stay readable.
+  // New report notifications always provide it; the UI falls back to the
+  // legacy summary only for historical rows.
+  reportTitle: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
   status: SessionReportStatus,
   origin: SessionReportOrigin,
   supersedesReportId: Schema.optional(TrimmedNonEmptyString),
@@ -560,6 +564,32 @@ export const SessionReportNotificationActivity = Schema.Struct({
 export type SessionReportNotificationActivity = typeof SessionReportNotificationActivity.Type;
 
 export const isSessionReportNotificationActivity = Schema.is(SessionReportNotificationActivity);
+
+// A report notification is consumed only by the parent agent reading that
+// report through MCP. This is intentionally an activity (rather than a field
+// on the report projection): report history remains append-only and clients
+// can derive the current inbox from the parent thread's durable audit trail.
+export const SessionReportReadPayload = Schema.Struct({
+  childThreadId: ThreadId,
+  reportId: TrimmedNonEmptyString,
+  readByThreadId: ThreadId,
+  readAt: IsoDateTime,
+});
+export type SessionReportReadPayload = typeof SessionReportReadPayload.Type;
+
+export const SessionReportReadActivity = Schema.Struct({
+  id: EventId,
+  tone: Schema.Literal("info"),
+  kind: Schema.Literal("session-report.read"),
+  summary: TrimmedNonEmptyString,
+  payload: SessionReportReadPayload,
+  turnId: Schema.Null,
+  sequence: Schema.optional(NonNegativeInt),
+  createdAt: IsoDateTime,
+});
+export type SessionReportReadActivity = typeof SessionReportReadActivity.Type;
+
+export const isSessionReportReadActivity = Schema.is(SessionReportReadActivity);
 
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",

@@ -1,7 +1,10 @@
 import {
+  isSessionReportReadActivity,
   isSessionReportNotificationActivity,
   type OrchestrationThreadActivity,
+  type SessionReportReadActivity,
   type SessionReportNotificationActivity,
+  type ThreadId,
 } from "@t3tools/contracts";
 
 export const deriveSessionReportNotifications = (
@@ -23,8 +26,14 @@ export const deriveSessionReportNotifications = (
       activity.payload.supersedesReportId ? [activity.payload.supersedesReportId] : [],
     ),
   );
+  const readReportIds = new Set(
+    activities
+      .filter(isSessionReportReadActivity)
+      .map((activity: SessionReportReadActivity) => activity.payload.reportId),
+  );
   return [...latestByReportId.values()].filter(
-    (activity) => !superseded.has(activity.payload.reportId),
+    (activity) =>
+      !superseded.has(activity.payload.reportId) && !readReportIds.has(activity.payload.reportId),
   );
 };
 
@@ -33,3 +42,44 @@ export const SESSION_REPORT_DIGEST_MAX_ITEMS = 20;
 export const visibleSessionReportNotifications = (
   notifications: ReadonlyArray<SessionReportNotificationActivity>,
 ) => notifications.slice(-SESSION_REPORT_DIGEST_MAX_ITEMS);
+
+export interface SessionReportInboxChild {
+  readonly childThreadId: ThreadId;
+  readonly childTitle: string;
+  readonly latest: SessionReportNotificationActivity;
+  readonly unreadCount: number;
+}
+
+// The chat surface gets one notification per child. Multiple independent
+// reports remain unread individually, but a burst from one child cannot grow
+// the composer area into a transcript; its count is visible in the popover.
+export const deriveSessionReportInboxChildren = (
+  notifications: ReadonlyArray<SessionReportNotificationActivity>,
+): ReadonlyArray<SessionReportInboxChild> => {
+  const byChild = new Map<ThreadId, SessionReportInboxChild>();
+  for (const notification of notifications) {
+    const previous = byChild.get(notification.payload.childThreadId);
+    if (previous === undefined) {
+      byChild.set(notification.payload.childThreadId, {
+        childThreadId: notification.payload.childThreadId,
+        childTitle: notification.payload.childTitle,
+        latest: notification,
+        unreadCount: 1,
+      });
+      continue;
+    }
+    byChild.set(notification.payload.childThreadId, {
+      ...previous,
+      latest: notification,
+      unreadCount: previous.unreadCount + 1,
+    });
+  }
+  return [...byChild.values()].toSorted((left, right) => {
+    const leftSequence = left.latest.sequence;
+    const rightSequence = right.latest.sequence;
+    if (leftSequence !== undefined && rightSequence !== undefined) {
+      return rightSequence - leftSequence;
+    }
+    return right.latest.createdAt.localeCompare(left.latest.createdAt);
+  });
+};

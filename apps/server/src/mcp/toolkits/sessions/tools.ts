@@ -149,14 +149,14 @@ export const ArchiveSessionTool = Tool.make("archive_session", {
 
 export const ReadReportTool = Tool.make("read_report", {
   description:
-    "Read the full body of a completion report posted by a session this session spawned, or by a sibling session (one spawned by the same parent). Pass the reportId from a report envelope, or a threadId to get that thread's latest report. Large reports paginate via offset/maxChars; the result also carries the report's origin (agent vs Phoenix-synthesized) and full findings/validation/recommendation. A report that has been amended comes back with supersededByReportId and a supersededNotice: read that newer report instead, it is the session's current account.",
+    "Read the full body of a completion report posted by a session this session spawned, or by a sibling session (one spawned by the same parent). Pass the reportId from a report envelope, or a threadId to get that thread's latest report. Large reports paginate via offset/maxChars; the result also carries the report's origin (agent vs Phoenix-synthesized) and full findings/validation/recommendation. Reading a direct child's report by reportId also consumes that one child-report inbox update on this parent; the durable report and read history remain available. Sibling reads and threadId-only reads never consume an update. A report that has been amended comes back with supersededByReportId and a supersededNotice: read that newer report instead, it is the session's current account.",
   parameters: ReadReportInput,
   success: ReadReportResult,
   failure: SessionOrchestrationError,
   dependencies,
 })
   .annotate(Tool.Title, "Read session report")
-  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 

@@ -6336,7 +6336,6 @@ function ChatViewContent(props: ChatViewProps) {
             </div>
             {/* Messages Wrapper */}
             <div className="relative flex min-h-0 flex-1 flex-col">
-              <SessionReportDigest activities={threadActivities} />
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 agentPanelModel={agentPanelModel}
@@ -6436,6 +6435,20 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
+                  {isServerThread ? (
+                    <SessionReportDigest
+                      activities={threadActivities}
+                      onOpenChildThread={(childThreadId) => {
+                        void navigate({
+                          to: "/$environmentId/$threadId",
+                          params: {
+                            environmentId: activeThread.environmentId,
+                            threadId: childThreadId,
+                          },
+                        });
+                      }}
+                    />
+                  ) : null}
                   {threadSyncPhase && !activeEnvironmentUnavailable ? (
                     <ThreadSyncStatusPill phase={threadSyncPhase} />
                   ) : null}
