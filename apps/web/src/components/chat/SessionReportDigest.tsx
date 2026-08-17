@@ -21,10 +21,11 @@ export function SessionReportDigest({
 }) {
   const notifications = useMemo(() => deriveSessionReportNotifications(activities), [activities]);
   const children = useMemo(() => deriveSessionReportInboxChildren(notifications), [notifications]);
-  const visibleChildren = visibleSessionReportInboxChildren(children);
-  const failedCount = notifications.filter(
-    (notification) => notification.payload.status === "failure",
-  ).length;
+  const visibleChildren = useMemo(() => visibleSessionReportInboxChildren(children), [children]);
+  const failedCount = useMemo(
+    () => notifications.filter((notification) => notification.payload.status === "failure").length,
+    [notifications],
+  );
 
   if (notifications.length === 0) return null;
 

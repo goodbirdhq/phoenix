@@ -1,4 +1,9 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationEvent,
+  OrchestrationReadModel,
+  OrchestrationThreadActivity,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -39,6 +44,27 @@ import {
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
+const MAX_THREAD_NON_REPORT_ACTIVITIES = 500;
+
+const isSessionReportActivity = (activity: OrchestrationThreadActivity) =>
+  activity.kind === "session-report.posted" || activity.kind === "session-report.read";
+
+// Report inbox state is derived from this append-only pair. Keep those rows
+// outside the operational activity window so a busy parent cannot lose an
+// unread report (or its later read receipt) after 500 unrelated activities.
+function retainThreadActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  const reportActivities: OrchestrationThreadActivity[] = [];
+  const otherActivities: OrchestrationThreadActivity[] = [];
+  for (const activity of activities) {
+    (isSessionReportActivity(activity) ? reportActivities : otherActivities).push(activity);
+  }
+  return [
+    ...reportActivities,
+    ...otherActivities.slice(-MAX_THREAD_NON_REPORT_ACTIVITIES),
+  ].toSorted(compareThreadActivities);
+}
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
@@ -884,12 +910,12 @@ export function projectEvent(
             return nextBase;
           }
 
-          const activities = [
-            ...thread.activities.filter((entry) => entry.id !== payload.activity.id),
-            payload.activity,
-          ]
-            .toSorted(compareThreadActivities)
-            .slice(-500);
+          const activities = retainThreadActivities(
+            [
+              ...thread.activities.filter((entry) => entry.id !== payload.activity.id),
+              payload.activity,
+            ].toSorted(compareThreadActivities),
+          );
 
           return {
             ...nextBase,

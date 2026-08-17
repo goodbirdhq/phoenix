@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vite-plus/test";
+import { it as effectIt } from "@effect/vitest";
 
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
@@ -39,6 +40,94 @@ function makeEvent(input: {
 }
 
 describe("orchestration projector", () => {
+  effectIt.effect("retains an unread child report after more than 500 unrelated activities", () =>
+    Effect.gen(function* () {
+      const createdAt = "2026-03-01T10:00:00.000Z";
+      const afterCreate = yield* projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "parent-thread",
+          occurredAt: createdAt,
+          commandId: "cmd-parent-create",
+          payload: {
+            threadId: "parent-thread",
+            projectId: "project-1",
+            title: "Parent",
+            modelSelection: { provider: ProviderDriverKind.make("codex"), model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      );
+      const reportEvent = makeEvent({
+        sequence: 2,
+        type: "thread.activity-appended",
+        aggregateKind: "thread",
+        aggregateId: "parent-thread",
+        occurredAt: createdAt,
+        commandId: "cmd-child-report",
+        payload: {
+          threadId: "parent-thread",
+          activity: {
+            id: "child-report-1",
+            tone: "info",
+            kind: "session-report.posted",
+            summary: "Child posted a report",
+            payload: {
+              childThreadId: "child-thread",
+              childTitle: "Child",
+              reportId: "report-1",
+              status: "success",
+              origin: "agent",
+              createdAt,
+            },
+            turnId: null,
+            createdAt,
+          },
+        },
+      });
+      const busyThreadEvents = Array.from({ length: 501 }, (_unused, index) =>
+        makeEvent({
+          sequence: index + 3,
+          type: "thread.activity-appended",
+          aggregateKind: "thread",
+          aggregateId: "parent-thread",
+          occurredAt: `2026-03-01T10:01:${String(index % 60).padStart(2, "0")}.000Z`,
+          commandId: `cmd-activity-${index}`,
+          payload: {
+            threadId: "parent-thread",
+            activity: {
+              id: `activity-${index}`,
+              tone: "tool",
+              kind: "tool.completed",
+              summary: `Work ${index}`,
+              payload: {},
+              turnId: null,
+              createdAt: `2026-03-01T10:01:${String(index % 60).padStart(2, "0")}.000Z`,
+            },
+          },
+        }),
+      );
+      const finalState = yield* Effect.reduce(
+        [reportEvent, ...busyThreadEvents],
+        () => afterCreate,
+        (state, event) => projectEvent(state, event),
+      );
+
+      const activities = finalState.threads[0]?.activities ?? [];
+      expect(activities).toHaveLength(501);
+      expect(activities.some((activity) => activity.id === "child-report-1")).toBe(true);
+      expect(activities.some((activity) => activity.id === "activity-0")).toBe(false);
+      expect(activities.some((activity) => activity.id === "activity-500")).toBe(true);
+    }),
+  );
+
   it("applies thread.created events", async () => {
     const now = "2026-01-01T00:00:00.000Z";
     const model = createEmptyReadModel(now);

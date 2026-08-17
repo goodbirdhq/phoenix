@@ -74,6 +74,7 @@ export const deriveSessionReportInboxChildren = (
     }
     byChild.set(notification.payload.childThreadId, {
       ...previous,
+      childTitle: notification.payload.childTitle,
       latest: notification,
       unreadCount: previous.unreadCount + 1,
     });

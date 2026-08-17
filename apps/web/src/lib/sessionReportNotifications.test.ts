@@ -163,6 +163,32 @@ describe("deriveSessionReportNotifications", () => {
     ]);
   });
 
+  it("uses the latest child title when a child posts another unread report", () => {
+    const children = deriveSessionReportInboxChildren([
+      {
+        ...activity("report-earlier", 1),
+        payload: {
+          ...activity("report-earlier", 1).payload,
+          childTitle: "Original child title",
+        },
+      },
+      {
+        ...activity("report-later", 2),
+        payload: {
+          ...activity("report-later", 2).payload,
+          childTitle: "Renamed child title",
+        },
+      },
+    ]);
+
+    expect(children).toHaveLength(1);
+    expect(children[0]).toMatchObject({
+      childTitle: "Renamed child title",
+      latest: { payload: { reportId: "report-later" } },
+      unreadCount: 2,
+    });
+  });
+
   it("keeps a large inbox bounded to the newest children", () => {
     const children = deriveSessionReportInboxChildren(
       Array.from({ length: SESSION_REPORT_DIGEST_MAX_ITEMS + 3 }, (_unused, index) => ({

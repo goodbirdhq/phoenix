@@ -2251,6 +2251,18 @@ export const make = Effect.gen(function* () {
           },
           createdAt: readAt,
         }),
+      ).pipe(
+        // The report is already durable and authorized. A transient failure
+        // while recording its inbox consumption must not turn that successful
+        // read into an error; a later read reuses this deterministic command.
+        Effect.catch((cause) =>
+          Effect.logWarning("child report inbox consumption deferred", {
+            parentThreadId: scope.threadId,
+            childThreadId: report.threadId,
+            reportId: report.reportId,
+            cause,
+          }),
+        ),
       );
     }
     return {

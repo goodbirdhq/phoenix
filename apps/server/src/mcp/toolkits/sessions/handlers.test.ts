@@ -1503,6 +1503,51 @@ describe("read_report child-report inbox consumption (handler)", () => {
       }),
   );
 
+  it.effect("returns the report when inbox consumption is temporarily unavailable", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      const report = () =>
+        projectedReport({ reportId: "direct-child-report", threadId: childThreadId });
+      const failedResult = yield* runHandler(
+        (handlers) => handlers.read_report({ reportId: "direct-child-report" }),
+        {
+          findByReportId: () => Effect.succeed(Option.some(report())),
+          dispatch: () =>
+            Effect.fail(
+              new OrchestrationCommandInvariantError({
+                commandType: "thread.activity.append",
+                detail: "projection is temporarily unavailable",
+              }),
+            ),
+          enqueueCommand: (effect) => effect,
+        },
+      );
+
+      const retriedResult = yield* runHandler(
+        (handlers) => handlers.read_report({ reportId: "direct-child-report" }),
+        {
+          findByReportId: () => Effect.succeed(Option.some(report())),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command);
+              return { sequence: 1 };
+            }),
+          enqueueCommand: (effect) => effect,
+        },
+      );
+
+      expect(failedResult.reportId).toBe("direct-child-report");
+      expect(retriedResult.reportId).toBe("direct-child-report");
+      expect(dispatched).toHaveLength(1);
+      const consumption = dispatched[0];
+      if (consumption?.type !== "thread.activity.append") {
+        throw new Error("Expected the retried inbox consumption command.");
+      }
+      expect(consumption.commandId).toBe("session-report-read:parent-1:direct-child-report");
+      expect(consumption.activity.id).toBe("session-report-read:parent-1:direct-child-report");
+    }),
+  );
+
   it.effect("uses one deterministic receipt across concurrent and replayed reads", () =>
     Effect.gen(function* () {
       const persisted: Array<OrchestrationCommand> = [];

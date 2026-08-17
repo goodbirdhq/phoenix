@@ -475,7 +475,11 @@ Reports and read activities are retained projections of their events. A parent m
 child's report by id even after that child is archived, including consuming its matching inbox
 update; this is the narrow archived exception because report history is durable. Archived targets
 never gain sibling access, and the `threadId` convenience form remains observational for every
-target. The UI copy must continue to state that opening the inbox does not mark anything read.
+target. The normal activity window does not trim report-posted or report-read rows, so unread
+reports and their later consumption receipts survive busy-thread activity. If that noncritical
+consumption append is temporarily unavailable, `read_report` still returns the durable report and
+a later read retries the same deterministic command. The UI copy must continue to state that
+opening the inbox does not mark anything read.
 
 ## Gotcha worth remembering
 
