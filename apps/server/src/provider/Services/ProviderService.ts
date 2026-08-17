@@ -114,6 +114,12 @@ export interface ProviderServiceShape {
     provider: ProviderDriverKind,
   ) => Effect.Effect<ProviderAvailability>;
 
+  /** Explicit, deduplicated native quota refresh for one configured instance. */
+  readonly refreshAvailability?: (
+    instanceId: ProviderInstanceId,
+    provider: ProviderDriverKind,
+  ) => Effect.Effect<ProviderAvailability>;
+
   /**
    * Roll back provider conversation state by a number of turns.
    */

@@ -143,6 +143,9 @@ export type SessionProviderDescriptor = typeof SessionProviderDescriptor.Type;
 export const ListSessionProvidersInput = Schema.Struct({
   // When true, omit providers that are not currently available.
   onlyAvailable: Schema.optional(Schema.Boolean),
+  // Explicitly asks supported providers to refresh a native quota snapshot.
+  // It never starts an agent session or a turn.
+  refreshAvailability: Schema.optional(Schema.Boolean),
 });
 export type ListSessionProvidersInput = typeof ListSessionProvidersInput.Type;
 

@@ -75,8 +75,10 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import * as PtyAdapter from "../../terminal/PtyAdapter.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { probeClaudeUsage } from "../Drivers/ClaudeUsageProbe.ts";
 import {
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
@@ -1659,6 +1661,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
+  // The normal server provides a PTY implementation. Keeping it optional at
+  // construction preserves lightweight adapter tests and reports unknown when
+  // a host genuinely cannot offer a terminal.
+  const pty = yield* Effect.serviceOption(PtyAdapter.PtyAdapter);
   const crypto = yield* Crypto.Crypto;
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
     Effect.provideService(Path.Path, path),
@@ -4621,6 +4627,41 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return context.streamFiber?.pollUnsafe() === undefined ? "live" : "dead";
     });
 
+  const refreshAvailability = () =>
+    Effect.gen(function* () {
+      if (Option.isNone(pty)) {
+        return {
+          status: "unknown" as const,
+          source: "claude_cli_usage" as const,
+          observedAt: yield* nowIso,
+          windows: [],
+        };
+      }
+      // A cache-owned cwd keeps the CLI from reading project instructions or
+      // creating a transcript in an agent's worktree. It is not a provider
+      // session and receives no prompt other than the built-in slash command.
+      const probeCwd = path.join(serverConfig.providerStatusCacheDir, "claude-usage-probe");
+      yield* fileSystem.makeDirectory(probeCwd, { recursive: true });
+      return yield* probeClaudeUsage({
+        binaryPath: claudeSettings.binaryPath,
+        cwd: probeCwd,
+        env: claudeEnvironment,
+      }).pipe(Effect.provideService(PtyAdapter.PtyAdapter, pty.value));
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Claude usage probe failed", { cause }).pipe(
+          Effect.andThen(DateTime.now),
+          Effect.map(DateTime.formatIso),
+          Effect.map((observedAt) => ({
+            status: "unknown" as const,
+            source: "claude_cli_usage" as const,
+            observedAt,
+            windows: [],
+          })),
+        ),
+      ),
+    );
+
   const stopAll: ClaudeAdapterShape["stopAll"] = () =>
     Effect.forEach(
       sessions,
@@ -4664,6 +4705,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     listSessions,
     hasSession,
     getSessionRuntimeLiveness,
+    refreshAvailability,
     stopAll,
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);

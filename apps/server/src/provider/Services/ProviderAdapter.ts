@@ -13,6 +13,7 @@ import type {
   ProviderDriverKind,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
+  ProviderAvailability,
   ProviderSendTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
@@ -111,6 +112,12 @@ export interface ProviderAdapterShape<TError> {
   readonly getSessionRuntimeLiveness?: (
     threadId: ThreadId,
   ) => Effect.Effect<ProviderSessionRuntimeLiveness>;
+
+  /**
+   * Explicitly refresh a provider-native subscription snapshot. This must not
+   * create an agent session or turn; adapters without an honest source omit it.
+   */
+  readonly refreshAvailability?: () => Effect.Effect<ProviderAvailability, TError>;
 
   /**
    * Read a provider thread snapshot.

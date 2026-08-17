@@ -1324,7 +1324,15 @@ const makeWsRpcLayer = (
                     ? providers
                     : providers.filter((provider) => provider.instanceId === input.instanceId),
                   (provider) =>
-                    providerAvailabilityFor(provider.instanceId, provider.driver).pipe(
+                    (input.refresh === true &&
+                    Option.isSome(providerService) &&
+                    providerService.value.refreshAvailability !== undefined
+                      ? providerService.value.refreshAvailability(
+                          provider.instanceId,
+                          provider.driver,
+                        )
+                      : providerAvailabilityFor(provider.instanceId, provider.driver)
+                    ).pipe(
                       Effect.map((availability) => ({
                         instanceId: provider.instanceId,
                         driver: provider.driver,

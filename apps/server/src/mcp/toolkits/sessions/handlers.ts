@@ -508,7 +508,15 @@ export const make = Effect.gen(function* () {
   const availabilityFor = (
     instanceId: ServerProvider["instanceId"],
     provider: ServerProvider["driver"],
+    refresh = false,
   ): Effect.Effect<ProviderAvailability> => {
+    if (
+      refresh &&
+      Option.isSome(providerService) &&
+      providerService.value.refreshAvailability !== undefined
+    ) {
+      return providerService.value.refreshAvailability(instanceId, provider);
+    }
     if (Option.isSome(providerService) && providerService.value.getAvailability !== undefined) {
       return providerService.value.getAvailability(instanceId, provider);
     }
@@ -690,6 +698,7 @@ export const make = Effect.gen(function* () {
 
   const listProviders = Effect.fn("SessionsToolkit.listProviders")(function* (input: {
     readonly onlyAvailable?: boolean | undefined;
+    readonly refreshAvailability?: boolean | undefined;
   }) {
     yield* requireSessionsCapability;
     const allProviders = yield* providerRegistry.getProviders.pipe(
@@ -699,7 +708,11 @@ export const make = Effect.gen(function* () {
       input.onlyAvailable === true ? allProviders.filter(isProviderAvailable) : allProviders;
     return {
       providers: yield* Effect.forEach(providers, (provider) =>
-        availabilityFor(provider.instanceId, provider.driver).pipe(
+        availabilityFor(
+          provider.instanceId,
+          provider.driver,
+          input.refreshAvailability === true,
+        ).pipe(
           Effect.map((availability) => ({
             instanceId: provider.instanceId,
             driver: provider.driver,

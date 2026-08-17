@@ -224,6 +224,7 @@ const unknownAvailabilityForDriver = (provider: ProviderDriverKind): ProviderAva
 });
 
 const PROVIDER_AVAILABILITY_MAX_AGE_MS = 15 * 60 * 1_000;
+const PROVIDER_AVAILABILITY_REFRESH_COOLDOWN_MS = 30_000;
 
 export type CachedProviderAvailability = {
   readonly availability: ProviderAvailability;
@@ -260,7 +261,13 @@ export const availabilityAt = (
   nowMs: number,
 ): ProviderAvailability => {
   if (cached === undefined) return unknownAvailabilityForDriver(provider);
-  if (cached.availability.source !== unknownAvailabilityForDriver(provider).source) {
+  // Claude can legitimately switch from the SDK's sparse notification to the
+  // explicit CLI /usage probe. Both are Claude-native; do not discard the
+  // better source merely because the initial unknown used another label.
+  if (
+    cached.availability.source !== unknownAvailabilityForDriver(provider).source &&
+    !(provider === "claudeAgent" && cached.availability.source === "claude_cli_usage")
+  ) {
     return unknownAvailabilityForDriver(provider);
   }
   if (nowMs - cached.receivedAtMs <= PROVIDER_AVAILABILITY_MAX_AGE_MS) {
@@ -370,6 +377,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const availabilityByInstance = yield* Ref.make(
     new Map<ProviderInstanceId, CachedProviderAvailability>(),
   );
+  const lastAvailabilityRefreshAt = yield* Ref.make(new Map<ProviderInstanceId, number>());
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   /**
    * Attach the `phoenix` MCP server to the session that is about to start.
@@ -501,6 +509,49 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const getAdapterEntries = Ref.get(subscribedAdapters).pipe(
     Effect.map((map) => Array.from(map.entries())),
   );
+
+  const cacheAvailability = (instanceId: ProviderInstanceId, availability: ProviderAvailability) =>
+    Effect.flatMap(DateTime.now, (now) =>
+      Ref.update(availabilityByInstance, (entries) => {
+        const next = new Map(entries);
+        next.set(instanceId, {
+          availability: mergeProviderAvailability(
+            entries.get(instanceId)?.availability,
+            availability,
+          ),
+          receivedAtMs: DateTime.toEpochMillis(now),
+        });
+        return next;
+      }),
+    );
+
+  const refreshAvailability = (instanceId: ProviderInstanceId, provider: ProviderDriverKind) =>
+    Effect.gen(function* () {
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      const lastRefreshes = yield* Ref.get(lastAvailabilityRefreshAt);
+      const cached = yield* Ref.get(availabilityByInstance);
+      if (now - (lastRefreshes.get(instanceId) ?? 0) < PROVIDER_AVAILABILITY_REFRESH_COOLDOWN_MS) {
+        return availabilityAt(cached.get(instanceId), provider, now);
+      }
+      yield* Ref.update(lastAvailabilityRefreshAt, (entries) => {
+        const next = new Map(entries);
+        next.set(instanceId, now);
+        return next;
+      });
+      const adapter = yield* registry.getByInstance(instanceId).pipe(Effect.option);
+      if (
+        Option.isNone(adapter) ||
+        adapter.value.provider !== provider ||
+        !adapter.value.refreshAvailability
+      ) {
+        return availabilityAt(cached.get(instanceId), provider, now);
+      }
+      const availability = yield* adapter.value
+        .refreshAvailability()
+        .pipe(Effect.catch(() => Effect.succeed(unknownAvailabilityForDriver(provider))));
+      yield* cacheAvailability(instanceId, availability);
+      return availability;
+    });
 
   // Rebuild the map of id → adapter from the registry and fork a new event
   // subscription for every instance that is either brand new or whose adapter
@@ -1355,6 +1406,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ),
         ),
       ),
+    refreshAvailability,
     rollbackConversation,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
