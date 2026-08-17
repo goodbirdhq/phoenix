@@ -707,6 +707,15 @@ describe("workEntryIndicatesToolFailure", () => {
         detail: "ok",
       }),
     ).toBe(false);
+    expect(
+      workEntryIndicatesToolNeutralStatus({
+        ...base,
+        tone: "tool",
+        itemType: "mcp_tool_call",
+        toolLifecycleStatus: "inProgress",
+        spawnedSession: { title: "Review the renderer" },
+      }),
+    ).toBe(false);
   });
 
   it("does not run heuristics on non-tool info rows", () => {
@@ -990,6 +999,37 @@ describe("deriveWorkLogEntries", () => {
     const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.toolTitle).toBe("t3-code · preview_status");
     expect(entry?.toolData).toEqual(item);
+  });
+
+  it("derives a spawned-session CTA from provider-neutral MCP data", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "spawn-session-complete",
+        kind: "tool.completed",
+        summary: "MCP tool call",
+        payload: {
+          itemType: "mcp_tool_call",
+          data: {
+            toolName: "mcp__phoenix__spawn_session",
+            input: { title: "Review the timeline", model: "claude-opus-5" },
+            result: {
+              content: JSON.stringify({
+                threadId: "child-thread",
+                title: "Review the timeline",
+                modelSelection: { model: "claude-opus-5" },
+              }),
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities);
+    expect(entry?.spawnedSession).toEqual({
+      title: "Review the timeline",
+      threadId: "child-thread",
+      model: "claude-opus-5",
+    });
   });
 
   it("keeps MCP payloads while collapsing lifecycle updates", () => {

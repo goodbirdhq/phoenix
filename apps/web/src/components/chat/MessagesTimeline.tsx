@@ -14,6 +14,7 @@ import {
 
 const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
 const NOOP_OPEN_AGENTS = () => {};
+const NOOP_OPEN_THREAD = (_threadId: string) => {};
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
   createContext,
@@ -145,6 +146,7 @@ interface TimelineRowSharedState {
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
+  onOpenThread: (threadId: string) => void;
 }
 
 interface TimelineRowActivityState {
@@ -205,6 +207,7 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
 interface MessagesTimelineProps {
   agentPanelModel?: AgentPanelModel;
   onOpenAgents?: () => void;
+  onOpenThread?: (threadId: string) => void;
   isWorking: boolean;
   workingStepLabel?: string | null;
   activeTurnInProgress: boolean;
@@ -255,6 +258,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   activeTurnStartedAt,
   agentPanelModel = EMPTY_AGENT_PANEL_MODEL,
   onOpenAgents = NOOP_OPEN_AGENTS,
+  onOpenThread = NOOP_OPEN_THREAD,
   listRef,
   timelineEntries,
   latestTurn,
@@ -518,6 +522,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      onOpenThread,
     }),
     [
       timestampFormat,
@@ -534,6 +539,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      onOpenThread,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -2231,6 +2237,73 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
   );
 });
 
+/** Phoenix session-MCP spawns create a real child thread, so they get agent
+ * chrome and a direct route instead of reading as an opaque MCP tool call. */
+const SessionSpawnCtaRow = memo(function SessionSpawnCtaRow(props: {
+  workEntry: TimelineWorkEntry;
+}) {
+  const { workEntry } = props;
+  const { onOpenThread } = use(TimelineRowCtx);
+  const session = workEntry.spawnedSession;
+  if (!session) {
+    return null;
+  }
+
+  const failed =
+    workEntry.tone === "error" ||
+    workEntry.toolLifecycleStatus === "failed" ||
+    workEntry.toolLifecycleStatus === "declined" ||
+    workEntry.toolLifecycleStatus === "stopped";
+  const canOpen = !failed && session.threadId !== undefined;
+  const openThreadId = canOpen ? session.threadId : null;
+  const starting = !failed && !canOpen;
+  const lead = failed ? "Failed to spawn agent" : starting ? "Spawning agent" : "Spawned agent";
+  const className =
+    "-mx-1 flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px]";
+  const content = (
+    <>
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          failed ? "bg-destructive" : starting ? "bg-info" : "bg-success",
+        )}
+      />
+      <WorkEntryIconSvg name="bot" className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate">
+        <span className="font-medium">{lead}</span>
+        <span className="text-muted-foreground"> · {session.title}</span>
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
+        {session.model ? (
+          <span className="hidden tabular-nums sm:inline">{session.model}</span>
+        ) : null}
+        <span>{failed ? "failed" : starting ? "starting" : "✓ started"}</span>
+        {canOpen ? <span className="text-info-foreground">Open ▸</span> : null}
+      </span>
+    </>
+  );
+
+  if (!openThreadId) {
+    return (
+      <div role="status" className={className}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpenThread(openThreadId)}
+      aria-label={`Open spawned agent: ${session.title}`}
+      className={cn(className, "transition hover:bg-accent/50")}
+    >
+      {content}
+    </button>
+  );
+});
+
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
@@ -2239,6 +2312,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // Before any hooks: spawn CTA rows render their own component.
   if (workEntry.agentSpawn) {
     return <AgentSpawnCtaRow workEntry={workEntry} />;
+  }
+  if (workEntry.spawnedSession) {
+    return <SessionSpawnCtaRow workEntry={workEntry} />;
   }
   return <PlainWorkEntryRow workEntry={workEntry} workspaceRoot={workspaceRoot} />;
 });
