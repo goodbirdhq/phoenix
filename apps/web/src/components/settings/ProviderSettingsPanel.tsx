@@ -33,7 +33,7 @@ import {
   RefreshCwIcon,
   TerminalIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import { isElectron } from "../../env";
@@ -381,6 +381,12 @@ export function EnvironmentProviderSettings({
       input: refreshingAvailability ? { refresh: true } : {},
     }),
   );
+  useEffect(() => {
+    if (refreshingAvailability && availabilityResult !== null && !availabilityResult.waiting) {
+      appAtomRegistry.refresh(serverEnvironment.providerAvailability({ environmentId, input: {} }));
+      setRefreshingAvailability(false);
+    }
+  }, [availabilityResult, environmentId, refreshingAvailability]);
   const availabilityByInstanceId = useMemo(
     () =>
       new Map(

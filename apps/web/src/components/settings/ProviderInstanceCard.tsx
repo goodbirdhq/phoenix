@@ -407,7 +407,7 @@ export function ProviderInstanceCard({
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   const rawSummary = getProviderSummary(liveProvider);
   const authEmail = liveProvider?.auth.email;
-  const isAuthenticated = liveProvider?.auth.status !== "unauthenticated";
+  const isAuthenticated = liveProvider?.auth.status === "authenticated";
   const hasAuthenticatedEmail = isAuthenticated && Boolean(authEmail?.trim());
   const authenticatedDetail = hasAuthenticatedEmail
     ? (liveProvider?.auth.label ?? liveProvider?.auth.type ?? null)

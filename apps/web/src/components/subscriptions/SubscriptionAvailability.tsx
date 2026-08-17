@@ -133,6 +133,11 @@ export function SubscriptionAvailabilitySection({
                 ) : null}
               </div>
               <SubscriptionAvailabilityBars availability={account.availability} />
+              {account.isStale ? (
+                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                  This provider's previous quota reading has expired. Refresh Usage to check again.
+                </p>
+              ) : null}
               {account.hasDivergentSnapshots ? (
                 <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
                   Connected environments reported different readings; this card shows the latest

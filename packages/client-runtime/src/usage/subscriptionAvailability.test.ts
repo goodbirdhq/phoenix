@@ -14,6 +14,8 @@ const source = (
   instanceId: "claude-a",
   driver: "claudeAgent",
   displayName: "Claude",
+  enabled: true,
+  authenticated: true,
   availability: {
     status: "available",
     source: "claude_cli_usage",
@@ -69,10 +71,30 @@ describe("deriveSubscriptionLimits", () => {
     expect(limits[0]?.availability.windows[0]?.usedPercent).toBe(80);
   });
 
-  it("treats an omitted enabled or authentication status as not yet known, not disabled", () => {
+  it("requires a confirmed enabled and authenticated provider", () => {
     expect(deriveSubscriptionLimits([source()])).toHaveLength(1);
     expect(deriveSubscriptionLimits([source({ enabled: false })])).toEqual([]);
     expect(deriveSubscriptionLimits([source({ authenticated: false })])).toEqual([]);
+  });
+
+  it("keeps an expired provider snapshot visible without inventing quota bars", () => {
+    const limits = deriveSubscriptionLimits([
+      source({
+        availability: {
+          status: "unknown",
+          source: "claude_cli_usage",
+          observedAt: "2026-08-17T18:00:00.000Z",
+          account: { id: "claude-subject", verification: "native_verified", displayName: "Neil" },
+          windows: [],
+        },
+      }),
+    ]);
+
+    expect(limits).toMatchObject([{ name: "Neil", isStale: true }]);
+  });
+
+  it("does not render an unknown authentication state as signed in", () => {
+    expect(deriveSubscriptionLimits([source({ authenticated: undefined })])).toEqual([]);
   });
 
   it("flags changed provider labels as divergent readings", () => {

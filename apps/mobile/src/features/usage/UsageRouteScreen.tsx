@@ -76,8 +76,8 @@ export function UsageRouteScreen() {
               driver: entry.driver,
               displayName:
                 entry.displayName ?? provider?.displayName ?? providerLimitSourceName(entry.driver),
-              enabled: provider?.enabled,
-              authenticated: provider?.auth.status !== "unauthenticated",
+              enabled: provider?.enabled === true,
+              authenticated: provider?.auth.status === "authenticated",
               availability: entry.availability,
             } satisfies SubscriptionAvailabilitySource;
           }),
@@ -127,16 +127,8 @@ export function UsageRouteScreen() {
   };
   const refreshWindow = () => {
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
-    if (
-      nextWindow.sinceDay === window.sinceDay &&
-      nextWindow.untilDay === window.untilDay &&
-      nextWindow.sinceTime === window.sinceTime &&
-      nextWindow.untilTime === window.untilTime
-    ) {
-      refresh();
-    } else {
-      setWindowSelection({ days: windowDays, window: nextWindow });
-    }
+    refresh(nextWindow);
+    setWindowSelection({ days: windowDays, window: nextWindow });
   };
 
   return (
@@ -295,6 +287,11 @@ function SubscriptionLimitsSection(props: {
                   </View>
                 );
               })}
+              {limit.isStale ? (
+                <Text className="text-xs leading-relaxed text-foreground-muted">
+                  This provider's previous quota reading has expired. Refresh Usage to check again.
+                </Text>
+              ) : null}
               {limit.hasDivergentSnapshots ? (
                 <Text className="text-xs leading-relaxed text-foreground-muted">
                   Connected environments reported different readings; this card shows the latest

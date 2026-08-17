@@ -73,10 +73,8 @@ export function UsagePage() {
               driver: entry.driver,
               displayName:
                 entry.displayName ?? provider?.displayName ?? providerLimitSourceName(entry.driver),
-              // The status projection may land after availability. Only an
-              // explicit disabled/signed-out state hides a reported limit.
-              enabled: provider?.enabled,
-              authenticated: provider?.auth.status !== "unauthenticated",
+              enabled: provider?.enabled === true,
+              authenticated: provider?.auth.status === "authenticated",
               availability: entry.availability,
             } satisfies SubscriptionAvailabilitySource;
           }),
@@ -131,16 +129,10 @@ export function UsagePage() {
   };
   const refreshWindow = () => {
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
-    if (
-      nextWindow.sinceDay === window.sinceDay &&
-      nextWindow.untilDay === window.untilDay &&
-      nextWindow.sinceTime === window.sinceTime &&
-      nextWindow.untilTime === window.untilTime
-    ) {
-      refresh();
-    } else {
-      setWindowSelection({ days: windowDays, window: nextWindow });
-    }
+    // Rolling windows always advance, including Past 24h. A refresh must
+    // still collect a provider quota reading for the range the user selected.
+    refresh(nextWindow);
+    setWindowSelection({ days: windowDays, window: nextWindow });
   };
 
   return (

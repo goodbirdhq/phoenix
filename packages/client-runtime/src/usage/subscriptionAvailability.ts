@@ -9,10 +9,9 @@ import * as Option from "effect/Option";
 /**
  * A provider-limit observation paired with the connection that reported it.
  *
- * `enabled` and `authenticated` are optional because an availability response
- * can arrive before the separate provider-status projection. A concrete false
- * hides a row; missing status must not turn a reported limit into a disabled
- * or signed-out provider.
+ * Status arrives through a separate projection. Limits are only shown after
+ * that projection has positively confirmed that the provider is enabled and
+ * authenticated; an unknown status must never read as signed in.
  */
 export type SubscriptionAvailabilitySource = {
   readonly environmentId: string;
@@ -37,6 +36,8 @@ export type SubscriptionLimit = {
   readonly isAccount: boolean;
   /** Two reports for the same verified account disagreed; show the newest one. */
   readonly hasDivergentSnapshots: boolean;
+  /** The provider retained identity metadata, but its quota windows expired. */
+  readonly isStale: boolean;
 };
 
 /** Presents an unknown extension driver without exposing its implementation slug. */
@@ -110,10 +111,11 @@ export function deriveSubscriptionLimits(
   const groups = new Map<string, SubscriptionAvailabilitySource[]>();
   for (const source of sources) {
     if (
-      source.enabled === false ||
-      source.authenticated === false ||
+      source.enabled !== true ||
+      source.authenticated !== true ||
       source.availability.source === "unsupported" ||
-      source.availability.windows.length === 0
+      (source.availability.windows.length === 0 &&
+        (source.availability.status !== "unknown" || source.availability.observedAt === undefined))
     ) {
       continue;
     }
@@ -142,6 +144,7 @@ export function deriveSubscriptionLimits(
         isAccount: account?.verification === "native_verified",
         hasDivergentSnapshots:
           new Set(members.map((member) => snapshotSignature(member.availability))).size > 1,
+        isStale: newest.availability.windows.length === 0,
       } satisfies SubscriptionLimit;
     })
     .toSorted(

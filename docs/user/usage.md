@@ -17,7 +17,12 @@ weekly pools, Codex's two windows) and when each resets. Phoenix shows what the 
 never adds two accounts' limits together: if the same account is reachable from more than one
 environment, its card names them and shows the newest reading.
 
-Opening the Usage page, and its refresh button, asks each signed-in provider for a fresh reading —
-at most once every thirty seconds per account. Providers that publish no limits, and accounts that are not signed in, are left
-out rather than shown as empty cards. Reading limits never starts an agent turn and never spends
+Opening the Usage page shows the latest retained provider reading. The refresh button rescans every
+connected environment for the selected date range (including **Past 24h**) and explicitly asks
+eligible, signed-in providers for a new quota reading. A provider refresh is shared per instance:
+clicks within thirty seconds reuse the in-flight or recent reading instead of starting another CLI
+request. Providers that publish no limits, accounts that are not confirmed as signed in, and
+unknown provider states are left out rather than shown as empty cards. If a previous provider
+reading expires, Phoenix keeps the account card with an expired-reading notice but removes its
+quota bars until a refresh succeeds. Reading limits never starts an agent turn and never spends
 your quota.

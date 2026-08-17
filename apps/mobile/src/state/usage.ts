@@ -21,7 +21,7 @@ import {
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
 import { environmentPresentations } from "./presentation";
@@ -105,7 +105,8 @@ export interface UsageView {
    * improve by waiting on them, so they must not read as "still reporting".
    */
   readonly isPartial: boolean;
-  readonly refresh: () => void;
+  /** Refreshes the supplied range, or the currently rendered range when omitted. */
+  readonly refresh: (input?: UsageSummaryInput) => void;
   readonly providerAvailability: readonly EnvironmentProviderAvailabilityStatus[];
   readonly isProviderAvailabilityPending: boolean;
 }
@@ -135,24 +136,47 @@ export function useUsage(input: UsageSummaryInput): UsageView {
   const [refreshingAvailability, setRefreshingAvailability] = useState(false);
   const providerAvailability = useAtomValue(providerAvailabilityAtom(refreshingAvailability));
 
+  // The refresh flag is a one-shot provider read, never durable screen state.
+  useEffect(() => {
+    if (
+      refreshingAvailability &&
+      !providerAvailability.some((environment) => environment.isPending)
+    ) {
+      for (const environment of providerAvailability) {
+        appAtomRegistry.refresh(
+          serverEnvironment.providerAvailability({
+            environmentId: environment.environmentId,
+            input: {},
+          }),
+        );
+      }
+      setRefreshingAvailability(false);
+    }
+  }, [providerAvailability, refreshingAvailability]);
+
   // Refreshing only the derived atom would re-read the per-environment SWR
   // queries within their stale window and change nothing. Refresh each
   // environment's query so pull-to-refresh always rescans.
-  const refresh = useCallback(() => {
-    const input = JSON.parse(windowKey) as UsageSummaryInput;
-    for (const environment of environments) {
-      appAtomRegistry.refresh(
-        serverEnvironment.usageSummary({ environmentId: environment.environmentId, input }),
-      );
-      appAtomRegistry.refresh(
-        serverEnvironment.providerAvailability({
-          environmentId: environment.environmentId,
-          input: { refresh: true },
-        }),
-      );
-    }
-    setRefreshingAvailability(true);
-  }, [environments, windowKey]);
+  const refresh = useCallback(
+    (refreshInput: UsageSummaryInput = input) => {
+      for (const environment of environments) {
+        appAtomRegistry.refresh(
+          serverEnvironment.usageSummary({
+            environmentId: environment.environmentId,
+            input: refreshInput,
+          }),
+        );
+        appAtomRegistry.refresh(
+          serverEnvironment.providerAvailability({
+            environmentId: environment.environmentId,
+            input: { refresh: true },
+          }),
+        );
+      }
+      setRefreshingAvailability(true);
+    },
+    [environments, input],
+  );
 
   const merged = useMemo(() => {
     const answered: EnvironmentUsage[] = environments.flatMap((environment) =>
