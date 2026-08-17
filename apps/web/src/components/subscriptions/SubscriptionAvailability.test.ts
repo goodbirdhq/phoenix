@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   deriveSubscriptionAccounts,
+  subscriptionResetLabel,
   subscriptionWindowLabel,
   type SubscriptionAvailabilitySource,
 } from "./SubscriptionAvailability";
@@ -27,6 +28,23 @@ const source = (
     ],
   },
   ...overrides,
+});
+
+describe("subscriptionResetLabel", () => {
+  it("uses reset timing rather than an expired remaining-time label", () => {
+    expect(
+      subscriptionResetLabel(
+        { kind: "weekly", usedPercent: 76, resetsAt: "2026-08-17T18:01:00.000Z" },
+        Date.parse("2026-08-17T18:00:15.000Z"),
+      ),
+    ).toBe("Resets in 1m");
+    expect(
+      subscriptionResetLabel(
+        { kind: "weekly", usedPercent: 76, resetsAt: "2026-08-17T18:00:00.000Z" },
+        Date.parse("2026-08-17T18:00:15.000Z"),
+      ),
+    ).toBe("Ready to refresh");
+  });
 });
 
 describe("deriveSubscriptionAccounts", () => {

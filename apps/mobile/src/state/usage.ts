@@ -13,13 +13,15 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
+  type ProviderAvailabilityEntry,
+  type ServerProvider,
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
 import { environmentPresentations } from "./presentation";
@@ -32,6 +34,38 @@ export interface EnvironmentUsageStatus {
   readonly error: string | null;
   readonly summary: UsageSummary | null;
 }
+
+export interface EnvironmentProviderAvailabilityStatus {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly isPending: boolean;
+  readonly providers: readonly ProviderAvailabilityEntry[];
+  readonly serverProviders: readonly ServerProvider[];
+}
+
+const providerAvailabilityAtom = Atom.family((refresh: boolean) =>
+  Atom.make((get): readonly EnvironmentProviderAvailabilityStatus[] => {
+    const presentations = get(environmentPresentations.presentationsAtom);
+    const statuses: EnvironmentProviderAvailabilityStatus[] = [];
+    for (const [environmentId, presentation] of presentations) {
+      const result = get(
+        serverEnvironment.providerAvailability({
+          environmentId,
+          input: refresh ? { refresh: true } : {},
+        }),
+      );
+      const value = Option.getOrNull(AsyncResult.value(result));
+      statuses.push({
+        environmentId,
+        label: presentation.entry.target.label,
+        isPending: result.waiting,
+        providers: value?.providers ?? [],
+        serverProviders: get(serverEnvironment.providersValueAtom(environmentId)) ?? [],
+      });
+    }
+    return statuses;
+  }).pipe(Atom.withLabel(`mobile-usage:provider-availability:${refresh ? "refresh" : "cached"}`)),
+);
 
 /**
  * Reads every environment's summary for one window.
@@ -72,6 +106,8 @@ export interface UsageView {
    */
   readonly isPartial: boolean;
   readonly refresh: () => void;
+  readonly providerAvailability: readonly EnvironmentProviderAvailabilityStatus[];
+  readonly isProviderAvailabilityPending: boolean;
 }
 
 export function useUsage(input: UsageSummaryInput): UsageView {
@@ -96,6 +132,8 @@ export function useUsage(input: UsageSummaryInput): UsageView {
   );
   const atom = usageByWindowAtom(windowKey);
   const environments = useAtomValue(atom);
+  const [refreshingAvailability, setRefreshingAvailability] = useState(false);
+  const providerAvailability = useAtomValue(providerAvailabilityAtom(refreshingAvailability));
 
   // Refreshing only the derived atom would re-read the per-environment SWR
   // queries within their stale window and change nothing. Refresh each
@@ -106,7 +144,14 @@ export function useUsage(input: UsageSummaryInput): UsageView {
       appAtomRegistry.refresh(
         serverEnvironment.usageSummary({ environmentId: environment.environmentId, input }),
       );
+      appAtomRegistry.refresh(
+        serverEnvironment.providerAvailability({
+          environmentId: environment.environmentId,
+          input: { refresh: true },
+        }),
+      );
     }
+    setRefreshingAvailability(true);
   }, [environments, windowKey]);
 
   const merged = useMemo(() => {
@@ -135,5 +180,9 @@ export function useUsage(input: UsageSummaryInput): UsageView {
     isPending: answeredCount === 0 && stillReporting > 0,
     isPartial: answeredCount > 0 && stillReporting > 0,
     refresh,
+    providerAvailability,
+    isProviderAvailabilityPending: providerAvailability.some(
+      (environment) => environment.isPending,
+    ),
   };
 }

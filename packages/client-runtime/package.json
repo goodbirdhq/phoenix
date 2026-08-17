@@ -146,6 +146,10 @@
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"
+    },
+    "./usage/subscription-availability": {
+      "types": "./src/usage/subscriptionAvailability.ts",
+      "default": "./src/usage/subscriptionAvailability.ts"
     }
   },
   "scripts": {

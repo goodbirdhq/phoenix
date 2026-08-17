@@ -1,5 +1,14 @@
 import { useNavigation } from "@react-navigation/native";
+import {
+  deriveSubscriptionLimits,
+  providerLimitSourceName,
+  subscriptionLimitResetLabel,
+  subscriptionLimitWindowLabel,
+  type SubscriptionAvailabilitySource,
+  type SubscriptionLimit,
+} from "@t3tools/client-runtime/usage/subscription-availability";
 import type { DailyTotals, MergedUsage } from "@t3tools/shared/usageMerge";
+import * as DateTime from "effect/DateTime";
 import {
   enumerateDays,
   enumerateHourStarts,
@@ -11,7 +20,7 @@ import {
   formatUsd,
   makeWindow,
 } from "@t3tools/shared/usageFormat";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Platform, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -43,7 +52,44 @@ export function UsageRouteScreen() {
   const [metric, setMetric] = useState<UsageChartMetric>("cost");
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
-  const { merged, environments, isPending, isPartial, refresh } = useUsage(window);
+  const {
+    merged,
+    environments,
+    isPending,
+    isPartial,
+    refresh,
+    providerAvailability,
+    isProviderAvailabilityPending,
+  } = useUsage(window);
+  const subscriptionLimits = useMemo(
+    () =>
+      deriveSubscriptionLimits(
+        providerAvailability.flatMap((environment) =>
+          environment.providers.map((entry) => {
+            const provider = environment.serverProviders.find(
+              (candidate) => candidate.instanceId === entry.instanceId,
+            );
+            return {
+              environmentId: environment.environmentId,
+              environmentLabel: environment.label,
+              instanceId: entry.instanceId,
+              driver: entry.driver,
+              displayName:
+                entry.displayName ?? provider?.displayName ?? providerLimitSourceName(entry.driver),
+              enabled: provider?.enabled,
+              authenticated: provider?.auth.status !== "unauthenticated",
+              availability: entry.availability,
+            } satisfies SubscriptionAvailabilitySource;
+          }),
+        ),
+      ),
+    [providerAvailability],
+  );
+  const resetClockMs = useMinuteClock(
+    subscriptionLimits.some((limit) =>
+      limit.availability.windows.some((window) => window.resetsAt !== undefined),
+    ),
+  );
 
   const days = useMemo(
     () => enumerateDays(window.sinceDay, window.untilDay),
@@ -117,6 +163,12 @@ export function UsageRouteScreen() {
 
         <UsageCoverageNotice environments={environments} merged={merged} isPartial={isPartial} />
 
+        <SubscriptionLimitsSection
+          limits={subscriptionLimits}
+          isPending={isProviderAvailabilityPending}
+          nowMs={resetClockMs}
+        />
+
         {isPending ? (
           <Text className="py-16 text-center text-base text-foreground-muted">
             Scanning provider transcripts…
@@ -145,6 +197,115 @@ export function UsageRouteScreen() {
         )}
       </ScrollView>
     </View>
+  );
+}
+
+function useMinuteClock(active: boolean): number {
+  const now = () => DateTime.toEpochMillis(DateTime.nowUnsafe());
+  const [nowMs, setNowMs] = useState(now);
+  useEffect(() => {
+    if (!active) return;
+    const delay = 60_000 - (now() % 60_000) + 25;
+    const timeout = setTimeout(() => setNowMs(now()), delay);
+    return () => clearTimeout(timeout);
+  }, [active, nowMs]);
+  return nowMs;
+}
+
+function SubscriptionLimitsSection(props: {
+  readonly limits: readonly SubscriptionLimit[];
+  readonly isPending: boolean;
+  readonly nowMs: number;
+}) {
+  return (
+    <SettingsSection title="Subscription limits" card>
+      <View className="gap-1 px-4 pt-4">
+        <Text className="text-sm text-foreground-muted">
+          Provider-reported limits for connected providers. Phoenix combines readings only when a
+          provider supplies a verified account identity.
+        </Text>
+      </View>
+      {props.limits.length === 0 ? (
+        <Text className="px-4 pb-4 pt-3 text-sm text-foreground-muted">
+          {props.isPending
+            ? "Checking connected providers for subscription limits…"
+            : "No subscription limits are available. Some providers do not report limits to Phoenix, and others report them only after you sign in."}
+        </Text>
+      ) : (
+        <View className="gap-3 p-4">
+          {props.limits.map((limit) => (
+            <View key={limit.key} className="gap-3 rounded-[16px] border-continuous bg-sheet p-3.5">
+              <View className="flex-row items-start justify-between gap-3">
+                <View className="min-w-0 flex-1 gap-0.5">
+                  <Text className="text-base font-t3-medium text-foreground" numberOfLines={1}>
+                    {limit.name}
+                  </Text>
+                  <Text className="text-xs leading-relaxed text-foreground-muted">
+                    Reported by {limit.environmentLabels.join(", ")}
+                    {!limit.isAccount
+                      ? ". This provider does not share an account identity, so this reading stays separate."
+                      : ""}
+                  </Text>
+                </View>
+                {limit.availability.status === "limited" ? (
+                  <Text className="rounded-full bg-warning/15 px-2 py-0.5 text-xs font-t3-medium text-warning">
+                    Limit reached
+                  </Text>
+                ) : null}
+              </View>
+              {limit.availability.windows.map((window) => {
+                const label = subscriptionLimitWindowLabel(window);
+                const reset = subscriptionLimitResetLabel(window, props.nowMs);
+                const progressLabel = `${label}: ${window.usedPercent}% used${reset ? `. ${reset}.` : ""}`;
+                return (
+                  <View key={`${window.kind}:${window.scope ?? ""}`} className="gap-1.5">
+                    <View className="flex-row items-baseline justify-between gap-3">
+                      <Text
+                        className="min-w-0 flex-1 text-xs font-t3-medium text-foreground"
+                        numberOfLines={1}
+                      >
+                        {label}
+                      </Text>
+                      <Text className="text-xs tabular-nums text-foreground-muted">
+                        {window.usedPercent}% used{reset ? ` · ${reset}` : ""}
+                      </Text>
+                    </View>
+                    <View
+                      accessibilityLabel={progressLabel}
+                      accessibilityRole="progressbar"
+                      accessibilityValue={{
+                        min: 0,
+                        max: 100,
+                        now: window.usedPercent,
+                        text: progressLabel,
+                      }}
+                      className="h-1.5 overflow-hidden rounded-full bg-subtle"
+                    >
+                      <View
+                        className={
+                          window.usedPercent >= 100
+                            ? "h-full bg-destructive"
+                            : window.usedPercent >= 80
+                              ? "h-full bg-warning"
+                              : "h-full bg-primary"
+                        }
+                        style={{ width: `${window.usedPercent}%` }}
+                      />
+                    </View>
+                  </View>
+                );
+              })}
+              {limit.hasDivergentSnapshots ? (
+                <Text className="text-xs leading-relaxed text-foreground-muted">
+                  Connected environments reported different readings; this card shows the latest
+                  one.
+                </Text>
+              ) : null}
+            </View>
+          ))}
+        </View>
+      )}
+    </SettingsSection>
   );
 }
 

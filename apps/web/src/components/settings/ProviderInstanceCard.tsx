@@ -407,7 +407,7 @@ export function ProviderInstanceCard({
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   const rawSummary = getProviderSummary(liveProvider);
   const authEmail = liveProvider?.auth.email;
-  const isAuthenticated = liveProvider?.auth.status === "authenticated";
+  const isAuthenticated = liveProvider?.auth.status !== "unauthenticated";
   const hasAuthenticatedEmail = isAuthenticated && Boolean(authEmail?.trim());
   const authenticatedDetail = hasAuthenticatedEmail
     ? (liveProvider?.auth.label ?? liveProvider?.auth.type ?? null)
@@ -599,8 +599,8 @@ export function ProviderInstanceCard({
     </p>
   );
 
-  // Do not turn disabled, unauthenticated, or unsupported providers into
-  // misleading quota rows. A concrete native window is the only honest UI.
+  // Do not turn disabled, signed-out, or unsupported providers into misleading
+  // quota rows. A concrete provider-reported window is the only honest UI.
   const availabilityNode =
     enabled &&
     isAuthenticated &&

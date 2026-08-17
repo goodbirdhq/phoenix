@@ -41,6 +41,7 @@ import { usePrimarySessionState } from "../../environments/primary";
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { resolveAppModelSelectionState } from "../../modelSelection";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
 import {
   useEnvironments,
   usePrimaryEnvironmentId,
@@ -373,8 +374,12 @@ export function EnvironmentProviderSettings({
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const serverProviders =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  const [refreshingAvailability, setRefreshingAvailability] = useState(false);
   const availabilityResult = useAtomValue(
-    serverEnvironment.providerAvailability({ environmentId, input: {} }),
+    serverEnvironment.providerAvailability({
+      environmentId,
+      input: refreshingAvailability ? { refresh: true } : {},
+    }),
   );
   const availabilityByInstanceId = useMemo(
     () =>
@@ -441,6 +446,12 @@ export function EnvironmentProviderSettings({
     if (refreshingRef.current) return;
     refreshingRef.current = true;
     setIsRefreshingProviders(true);
+    // Provider status and subscription limits use separate read models. Ask
+    // both to refresh so the manual control never leaves quota bars stale.
+    setRefreshingAvailability(true);
+    appAtomRegistry.refresh(
+      serverEnvironment.providerAvailability({ environmentId, input: { refresh: true } }),
+    );
     void (async () => {
       const result = await refreshServerProviders({
         environmentId,

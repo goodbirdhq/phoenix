@@ -17,7 +17,7 @@ import {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -35,42 +35,35 @@ export interface EnvironmentUsageStatus {
 export interface EnvironmentProviderAvailabilityStatus {
   readonly environmentId: EnvironmentId;
   readonly label: string;
+  readonly isPending: boolean;
   readonly providers: readonly ProviderAvailabilityEntry[];
   /** Provider snapshots carry enabled/auth facts used for account presentation. */
   readonly serverProviders: readonly ServerProvider[];
 }
 
-/**
- * The Usage page is where a person goes to read their limits, so it asks for a
- * fresh native reading rather than whatever last arrived on its own — Claude
- * publishes nothing passively, so a cached-only read would leave its bars
- * permanently unknown. The server gates the refresh to signed-in instances and
- * runs the provider CLI at most once every thirty seconds per instance; other
- * surfaces (Settings) keep reading the cached snapshot.
- */
-const USAGE_AVAILABILITY_INPUT = { refresh: true } as const;
-
-const providerAvailabilityAtom = Atom.make(
-  (get): readonly EnvironmentProviderAvailabilityStatus[] => {
+const providerAvailabilityAtom = Atom.family((refresh: boolean) =>
+  Atom.make((get): readonly EnvironmentProviderAvailabilityStatus[] => {
     const presentations = get(environmentPresentations.presentationsAtom);
     const statuses: EnvironmentProviderAvailabilityStatus[] = [];
     for (const [environmentId, presentation] of presentations) {
       const result = get(
-        serverEnvironment.providerAvailability({ environmentId, input: USAGE_AVAILABILITY_INPUT }),
+        serverEnvironment.providerAvailability({
+          environmentId,
+          input: refresh ? { refresh: true } : {},
+        }),
       );
       const value = Option.getOrNull(AsyncResult.value(result));
-      if (value !== null) {
-        statuses.push({
-          environmentId,
-          label: presentation.entry.target.label,
-          providers: value.providers,
-          serverProviders: get(serverEnvironment.providersValueAtom(environmentId)) ?? [],
-        });
-      }
+      statuses.push({
+        environmentId,
+        label: presentation.entry.target.label,
+        isPending: result.waiting,
+        providers: value?.providers ?? [],
+        serverProviders: get(serverEnvironment.providersValueAtom(environmentId)) ?? [],
+      });
     }
     return statuses;
-  },
-).pipe(Atom.withLabel("web-usage:provider-availability"));
+  }).pipe(Atom.withLabel(`web-usage:provider-availability:${refresh ? "refresh" : "cached"}`)),
+);
 
 /**
  * Reads every environment's summary for one window.
@@ -112,6 +105,7 @@ export interface UsageView {
   readonly isPartial: boolean;
   readonly refresh: () => void;
   readonly providerAvailability: readonly EnvironmentProviderAvailabilityStatus[];
+  readonly isProviderAvailabilityPending: boolean;
 }
 
 export function useUsage(input: UsageSummaryInput): UsageView {
@@ -136,7 +130,8 @@ export function useUsage(input: UsageSummaryInput): UsageView {
   );
   const atom = usageByWindowAtom(windowKey);
   const environments = useAtomValue(atom);
-  const providerAvailability = useAtomValue(providerAvailabilityAtom);
+  const [refreshingAvailability, setRefreshingAvailability] = useState(false);
+  const providerAvailability = useAtomValue(providerAvailabilityAtom(refreshingAvailability));
 
   // Refreshing only the derived atom would re-read the per-environment SWR
   // queries within their stale window and change nothing. Refresh each
@@ -150,10 +145,13 @@ export function useUsage(input: UsageSummaryInput): UsageView {
       appAtomRegistry.refresh(
         serverEnvironment.providerAvailability({
           environmentId: environment.environmentId,
-          input: USAGE_AVAILABILITY_INPUT,
+          // This request asks the provider to collect a fresh reading. The
+          // default query deliberately reads its short-lived cache instead.
+          input: { refresh: true },
         }),
       );
     }
+    setRefreshingAvailability(true);
   }, [environments, windowKey]);
 
   const merged = useMemo(() => {
@@ -183,5 +181,8 @@ export function useUsage(input: UsageSummaryInput): UsageView {
     isPartial: answeredCount > 0 && stillReporting > 0,
     refresh,
     providerAvailability,
+    isProviderAvailabilityPending: providerAvailability.some(
+      (environment) => environment.isPending,
+    ),
   };
 }

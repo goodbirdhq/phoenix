@@ -28,6 +28,7 @@ import { UsageChartLegend, UsageProviderChart, type UsageChartMetric } from "./U
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
 import {
   deriveSubscriptionAccounts,
+  providerLimitSourceName,
   SubscriptionAvailabilitySection,
   type SubscriptionAvailabilitySource,
 } from "../subscriptions/SubscriptionAvailability";
@@ -48,8 +49,15 @@ export function UsagePage() {
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
-  const { merged, environments, isPending, isPartial, refresh, providerAvailability } =
-    useUsage(window);
+  const {
+    merged,
+    environments,
+    isPending,
+    isPartial,
+    refresh,
+    providerAvailability,
+    isProviderAvailabilityPending,
+  } = useUsage(window);
   const subscriptionAccounts = useMemo(
     () =>
       deriveSubscriptionAccounts(
@@ -63,9 +71,12 @@ export function UsagePage() {
               environmentLabel: environment.label,
               instanceId: entry.instanceId,
               driver: entry.driver,
-              displayName: entry.displayName ?? provider?.displayName ?? entry.driver,
-              enabled: provider?.enabled ?? false,
-              authenticated: provider?.auth.status === "authenticated",
+              displayName:
+                entry.displayName ?? provider?.displayName ?? providerLimitSourceName(entry.driver),
+              // The status projection may land after availability. Only an
+              // explicit disabled/signed-out state hides a reported limit.
+              enabled: provider?.enabled,
+              authenticated: provider?.auth.status !== "unauthenticated",
               availability: entry.availability,
             } satisfies SubscriptionAvailabilitySource;
           }),
@@ -202,7 +213,10 @@ export function UsagePage() {
             {settling ? (
               <>
                 {environments.length > 1 ? <UsageDeviceStrip environments={environments} /> : null}
-                <SubscriptionAvailabilitySection accounts={subscriptionAccounts} />
+                <SubscriptionAvailabilitySection
+                  accounts={subscriptionAccounts}
+                  isPending={isProviderAvailabilityPending}
+                />
                 <UsageSkeleton resolution={isPast24Hours ? "hour" : "day"} />
               </>
             ) : (
@@ -212,7 +226,10 @@ export function UsagePage() {
                   duplicateSources={merged.duplicateSources}
                   staleEnvironments={merged.staleEnvironments}
                 />
-                <SubscriptionAvailabilitySection accounts={subscriptionAccounts} />
+                <SubscriptionAvailabilitySection
+                  accounts={subscriptionAccounts}
+                  isPending={isProviderAvailabilityPending}
+                />
 
                 {/* Cost first: the financial answer, then the provider split. */}
                 <section className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
