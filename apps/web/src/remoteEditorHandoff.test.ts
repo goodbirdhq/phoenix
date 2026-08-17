@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { EnvironmentEditorHandoff } from "@t3tools/contracts";
 
-import { buildRemoteEditorTarget, quoteForShell } from "./remoteEditorHandoff";
+import { buildRemoteEditorTarget, launchRemoteEditor, quoteForShell } from "./remoteEditorHandoff";
 
 const remoteHandoff: EnvironmentEditorHandoff = {
   mode: "vscode-remote-ssh",
@@ -61,5 +61,37 @@ describe("quoteForShell", () => {
     expect(quoteForShell("a'; rm -rf /; `x` $HOME\nnext")).toBe(
       "'a'\"'\"'; rm -rf /; `x` $HOME\nnext'",
     );
+  });
+});
+
+describe("launchRemoteEditor", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("treats browser protocol dispatch as successful", async () => {
+    const assign = vi.fn();
+    vi.stubGlobal("window", { location: { assign } });
+    const target = {
+      uri: "vscode://vscode-remote/ssh-remote+dev-box/home/me/project/src/a.ts:4",
+      command: "code --remote 'ssh-remote+dev-box' --goto '/home/me/project/src/a.ts:4'",
+      remotePath: "/home/me/project/src/a.ts",
+    };
+
+    await expect(launchRemoteEditor(target)).resolves.toBe(true);
+    expect(assign).toHaveBeenCalledWith(target.uri);
+  });
+
+  it("preserves an explicit desktop refusal", async () => {
+    const openExternal = vi.fn().mockResolvedValue(false);
+    vi.stubGlobal("window", { desktopBridge: { openExternal } });
+    const target = {
+      uri: "vscode://vscode-remote/ssh-remote+dev-box/home/me/project/src/a.ts:4",
+      command: "code --remote 'ssh-remote+dev-box' --goto '/home/me/project/src/a.ts:4'",
+      remotePath: "/home/me/project/src/a.ts",
+    };
+
+    await expect(launchRemoteEditor(target)).resolves.toBe(false);
+    expect(openExternal).toHaveBeenCalledWith(target.uri);
   });
 });

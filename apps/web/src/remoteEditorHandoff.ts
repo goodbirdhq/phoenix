@@ -54,6 +54,7 @@ export async function launchRemoteEditor(target: RemoteEditorTarget): Promise<bo
   }
   window.location.assign(target.uri);
   // Browsers do not report whether a custom protocol handler accepted this.
-  // The caller must keep an explicit copy fallback visible.
-  return false;
+  // Dispatch is still successful; the caller keeps an explicit copy fallback
+  // visible without showing a false failure when VS Code accepted the URI.
+  return true;
 }

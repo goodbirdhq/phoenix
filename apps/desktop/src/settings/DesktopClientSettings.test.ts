@@ -13,6 +13,11 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
+  browserDefaultViewport: { _tag: "preset", width: 1024, height: 600, presetId: "nest-hub" },
+  browserDefaultZoomFactor: 1.25,
+  browserDefaultAppearance: "dark",
+  browserAutoShowFloatingPreview: false,
+  confirmQuit: true,
   confirmThreadArchive: true,
   confirmThreadDelete: false,
   dismissedProviderUpdateNotificationKeys: [],
@@ -33,6 +38,7 @@ const clientSettings: ClientSettings = {
   planModeEnabled: false,
   providerModelPreferences: {},
   sidebarAutoSettleAfterDays: 3,
+  sidebarAutoSettleOnMerge: true,
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {
     "environment-1:/tmp/project-a": "separate",
@@ -63,7 +69,7 @@ function makeLayer(baseDir: string) {
     runningUnderArm64Translation: false,
   }).pipe(
     Layer.provide(
-      Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({ T3CODE_HOME: baseDir })),
+      Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({ PHOENIX_HOME: baseDir })),
     ),
   );
 

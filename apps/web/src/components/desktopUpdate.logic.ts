@@ -1,9 +1,8 @@
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
-import { isWindowsPlatform } from "../lib/utils";
 
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
 
-const DESKTOP_RELEASE_TAG_URL = "https://github.com/pingdotgg/t3code/releases/tag";
+const DESKTOP_RELEASE_TAG_URL = "https://github.com/goodbirdhq/phoenix/releases/tag";
 
 /**
  * The main process fills `downloadedVersion` from the updater's `update-downloaded`
@@ -97,13 +96,9 @@ export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string
 
 export function getDesktopUpdateInstallConfirmationMessage(
   state: Pick<DesktopUpdateState, "availableVersion" | "downloadedVersion">,
-  platform = "",
 ): string {
   const version = state.downloadedVersion ?? state.availableVersion;
-  const windowsInstallWarning = isWindowsPlatform(platform)
-    ? "\n\nOn Windows, Phoenix may remain closed for several minutes while the update installs, and no installer window may appear. Phoenix will reopen automatically when installation finishes."
-    : "";
-  return `Install update${version ? ` ${version}` : ""} and restart Phoenix?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.${windowsInstallWarning}`;
+  return `Install update${version ? ` ${version}` : ""} and restart Phoenix?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.`;
 }
 
 export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): string | null {

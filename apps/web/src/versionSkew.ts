@@ -54,12 +54,8 @@ export function resolveServerConfigVersionMismatch(
 export function resolveServerSelfUpdateCapability(
   serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
 ): ServerSelfUpdateCapability | null {
-  return serverConfig?.environment.capabilities.serverSelfUpdate ?? null;
-}
-
-/** The command to hand users whose server cannot update itself. */
-export function manualServerUpdateCommand(targetVersion: string): string {
-  return `npx t3@${targetVersion}`;
+  const capability = serverConfig?.environment.capabilities.serverSelfUpdate;
+  return capability === "desktop-managed" ? capability : null;
 }
 
 /** One sentence telling the user how to resolve version skew for a server,
@@ -69,13 +65,10 @@ export function serverUpdateGuidance(
   serverLabel: string,
 ): string {
   switch (capability) {
-    case "boot-service":
-    case "respawn":
-      return `Update the ${serverLabel} so they stay in sync.`;
     case "desktop-managed":
-      return `The ${serverLabel} is run by the Phoenix desktop app on its machine — update the desktop app there to sync them.`;
+      return `Update the Phoenix desktop app that runs the ${serverLabel}.`;
     default:
-      return `Relaunch the ${serverLabel} with the copied command to sync them.`;
+      return `Build and relaunch Phoenix from source on the ${serverLabel} to sync them.`;
   }
 }
 

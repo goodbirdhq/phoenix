@@ -58,6 +58,7 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "no such thread",
   "unknown thread",
   "does not exist",
+  "no rollout found",
 ];
 
 export function hasConfiguredMcpServer(appServerArgs: ReadonlyArray<string> | undefined): boolean {
@@ -106,6 +107,8 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
+  /** Read for every turn so settings toggles affect an already-running session. */
+  readonly browserToolsAvailable?: Effect.Effect<boolean>;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -339,6 +342,7 @@ function buildCodexCollaborationMode(input: {
   readonly interactionMode?: ProviderInteractionMode;
   readonly model?: string;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
+  readonly browserToolsAvailable?: boolean;
 }): EffectCodexSchema.V2TurnStartParams__CollaborationMode | undefined {
   if (input.interactionMode === undefined) {
     return undefined;
@@ -350,10 +354,11 @@ function buildCodexCollaborationMode(input: {
     settings: {
       model,
       reasoning_effort: reasoningEffort,
-      developer_instructions: buildCodexDeveloperInstructions(input.interactionMode, {
-        model,
-        reasoningEffort,
-      }),
+      developer_instructions: buildCodexDeveloperInstructions(
+        input.interactionMode,
+        { model, reasoningEffort },
+        input.browserToolsAvailable ?? true,
+      ),
     },
   };
 }
@@ -370,6 +375,8 @@ export function buildTurnStartParams(input: {
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
+  /** Defaults to true so callers that predate the agent-access gate are unchanged. */
+  readonly browserToolsAvailable?: boolean;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -390,6 +397,7 @@ export function buildTurnStartParams(input: {
     ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
+    browserToolsAvailable: input.browserToolsAvailable ?? true,
   });
 
   return decodeCodexTurnStartParamsWithCollaborationMode({
@@ -539,6 +547,49 @@ function readNotificationThreadId(notification: CodexServerNotification): string
     default:
       return undefined;
   }
+}
+
+export function makeMemoryConsolidationNotificationFilter(): (
+  notification: CodexServerNotification,
+) => boolean {
+  const threadIds = new Set<string>();
+
+  return (notification) => {
+    if (notification.method === "thread/started") {
+      const thread = notification.params.thread;
+      const source = thread.source;
+      if (
+        thread.threadSource === "memory_consolidation" ||
+        (typeof source === "object" &&
+          source !== null &&
+          "subAgent" in source &&
+          source.subAgent === "memory_consolidation")
+      ) {
+        threadIds.add(thread.id);
+        return true;
+      }
+    }
+
+    const params = notification.params;
+    const threadId =
+      notification.method === "thread/started"
+        ? notification.params.thread.id
+        : "threadId" in params && typeof params.threadId === "string"
+          ? params.threadId
+          : undefined;
+    if (!threadId || !threadIds.has(threadId)) {
+      return false;
+    }
+
+    if (notification.method === "serverRequest/resolved") {
+      return false;
+    }
+
+    if (notification.method === "thread/closed") {
+      threadIds.delete(threadId);
+    }
+    return true;
+  };
 }
 
 function readRouteFields(notification: CodexServerNotification): {
@@ -857,6 +908,7 @@ export const makeCodexSessionRuntime = (
     const collabChildAgentsRef = yield* Ref.make(new Map<string, CollabChildAgentState>());
     /** Child provider-thread id → its currently running provider turn id. */
     const collabChildLiveTurnsRef = yield* Ref.make(new Map<string, string>());
+    const suppressMemoryConsolidationNotification = makeMemoryConsolidationNotificationFilter();
     const closedRef = yield* Ref.make(false);
 
     // `~` is not shell-expanded when env vars are set via
@@ -1249,6 +1301,9 @@ export const makeCodexSessionRuntime = (
 
     const handleRawNotification = (notification: CodexServerNotification) =>
       Effect.gen(function* () {
+        const isMemoryConsolidationNotification =
+          suppressMemoryConsolidationNotification(notification);
+
         const payload = notification.params;
         const route = readRouteFields(notification);
         const collabReceiverTurns = yield* Ref.get(collabReceiverTurnsRef);
@@ -1323,6 +1378,10 @@ export const makeCodexSessionRuntime = (
             }
           }
           yield* Ref.set(collabReceiverTurnsRef, collabReceiverTurns);
+          return;
+        }
+
+        if (isMemoryConsolidationNotification) {
           return;
         }
 
@@ -1761,6 +1820,10 @@ export const makeCodexSessionRuntime = (
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );
+          const browserToolsAvailable = yield* (
+            options.browserToolsAvailable ??
+              Effect.succeed(hasConfiguredMcpServer(options.appServerArgs))
+          );
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
             runtimeMode: options.runtimeMode,
@@ -1770,6 +1833,7 @@ export const makeCodexSessionRuntime = (
             ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
             ...(input.effort ? { effort: input.effort } : {}),
             ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+            browserToolsAvailable,
           });
           const rawResponse = yield* client.raw.request("turn/start", params);
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(

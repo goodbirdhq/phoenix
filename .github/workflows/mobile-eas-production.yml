@@ -6,7 +6,13 @@ name: Mobile EAS Production
 # fingerprint (platform-specific deps + pnpm version) and errors. On this Linux
 # runner, with corepack pinning pnpm 10.24 in eas.json, local == build.
 #
-# Every merge to main that touches the mobile app reconciles, per platform:
+# This upstream workflow is retained as a reference only. Phoenix has not yet
+# replaced the Expo owner/project, update URL, and signing identity with
+# Phoenix-owned infrastructure, so it must never deploy from this repository.
+# Once those identities are migrated, remove the repository guard below and
+# deliberately restore any desired push trigger.
+#
+# In upstream, every merge to main that touches the mobile app reconciles, per platform:
 #   1. Store builds: if the latest production build's version differs from
 #      app.config.ts, cut a new build and submit it (TestFlight + Play internal
 #      track). Bumping `version` is therefore all it takes to
@@ -52,19 +58,6 @@ on:
         description: "OTA update message (mode=update only)"
         required: false
         type: string
-  push:
-    branches: [main]
-    paths:
-      - apps/mobile/**
-      - packages/client-runtime/**
-      - packages/contracts/**
-      - packages/shared/**
-      - assets/**
-      - scripts/**
-      - patches/**
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - .github/workflows/mobile-eas-production.yml
 
 # Serialize runs so OTAs publish in merge order. GitHub keeps at most one
 # queued run per group, so a burst of merges collapses into one run of the
@@ -76,6 +69,7 @@ concurrency:
 jobs:
   production:
     name: EAS Production ${{ github.event_name == 'push' && 'auto' || inputs.mode }}
+    if: ${{ github.repository == 'pingdotgg/t3code' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     permissions:
       contents: read

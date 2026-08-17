@@ -76,19 +76,13 @@ Credit to T3 Code is required — legally by MIT, and because it is deserved:
 
 ## Merging from upstream
 
-```bash
-git remote add upstream https://github.com/pingdotgg/t3code.git   # once
-git fetch upstream
-git merge upstream/main
-```
+Follow the [upstream integration runbook](../operations/upstream-integration.md). Conflicts are not
+limited to display strings and known runtime identifiers: Phoenix features and upstream improvements
+can touch the same contracts, tests, and UI without producing a textual conflict. Review both the
+conflict list and every file changed by both branches.
 
-Conflicts should be confined to display strings and the runtime identifiers in the table above.
-After merging, check that no upstream identifier leaked back in:
-
-```bash
-git grep -nE '~/\.t3\b|T3CODE_HOME|t3code\.service|"t3code"|t3code://|com\.t3tools\.t3code' \
-  -- . ':!.repos' ':!docs/internals/branding.md'
-```
-
-That should return nothing. If upstream adds a _new_ OS-level identifier, it needs a Phoenix
-counterpart here before the merge lands.
+Search the staged upstream delta for runtime identifiers from the table above. Classify results
+rather than replacing them blindly: compatibility tests, source-only names, environment-variable
+fallbacks, and attribution may deliberately retain an upstream name. If upstream adds a new
+OS-level identifier, give it a Phoenix counterpart and add it to this table before the integration
+lands.

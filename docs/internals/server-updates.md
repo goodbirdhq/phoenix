@@ -2,7 +2,11 @@
 
 > For maintainers. Using Phoenix? See [docs/user](../user/).
 
-Remote server updates use one stable systemd launcher. Foreground CLI processes do not self-update,
+> Dormant upstream architecture. Phoenix has no owned package distribution, so it does not advertise
+> or execute remote server updates and it does not install the upstream `t3` npm package. Keep this
+> design as reference until Phoenix has a separately owned, verified distribution path.
+
+The inherited design uses one stable systemd launcher. Foreground CLI processes do not self-update,
 and a running server never edits its systemd unit or durable service state.
 
 ## Ownership
@@ -26,9 +30,9 @@ The state contains one active version and, at most, one update record:
 
 Every write uses same-directory replacement plus file and directory fsync.
 
-## Remote Update
+## Inherited remote update design (disabled)
 
-1. The active server installs `t3@<target>` into a unique staging directory.
+1. The active server installs a Phoenix-owned exact-version artifact into a unique staging directory.
 2. The target runs `__service-preflight` and verifies that the stable launcher supports its update
    protocol.
 3. The staging directory is renamed to its immutable version path only after preflight succeeds.
@@ -60,15 +64,8 @@ server stops and before the trial starts. This makes trial migrations and writes
 requiring down migrations. The snapshot is retained across launcher restarts and is removed only
 after commit or after both restore and the terminal rollback state are durable.
 
-The protocol version is part of the safety boundary. A target that requires database snapshots is
-blocked when the installed launcher is too old. Upgrade the launcher once with:
-
-```sh
-phoenix@<version> service update
-```
-
-The local command stops the unit, selects the new launcher and exact runtime, then restarts the
-service. Later releases, including releases with migrations, can use the remote trial path.
+The protocol version is part of the safety boundary. Reactivation requires a Phoenix-owned artifact
+source plus a local launcher migration path that never resolves the upstream `t3` package.
 
 Snapshots briefly require enough free disk for another copy of the SQLite files. Attachments and
 other files under the state directory are outside this rollback boundary.
@@ -82,10 +79,9 @@ recorded reason. Older servers without an ID retain version-only reconnect behav
 
 ## Capability and Compatibility
 
-The existing additive RPC and lifecycle schemas remain compatible with older clients. New servers
-advertise remote self-update only when they have valid launcher context and a live IPC channel.
-Desktop-managed servers direct the user to update the desktop app. Other process shapes provide a
-manual command; the old detached foreground respawn path no longer exists.
+The existing additive RPC and lifecycle schemas remain compatible with older clients. Phoenix
+servers advertise only `desktop-managed` updates; every other process shape requires a source build
+and relaunch. The client ignores legacy `boot-service` and `respawn` capabilities.
 
 ## Source Map
 

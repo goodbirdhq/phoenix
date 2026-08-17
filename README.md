@@ -53,9 +53,12 @@ Tip: `phoenix --help` for the full CLI reference.
 Phoenix desktop builds come from this repository's [GitHub Releases](https://github.com/goodbirdhq/phoenix/releases), or you can build from source (see [docs/internals/overview.md](./docs/internals/overview.md)).
 
 > [!NOTE]
-> Phoenix is not published to `winget`, Homebrew, or the AUR. The upstream packages
-> (`T3Tools.T3Code`, `--cask t3-code`, `t3code-bin`) install **T3 Code**, not Phoenix — which is a
-> perfectly good thing to do if you'd rather run the original.
+> Phoenix is not currently published to `winget`, Homebrew, or the AUR. The upstream packages
+> (`T3Tools.T3Code`, `--cask t3-code`, `t3code-bin`, and `t3code-nightly-bin`) install
+> **T3 Code**, not Phoenix—which is a perfectly good choice if you would rather run the original.
+> Phoenix retains upstream's AUR packaging sources under [`packaging/aur`](./packaging/aur) as a
+> reference, but the release workflow does not invoke them because they remain configured for T3
+> Code.
 
 ## Some notes
 
@@ -105,7 +108,7 @@ Checkout their getting started guide for more information: https://viteplus.dev/
 vp i
 ```
 
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
+Read [CONTRIBUTING.md](./CONTRIBUTING.md) before reporting a bug, requesting a feature, or opening a PR.
 
 Need support with Phoenix? Open an issue on this repository. The [T3 Code Discord](https://discord.gg/jn4EGJjrvv) is for upstream T3 Code — please don't take fork-specific problems there.
 

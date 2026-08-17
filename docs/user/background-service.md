@@ -1,49 +1,24 @@
 # Running Phoenix in the Background
 
-On a Linux host, Phoenix can run as a background service for your user. It starts when the machine
-boots and keeps running after you log out.
+Phoenix's inherited Linux background-service implementation requires an exact-version package
+distribution. Phoenix is not published to npm, so new background-service installs and updates are
+currently disabled: installing the upstream `t3` package would run a different product.
 
-## Manage the Service
+For now, run the source-built server in a terminal or create a service definition you manage
+yourself. Do not run `phoenix service install` or `phoenix service update` until Phoenix has an owned
+package identity and this page announces that distribution.
 
-Install it with the latest Phoenix release:
-
-```sh
-phoenix service install
-```
-
-Check whether it is installed:
+If an older Phoenix background service is already installed, you can inspect it:
 
 ```sh
 phoenix service status
 ```
 
-Update or repair it:
-
-```sh
-phoenix service update
-```
-
-Stop it and remove it from startup:
+You can stop it and remove it from startup:
 
 ```sh
 phoenix service uninstall
 ```
 
-Updating restarts Phoenix briefly. Let active agent work and terminal commands finish first.
-If a remote update is already in progress, wait for it to finish before retrying a local update.
-
-The systemd unit runs a small stable launcher. Exact Phoenix versions are installed separately, so
-a failed remote candidate can return to the previous version without rewriting the unit. The
-launcher snapshots the database before a remote candidate starts, so database updates roll back
-with the server version. An older launcher may require one local `service update` before this is
-available.
-
-## Using It with T3 Connect
-
-T3 Connect may offer to install the service during setup so the host stays reachable after you log
-out. This is only an onboarding shortcut: the service and T3 Connect are managed separately.
-
-Signing out of T3 Connect does not remove the service. Use `phoenix service uninstall` when you no longer
-want Phoenix to start in the background.
-
-The background service currently requires Linux with systemd.
+T3 Connect and the background service have independent lifecycles. Signing out of T3 Connect does
+not remove an existing service.

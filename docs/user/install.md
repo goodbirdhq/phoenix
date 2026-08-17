@@ -20,26 +20,9 @@ This starts the Phoenix server on your machine and opens the local web app. Use
 ## Desktop App
 
 Download the latest release from
-[GitHub Releases](https://github.com/pingdotgg/t3code/releases), or install from a package
-registry.
-
-Windows:
-
-```bash
-winget install T3Tools.T3Code
-```
-
-macOS:
-
-```bash
-brew install --cask t3-code
-```
-
-Arch Linux:
-
-```bash
-yay -S t3code-bin
-```
+[Phoenix GitHub Releases](https://github.com/goodbirdhq/phoenix/releases). Phoenix is not currently
+published through `winget`, Homebrew, or the AUR; packages named T3 Code install the upstream
+product instead.
 
 ## Providers
 

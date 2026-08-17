@@ -45,6 +45,16 @@ const makeSuccessfulProcess = (stdout: string) => {
   });
 };
 
+const makeDelayedSuccessfulProcess = (stdout: string, delayMs: number) => {
+  const process = makeSuccessfulProcess(stdout);
+  return {
+    ...process,
+    exitCode: Effect.sleep(Duration.millis(delayMs)).pipe(
+      Effect.as(ChildProcessSpawner.ExitCode(0)),
+    ),
+  };
+};
+
 const makeRunningProcess = (onKill: () => void) => {
   let finish: ((exitCode: ChildProcessSpawner.ExitCode) => void) | null = null;
   return ChildProcessSpawner.makeHandle({
@@ -80,6 +90,7 @@ const hangingHttpClient = HttpClient.make(() => Effect.never);
 const testNetService = NetService.NetService.of({
   canListenOnHost: () => Effect.succeed(true),
   isPortAvailableOnLoopback: () => Effect.succeed(true),
+  hasListenerOnHost: () => Effect.succeed(false),
   reserveLoopbackPort: () => Effect.succeed(41_773),
   findAvailablePort: (preferred) => Effect.succeed(preferred),
 });
@@ -89,14 +100,17 @@ function commandArgs(command: ChildProcess.Command): ReadonlyArray<string> {
 }
 
 describe("ssh tunnel scripts", () => {
-  it("builds the remote t3 runner with npx and npm fallbacks", () => {
+  it("fails closed when no source-built Phoenix entry point is configured", () => {
     const script = buildRemoteT3RunnerScript({ nodeEngineRange: TEST_NODE_ENGINE_RANGE });
 
     assert.include(script, "T3_NODE_SCRIPT_PATH=''");
-    assert.include(script, 'exec t3 "$@"');
-    assert.include(script, "exec npx --yes 't3@latest' \"$@\"");
-    assert.include(script, "exec npm exec --yes 't3@latest' -- \"$@\"");
-    assert.include(script, "could not install 't3@latest'");
+    assert.include(
+      script,
+      "Phoenix Remote SSH cannot provision a server until Phoenix has an owned package distribution",
+    );
+    assert.notInclude(script, 'exec t3 "$@"');
+    assert.notInclude(script, "npx --yes");
+    assert.notInclude(script, "npm exec");
     assert.include(script, 'prepend_path_if_dir "$HOME/.local/bin"');
     assert.include(script, `T3_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
     assert.include(script, "remote_node_satisfies_engine()");
@@ -120,16 +134,6 @@ describe("ssh tunnel scripts", () => {
 
     assert.include(script, "T3_NODE_ENGINE_RANGE=''");
     assert.notInclude(script, TEST_NODE_ENGINE_RANGE);
-  });
-
-  it("shell-quotes package specs in the remote t3 runner", () => {
-    const script = buildRemoteT3RunnerScript({
-      packageSpec: "t3@nightly; touch /tmp/t3-owned",
-    });
-
-    assert.include(script, "exec npx --yes 't3@nightly; touch /tmp/t3-owned' \"$@\"");
-    assert.include(script, "exec npm exec --yes 't3@nightly; touch /tmp/t3-owned' -- \"$@\"");
-    assert.notInclude(script, "exec npx --yes t3@nightly; touch /tmp/t3-owned");
   });
 
   it("builds the remote t3 runner with a node script override", () => {
@@ -169,24 +173,33 @@ describe("ssh tunnel scripts", () => {
     );
     assert.include(buildRemoteLaunchScript(), 'kill "$REMOTE_PID" 2>/dev/null || true');
     assert.include(buildRemoteLaunchScript(), "wait_ready");
-    assert.include(buildRemoteLaunchScript(), '"$RUNNER_FILE" serve --host 127.0.0.1');
+    assert.include(buildRemoteLaunchScript(), '"$RUNNER_FILE" serve --no-browser --host 127.0.0.1');
     assert.include(buildRemoteLaunchScript(), '--base-dir "$DEFAULT_SERVER_HOME"');
     assert.notInclude(buildRemoteLaunchScript(), "server-home");
-    assert.include(buildRemoteLaunchScript(), "Remote T3 server did not become ready");
-    assert.include(buildRemoteLaunchScript({ packageSpec: "t3@nightly" }), "t3@nightly");
+    assert.include(buildRemoteLaunchScript(), "Remote Phoenix server did not become ready");
+    assert.include(buildRemoteLaunchScript(), 'wait_ready "60000"');
+    assert.include(buildRemoteLaunchScript(), 'if [ -s "$LOG_FILE" ]; then');
+    assert.include(buildRemoteLaunchScript(), "It wrote nothing to %s");
     assert.include(
       buildRemotePairingScript(target),
       '"$RUNNER_FILE" auth pairing create --base-dir "$PAIRING_BASE_DIR" --json',
     );
     assert.include(buildRemotePairingScript(target), 'PAIRING_BASE_DIR="$DEFAULT_SERVER_HOME"');
     assert.notInclude(buildRemotePairingScript(target), "server-home");
-    assert.include(buildRemotePairingScript(target, { packageSpec: "t3@nightly" }), "t3@nightly");
+    assert.include(buildRemoteLaunchScript(), 'STATE_DIR="$HOME/.phoenix/ssh-launch/$STATE_KEY"');
+    assert.include(buildRemoteLaunchScript(), 'DEFAULT_SERVER_HOME="$HOME/.phoenix"');
+    assert.include(buildRemoteLaunchScript(), "serve --no-browser --host 127.0.0.1");
+    assert.notInclude(buildRemoteLaunchScript(), "T3CODE_NO_BROWSER=1");
+    assert.notInclude(buildRemoteLaunchScript(), "$HOME/.t3");
+    assert.include(buildRemotePairingScript(target), 'STATE_DIR="$HOME/.phoenix/ssh-launch/');
+    assert.notInclude(buildRemotePairingScript(target), "$HOME/.t3");
     assert.include(
       buildRemoteStopScript(target),
       'if [ "$REMOTE_MANAGED" != "external" ] && [ -n "$REMOTE_PID" ]',
     );
     assert.include(buildRemoteStopScript(target), 'kill "$REMOTE_PID" 2>/dev/null || true');
     assert.include(buildRemoteStopScript(target), 'rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE"');
+    assert.notInclude(buildRemoteStopScript(target), "$HOME/.t3");
     assert.include(
       buildRemoteLaunchScript(),
       'DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"',
@@ -230,6 +243,29 @@ describe("ssh tunnel scripts", () => {
 
     return Effect.gen(function* () {
       const result = yield* launchOrReuseRemoteServer(target);
+      assert.equal(result.remotePort, 3774);
+    }).pipe(Effect.provide(processLayer));
+  });
+
+  it.effect("allows cold remote launches to exceed the default SSH command timeout", () => {
+    const target = {
+      alias: "devbox",
+      hostname: "devbox.example.com",
+      username: "julius",
+      port: 2222,
+    } as const;
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed(makeDelayedSuccessfulProcess('{"remotePort":3774}\n', 75_000)),
+    );
+    const spawnerLayer = Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner);
+    const processLayer = Layer.mergeAll(NodeServices.layer, spawnerLayer, TestClock.layer());
+
+    return Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(launchOrReuseRemoteServer(target));
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(Duration.seconds(75));
+
+      const result = yield* Fiber.join(fiber);
       assert.equal(result.remotePort, 3774);
     }).pipe(Effect.provide(processLayer));
   });

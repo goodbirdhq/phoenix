@@ -9,6 +9,7 @@ body:
     attributes:
       value: |
         Use this form for broken behavior, regressions, crashes, or reliability problems.
+        Feature requests should use a blank issue in the Phoenix repository.
         Search existing issues first and keep the report focused on one problem.
 
   - type: checkboxes
