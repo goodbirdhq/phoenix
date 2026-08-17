@@ -829,7 +829,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-label="Tool call failed"');
   });
 
-  it("renders session MCP spawns as agent cards with a child-thread action", () => {
+  it("renders session MCP spawns as session cards with a child-thread action", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -856,12 +856,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Spawned agent");
+    expect(markup).toContain("Spawned session");
     expect(markup).toContain("Review the timeline");
     expect(markup).toContain("claude-opus-5");
     expect(markup).toContain("Open ▸");
     expect(markup).toContain("lucide-bot");
-    expect(markup).toContain('aria-label="Open spawned agent: Review the timeline"');
+    expect(markup).toContain('aria-label="Open spawned session: Review the timeline"');
     expect(markup).not.toContain("MCP tool call");
   });
 
@@ -888,7 +888,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Spawning agent");
+    expect(markup).toContain("Spawning session");
     expect(markup).toContain('role="status"');
     expect(markup).not.toContain("<button");
   });

@@ -76,6 +76,31 @@ describe("toolActivity", () => {
     });
   });
 
+  it("prefers the identity the server carried past its own result slimming", () => {
+    // What a client actually receives: the result is summarized to one
+    // truncated line, so only `spawnedSession` still holds the child's id.
+    expect(
+      deriveSpawnedSessionToolActivity({
+        item: {
+          type: "mcpToolCall",
+          server: "phoenix",
+          tool: "spawn_session",
+          arguments: { title: "Check mobile", model: "gpt-5.6-terra" },
+          result: { content: '{"threadId":"child-thr…' },
+        },
+        spawnedSession: {
+          title: "Check mobile",
+          threadId: "child-thread",
+          model: "claude-opus-5",
+        },
+      }),
+    ).toEqual({
+      title: "Check mobile",
+      threadId: "child-thread",
+      model: "claude-opus-5",
+    });
+  });
+
   it("does not classify unrelated MCP tools as session spawns", () => {
     expect(
       deriveSpawnedSessionToolActivity({

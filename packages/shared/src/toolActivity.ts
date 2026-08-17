@@ -75,6 +75,12 @@ export interface SpawnedSessionToolActivity {
  * Recognizes Phoenix's session-spawn MCP call across provider payload shapes.
  * The child thread id only appears after the tool result lands, while the
  * requested title is available during the in-progress lifecycle update.
+ *
+ * Reads `data.spawnedSession` first: the server slims MCP results down to a
+ * one-line preview before they reach a client, which would otherwise cut the
+ * thread id out of the spawn result, so it carries the derived identity in
+ * that field. Raw provider payloads (server-side, and pre-slimming clients)
+ * still resolve from `result`/`arguments` below.
  */
 export function deriveSpawnedSessionToolActivity(
   value: unknown,
@@ -89,11 +95,18 @@ export function deriveSpawnedSessionToolActivity(
   }
 
   const input = asRecord(item?.arguments) ?? asRecord(item?.input) ?? asRecord(data.input);
+  const projected = asRecord(data.spawnedSession);
   const result = spawnedSessionResult(item?.result ?? data.result);
   const modelSelection = asRecord(result?.modelSelection);
-  const title = asTrimmedString(result?.title) ?? asTrimmedString(input?.title);
-  const threadId = asTrimmedString(result?.threadId);
-  const model = asTrimmedString(modelSelection?.model) ?? asTrimmedString(input?.model);
+  const title =
+    asTrimmedString(projected?.title) ??
+    asTrimmedString(result?.title) ??
+    asTrimmedString(input?.title);
+  const threadId = asTrimmedString(projected?.threadId) ?? asTrimmedString(result?.threadId);
+  const model =
+    asTrimmedString(projected?.model) ??
+    asTrimmedString(modelSelection?.model) ??
+    asTrimmedString(input?.model);
 
   return {
     title: title ?? "New agent session",
