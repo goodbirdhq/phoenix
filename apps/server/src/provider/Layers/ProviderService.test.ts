@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 
 import type {
   ProviderApprovalDecision,
+  ProviderAvailability,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
@@ -1644,6 +1645,187 @@ it.effect("ProviderServiceLive ignores late availability events from a replaced 
     );
     yield* Scope.close(scope, Exit.void);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "ProviderServiceLive keeps a Claude /usage reading, and names the CLI when one fails",
+  () =>
+    Effect.gen(function* () {
+      const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      const usageSnapshot = {
+        status: "available",
+        source: "claude_cli_usage",
+        observedAt: "2026-08-17T20:45:00.000Z",
+        account: {
+          id: "claude:org-1:maintainer@example.com",
+          verification: "native_verified",
+          displayName: "maintainer@example.com",
+        },
+        windows: [{ kind: "session", label: "Current session", usedPercent: 5 }],
+      } as const;
+      let refreshResult: Effect.Effect<ProviderAvailability, ProviderAdapterError> =
+        Effect.succeed(usageSnapshot);
+      const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+        ...claude.adapter,
+        refreshAvailability: () => refreshResult,
+        get streamEvents() {
+          return claude.adapter.streamEvents;
+        },
+      };
+      const changes = yield* PubSub.unbounded<void>();
+      const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
+        getByInstance: () => Effect.succeed(adapter),
+        getInstanceInfo: () =>
+          Effect.succeed({
+            instanceId: claudeAgentInstanceId,
+            driverKind: CLAUDE_AGENT_DRIVER,
+            displayName: undefined,
+            enabled: true,
+            continuationIdentity: {
+              driverKind: CLAUDE_AGENT_DRIVER,
+              continuationKey: "claudeAgent:availability-test",
+            },
+          }),
+        listInstances: () => Effect.succeed([claudeAgentInstanceId]),
+        listProviders: () => Effect.succeed([CLAUDE_AGENT_DRIVER]),
+        streamChanges: Stream.fromPubSub(changes),
+        subscribeChanges: PubSub.subscribe(changes),
+      };
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const providerLayer = Layer.mergeAll(
+        makeProviderServiceLive().pipe(
+          Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+          Layer.provide(directoryLayer),
+          Layer.provide(defaultServerSettingsLayer),
+          Layer.provide(serverConfigTestLayer),
+          Layer.provideMerge(AnalyticsService.layerTest),
+          Layer.provide(
+            Layer.succeed(
+              ProviderEventLoggers.ProviderEventLoggers,
+              ProviderEventLoggers.NoOpProviderEventLoggers,
+            ),
+          ),
+        ),
+        directoryLayer,
+        runtimeRepositoryLayer,
+        NodeServices.layer,
+      );
+      const scope = yield* Scope.make();
+      const services = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
+      const provider = yield* ProviderService.ProviderService.pipe(Effect.provide(services));
+      yield* Effect.yieldNow;
+
+      const refreshed = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      );
+      assert.equal(refreshed.source, "claude_cli_usage");
+      assert.equal(refreshed.windows[0]?.usedPercent, 5);
+
+      // The Agent SDK publishes rate-limit notifications that carry no quota
+      // rows. One arriving fourteen minutes later must not blank the panel the
+      // user asked for…
+      yield* advanceTestClock(14 * 60 * 1_000);
+      claude.emit({
+        type: "account.rate-limits.updated",
+        eventId: asEventId("claude-sdk-ping"),
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId: asThreadId("availability-thread"),
+        createdAt: "2026-08-17T20:59:00.000Z",
+        payload: { rateLimits: {} },
+      } as unknown as LegacyProviderRuntimeEvent);
+      yield* advanceTestClock(1);
+      const afterPing = yield* provider.getAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      );
+      assert.equal(afterPing.windows[0]?.usedPercent, 5);
+      assert.equal(afterPing.account?.id, usageSnapshot.account.id);
+
+      // …and must not renew its freshness either: the panel ages out fifteen
+      // minutes after the CLI reported it, not fifteen minutes after a ping.
+      yield* advanceTestClock(60 * 1_000);
+      const aged = yield* provider.getAvailability!(claudeAgentInstanceId, CLAUDE_AGENT_DRIVER);
+      assert.deepEqual([...aged.windows], []);
+      assert.equal(aged.source, "claude_cli_usage");
+
+      refreshResult = Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: String(CLAUDE_AGENT_DRIVER),
+          method: "refreshAvailability",
+          detail: "usage probe failed",
+        }),
+      );
+      const failed = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      );
+      // The refresh ran the CLI, so a failed one says so instead of blaming the
+      // Agent SDK, which never went quiet.
+      assert.equal(failed.source, "claude_cli_usage");
+      assert.equal(failed.status, "unknown");
+      // It is still an observation: "asked just now, learned nothing". Without
+      // a time a client cannot tell it from an instance never read at all.
+      assert.equal(typeof failed.observedAt, "string");
+
+      // An adapter that throws arrives as a defect, which a typed-error handler
+      // would let straight through and fail the caller's whole fan-out over one
+      // instance. Refreshing has a per-instance cooldown, so let it lapse first.
+      yield* advanceTestClock(31 * 1_000);
+      refreshResult = Effect.sync(() => {
+        throw new Error("claude CLI spawn blew up");
+      });
+      const afterDefect = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      );
+      assert.equal(afterDefect.source, "claude_cli_usage");
+      assert.equal(afterDefect.status, "unknown");
+      assert.equal(typeof afterDefect.observedAt, "string");
+
+      // A refresh that fails while a fresh reading is on screen keeps that
+      // reading rather than blanking the bars the person just asked about…
+      yield* advanceTestClock(31 * 1_000);
+      refreshResult = Effect.succeed(usageSnapshot);
+      const repopulated = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      );
+      assert.equal(repopulated.windows[0]?.usedPercent, 5);
+
+      yield* advanceTestClock(31 * 1_000);
+      refreshResult = Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: String(CLAUDE_AGENT_DRIVER),
+          method: "refreshAvailability",
+          detail: "usage probe failed again",
+        }),
+      );
+      const retained = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      );
+      assert.equal(retained.windows[0]?.usedPercent, 5);
+      assert.equal(retained.account?.id, usageSnapshot.account.id);
+      // …but it says plainly that the numbers are no longer confirmed.
+      assert.equal(retained.stale?.reason, "refresh_failed");
+      assert.equal(retained.status, "available");
+
+      // And it still ages out on the clock of the reading it kept, not on the
+      // clock of the attempt that failed.
+      yield* advanceTestClock(15 * 60 * 1_000);
+      const expired = yield* provider.getAvailability!(claudeAgentInstanceId, CLAUDE_AGENT_DRIVER);
+      assert.deepEqual([...expired.windows], []);
+      assert.equal(expired.stale, undefined);
+
+      yield* Scope.close(scope, Exit.void);
+    }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 const fanout = makeProviderServiceLayer();

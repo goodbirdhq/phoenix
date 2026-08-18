@@ -1,4 +1,9 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationEvent,
+  OrchestrationReadModel,
+  OrchestrationThreadActivity,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -39,6 +44,49 @@ import {
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
+const MAX_THREAD_NON_REPORT_ACTIVITIES = 500;
+
+const isSessionReportPostedActivity = (activity: OrchestrationThreadActivity) =>
+  activity.kind === "session-report.posted";
+
+const isSessionReportReadActivity = (activity: OrchestrationThreadActivity) =>
+  activity.kind === "session-report.read";
+
+// The activity feed is operational state, not report history. A report's
+// durable body remains in projection_thread_reports, and the event journal
+// records its read receipt. Keep only currently unread report notifications
+// here: a consumed notification and its receipt no longer inform the inbox,
+// so retaining either would make repeated child report/read cycles grow this
+// projection forever.
+function retainThreadActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  const readReportIds = new Set(
+    activities
+      .filter(isSessionReportReadActivity)
+      .map((activity) => {
+        const payload = activity.payload as { reportId?: unknown };
+        return typeof payload.reportId === "string" ? payload.reportId : undefined;
+      })
+      .filter((reportId): reportId is string => reportId !== undefined),
+  );
+  const unreadReportActivities: OrchestrationThreadActivity[] = [];
+  const otherActivities: OrchestrationThreadActivity[] = [];
+  for (const activity of activities) {
+    if (isSessionReportPostedActivity(activity)) {
+      const payload = activity.payload as { reportId?: unknown };
+      if (typeof payload.reportId === "string" && !readReportIds.has(payload.reportId)) {
+        unreadReportActivities.push(activity);
+      }
+      continue;
+    }
+    if (!isSessionReportReadActivity(activity)) otherActivities.push(activity);
+  }
+  return [
+    ...unreadReportActivities,
+    ...otherActivities.slice(-MAX_THREAD_NON_REPORT_ACTIVITIES),
+  ].toSorted(compareThreadActivities);
+}
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
@@ -884,12 +932,12 @@ export function projectEvent(
             return nextBase;
           }
 
-          const activities = [
-            ...thread.activities.filter((entry) => entry.id !== payload.activity.id),
-            payload.activity,
-          ]
-            .toSorted(compareThreadActivities)
-            .slice(-500);
+          const activities = retainThreadActivities(
+            [
+              ...thread.activities.filter((entry) => entry.id !== payload.activity.id),
+              payload.activity,
+            ].toSorted(compareThreadActivities),
+          );
 
           return {
             ...nextBase,

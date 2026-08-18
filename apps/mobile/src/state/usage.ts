@@ -13,13 +13,16 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
+  type ProviderAvailabilityEntry,
+  type ServerProvider,
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
+import { subscriptionAvailabilityPresentationState } from "@t3tools/client-runtime/usage/subscription-availability";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
 import { environmentPresentations } from "./presentation";
@@ -32,6 +35,48 @@ export interface EnvironmentUsageStatus {
   readonly error: string | null;
   readonly summary: UsageSummary | null;
 }
+
+export interface EnvironmentProviderAvailabilityStatus {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly isPending: boolean;
+  readonly hasError: boolean;
+  readonly providers: readonly ProviderAvailabilityEntry[];
+  readonly serverProviders: readonly ServerProvider[] | null;
+}
+
+const providerAvailabilityAtom = Atom.family((refresh: boolean) =>
+  Atom.make((get): readonly EnvironmentProviderAvailabilityStatus[] => {
+    const presentations = get(environmentPresentations.presentationsAtom);
+    const statuses: EnvironmentProviderAvailabilityStatus[] = [];
+    for (const [environmentId, presentation] of presentations) {
+      const result = get(
+        serverEnvironment.providerAvailability({
+          environmentId,
+          input: refresh ? { refresh: true } : {},
+        }),
+      );
+      const value = Option.getOrNull(AsyncResult.value(result));
+      const serverProviders = get(serverEnvironment.providersValueAtom(environmentId));
+      const presentationState = subscriptionAvailabilityPresentationState({
+        availabilityQueryPending: result.waiting,
+        availabilityQueryFailed: result._tag === "Failure",
+        providerProjectionReady: serverProviders !== null,
+      });
+      statuses.push({
+        environmentId,
+        label: presentation.entry.target.label,
+        // Availability does not carry enabled/auth facts. Keep the loading
+        // state until the separate provider projection is ready, otherwise a
+        // fast availability response briefly reads as a final empty result.
+        ...presentationState,
+        providers: value?.providers ?? [],
+        serverProviders,
+      });
+    }
+    return statuses;
+  }).pipe(Atom.withLabel(`mobile-usage:provider-availability:${refresh ? "refresh" : "cached"}`)),
+);
 
 /**
  * Reads every environment's summary for one window.
@@ -71,7 +116,11 @@ export interface UsageView {
    * improve by waiting on them, so they must not read as "still reporting".
    */
   readonly isPartial: boolean;
-  readonly refresh: () => void;
+  /** Refreshes the supplied range, or the currently rendered range when omitted. */
+  readonly refresh: (input?: UsageSummaryInput) => void;
+  readonly providerAvailability: readonly EnvironmentProviderAvailabilityStatus[];
+  readonly isProviderAvailabilityPending: boolean;
+  readonly hasProviderAvailabilityError: boolean;
 }
 
 export function useUsage(input: UsageSummaryInput): UsageView {
@@ -96,18 +145,50 @@ export function useUsage(input: UsageSummaryInput): UsageView {
   );
   const atom = usageByWindowAtom(windowKey);
   const environments = useAtomValue(atom);
+  const [refreshingAvailability, setRefreshingAvailability] = useState(false);
+  const providerAvailability = useAtomValue(providerAvailabilityAtom(refreshingAvailability));
+
+  // The refresh flag is a one-shot provider read, never durable screen state.
+  useEffect(() => {
+    if (
+      refreshingAvailability &&
+      !providerAvailability.some((environment) => environment.isPending)
+    ) {
+      for (const environment of providerAvailability) {
+        appAtomRegistry.refresh(
+          serverEnvironment.providerAvailability({
+            environmentId: environment.environmentId,
+            input: {},
+          }),
+        );
+      }
+      setRefreshingAvailability(false);
+    }
+  }, [providerAvailability, refreshingAvailability]);
 
   // Refreshing only the derived atom would re-read the per-environment SWR
   // queries within their stale window and change nothing. Refresh each
   // environment's query so pull-to-refresh always rescans.
-  const refresh = useCallback(() => {
-    const input = JSON.parse(windowKey) as UsageSummaryInput;
-    for (const environment of environments) {
-      appAtomRegistry.refresh(
-        serverEnvironment.usageSummary({ environmentId: environment.environmentId, input }),
-      );
-    }
-  }, [environments, windowKey]);
+  const refresh = useCallback(
+    (refreshInput: UsageSummaryInput = input) => {
+      for (const environment of environments) {
+        appAtomRegistry.refresh(
+          serverEnvironment.usageSummary({
+            environmentId: environment.environmentId,
+            input: refreshInput,
+          }),
+        );
+        appAtomRegistry.refresh(
+          serverEnvironment.providerAvailability({
+            environmentId: environment.environmentId,
+            input: { refresh: true },
+          }),
+        );
+      }
+      setRefreshingAvailability(true);
+    },
+    [environments, input],
+  );
 
   const merged = useMemo(() => {
     const answered: EnvironmentUsage[] = environments.flatMap((environment) =>
@@ -135,5 +216,10 @@ export function useUsage(input: UsageSummaryInput): UsageView {
     isPending: answeredCount === 0 && stillReporting > 0,
     isPartial: answeredCount > 0 && stillReporting > 0,
     refresh,
+    providerAvailability,
+    isProviderAvailabilityPending: providerAvailability.some(
+      (environment) => environment.isPending,
+    ),
+    hasProviderAvailabilityError: providerAvailability.some((environment) => environment.hasError),
   };
 }

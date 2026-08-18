@@ -325,6 +325,9 @@ function deriveWorkLogEntries(
   const ordered = Arr.sort(activities, activityOrder);
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
+    // This is parent-inbox bookkeeping, not child work. Keeping it out of
+    // the mobile timeline matches the passive inbox contract on web.
+    if (activity.kind === "session-report.read") continue;
     if (activity.kind === "tool.started") continue;
     if (activity.kind === "task.started") continue;
     // Terminal bypassed updates pass: Codex children's only terminal signal.

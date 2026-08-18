@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import type { DependencyList, Dispatch, EffectCallback, SetStateAction } from "react";
 
 /**
  * Minimal React hook shim for tests that call components as plain functions
@@ -21,6 +21,7 @@ import type { Dispatch, SetStateAction } from "react";
  *     ...actual,
  *     useCallback: reactHookHarness.useCallback,
  *     useMemo: reactHookHarness.useMemo,
+ *     useEffect: reactHookHarness.useEffect,
  *     useRef: reactHookHarness.useRef,
  *     useState: reactHookHarness.useState,
  *   };
@@ -54,6 +55,13 @@ export function createReactHookHarness() {
     useMemo<T>(factory: () => T): T {
       nextIndex();
       return factory();
+    },
+    // Plain-function component tests inspect the render tree; they do not
+    // mount a React tree, so effects cannot have React's commit lifecycle.
+    // Still reserve the slot to keep hook-order checks faithful when a
+    // component gains an effect.
+    useEffect(_effect: EffectCallback, _dependencies?: DependencyList): void {
+      nextIndex();
     },
     useMemoCache(size: number): unknown[] {
       const index = nextIndex();

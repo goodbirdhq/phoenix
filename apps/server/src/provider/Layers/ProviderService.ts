@@ -26,6 +26,7 @@ import {
   type ProviderAvailability,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -212,34 +213,138 @@ const correlateRuntimeEventWithInstance = (
   return { ...event, providerInstanceId: source.instanceId };
 };
 
-const unknownAvailabilityForDriver = (provider: ProviderDriverKind): ProviderAvailability => ({
+// The native channels each driver is allowed to speak through. A driver may
+// own more than one: Claude reports sparse SDK notifications and, on explicit
+// request, the CLI's own `/usage` panel. A cached snapshot whose source is not
+// in this list belongs to some other driver and is never presented.
+const NATIVE_AVAILABILITY_SOURCES: Partial<
+  Record<string, ReadonlyArray<ProviderAvailability["source"]>>
+> = {
+  codex: ["codex_app_server"],
+  claudeAgent: ["claude_agent_sdk", "claude_cli_usage"],
+};
+
+const isNativeAvailabilitySource = (
+  provider: ProviderDriverKind,
+  source: ProviderAvailability["source"],
+): boolean => (NATIVE_AVAILABILITY_SOURCES[provider] ?? ["unsupported"]).includes(source);
+
+// Which channel a silent driver is silent on is one fact, shared with the
+// transports that build the same fallback when an instance cannot answer.
+const unknownAvailabilityForDriver = ProviderService.unknownAvailabilityForDriver;
+
+// The channel an explicit refresh speaks through, which is not always the
+// channel a driver reports passively. Claude's passive source is the Agent SDK,
+// but a refresh runs the CLI's `/usage` panel — so a failed refresh has to say
+// `claude_cli_usage`, or a client is told the SDK went quiet when in fact the
+// CLI read failed.
+const REFRESH_AVAILABILITY_SOURCES: Partial<Record<string, ProviderAvailability["source"]>> = {
+  claudeAgent: "claude_cli_usage",
+};
+
+/**
+ * What a refresh reports when the driver could not produce a reading at all.
+ * It is still an observation — "at this instant the channel had nothing to
+ * say" — so it carries `observedAt`. Without it a client cannot tell a refresh
+ * that just failed from an instance that has never been read, and the retained
+ * reading it replaces cannot say when the attempt behind it happened.
+ */
+export const unknownRefreshAvailability = (
+  provider: ProviderDriverKind,
+  observedAt: string,
+): ProviderAvailability => ({
   status: "unknown",
-  source:
-    provider === "codex"
-      ? "codex_app_server"
-      : provider === "claudeAgent"
-        ? "claude_agent_sdk"
-        : "unsupported",
+  source: REFRESH_AVAILABILITY_SOURCES[provider] ?? unknownAvailabilityForDriver(provider).source,
+  observedAt,
   windows: [],
 });
 
 const PROVIDER_AVAILABILITY_MAX_AGE_MS = 15 * 60 * 1_000;
+const PROVIDER_AVAILABILITY_REFRESH_COOLDOWN_MS = 30_000;
 
 export type CachedProviderAvailability = {
   readonly availability: ProviderAvailability;
   readonly receivedAtMs: number;
 };
 
+/**
+ * What makes two reported windows the same window. Clients key their rendered
+ * rows the same way, so a provider that names its pools keeps them distinct
+ * everywhere rather than in one layer only.
+ */
+export const windowIdentityKey = (window: ProviderAvailability["windows"][number]): string =>
+  `${window.kind}:${window.scope ?? ""}`;
+
+/**
+ * Whether `incoming` is a non-answer that must not displace the reading
+ * already in hand. Two cases, both "we learned nothing new on a channel that
+ * previously told us something":
+ *
+ *  - A passive `claude_agent_sdk` ping over a `/usage` reading. The SDK carries
+ *    no quota rows today, so it says "the runtime spoke", not "the quota is
+ *    unknown"; letting it through would blank the bars a person just asked for,
+ *    seconds after they asked.
+ *  - A refresh on the *same* channel that came back with nothing. A timed-out
+ *    or non-zero-exit CLI call is a fact about the call, not about the
+ *    subscription, and throwing away a reading that is still inside its normal
+ *    fifteen-minute life would punish a person for pressing refresh.
+ *
+ * Codex is excluded from the second case because its snapshots merge per
+ * window identity below, which already keeps windows a sparse update omitted.
+ *
+ * An incoming reading that names a *different* account always wins, however
+ * empty: showing one account's bars while naming another is worse than showing
+ * none. The retained reading is marked stale by the caller and still ages out
+ * on its original clock, so a signed-out instance cannot hold bars indefinitely.
+ */
+const retainsPreviousReading = (
+  previous: ProviderAvailability,
+  incoming: ProviderAvailability,
+): boolean => {
+  if (incoming.windows.length > 0) return false;
+  if (previous.source === "claude_cli_usage" && incoming.source === "claude_agent_sdk") return true;
+  if (previous.source !== incoming.source || incoming.source === "codex_app_server") return false;
+  if (previous.windows.length === 0) return false;
+  return incoming.account === undefined || incoming.account.id === previous.account?.id;
+};
+
+/** Whether a retained reading has to tell clients it is no longer confirmed. */
+const staleMarkerFor = (
+  previous: ProviderAvailability,
+  incoming: ProviderAvailability,
+): ProviderAvailability["stale"] | undefined => {
+  // A passive ping is not a failed reading: nothing was asked, so nothing
+  // failed, and the reading in hand is as good as it was a moment ago.
+  if (incoming.source !== previous.source) return undefined;
+  return {
+    // An attempt that came back with an account reached the provider and simply
+    // rendered no rows; one that came back with neither told us nothing at all.
+    reason: incoming.account === undefined ? "refresh_failed" : "refresh_empty",
+    ...(incoming.observedAt ? { attemptedAt: incoming.observedAt } : {}),
+  };
+};
+
 export const mergeProviderAvailability = (
   previous: ProviderAvailability | undefined,
   incoming: ProviderAvailability,
 ): ProviderAvailability => {
+  if (previous !== undefined && retainsPreviousReading(previous, incoming)) {
+    const stale = staleMarkerFor(previous, incoming);
+    // Returned unchanged when there is nothing new to say — identity matters,
+    // because the caller uses it to keep the older snapshot's age (see
+    // `cacheProviderAvailability`).
+    return stale === undefined ? previous : { ...previous, stale };
+  }
   if (incoming.source !== "codex_app_server" || previous?.source !== incoming.source) {
     return incoming;
   }
-  const windows = new Map(previous.windows.map((window) => [window.kind, window]));
+  // Kind alone is not a window identity: a provider can report several windows
+  // of one kind, one per pool. Merging on kind would fold a per-model weekly
+  // quota into the shared one and report a number that belongs to neither.
+  const windows = new Map(previous.windows.map((window) => [windowIdentityKey(window), window]));
   for (const window of incoming.windows) {
-    windows.set(window.kind, { ...windows.get(window.kind), ...window });
+    const key = windowIdentityKey(window);
+    windows.set(key, { ...windows.get(key), ...window });
   }
   const mergedWindows = [...windows.values()];
   return {
@@ -250,8 +355,34 @@ export const mergeProviderAvailability = (
         : "unknown",
     source: incoming.source,
     observedAt: incoming.observedAt,
+    // An account identity is only ever as fresh as the snapshot that carried
+    // it; a merge never keeps an account the newest reading did not confirm.
+    ...(incoming.account ? { account: incoming.account } : {}),
     windows: mergedWindows,
   };
+};
+
+/**
+ * The cache entry an incoming snapshot produces. Freshness is server-owned:
+ * `receivedAtMs` is what `availabilityAt` ages against, so it only advances
+ * when the merge actually took something from the incoming snapshot. A ping
+ * that carried no reading must not make a fifteen-minute-old `/usage` panel
+ * look like it was observed just now.
+ */
+export const cacheProviderAvailability = (
+  cached: CachedProviderAvailability | undefined,
+  incoming: ProviderAvailability,
+  nowMs: number,
+): CachedProviderAvailability => {
+  const availability = mergeProviderAvailability(cached?.availability, incoming);
+  if (cached === undefined) return { availability, receivedAtMs: nowMs };
+  // A retained reading keeps the age it already had, whether or not it picked
+  // up a stale marker on the way through. Restamping it would let a run of
+  // failed refreshes keep a single old panel alive forever.
+  if (retainsPreviousReading(cached.availability, incoming)) {
+    return availability === cached.availability ? cached : { ...cached, availability };
+  }
+  return { availability, receivedAtMs: nowMs };
 };
 
 export const availabilityAt = (
@@ -260,30 +391,72 @@ export const availabilityAt = (
   nowMs: number,
 ): ProviderAvailability => {
   if (cached === undefined) return unknownAvailabilityForDriver(provider);
-  if (cached.availability.source !== unknownAvailabilityForDriver(provider).source) {
+  if (!isNativeAvailabilitySource(provider, cached.availability.source)) {
     return unknownAvailabilityForDriver(provider);
   }
   if (nowMs - cached.receivedAtMs <= PROVIDER_AVAILABILITY_MAX_AGE_MS) {
     return cached.availability;
   }
+  // Aged out: the quota numbers are dropped, but which channel observed them,
+  // when, and for which account stay — those facts did not expire, and clients
+  // use them to keep an account card in place instead of flickering it away.
   return {
     status: "unknown",
     source: cached.availability.source,
     ...(cached.availability.observedAt ? { observedAt: cached.availability.observedAt } : {}),
+    ...(cached.availability.account ? { account: cached.availability.account } : {}),
     windows: [],
   };
+};
+
+/**
+ * Drop per-instance state for adapters that were replaced or removed, so a
+ * rebuilt instance never inherits the previous process's quota reading or its
+ * refresh cooldown. Entries are keyed by instance id in both maps.
+ */
+export const retainStateForReconciledAdapters = <Value, Adapter>(
+  entries: ReadonlyMap<ProviderInstanceId, Value>,
+  previous: ReadonlyMap<ProviderInstanceId, Adapter>,
+  next: ReadonlyMap<ProviderInstanceId, Adapter>,
+): Map<ProviderInstanceId, Value> => {
+  const retained = new Map(entries);
+  for (const [id, previousAdapter] of previous) {
+    if (next.get(id) !== previousAdapter) retained.delete(id);
+  }
+  for (const id of retained.keys()) {
+    if (!next.has(id)) retained.delete(id);
+  }
+  return retained;
 };
 
 export const clearAvailabilityForReconciledAdapters = <Adapter>(
   entries: ReadonlyMap<ProviderInstanceId, CachedProviderAvailability>,
   previous: ReadonlyMap<ProviderInstanceId, Adapter>,
   next: ReadonlyMap<ProviderInstanceId, Adapter>,
-): Map<ProviderInstanceId, CachedProviderAvailability> => {
-  const nextAvailability = new Map(entries);
-  for (const [id, previousAdapter] of previous) {
-    if (next.get(id) !== previousAdapter) nextAvailability.delete(id);
+): Map<ProviderInstanceId, CachedProviderAvailability> =>
+  retainStateForReconciledAdapters(entries, previous, next);
+
+/**
+ * Decide, in one step, whether this caller owns the next refresh of
+ * `instanceId` and what the cooldown map becomes. Callers apply it inside a
+ * single `Ref.modify`: a read-then-write would let two clients that clicked at
+ * the same moment both pass the check and spawn the provider CLI twice.
+ */
+export const claimAvailabilityRefresh = (
+  entries: ReadonlyMap<ProviderInstanceId, number>,
+  instanceId: ProviderInstanceId,
+  nowMs: number,
+): readonly [claimed: boolean, entries: ReadonlyMap<ProviderInstanceId, number>] => {
+  const lastRefreshMs = entries.get(instanceId);
+  if (
+    lastRefreshMs !== undefined &&
+    nowMs - lastRefreshMs < PROVIDER_AVAILABILITY_REFRESH_COOLDOWN_MS
+  ) {
+    return [false, entries];
   }
-  return nextAvailability;
+  const next = new Map(entries);
+  next.set(instanceId, nowMs);
+  return [true, next];
 };
 
 const toIsoDateTime = (unixSeconds: unknown): string | undefined => {
@@ -369,6 +542,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const availabilityByInstance = yield* Ref.make(
     new Map<ProviderInstanceId, CachedProviderAvailability>(),
+  );
+  const lastAvailabilityRefreshAt = yield* Ref.make<ReadonlyMap<ProviderInstanceId, number>>(
+    new Map(),
   );
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   /**
@@ -460,13 +636,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ? Effect.flatMap(DateTime.now, (now) =>
               Ref.update(availabilityByInstance, (entries) => {
                 const next = new Map(entries);
-                next.set(source.instanceId, {
-                  availability: mergeProviderAvailability(
-                    entries.get(source.instanceId)?.availability,
+                next.set(
+                  source.instanceId,
+                  cacheProviderAvailability(
+                    entries.get(source.instanceId),
                     availability,
+                    DateTime.toEpochMillis(now),
                   ),
-                  receivedAtMs: DateTime.toEpochMillis(now),
-                });
+                );
                 return next;
               }),
             )
@@ -502,6 +679,76 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     Effect.map((map) => Array.from(map.entries())),
   );
 
+  // Returns the stored entry, so a caller can answer with exactly what a
+  // subsequent read of this instance returns rather than with the snapshot it
+  // handed in.
+  const cacheAvailability = (
+    instanceId: ProviderInstanceId,
+    availability: ProviderAvailability,
+    nowMs: number,
+  ) =>
+    Ref.modify(availabilityByInstance, (entries) => {
+      const entry = cacheProviderAvailability(entries.get(instanceId), availability, nowMs);
+      const next = new Map(entries);
+      next.set(instanceId, entry);
+      return [entry, next] as const;
+    });
+
+  const refreshAvailability = (instanceId: ProviderInstanceId, provider: ProviderDriverKind) =>
+    Effect.gen(function* () {
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      const cachedAt = () =>
+        Effect.map(Ref.get(availabilityByInstance), (entries) =>
+          availabilityAt(entries.get(instanceId), provider, now),
+        );
+      // Resolve the adapter before claiming the cooldown: an instance whose
+      // driver cannot refresh should not burn the next thirty seconds of the
+      // one that can.
+      const adapter = yield* registry.getByInstance(instanceId).pipe(Effect.option);
+      if (
+        Option.isNone(adapter) ||
+        adapter.value.provider !== provider ||
+        !adapter.value.refreshAvailability
+      ) {
+        return yield* cachedAt();
+      }
+      const claimed = yield* Ref.modify(lastAvailabilityRefreshAt, (entries) =>
+        claimAvailabilityRefresh(entries, instanceId, now),
+      );
+      if (!claimed) {
+        return yield* cachedAt();
+      }
+      const availability = yield* adapter.value.refreshAvailability().pipe(
+        // A refresh that failed reports the channel it failed on, not the
+        // driver's passive one. The whole cause is caught, not just the typed
+        // error: an adapter that throws while shelling out to its CLI is a
+        // defect, and a defect escaping here would take down the caller's
+        // whole availability fan-out over one misbehaving instance.
+        // Interruption is the caller going away and stays a cancellation.
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause as Cause.Cause<never>)
+            : Effect.logWarning("provider availability refresh failed", {
+                instanceId,
+                provider,
+                cause,
+              }).pipe(
+                Effect.andThen(DateTime.now),
+                Effect.map((failedAt) =>
+                  unknownRefreshAvailability(provider, DateTime.formatIso(failedAt)),
+                ),
+              ),
+        ),
+      );
+      // Stamped when the reading came back rather than when the request
+      // started: the CLI call itself can take seconds. Answering through
+      // `availabilityAt` keeps one owner of freshness — a refresh reports what
+      // the cache now holds, never a snapshot the cache would not present.
+      const receivedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
+      const entry = yield* cacheAvailability(instanceId, availability, receivedAtMs);
+      return availabilityAt(entry, provider, receivedAtMs);
+    });
+
   // Rebuild the map of id → adapter from the registry and fork a new event
   // subscription for every instance that is either brand new or whose adapter
   // identity changed (indicating the underlying `ProviderInstance` was torn
@@ -526,6 +773,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     yield* Ref.set(subscribedAdapters, next);
     yield* Ref.update(availabilityByInstance, (entries) =>
       clearAvailabilityForReconciledAdapters(entries, previous, next),
+    );
+    // The cooldown map is keyed by instance id too; without the same pruning it
+    // keeps a timestamp per instance that ever existed and would silence the
+    // first refresh of a rebuilt instance.
+    yield* Ref.update(lastAvailabilityRefreshAt, (entries) =>
+      retainStateForReconciledAdapters(entries, previous, next),
     );
     for (const [id, adapter] of next) {
       if (previous.get(id) !== adapter) {
@@ -1355,6 +1608,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ),
         ),
       ),
+    refreshAvailability,
     rollbackConversation,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each

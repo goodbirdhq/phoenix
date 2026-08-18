@@ -71,12 +71,14 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { probeClaudeUsage, unknownClaudeUsage } from "../Drivers/ClaudeUsageProbe.ts";
 import {
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
@@ -1659,6 +1661,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
+  // Captured at construction so the on-demand quota probe stays a plain
+  // `Effect<ProviderAvailability, …>` on the adapter contract.
+  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const crypto = yield* Crypto.Crypto;
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
     Effect.provideService(Path.Path, path),
@@ -4621,6 +4626,32 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return context.streamFiber?.pollUnsafe() === undefined ? "live" : "dead";
     });
 
+  const refreshAvailability: NonNullable<ClaudeAdapterShape["refreshAvailability"]> = () =>
+    Effect.gen(function* () {
+      const observedAt = DateTime.toDateUtc(yield* DateTime.now);
+      if (!claudeSettings.enabled) {
+        return unknownClaudeUsage(observedAt);
+      }
+      // A cache-owned cwd keeps the CLI from reading project instructions or
+      // writing anything into an agent's worktree. It is not a provider session
+      // and receives no prompt other than the built-in slash command.
+      const probeCwd = path.join(serverConfig.providerStatusCacheDir, "claude-usage-probe");
+      yield* fileSystem.makeDirectory(probeCwd, { recursive: true });
+      return yield* probeClaudeUsage({
+        binaryPath: claudeSettings.binaryPath,
+        cwd: probeCwd,
+        env: claudeEnvironment,
+        observedAt,
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner));
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Claude usage probe failed", { cause }).pipe(
+          Effect.andThen(DateTime.now),
+          Effect.map((now) => unknownClaudeUsage(DateTime.toDateUtc(now))),
+        ),
+      ),
+    );
+
   const stopAll: ClaudeAdapterShape["stopAll"] = () =>
     Effect.forEach(
       sessions,
@@ -4664,6 +4695,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     listSessions,
     hasSession,
     getSessionRuntimeLiveness,
+    refreshAvailability,
     stopAll,
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);

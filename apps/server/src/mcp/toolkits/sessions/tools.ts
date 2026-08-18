@@ -33,7 +33,7 @@ const dependencies = [McpInvocationContext.McpInvocationContext];
 
 export const ListSessionProvidersTool = Tool.make("list_session_providers", {
   description:
-    "List the provider instances and models this Phoenix environment can start a new agent session with. Each instance includes an honest subscription-availability snapshot when its native provider runtime has supplied one: Codex exposes its primary/secondary windows, while unavailable or unsupported data is explicit unknown rather than an estimate. Instances are separate accounts; never add their quotas together. Call before spawn_session to offer real choices instead of guessing.",
+    "List the provider instances and models this Phoenix environment can start a new agent session with. Each instance includes an honest subscription-availability snapshot when its native provider runtime has supplied one. Set refreshAvailability=true to explicitly refresh supported native sources; it runs the provider's own read-only quota command for signed-in instances only, never creates a session or turn, and is rate-limited per instance, so do not poll it. Instances are separate accounts; never add their quotas together. Call before spawn_session to offer real choices instead of guessing.",
   parameters: ListSessionProvidersInput,
   success: ListSessionProvidersResult,
   failure: SessionOrchestrationError,
@@ -149,14 +149,14 @@ export const ArchiveSessionTool = Tool.make("archive_session", {
 
 export const ReadReportTool = Tool.make("read_report", {
   description:
-    "Read the full body of a completion report posted by a session this session spawned, or by a sibling session (one spawned by the same parent). Pass the reportId from a report envelope, or a threadId to get that thread's latest report. Large reports paginate via offset/maxChars; the result also carries the report's origin (agent vs Phoenix-synthesized) and full findings/validation/recommendation. A report that has been amended comes back with supersededByReportId and a supersededNotice: read that newer report instead, it is the session's current account.",
+    "Read the full body of a completion report posted by a session this session spawned, or by a sibling session (one spawned by the same parent). Pass the reportId from a report envelope, or a threadId to get that thread's latest report. Large reports paginate via offset/maxChars; the result also carries the report's origin (agent vs Phoenix-synthesized) and full findings/validation/recommendation. A parent can still read a direct child's durable report after that child is archived; archived siblings remain outside this read scope. Reading a direct child's report by reportId also consumes that one child-report inbox update on this parent; the durable report and read activity remain available. Sibling reads and threadId-only reads never consume an update. A report that has been amended comes back with supersededByReportId and a supersededNotice: read that newer report instead, it is the session's current account.",
   parameters: ReadReportInput,
   success: ReadReportResult,
   failure: SessionOrchestrationError,
   dependencies,
 })
   .annotate(Tool.Title, "Read session report")
-  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 

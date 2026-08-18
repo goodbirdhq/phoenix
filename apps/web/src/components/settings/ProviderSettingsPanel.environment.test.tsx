@@ -15,6 +15,7 @@ import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 const atoms = vi.hoisted(() => ({
   providers: null as ReadonlyArray<ServerProvider> | null,
   providersAtom: Symbol("providers"),
+  providerAvailability: vi.fn(() => Symbol("providerAvailability")),
   refreshProviders: Symbol("refreshProviders"),
   updateProvider: Symbol("updateProvider"),
 }));
@@ -22,6 +23,10 @@ const atoms = vi.hoisted(() => ({
 const commands = vi.hoisted(() => ({
   refresh: vi.fn(),
   updateProvider: vi.fn(),
+}));
+
+const atomRegistry = vi.hoisted(() => ({
+  refresh: vi.fn(),
 }));
 
 const settingsState = vi.hoisted(() => ({
@@ -37,6 +42,7 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useCallback: reactHookHarness.useCallback,
+    useEffect: reactHookHarness.useEffect,
     useMemo: reactHookHarness.useMemo,
     useRef: reactHookHarness.useRef,
     useState: reactHookHarness.useState,
@@ -52,11 +58,15 @@ vi.mock("@effect/atom-react", () => ({
   useAtomValue: () => atoms.providers,
 }));
 
+vi.mock("../../rpc/atomRegistry", () => ({
+  appAtomRegistry: atomRegistry,
+}));
+
 vi.mock("../../state/server", () => ({
   EMPTY_SERVER_PROVIDERS: [],
   serverEnvironment: {
     providersValueAtom: () => atoms.providersAtom,
-    providerAvailability: () => atoms.providersAtom,
+    providerAvailability: atoms.providerAvailability,
     refreshProviders: atoms.refreshProviders,
     updateProvider: atoms.updateProvider,
   },
@@ -141,8 +151,10 @@ describe("EnvironmentProviderSettings routing", () => {
     settingsState.readEnvironmentIds = [];
     settingsState.updateEnvironmentIds = [];
     settingsState.updateSettings.mockReset();
+    atoms.providerAvailability.mockClear();
     commands.refresh.mockReset().mockResolvedValue({ _tag: "Success" });
     commands.updateProvider.mockReset().mockResolvedValue({ _tag: "Success" });
+    atomRegistry.refresh.mockReset();
   });
 
   it("coalesces a nullable provider snapshot before rendering array-backed UI", () => {
@@ -163,6 +175,11 @@ describe("EnvironmentProviderSettings routing", () => {
     await flushPromises();
 
     expect(commands.refresh).toHaveBeenCalledWith({ environmentId, input: {} });
+    expect(atoms.providerAvailability).toHaveBeenCalledWith({
+      environmentId,
+      input: { refresh: true },
+    });
+    expect(atomRegistry.refresh).toHaveBeenCalledTimes(1);
 
     const providerCard = visitElements(
       panel,

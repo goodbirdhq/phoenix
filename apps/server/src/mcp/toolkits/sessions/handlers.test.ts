@@ -5,6 +5,8 @@ import {
   type OrchestrationCommand,
   type OrchestrationThreadShell,
   type ProjectId,
+  type ProviderAvailability,
+  ProviderDriverKind,
   ProviderInstanceId,
   READ_REPORT_MAX_CHARS,
   ReadReportInput,
@@ -13,6 +15,7 @@ import {
   SessionOrchestrationInvalidInputError,
   SessionOrchestrationReportAlreadySupersededError,
   type SessionReport,
+  type ServerProvider,
   type SessionUsageSnapshot,
   supersededReportNotice,
   ThreadId,
@@ -38,8 +41,12 @@ import {
   type ProjectionThreadReportRepositoryShape,
 } from "../../../persistence/Services/ProjectionThreadReports.ts";
 import { ProjectionTurnRepository } from "../../../persistence/Services/ProjectionTurns.ts";
-import { ProviderSessionDirectoryPersistenceError } from "../../../provider/Errors.ts";
+import {
+  ProviderAdapterRequestError,
+  ProviderSessionDirectoryPersistenceError,
+} from "../../../provider/Errors.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "../../../provider/Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import { layerTest as serverSettingsLayerTest } from "../../../serverSettings.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
@@ -816,6 +823,7 @@ const runHandler = <A, E, R>(
   run: (handlers: Effect.Success<typeof make>) => Effect.Effect<A, E, R>,
   overrides: {
     getThreadShellById?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadShellById"];
+    getThreadDetailById?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadDetailById"];
     getThreadHasReport?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getThreadHasReport"];
     getLastAssistantMessage?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getLastAssistantMessage"];
     getLatestUsageActivity?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape["getLatestUsageActivity"];
@@ -831,6 +839,10 @@ const runHandler = <A, E, R>(
     // dispatch.
     dispatch?: OrchestrationEngine.OrchestrationEngineShape["dispatch"];
     enqueueCommand?: ServerRuntimeStartup.ServerRuntimeStartup["Service"]["enqueueCommand"];
+    getProviders?: ProviderRegistry.ProviderRegistryShape["getProviders"];
+    // Absent by default: the toolkit reads ProviderService optionally, and
+    // most handler tests run without the process-facing provider layer.
+    providerService?: Partial<ProviderService.ProviderServiceShape>;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -870,7 +882,8 @@ const runHandler = <A, E, R>(
           getThreadTurnCount: overrides.getThreadTurnCount ?? (() => Effect.succeed(0)),
           // read_session's pre-existing report/messages fetch; not under test
           // here, so a fixed empty response is enough to keep it from dying.
-          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailById:
+            overrides.getThreadDetailById ?? (() => Effect.succeed(Option.none())),
           getShellSnapshot:
             overrides.getShellSnapshot ??
             (() =>
@@ -882,7 +895,12 @@ const runHandler = <A, E, R>(
           getProjectShellById:
             overrides.getProjectShellById ?? (() => Effect.succeed(Option.none())),
         }),
-        Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+        Layer.mock(ProviderRegistry.ProviderRegistry)(
+          overrides.getProviders ? { getProviders: overrides.getProviders } : {},
+        ),
+        overrides.providerService
+          ? Layer.mock(ProviderService.ProviderService)(overrides.providerService)
+          : Layer.empty,
         Layer.mock(ProviderSessionDirectory)({
           listBindings: overrides.listBindings ?? (() => Effect.succeed([])),
         }),
@@ -1439,6 +1457,492 @@ describe("read_report supersession (handler)", () => {
       expect(result.supersedesReportId).toBeUndefined();
       expect(result.supersededByReportId).toBeUndefined();
       expect(result.supersededNotice).toBeUndefined();
+    }),
+  );
+});
+
+describe("read_report child-report inbox consumption (handler)", () => {
+  it.effect(
+    "records one durable parent activity after the parent reads a direct child's report id",
+    () =>
+      Effect.gen(function* () {
+        const dispatched: Array<OrchestrationCommand> = [];
+        const result = yield* runHandler(
+          (handlers) => handlers.read_report({ reportId: "direct-child-report" }),
+          {
+            findByReportId: () =>
+              Effect.succeed(
+                Option.some(
+                  projectedReport({ reportId: "direct-child-report", threadId: childThreadId }),
+                ),
+              ),
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatched.push(command);
+                return { sequence: 1 };
+              }),
+            enqueueCommand: (effect) => effect,
+            // Consumption must not load the full parent thread just to search
+            // for an existing activity; receipt deduplication is the atomic
+            // boundary instead.
+            getThreadDetailById: () => Effect.die("parent detail must not be loaded"),
+          },
+        );
+
+        expect(result.reportId).toBe("direct-child-report");
+        expect(dispatched).toHaveLength(1);
+        expect(dispatched[0]).toMatchObject({
+          type: "thread.activity.append",
+          commandId: "session-report-read:parent-1:direct-child-report",
+          threadId: parentThreadId,
+          activity: {
+            kind: "session-report.read",
+            payload: {
+              childThreadId,
+              reportId: "direct-child-report",
+              readByThreadId: parentThreadId,
+            },
+          },
+        });
+      }),
+  );
+
+  it.effect("returns the report when inbox consumption is temporarily unavailable", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      const report = () =>
+        projectedReport({ reportId: "direct-child-report", threadId: childThreadId });
+      const failedResult = yield* runHandler(
+        (handlers) => handlers.read_report({ reportId: "direct-child-report" }),
+        {
+          findByReportId: () => Effect.succeed(Option.some(report())),
+          dispatch: () =>
+            Effect.fail(
+              new OrchestrationCommandInvariantError({
+                commandType: "thread.activity.append",
+                detail: "projection is temporarily unavailable",
+              }),
+            ),
+          enqueueCommand: (effect) => effect,
+        },
+      );
+
+      const retriedResult = yield* runHandler(
+        (handlers) => handlers.read_report({ reportId: "direct-child-report" }),
+        {
+          findByReportId: () => Effect.succeed(Option.some(report())),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command);
+              return { sequence: 1 };
+            }),
+          enqueueCommand: (effect) => effect,
+        },
+      );
+
+      expect(failedResult.reportId).toBe("direct-child-report");
+      expect(retriedResult.reportId).toBe("direct-child-report");
+      expect(dispatched).toHaveLength(1);
+      const consumption = dispatched[0];
+      if (consumption?.type !== "thread.activity.append") {
+        throw new Error("Expected the retried inbox consumption command.");
+      }
+      expect(consumption.commandId).toBe("session-report-read:parent-1:direct-child-report");
+      expect(consumption.activity.id).toBe("session-report-read:parent-1:direct-child-report");
+    }),
+  );
+
+  it.effect("uses one deterministic receipt across concurrent and replayed reads", () =>
+    Effect.gen(function* () {
+      const persisted: Array<OrchestrationCommand> = [];
+      const receipts = new Map<string, number>();
+      const results = yield* runHandler(
+        (handlers) =>
+          Effect.all(
+            [
+              handlers.read_report({ reportId: "direct-child-report" }),
+              handlers.read_report({ reportId: "direct-child-report" }),
+              // A later delivery replay must use the same receipt too.
+              handlers.read_report({ reportId: "direct-child-report" }),
+            ],
+            { concurrency: "unbounded" },
+          ),
+        {
+          findByReportId: () =>
+            Effect.succeed(
+              Option.some(
+                projectedReport({ reportId: "direct-child-report", threadId: childThreadId }),
+              ),
+            ),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              const existing = receipts.get(command.commandId);
+              if (existing !== undefined) return { sequence: existing };
+              const sequence = 41 + persisted.length;
+              receipts.set(command.commandId, sequence);
+              persisted.push(command);
+              return { sequence };
+            }),
+          enqueueCommand: (effect) => effect,
+          getThreadDetailById: () => Effect.die("parent detail must not be loaded"),
+        },
+      );
+
+      expect(results.map((result) => result.reportId)).toEqual([
+        "direct-child-report",
+        "direct-child-report",
+        "direct-child-report",
+      ]);
+      expect(persisted).toHaveLength(1);
+      const consumption = persisted[0];
+      if (consumption?.type !== "thread.activity.append") {
+        throw new Error("Expected the durable consumption command.");
+      }
+      expect(consumption.commandId).toBe("session-report-read:parent-1:direct-child-report");
+      expect(consumption.activity.id).toBe("session-report-read:parent-1:direct-child-report");
+    }),
+  );
+
+  it.effect("allows a direct archived child report and still consumes its report-id read", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      const archivedChild = { ...childShell, archivedAt: now };
+      const result = yield* runHandler(
+        (handlers) => handlers.read_report({ reportId: "archived-child-report" }),
+        {
+          findByReportId: () =>
+            Effect.succeed(
+              Option.some(
+                projectedReport({ reportId: "archived-child-report", threadId: childThreadId }),
+              ),
+            ),
+          getThreadShellById: (threadId) =>
+            Effect.succeed(threadId === parentThreadId ? Option.some(parentShell) : Option.none()),
+          getArchivedShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [],
+              threads: [archivedChild],
+              updatedAt: now,
+            }),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command);
+              return { sequence: 1 };
+            }),
+          enqueueCommand: (effect) => effect,
+        },
+      );
+
+      expect(result.reportId).toBe("archived-child-report");
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0]?.commandId).toBe("session-report-read:parent-1:archived-child-report");
+    }),
+  );
+
+  it.effect("keeps archived siblings outside the direct-child exception", () =>
+    Effect.gen(function* () {
+      const rootThreadId = "root-thread" as ThreadId;
+      const siblingThreadId = "archived-sibling" as ThreadId;
+      const archivedSibling = {
+        ...childShell,
+        id: siblingThreadId,
+        spawnedByThreadId: rootThreadId,
+        archivedAt: now,
+      };
+      const error = yield* runHandler(
+        (handlers) => handlers.read_report({ reportId: "archived-sibling-report" }),
+        {
+          findByReportId: () =>
+            Effect.succeed(
+              Option.some(
+                projectedReport({ reportId: "archived-sibling-report", threadId: siblingThreadId }),
+              ),
+            ),
+          getThreadShellById: (threadId) =>
+            Effect.succeed(
+              threadId === parentThreadId
+                ? Option.some({ ...parentShell, spawnedByThreadId: rootThreadId })
+                : Option.none(),
+            ),
+          getArchivedShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 1,
+              projects: [],
+              threads: [archivedSibling],
+              updatedAt: now,
+            }),
+        },
+      ).pipe(Effect.flip);
+
+      expect(error).toMatchObject({
+        _tag: "SessionOrchestrationDeniedError",
+        reason: "report_not_accessible",
+      });
+    }),
+  );
+
+  it.effect("never consumes a sibling, self, or threadId-only read", () =>
+    Effect.gen(function* () {
+      const rootThreadId = "root-thread" as ThreadId;
+      const siblingThreadId = "sibling-thread" as ThreadId;
+      const dispatched: Array<OrchestrationCommand> = [];
+      const noConsume = {
+        dispatch: (command: OrchestrationCommand) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: 1 };
+          }),
+        enqueueCommand: <A, E>(effect: Effect.Effect<A, E>) => effect,
+      };
+      const siblingShell = {
+        ...childShell,
+        id: siblingThreadId,
+        spawnedByThreadId: rootThreadId,
+      };
+      yield* runHandler((handlers) => handlers.read_report({ reportId: "sibling-report" }), {
+        findByReportId: () =>
+          Effect.succeed(
+            Option.some(projectedReport({ reportId: "sibling-report", threadId: siblingThreadId })),
+          ),
+        getThreadShellById: (threadId) =>
+          Effect.succeed(
+            threadId === siblingThreadId
+              ? Option.some(siblingShell)
+              : threadId === parentThreadId
+                ? Option.some({ ...parentShell, spawnedByThreadId: rootThreadId })
+                : Option.none(),
+          ),
+        ...noConsume,
+      });
+      yield* runHandler((handlers) => handlers.read_report({ threadId: childThreadId }), {
+        listByThreadId: () =>
+          Effect.succeed([
+            projectedReport({ reportId: "thread-only-report", threadId: childThreadId }),
+          ]),
+        ...noConsume,
+      });
+      yield* runHandler((handlers) => handlers.read_report({ reportId: "self-report" }), {
+        findByReportId: () =>
+          Effect.succeed(Option.some(projectedReport({ reportId: "self-report" }))),
+        ...noConsume,
+      });
+
+      expect(dispatched).toEqual([]);
+    }),
+  );
+});
+
+describe("list_session_providers availability refresh (handler)", () => {
+  const providerSnapshot = (input: {
+    readonly instanceId: string;
+    readonly enabled?: boolean;
+    readonly installed?: boolean;
+    readonly authStatus?: "authenticated" | "unauthenticated" | "unknown";
+  }): ServerProvider => ({
+    instanceId: ProviderInstanceId.make(input.instanceId),
+    driver: ProviderDriverKind.make("claudeAgent"),
+    enabled: input.enabled ?? true,
+    installed: input.installed ?? true,
+    version: "2.1.233",
+    status: "ready",
+    auth: { status: input.authStatus ?? "authenticated" },
+    checkedAt: now,
+    models: [],
+    slashCommands: [],
+    skills: [],
+  });
+
+  const unknownAvailability = {
+    status: "unknown",
+    source: "claude_agent_sdk",
+    windows: [],
+  } as const;
+
+  it.effect("only runs the provider CLI for an installed, enabled, signed-in instance", () =>
+    Effect.gen(function* () {
+      const refreshed: Array<string> = [];
+      const result = yield* runHandler(
+        (handlers) => handlers.list_session_providers({ refreshAvailability: true }),
+        {
+          getProviders: Effect.succeed([
+            providerSnapshot({ instanceId: "claude-signed-in" }),
+            providerSnapshot({ instanceId: "claude-logged-out", authStatus: "unauthenticated" }),
+            providerSnapshot({ instanceId: "claude-disabled", enabled: false }),
+            providerSnapshot({ instanceId: "claude-missing", installed: false }),
+          ]),
+          providerService: {
+            refreshAvailability: (instanceId) =>
+              Effect.sync(() => {
+                refreshed.push(instanceId);
+                return unknownAvailability;
+              }),
+            getAvailability: () => Effect.succeed(unknownAvailability),
+          },
+        },
+      );
+
+      expect(refreshed).toEqual(["claude-signed-in"]);
+      expect(result.providers.map((provider) => provider.instanceId)).toEqual([
+        "claude-signed-in",
+        "claude-logged-out",
+        "claude-disabled",
+        "claude-missing",
+      ]);
+    }),
+  );
+
+  it.effect("never publishes the signed-in account subject to an MCP caller", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler(
+        (handlers) => handlers.list_session_providers({ refreshAvailability: true }),
+        {
+          getProviders: Effect.succeed([providerSnapshot({ instanceId: "claude-signed-in" })]),
+          providerService: {
+            refreshAvailability: () =>
+              Effect.succeed({
+                status: "available",
+                source: "claude_cli_usage",
+                observedAt: now,
+                account: {
+                  id: "claude:org-1:maintainer@example.com",
+                  verification: "native_verified",
+                  displayName: "maintainer@example.com",
+                },
+                windows: [{ kind: "session", label: "Current session", usedPercent: 5 }],
+              }),
+            getAvailability: () => Effect.succeed(unknownAvailability),
+          },
+        },
+      );
+
+      const availability = result.providers[0]!.availability;
+      // The quota an agent acts on survives; the owner's email address, which
+      // it has no decision to make with, does not reach a transcript.
+      expect(availability).toEqual({
+        status: "available",
+        source: "claude_cli_usage",
+        observedAt: now,
+        windows: [{ kind: "session", label: "Current session", usedPercent: 5 }],
+      });
+      expect(availability).not.toHaveProperty("account");
+    }),
+  );
+
+  it.effect("collects from several instances at once, but not from all of them", () =>
+    Effect.gen(function* () {
+      let inFlight = 0;
+      let peakInFlight = 0;
+      const result = yield* runHandler(
+        (handlers) => handlers.list_session_providers({ refreshAvailability: true }),
+        {
+          getProviders: Effect.succeed(
+            Array.from({ length: 12 }, (_unused, index) =>
+              providerSnapshot({ instanceId: `claude-${index}` }),
+            ),
+          ),
+          providerService: {
+            refreshAvailability: () =>
+              Effect.gen(function* () {
+                inFlight += 1;
+                peakInFlight = Math.max(peakInFlight, inFlight);
+                // Each probe spawns a CLI and waits on it; yielding lets every
+                // fiber the fan-out is willing to start reach this point.
+                for (let tick = 0; tick < 24; tick += 1) yield* Effect.yieldNow;
+                inFlight -= 1;
+                return unknownAvailability;
+              }),
+            getAvailability: () => Effect.succeed(unknownAvailability),
+          },
+        },
+      );
+
+      expect(peakInFlight).toBe(ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY);
+      // Bounding the fan-out must not drop or reorder an instance's answer.
+      expect(result.providers.map((provider) => provider.instanceId)).toEqual(
+        Array.from({ length: 12 }, (_unused, index) => `claude-${index}`),
+      );
+    }),
+  );
+
+  // `ProviderService.refreshAvailability` declares no error channel, so a
+  // typed adapter failure reaching this fan-out can only be expressed by
+  // asserting past that declaration - which is the point: the transport must
+  // hold even when the declaration turns out to be optimistic.
+  const typedRefreshFailure = Effect.fail(
+    new ProviderAdapterRequestError({
+      provider: "claudeAgent",
+      method: "refreshAvailability",
+      detail: "usage probe failed",
+    }),
+  ) as unknown as Effect.Effect<ProviderAvailability>;
+
+  it.effect("lets one broken instance cost only its own numbers", () =>
+    Effect.gen(function* () {
+      // The three failure shapes an adapter can present: a typed error, a
+      // thrown exception (a defect, which a typed-error handler never sees),
+      // and an honest answer. An agent asking which instances it can spawn
+      // into must still be told about the healthy ones.
+      const result = yield* runHandler(
+        (handlers) => handlers.list_session_providers({ refreshAvailability: true }),
+        {
+          getProviders: Effect.succeed([
+            providerSnapshot({ instanceId: "claude-fails" }),
+            providerSnapshot({ instanceId: "claude-throws" }),
+            providerSnapshot({ instanceId: "claude-healthy" }),
+          ]),
+          providerService: {
+            refreshAvailability: (instanceId) => {
+              if (instanceId === "claude-fails") {
+                return typedRefreshFailure;
+              }
+              if (instanceId === "claude-throws") {
+                return Effect.sync(() => {
+                  throw new Error("claude CLI spawn blew up");
+                });
+              }
+              return Effect.succeed({
+                status: "available",
+                source: "claude_cli_usage",
+                observedAt: now,
+                windows: [{ kind: "session", label: "Current session", usedPercent: 5 }],
+              } satisfies ProviderAvailability);
+            },
+            getAvailability: () => Effect.succeed(unknownAvailability),
+          },
+        },
+      );
+
+      expect(result.providers.map((provider) => provider.instanceId)).toEqual([
+        "claude-fails",
+        "claude-throws",
+        "claude-healthy",
+      ]);
+      // A broken instance reports what it honestly knows: nothing.
+      expect(result.providers[0]?.availability).toEqual(unknownAvailability);
+      expect(result.providers[1]?.availability).toEqual(unknownAvailability);
+      expect(result.providers[2]?.availability.windows).toEqual([
+        { kind: "session", label: "Current session", usedPercent: 5 },
+      ]);
+    }),
+  );
+
+  it.effect("never runs the provider CLI when a caller did not ask for a refresh", () =>
+    Effect.gen(function* () {
+      const refreshed: Array<string> = [];
+      yield* runHandler((handlers) => handlers.list_session_providers({}), {
+        getProviders: Effect.succeed([providerSnapshot({ instanceId: "claude-signed-in" })]),
+        providerService: {
+          refreshAvailability: (instanceId) =>
+            Effect.sync(() => {
+              refreshed.push(instanceId);
+              return unknownAvailability;
+            }),
+          getAvailability: () => Effect.succeed(unknownAvailability),
+        },
+      });
+
+      expect(refreshed).toEqual([]);
     }),
   );
 });

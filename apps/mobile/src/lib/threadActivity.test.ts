@@ -152,6 +152,30 @@ function makeThread(
 }
 
 describe("buildThreadFeed", () => {
+  it("excludes child-report read bookkeeping from the mobile timeline", () => {
+    const thread = makeThread({
+      id: ThreadId.make("parent-thread"),
+      projectId: ProjectId.make("project-1"),
+      title: "Parent",
+      activities: [
+        makeActivity({
+          id: EventId.make("child-report-read"),
+          kind: "session-report.read",
+          summary: "Parent agent read child report",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: {
+            childThreadId: "child-thread",
+            reportId: "report-1",
+            readByThreadId: "parent-thread",
+            readAt: "2026-04-01T00:00:01.000Z",
+          },
+        }),
+      ],
+    });
+
+    expect(buildThreadFeed(thread)).toEqual([]);
+  });
+
   it("keeps historic work entries attributed to their turns", () => {
     const thread = makeThread({
       id: ThreadId.make("thread-1"),

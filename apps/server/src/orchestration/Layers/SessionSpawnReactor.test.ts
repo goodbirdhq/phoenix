@@ -868,7 +868,11 @@ describe("SessionSpawnReactor report notifications", () => {
       notifiedAt: NOW,
     });
     expect(replay.id).toBe(first.id);
-    expect(replay.payload).toMatchObject({ reportId: "report-restarted", origin: "system" });
+    expect(replay.payload).toMatchObject({
+      reportId: "report-restarted",
+      reportTitle: posted.title,
+      origin: "system",
+    });
   });
 });
 

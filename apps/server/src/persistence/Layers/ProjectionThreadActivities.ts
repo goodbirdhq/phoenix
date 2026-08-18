@@ -10,6 +10,7 @@ import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 
 import {
   DeleteProjectionThreadActivitiesInput,
+  DeleteProjectionSessionReportActivityPairInput,
   ListProjectionThreadActivitiesInput,
   ProjectionThreadActivity,
   ProjectionThreadActivityRepository,
@@ -106,6 +107,16 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
       `,
   });
 
+  const deleteProjectionSessionReportActivityPair = SqlSchema.void({
+    Request: DeleteProjectionSessionReportActivityPairInput,
+    execute: ({ threadId, reportId }) => sql`
+      DELETE FROM projection_thread_activities
+      WHERE thread_id = ${threadId}
+        AND kind IN ('session-report.posted', 'session-report.read')
+        AND json_extract(payload_json, '$.reportId') = ${reportId}
+    `,
+  });
+
   const upsert: ProjectionThreadActivityRepositoryShape["upsert"] = (row) =>
     upsertProjectionThreadActivityRow(row).pipe(
       Effect.mapError(
@@ -146,10 +157,21 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
       ),
     );
 
+  const deleteSessionReportActivityPair: ProjectionThreadActivityRepositoryShape["deleteSessionReportActivityPair"] =
+    (input) =>
+      deleteProjectionSessionReportActivityPair(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "ProjectionThreadActivityRepository.deleteSessionReportActivityPair:query",
+          ),
+        ),
+      );
+
   return {
     upsert,
     listByThreadId,
     deleteByThreadId,
+    deleteSessionReportActivityPair,
   } satisfies ProjectionThreadActivityRepositoryShape;
 });
 

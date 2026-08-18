@@ -460,6 +460,31 @@ matching child, which matters once retention is only capped at 32 instead of 8.
 - Spawned threads participate in normal archive/settle session cleanup, so orchestration cannot
   leak provider processes.
 
+## Child-report inbox reads
+
+Posting a report appends a `session-report.posted` activity to the active parent's thread. The web
+inbox is deliberately passive: opening it or navigating to a child emits no command. Only the
+parent's `read_report({ reportId })` for a direct child appends the corresponding
+`session-report.read` activity. Both the activity ID and its command ID are derived from
+`parentThreadId + reportId`, so the orchestration command-receipt table makes concurrent calls and
+event-stream replay return the same receipt rather than write a second consumption event. This
+keeps consumption event-sourced and avoids materializing the parent's full thread detail just to
+check whether an earlier read exists.
+
+Reports and read activities are events, while the thread activity list is an operational inbox
+projection. Its retention policy is explicit: retain every currently unread report notification
+plus the newest 500 non-report activities; when `read_report({ reportId })` appends its receipt,
+evict both that receipt and the matching notification. Thus completed report/read lifecycles have
+zero activity-list capacity and cannot grow a busy parent forever. The unavoidable inbox capacity
+is the number of reports the parent has not yet read: evicting one of those would silently mark it
+read, so it is intentionally not permitted. Full report history (and every receipt) remains in the
+event stream and `projection_thread_reports`, so a parent may read a direct child's report by id
+even after that child is archived. Archived targets never gain sibling access, and the `threadId`
+convenience form remains observational for every target. If that noncritical consumption append is
+temporarily unavailable, `read_report` still returns the durable report and a later read retries
+the same deterministic command. The UI copy must continue to state that opening the inbox does
+not mark anything read.
+
 ## Gotcha worth remembering
 
 Every MCP tool here must declare at least one (optional) parameter. An empty `Schema.Struct({})`

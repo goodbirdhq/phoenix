@@ -47,6 +47,8 @@ import {
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
   RpcClientId,
+  canRefreshProviderAvailability,
+  narrowProviderAvailability,
   type ProviderAvailability,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -1324,14 +1326,42 @@ const makeWsRpcLayer = (
                     ? providers
                     : providers.filter((provider) => provider.instanceId === input.instanceId),
                   (provider) =>
-                    providerAvailabilityFor(provider.instanceId, provider.driver).pipe(
+                    // Refreshing runs the provider's own CLI, so only an
+                    // instance that is installed, enabled and already signed in
+                    // is asked. Each instance is contained on its own: one
+                    // adapter that fails or throws costs that card its numbers,
+                    // never the whole page.
+                    ProviderService.containedAvailability(
+                      { instanceId: provider.instanceId, provider: provider.driver },
+                      () =>
+                        input.refresh === true &&
+                        canRefreshProviderAvailability(provider) &&
+                        Option.isSome(providerService) &&
+                        providerService.value.refreshAvailability !== undefined
+                          ? providerService.value.refreshAvailability(
+                              provider.instanceId,
+                              provider.driver,
+                            )
+                          : providerAvailabilityFor(provider.instanceId, provider.driver),
+                    ).pipe(
                       Effect.map((availability) => ({
                         instanceId: provider.instanceId,
                         driver: provider.driver,
                         ...(provider.displayName ? { displayName: provider.displayName } : {}),
-                        availability,
+                        // Answered in the vocabulary this caller can decode.
+                        // A client built before these sources existed fails the
+                        // whole response on a literal it has no case for, so it
+                        // is told what it can read rather than sent everything.
+                        availability: narrowProviderAvailability(
+                          availability,
+                          input.contractVersion,
+                        ),
                       })),
                     ),
+                  // A refresh spawns provider CLIs, so the fan-out over
+                  // configured instances is bounded rather than unbounded or
+                  // strictly serial.
+                  { concurrency: ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY },
                 ),
               ),
               Effect.map((providers) => ({ providers })),

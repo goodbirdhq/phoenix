@@ -2,7 +2,9 @@ import {
   type ArchiveSessionInput,
   checkReportSupersession,
   CommandId,
+  EventId,
   GitCommandError,
+  canRefreshProviderAvailability,
   isProviderAvailable,
   LIST_SESSIONS_MAX_ENTRIES,
   type ListSessionsInput,
@@ -492,6 +494,30 @@ export function assessGitLockStaleness(stat: {
   };
 }
 
+/**
+ * The availability an MCP caller sees. Deliberate decision: the account subject
+ * is dropped here and only here.
+ *
+ * `ProviderAvailabilityAccount` exists so a person looking at Usage sees one
+ * card per real account, and for Claude it is built from the CLI's own
+ * `claude auth status` — both its id and its display name are the signed-in
+ * email address. Clients read it over the authenticated RPC the person is
+ * already using, so nothing a user sees is concealed by this.
+ *
+ * `list_session_providers` is a different audience: an agent choosing which
+ * configured instance to spawn into, whose transcript is written to disk,
+ * summarised into reports, and read by other agents. That decision needs the
+ * instance id, whether it is available, and its quota windows — never the
+ * owner's email address. Windows are per instance, and the tool's own
+ * description already tells callers that two instances are two accounts, so
+ * dropping the subject costs the caller nothing it acts on.
+ */
+const withoutAccountSubject = (availability: ProviderAvailability): ProviderAvailability => {
+  if (availability.account === undefined) return availability;
+  const { account: _account, ...rest } = availability;
+  return rest;
+};
+
 // Exported so tests can drive the real handlers against stub services; the
 // wiring between them (stop → settle → cleanup ordering) is exactly what pure
 // helper tests cannot see.
@@ -505,23 +531,32 @@ export const make = Effect.gen(function* () {
   // the process-facing provider layer. Availability is optional enrichment,
   // never a reason that listing spawnable providers should fail.
   const providerService = yield* Effect.serviceOption(ProviderService.ProviderService);
+  // A refresh runs the provider's own CLI, so it is only offered for an
+  // instance that is installed, enabled and already signed in; everything else
+  // reads the cached snapshot. Contained per instance: an agent asking which
+  // instances it can spawn into must still be told about the healthy ones when
+  // one adapter fails or throws.
   const availabilityFor = (
-    instanceId: ServerProvider["instanceId"],
-    provider: ServerProvider["driver"],
+    snapshot: ServerProvider,
+    refresh = false,
   ): Effect.Effect<ProviderAvailability> => {
-    if (Option.isSome(providerService) && providerService.value.getAvailability !== undefined) {
-      return providerService.value.getAvailability(instanceId, provider);
-    }
-    return Effect.succeed({
-      status: "unknown",
-      source:
-        provider === "codex"
-          ? "codex_app_server"
-          : provider === "claudeAgent"
-            ? "claude_agent_sdk"
-            : "unsupported",
-      windows: [],
-    } satisfies ProviderAvailability);
+    const instanceId = snapshot.instanceId;
+    const provider = snapshot.driver;
+    const read = (): Effect.Effect<ProviderAvailability> => {
+      if (
+        refresh &&
+        canRefreshProviderAvailability(snapshot) &&
+        Option.isSome(providerService) &&
+        providerService.value.refreshAvailability !== undefined
+      ) {
+        return providerService.value.refreshAvailability(instanceId, provider);
+      }
+      if (Option.isSome(providerService) && providerService.value.getAvailability !== undefined) {
+        return providerService.value.getAvailability(instanceId, provider);
+      }
+      return Effect.succeed(ProviderService.unknownAvailabilityForDriver(provider));
+    };
+    return ProviderService.containedAvailability({ instanceId, provider }, read);
   };
   const reportRepository = yield* ProjectionThreadReportRepository;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
@@ -579,10 +614,9 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.mapError(operationError("Failed to read thread state")));
 
   // getThreadShellById/getShellSnapshot only ever resolve non-archived
-  // threads, so an already-archived child needs its own lookup — used only
-  // by archive_session's idempotency check (a fallback path, not the hot
-  // one), never for authorization on any other tool. Scoped to threads this
-  // caller spawned, same as every other mutating lookup.
+  // threads, so an already-archived child needs its own lookup. This is a
+  // fallback path for archive_session retries and for a parent reading one of
+  // its archived child's durable reports; it never broadens sibling access.
   const findArchivedSpawnedChild = (parentThreadId: ThreadId, threadId: ThreadId) =>
     snapshotQuery.getArchivedShellSnapshot().pipe(
       Effect.mapError(operationError("Failed to read archived thread snapshot")),
@@ -690,6 +724,7 @@ export const make = Effect.gen(function* () {
 
   const listProviders = Effect.fn("SessionsToolkit.listProviders")(function* (input: {
     readonly onlyAvailable?: boolean | undefined;
+    readonly refreshAvailability?: boolean | undefined;
   }) {
     yield* requireSessionsCapability;
     const allProviders = yield* providerRegistry.getProviders.pipe(
@@ -698,24 +733,29 @@ export const make = Effect.gen(function* () {
     const providers =
       input.onlyAvailable === true ? allProviders.filter(isProviderAvailable) : allProviders;
     return {
-      providers: yield* Effect.forEach(providers, (provider) =>
-        availabilityFor(provider.instanceId, provider.driver).pipe(
-          Effect.map((availability) => ({
-            instanceId: provider.instanceId,
-            driver: provider.driver,
-            displayName: provider.displayName ?? provider.driver,
-            available: isProviderAvailable(provider),
-            availability,
-            models: provider.models.map((model) => ({
-              id: model.slug,
-              displayName: model.name,
-              isDefault: model.isDefault === true,
-              ...(model.capabilities?.optionDescriptors
-                ? { options: model.capabilities.optionDescriptors }
-                : {}),
+      providers: yield* Effect.forEach(
+        providers,
+        (provider) =>
+          availabilityFor(provider, input.refreshAvailability === true).pipe(
+            Effect.map((availability) => ({
+              instanceId: provider.instanceId,
+              driver: provider.driver,
+              displayName: provider.displayName ?? provider.driver,
+              available: isProviderAvailable(provider),
+              availability: withoutAccountSubject(availability),
+              models: provider.models.map((model) => ({
+                id: model.slug,
+                displayName: model.name,
+                isDefault: model.isDefault === true,
+                ...(model.capabilities?.optionDescriptors
+                  ? { options: model.capabilities.optionDescriptors }
+                  : {}),
+              })),
             })),
-          })),
-        ),
+          ),
+        // Refreshing runs provider CLIs, so an environment with several
+        // configured instances collects from a bounded number at a time.
+        { concurrency: ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY },
       ),
     };
   });
@@ -2137,19 +2177,28 @@ export const make = Effect.gen(function* () {
         reason: "report_not_accessible",
         message: REPORT_NOT_ACCESSIBLE_MESSAGE,
       });
-    const mayReadThread = (targetThreadId: ThreadId) =>
-      getShell(targetThreadId).pipe(
-        Effect.map(
-          (shell) =>
-            Option.isSome(shell) &&
-            canReadThreadReports({
-              callerThreadId: scope.threadId,
-              callerSpawnedByThreadId: caller.spawnedByThreadId ?? null,
-              targetThreadId,
-              targetSpawnedByThreadId: shell.value.spawnedByThreadId ?? null,
-            }),
-        ),
-      );
+    // Reports outlive an archived thread. A parent may therefore still read
+    // an archived direct child's report (and consume its matching inbox
+    // update), but archiving does not turn archived siblings into readable
+    // targets. Active targets retain the normal self/child/sibling policy.
+    const resolveReadableReportTarget = (targetThreadId: ThreadId) =>
+      Effect.gen(function* () {
+        const activeTarget = yield* getShell(targetThreadId);
+        if (Option.isSome(activeTarget)) {
+          const isDirectChild = activeTarget.value.spawnedByThreadId === scope.threadId;
+          return canReadThreadReports({
+            callerThreadId: scope.threadId,
+            callerSpawnedByThreadId: caller.spawnedByThreadId ?? null,
+            targetThreadId,
+            targetSpawnedByThreadId: activeTarget.value.spawnedByThreadId ?? null,
+          })
+            ? { isDirectChild }
+            : null;
+        }
+
+        const archivedDirectChild = yield* findArchivedSpawnedChild(scope.threadId, targetThreadId);
+        return Option.isSome(archivedDirectChild) ? { isDirectChild: true } : null;
+      });
 
     // When the target thread is named, authorize it before touching any
     // report rows; only the reportId-only path has to resolve the row first
@@ -2158,9 +2207,9 @@ export const make = Effect.gen(function* () {
     // residual signal in that path is timing (a row lookup happens before the
     // denial); acceptable only because reportIds are server-generated v4
     // UUIDs — unguessable, so there is nothing to probe by dictionary.
-    if (input.threadId !== undefined && !(yield* mayReadThread(input.threadId))) {
-      return yield* reportNotAccessible();
-    }
+    let target =
+      input.threadId === undefined ? undefined : yield* resolveReadableReportTarget(input.threadId);
+    if (input.threadId !== undefined && target === null) return yield* reportNotAccessible();
 
     let report: ProjectionThreadReport;
     if (input.reportId !== undefined) {
@@ -2174,8 +2223,9 @@ export const make = Effect.gen(function* () {
         if (found.value.threadId !== input.threadId) {
           return yield* reportNotAccessible();
         }
-      } else if (!(yield* mayReadThread(found.value.threadId))) {
-        return yield* reportNotAccessible();
+      } else if (target === undefined) {
+        target = yield* resolveReadableReportTarget(found.value.threadId);
+        if (target === null) return yield* reportNotAccessible();
       }
       report = found.value;
     } else {
@@ -2194,6 +2244,52 @@ export const make = Effect.gen(function* () {
       offset: input.offset,
       maxChars: input.maxChars,
     });
+
+    // A child-report inbox belongs to the parent, not to any person looking
+    // at the child in the UI. The only consumption path is the parent agent's
+    // explicit read_report(reportId): sibling reads, self reads, and the
+    // convenience threadId form are observations only. The stable command ID
+    // is the concurrency boundary: the event store receipt returns the same
+    // sequence to duplicate/replayed reads, without loading parent detail or
+    // racing an activity-list check. The resulting activity is append-only,
+    // so report and read history remain durable.
+    if (input.reportId !== undefined && target?.isDirectChild === true) {
+      const readAt = yield* nowIso;
+      yield* enqueue(
+        engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(`session-report-read:${scope.threadId}:${report.reportId}`),
+          threadId: scope.threadId,
+          activity: {
+            id: EventId.make(`session-report-read:${scope.threadId}:${report.reportId}`),
+            tone: "info",
+            kind: "session-report.read",
+            summary: "Parent agent read child report",
+            payload: {
+              childThreadId: report.threadId,
+              reportId: report.reportId,
+              readByThreadId: scope.threadId,
+              readAt,
+            },
+            turnId: null,
+            createdAt: readAt,
+          },
+          createdAt: readAt,
+        }),
+      ).pipe(
+        // The report is already durable and authorized. A transient failure
+        // while recording its inbox consumption must not turn that successful
+        // read into an error; a later read reuses this deterministic command.
+        Effect.catch((cause) =>
+          Effect.logWarning("child report inbox consumption deferred", {
+            parentThreadId: scope.threadId,
+            childThreadId: report.threadId,
+            reportId: report.reportId,
+            cause,
+          }),
+        ),
+      );
+    }
     return {
       reportId: report.reportId,
       threadId: report.threadId,

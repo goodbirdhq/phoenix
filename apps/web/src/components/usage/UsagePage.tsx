@@ -1,4 +1,4 @@
-import type { ProviderAvailabilityEntry, UsageProviderKind } from "@t3tools/contracts";
+import type { UsageProviderKind } from "@t3tools/contracts";
 import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -26,6 +26,12 @@ import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadc
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "../../workspaceTitlebar";
 import { UsageChartLegend, UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
+import {
+  deriveSubscriptionAccounts,
+  providerLimitSourceName,
+  SubscriptionAvailabilitySection,
+  type SubscriptionAvailabilitySource,
+} from "../subscriptions/SubscriptionAvailability";
 
 const WINDOW_OPTIONS = [
   { days: 1, label: "Past 24h" },
@@ -33,26 +39,6 @@ const WINDOW_OPTIONS = [
   { days: 30, label: "30 days" },
   { days: 90, label: "90 days" },
 ] as const;
-
-function availabilityWindowLabel(
-  window: ProviderAvailabilityEntry["availability"]["windows"][number],
-) {
-  if (window.windowDurationMins === 300) return "5-hour";
-  if (window.windowDurationMins === 10_080) return "Weekly";
-  return window.kind;
-}
-
-function availabilityTimeLabel(isoDateTime: string): string {
-  const date = new Date(isoDateTime);
-  return Number.isNaN(date.getTime())
-    ? isoDateTime
-    : new Intl.DateTimeFormat(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-        month: "short",
-        day: "numeric",
-      }).format(date);
-}
 
 export function UsagePage() {
   const [windowSelection, setWindowSelection] = useState(() => ({
@@ -63,8 +49,40 @@ export function UsagePage() {
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
-  const { merged, environments, isPending, isPartial, refresh, providerAvailability } =
-    useUsage(window);
+  const {
+    merged,
+    environments,
+    isPending,
+    isPartial,
+    refresh,
+    providerAvailability,
+    isProviderAvailabilityPending,
+    hasProviderAvailabilityError,
+  } = useUsage(window);
+  const subscriptionAccounts = useMemo(
+    () =>
+      deriveSubscriptionAccounts(
+        providerAvailability.flatMap((environment) =>
+          environment.providers.map((entry) => {
+            const provider = environment.serverProviders?.find(
+              (candidate) => candidate.instanceId === entry.instanceId,
+            );
+            return {
+              environmentId: environment.environmentId,
+              environmentLabel: environment.label,
+              instanceId: entry.instanceId,
+              driver: entry.driver,
+              displayName:
+                entry.displayName ?? provider?.displayName ?? providerLimitSourceName(entry.driver),
+              enabled: provider?.enabled === true,
+              authenticated: provider?.auth.status === "authenticated",
+              availability: entry.availability,
+            } satisfies SubscriptionAvailabilitySource;
+          }),
+        ),
+      ),
+    [providerAvailability],
+  );
 
   // Hold the content until every environment is terminal. Rendering merged
   // totals while devices are still answering makes every number on the page
@@ -112,16 +130,10 @@ export function UsagePage() {
   };
   const refreshWindow = () => {
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
-    if (
-      nextWindow.sinceDay === window.sinceDay &&
-      nextWindow.untilDay === window.untilDay &&
-      nextWindow.sinceTime === window.sinceTime &&
-      nextWindow.untilTime === window.untilTime
-    ) {
-      refresh();
-    } else {
-      setWindowSelection({ days: windowDays, window: nextWindow });
-    }
+    // Rolling windows always advance, including Past 24h. A refresh must
+    // still collect a provider quota reading for the range the user selected.
+    refresh(nextWindow);
+    setWindowSelection({ days: windowDays, window: nextWindow });
   };
 
   return (
@@ -194,7 +206,11 @@ export function UsagePage() {
             {settling ? (
               <>
                 {environments.length > 1 ? <UsageDeviceStrip environments={environments} /> : null}
-                <SubscriptionAvailabilityRows availability={providerAvailability} />
+                <SubscriptionAvailabilitySection
+                  accounts={subscriptionAccounts}
+                  isPending={isProviderAvailabilityPending}
+                  hasError={hasProviderAvailabilityError}
+                />
                 <UsageSkeleton resolution={isPast24Hours ? "hour" : "day"} />
               </>
             ) : (
@@ -204,7 +220,11 @@ export function UsagePage() {
                   duplicateSources={merged.duplicateSources}
                   staleEnvironments={merged.staleEnvironments}
                 />
-                <SubscriptionAvailabilityRows availability={providerAvailability} />
+                <SubscriptionAvailabilitySection
+                  accounts={subscriptionAccounts}
+                  isPending={isProviderAvailabilityPending}
+                  hasError={hasProviderAvailabilityError}
+                />
 
                 {/* Cost first: the financial answer, then the provider split. */}
                 <section className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
@@ -591,60 +611,6 @@ function UsageDeviceStrip({
           : `${scanning.length} devices still scanning`}
       </span>
     </div>
-  );
-}
-
-function SubscriptionAvailabilityRows({
-  availability,
-}: {
-  readonly availability: readonly {
-    readonly environmentId: string;
-    readonly label: string;
-    readonly providers: readonly ProviderAvailabilityEntry[];
-  }[];
-}) {
-  const entries = availability.flatMap((environment) =>
-    environment.providers.map((provider) => ({
-      ...provider,
-      environmentId: environment.environmentId,
-      environmentLabel: environment.label,
-    })),
-  );
-  if (entries.length === 0) return null;
-  return (
-    <section className="rounded-lg border border-border bg-card px-4 py-3">
-      <h2 className="text-sm font-medium text-foreground">Subscription availability</h2>
-      <p className="mt-0.5 text-xs text-muted-foreground">
-        Per provider account. Phoenix never combines subscription limits.
-      </p>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {entries.map((entry) => (
-          <div
-            key={`${entry.environmentId}:${entry.instanceId}`}
-            className="rounded-md bg-muted/50 px-3 py-2"
-          >
-            <div className="truncate text-sm text-foreground">
-              {entry.displayName ?? entry.driver}
-              {availability.length > 1 ? ` · ${entry.environmentLabel}` : ""}
-            </div>
-            <div className="mt-0.5 text-xs text-muted-foreground">
-              {entry.availability.windows.length > 0
-                ? entry.availability.windows
-                    .map(
-                      (window) =>
-                        `${availabilityWindowLabel(window)}: ${100 - window.usedPercent}% left${window.resetsAt ? ` · resets ${availabilityTimeLabel(window.resetsAt)}` : ""}`,
-                    )
-                    .join(" · ")
-                : entry.availability.source === "unsupported"
-                  ? "Not available from this provider"
-                  : entry.availability.observedAt
-                    ? `Native signal is stale (last seen ${availabilityTimeLabel(entry.availability.observedAt)})`
-                    : "Awaiting a native provider signal"}
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
   );
 }
 

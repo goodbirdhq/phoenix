@@ -26,14 +26,82 @@ import type {
   ThreadId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 import type { ProviderSessionRuntimeLiveness } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
+
+/**
+ * How many configured instances one availability request may collect from at
+ * once. A refresh runs a provider's own CLI, so an environment with several
+ * configured instances must neither start them all at once (a burst of child
+ * processes, on the machine the user is working on) nor walk them strictly one
+ * at a time (a slow instance would hold up every other instance's answer, up to
+ * each probe's own timeout). Reads that hit only the cache are unaffected.
+ */
+export const PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY = 4;
+
+/**
+ * The channel a driver reports availability through when it has nothing to
+ * report. Kept here rather than in the live layer because the transports build
+ * the same fallback when an instance cannot answer at all.
+ */
+const NATIVE_AVAILABILITY_SOURCES: Partial<Record<string, ProviderAvailability["source"]>> = {
+  codex: "codex_app_server",
+  claudeAgent: "claude_agent_sdk",
+};
+
+/** "This instance told us nothing", in the driver's own native vocabulary. */
+export const unknownAvailabilityForDriver = (
+  provider: ProviderDriverKind,
+): ProviderAvailability => ({
+  status: "unknown",
+  source: NATIVE_AVAILABILITY_SOURCES[provider] ?? "unsupported",
+  windows: [],
+});
+
+/**
+ * One instance's availability, contained so that it can only ever answer for
+ * itself.
+ *
+ * Availability is collected by fanning out over every configured instance, and
+ * the collection is optional enrichment: a person opening Usage, or an agent
+ * calling `list_session_providers`, is asking about *all* of their instances.
+ * A single adapter that fails — or that throws, which arrives as a defect and
+ * would otherwise bypass a typed-error handler entirely and fail the whole
+ * `forEach` — must cost that one instance its numbers, not blank every other
+ * instance's card. Each element is therefore wrapped here rather than the
+ * fan-out as a whole.
+ *
+ * Interruption is not contained: that is the caller going away, and every
+ * element should stop with it.
+ *
+ * The reading is taken as a thunk so that resolving *which* effect to run is
+ * inside the containment too, not only running it.
+ */
+export const containedAvailability = <E>(
+  input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly provider: ProviderDriverKind;
+  },
+  read: () => Effect.Effect<ProviderAvailability, E>,
+): Effect.Effect<ProviderAvailability> =>
+  Effect.suspend(read).pipe(
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.failCause(cause as Cause.Cause<never>)
+        : Effect.logWarning("provider availability collection failed for one instance", {
+            instanceId: input.instanceId,
+            provider: input.provider,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as(unknownAvailabilityForDriver(input.provider))),
+    ),
+  );
 
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
@@ -110,6 +178,16 @@ export interface ProviderServiceShape {
    * Missing data is represented as an explicit unknown snapshot.
    */
   readonly getAvailability?: (
+    instanceId: ProviderInstanceId,
+    provider: ProviderDriverKind,
+  ) => Effect.Effect<ProviderAvailability>;
+
+  /**
+   * Explicit, deduplicated native quota refresh for one configured instance.
+   * Callers that fan this out over every configured instance must bound the
+   * fan-out with `PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY`.
+   */
+  readonly refreshAvailability?: (
     instanceId: ProviderInstanceId,
     provider: ProviderDriverKind,
   ) => Effect.Effect<ProviderAvailability>;

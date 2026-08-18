@@ -134,3 +134,70 @@ describe("ProviderCommandNotFoundError", () => {
     });
   });
 });
+
+describe("spawnAndCollect output bounds", () => {
+  const chattyCli = (input: { readonly chunks: number; readonly chunkChars: number }) => {
+    let emittedChunks = 0;
+    const chunk = "x".repeat(input.chunkChars);
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed(
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.encodeText(
+            Stream.fromIterableEffect(
+              Effect.sync(() =>
+                Array.from({ length: input.chunks }, () => {
+                  emittedChunks += 1;
+                  return chunk;
+                }),
+              ),
+            ),
+          ),
+          stderr: Stream.encodeText(Stream.make(chunk)),
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        }),
+      ),
+    );
+    return { spawner, emittedChunks: () => emittedChunks };
+  };
+
+  it.effect("keeps only the capped bytes of a CLI that will not stop writing", () => {
+    const cli = chattyCli({ chunks: 64, chunkChars: 1_024 });
+    return Effect.gen(function* () {
+      const result = yield* spawnAndCollect(
+        "claude",
+        ChildProcess.make("claude", ["--print", "/usage"]),
+        { maxOutputBytes: 2_048 },
+      ).pipe(Effect.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, cli.spawner)));
+
+      // Both pipes are capped, and the cap is reported rather than left for a
+      // caller to infer from a prefix that happens to parse.
+      expect(result.stdout.length).toBe(2_048);
+      expect(result.stderr.length).toBe(1_024);
+      expect(result.truncated).toBe(true);
+      // The child is still drained, so it can exit on its own.
+      expect(cli.emittedChunks()).toBe(64);
+    });
+  });
+
+  it.effect("reports no truncation when the child stays within the cap", () => {
+    const cli = chattyCli({ chunks: 1, chunkChars: 16 });
+    return Effect.gen(function* () {
+      const result = yield* spawnAndCollect(
+        "claude",
+        ChildProcess.make("claude", ["auth", "status", "--json"]),
+        { maxOutputBytes: 2_048 },
+      ).pipe(Effect.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, cli.spawner)));
+
+      expect(result.stdout).toBe("x".repeat(16));
+      expect(result.truncated).toBe(undefined);
+    });
+  });
+});
