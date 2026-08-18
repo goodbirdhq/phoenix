@@ -1240,6 +1240,14 @@ const make = Effect.gen(function* () {
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
     // A stop that cannot reach its provider has to say so: without this the
     // press is indistinguishable from one that worked.
+    //
+    // Forked for the same reason sendTurn is: one worker fiber serves every
+    // thread's provider commands, so awaiting an adapter here lets a single
+    // unresponsive provider hold up Stop, turn starts, and approval responses
+    // for every other thread. Only the Claude adapter bounds its own
+    // interrupt; Codex leaves its parent request unbounded, OpenCode awaits an
+    // external server, and Cursor swallows the outcome — forking covers all of
+    // them without asking each to pick a timeout.
     yield* providerService.interruptTurn({ threadId: event.payload.threadId }).pipe(
       Effect.catchCause((cause) =>
         appendProviderFailureActivity({
@@ -1251,6 +1259,7 @@ const make = Effect.gen(function* () {
           createdAt: event.payload.createdAt,
         }),
       ),
+      Effect.forkScoped,
     );
   });
 

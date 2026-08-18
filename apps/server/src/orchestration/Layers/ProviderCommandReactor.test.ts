@@ -2633,6 +2633,79 @@ describe("ProviderCommandReactor", () => {
     expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({ threadId: "thread-1" });
   });
 
+  it("does not let one unresponsive interrupt hold up other threads", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // A provider that accepts the interrupt and never answers. Only Claude
+    // bounds this itself; Codex, OpenCode and Cursor do not, so the reactor
+    // must not be the thing that depends on them settling.
+    harness.interruptTurn.mockImplementationOnce(() => Effect.never);
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-create-other"),
+        threadId: ThreadId.make("thread-2"),
+        projectId: asProjectId("project-1"),
+        title: "Thread 2",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    for (const threadId of ["thread-1", "thread-2"]) {
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`cmd-session-set-${threadId}`),
+          threadId: ThreadId.make(threadId),
+          session: {
+            threadId: ThreadId.make(threadId),
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId(`turn-${threadId}`),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+    }
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-turn-interrupt-wedged"),
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-thread-1"),
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+
+    // The wedged interrupt is still outstanding. An unrelated thread's Stop
+    // has to get through anyway — with the call awaited on the single worker
+    // fiber, this second interrupt never runs at all.
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-turn-interrupt-other"),
+        threadId: ThreadId.make("thread-2"),
+        turnId: asTurnId("turn-thread-2"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 2);
+    expect(harness.interruptTurn.mock.calls[1]?.[0]).toEqual({ threadId: "thread-2" });
+  });
+
   it("surfaces a failure activity when the provider interrupt does not land", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
