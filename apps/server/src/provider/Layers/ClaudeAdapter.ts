@@ -1529,6 +1529,13 @@ function toSessionError(
   return undefined;
 }
 
+/**
+ * How long `interruptTurn` waits for the SDK to acknowledge a stop before
+ * reporting failure. A wedged child never acknowledges, and Stop must not
+ * become an unbounded wait.
+ */
+const INTERRUPT_ACK_TIMEOUT = "10 seconds";
+
 function toRequestError(threadId: ThreadId, method: string, cause: unknown): ProviderAdapterError {
   const sessionError = toSessionError(threadId, cause);
   if (sessionError) {
@@ -4541,10 +4548,28 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           { concurrency: 8, discard: true },
         ).pipe(Effect.timeoutOption("10 seconds"), Effect.ignore);
       }
+      // Bounded for the same reason stopTask is above: a wedged child can
+      // leave the control request unsettled forever, and non-resolution is
+      // not something `catch` can see. One worker fiber serves every thread's
+      // provider commands, so parking here stalls unrelated threads too.
       yield* Effect.tryPromise({
         try: () => context.query.interrupt(),
         catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
-      });
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: INTERRUPT_ACK_TIMEOUT,
+          orElse: () =>
+            Effect.fail(
+              toRequestError(
+                threadId,
+                "turn/interrupt",
+                new Error(
+                  `Provider did not acknowledge the interrupt within ${INTERRUPT_ACK_TIMEOUT}.`,
+                ),
+              ),
+            ),
+        }),
+      );
     },
   );
 

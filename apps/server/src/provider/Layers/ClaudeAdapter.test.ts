@@ -25,6 +25,7 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Random from "effect/Random";
@@ -95,8 +96,15 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     }
   }
 
+  public interruptNeverSettles = false;
+
   readonly interrupt = async (): Promise<void> => {
     this.interruptCalls.push(undefined);
+    if (this.interruptNeverSettles) {
+      // A wedged child accepts the control request and never acknowledges it.
+      // Rejection is not the hazard here; non-resolution is.
+      return new Promise<void>(() => {});
+    }
   };
 
   readonly stopTask = async (taskId: string): Promise<void> => {
@@ -1659,6 +1667,40 @@ describe("ClaudeAdapterLive", () => {
         assert.equal(stoppedTaskEvent.payload.taskType, "local_agent");
         assert.equal(stoppedTaskEvent.payload.title, "Agent A");
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("fails interruptTurn when the provider never acknowledges the stop", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "work",
+        attachments: [],
+      });
+
+      harness.query.interruptNeverSettles = true;
+      const interruptFiber = yield* Effect.exit(adapter.interruptTurn(session.threadId)).pipe(
+        Effect.forkChild,
+      );
+
+      // One worker fiber serves every thread's provider commands, so an
+      // unbounded wait here would stall unrelated threads, not just this one.
+      yield* TestClock.adjust("10 seconds");
+
+      const exit = yield* Fiber.join(interruptFiber);
+      assert.equal(Exit.isFailure(exit), true);
+      assert.equal(harness.query.interruptCalls.length, 1);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

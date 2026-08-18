@@ -1189,11 +1189,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.interrupt": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      // Stop was idempotent in intent but not in effect: the command emitted
+      // unconditionally, so a thread with nothing running absorbed repeated
+      // presses as silent no-op events. Reject instead of recording one.
+      const session = thread.session;
+      if (session?.status !== "starting" && session?.status !== "running") {
+        return yield* Effect.fail(
+          new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `thread ${command.threadId} has no running provider session to interrupt`,
+          }),
+        );
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
