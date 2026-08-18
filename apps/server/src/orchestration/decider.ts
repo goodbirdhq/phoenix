@@ -1189,6 +1189,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.interrupt": {
+      // No emit guard here on purpose. Stop is reachable when the session is
+      // not running — the background-work banner is the only stop affordance
+      // for a settled turn whose fleet is still alive, and it interrupts by
+      // session with no turn id. Refusing on session or turn state broke that
+      // path and made a failed stop unretryable. ProviderCommandReactor holds
+      // the looser check that actually belongs here.
       yield* requireThread({
         readModel,
         command,
