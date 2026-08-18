@@ -2595,6 +2595,50 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("rejects a repeat interrupt once the targeted turn has already ended", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-repeat"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    const interrupt = (suffix: string) =>
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make(`cmd-turn-interrupt-${suffix}`),
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: now,
+      });
+
+    // The first press lands and moves the turn out of "running".
+    await harness.runEffect(interrupt("first"));
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+
+    // The session status is deliberately left "running" here: that is the
+    // state a wedged provider leaves behind, and it is why guarding on the
+    // session alone was not enough to stop a user pressing Stop 31 times.
+    const exit = await harness.runEffect(Effect.exit(interrupt("second")));
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(harness.interruptTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a turn interrupt when no provider session is running", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

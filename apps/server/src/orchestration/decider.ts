@@ -1206,6 +1206,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           }),
         );
       }
+      // Positive evidence that the press has nothing left to stop: the exact
+      // turn it targets already reached a terminal state. Anything less
+      // certain still emits — Stop has to work whenever there is doubt, so a
+      // missing or mismatched latest turn is not grounds for refusing.
+      const targetTurnId = command.turnId ?? session.activeTurnId ?? null;
+      const latestTurn = thread.latestTurn;
+      if (
+        latestTurn !== null &&
+        targetTurnId !== null &&
+        latestTurn.turnId === targetTurnId &&
+        latestTurn.state !== "running"
+      ) {
+        return yield* Effect.fail(
+          new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `thread ${command.threadId} turn ${targetTurnId} already ended (${latestTurn.state}); nothing to interrupt`,
+          }),
+        );
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
