@@ -5,7 +5,8 @@ distribution. Phoenix is not published to npm, so new background-service install
 currently disabled: installing the upstream `t3` package would run a different product.
 
 For now, run the source-built server in a terminal or create a service definition you manage
-yourself. Do not run `phoenix service install` or `phoenix service update` until Phoenix has an owned
+yourself. To update a server you run that way, follow the
+[self-managed server update runbook](../operations/updating-a-self-managed-server.md). Do not run `phoenix service install` or `phoenix service update` until Phoenix has an owned
 package identity and this page announces that distribution.
 
 If an older Phoenix background service is already installed, you can inspect it:
