@@ -1189,42 +1189,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.interrupt": {
-      const thread = yield* requireThread({
+      // No emit guard here on purpose. Stop is reachable when the session is
+      // not running — the background-work banner is the only stop affordance
+      // for a settled turn whose fleet is still alive, and it interrupts by
+      // session with no turn id. Refusing on session or turn state broke that
+      // path and made a failed stop unretryable. ProviderCommandReactor holds
+      // the looser check that actually belongs here.
+      yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      // Stop was idempotent in intent but not in effect: the command emitted
-      // unconditionally, so a thread with nothing running absorbed repeated
-      // presses as silent no-op events. Reject instead of recording one.
-      const session = thread.session;
-      if (session?.status !== "starting" && session?.status !== "running") {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} has no running provider session to interrupt`,
-          }),
-        );
-      }
-      // Positive evidence that the press has nothing left to stop: the exact
-      // turn it targets already reached a terminal state. Anything less
-      // certain still emits — Stop has to work whenever there is doubt, so a
-      // missing or mismatched latest turn is not grounds for refusing.
-      const targetTurnId = command.turnId ?? session.activeTurnId ?? null;
-      const latestTurn = thread.latestTurn;
-      if (
-        latestTurn !== null &&
-        targetTurnId !== null &&
-        latestTurn.turnId === targetTurnId &&
-        latestTurn.state !== "running"
-      ) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} turn ${targetTurnId} already ended (${latestTurn.state}); nothing to interrupt`,
-          }),
-        );
-      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",

@@ -2595,62 +2595,21 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("rejects a repeat interrupt once the targeted turn has already ended", async () => {
+  it("interrupts a ready session with no active turn, for background-work Stop", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
+    // The background-work banner is the only stop affordance for a settled
+    // turn whose fleet is still alive. It appears precisely when the session
+    // is NOT running, and interrupts by session with no turn id.
     await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-set-repeat"),
+        commandId: CommandId.make("cmd-session-ready-background"),
         threadId: ThreadId.make("thread-1"),
         session: {
           threadId: ThreadId.make("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-1"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-
-    const interrupt = (suffix: string) =>
-      harness.engine.dispatch({
-        type: "thread.turn.interrupt",
-        commandId: CommandId.make(`cmd-turn-interrupt-${suffix}`),
-        threadId: ThreadId.make("thread-1"),
-        turnId: asTurnId("turn-1"),
-        createdAt: now,
-      });
-
-    // The first press lands and moves the turn out of "running".
-    await harness.runEffect(interrupt("first"));
-    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
-
-    // The session status is deliberately left "running" here: that is the
-    // state a wedged provider leaves behind, and it is why guarding on the
-    // session alone was not enough to stop a user pressing Stop 31 times.
-    const exit = await harness.runEffect(Effect.exit(interrupt("second")));
-
-    expect(Exit.isFailure(exit)).toBe(true);
-    expect(harness.interruptTurn).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects a turn interrupt when no provider session is running", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-stopped"),
-        threadId: ThreadId.make("thread-1"),
-        session: {
-          threadId: ThreadId.make("thread-1"),
-          status: "stopped",
+          status: "ready",
           providerName: "codex",
           runtimeMode: "approval-required",
           activeTurnId: null,
@@ -2661,22 +2620,17 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // Stop used to emit unconditionally, so a thread with nothing running
-    // absorbed every press as a silent no-op event.
-    const exit = await harness.runEffect(
-      Effect.exit(
-        harness.engine.dispatch({
-          type: "thread.turn.interrupt",
-          commandId: CommandId.make("cmd-turn-interrupt-idle"),
-          threadId: ThreadId.make("thread-1"),
-          turnId: asTurnId("turn-1"),
-          createdAt: now,
-        }),
-      ),
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-turn-interrupt-background"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
     );
 
-    expect(Exit.isFailure(exit)).toBe(true);
-    expect(harness.interruptTurn).not.toHaveBeenCalled();
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+    expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({ threadId: "thread-1" });
   });
 
   it("surfaces a failure activity when the provider interrupt does not land", async () => {
