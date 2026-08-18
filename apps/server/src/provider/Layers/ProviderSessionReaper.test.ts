@@ -159,9 +159,13 @@ describe("ProviderSessionReaper", () => {
     }) => ReturnType<ProviderServiceShape["stopSession"]>;
     readonly sessions?: ReadonlyArray<ProviderSession>;
     readonly runtimeLiveness?: "live" | "dead" | "unknown";
+    readonly sweepIntervalMs?: number;
   }) {
     const stoppedThreadIds = new Set<ThreadId>();
     const dispatch = vi.fn((_: OrchestrationCommand) => Effect.succeed({ sequence: 1 }));
+    // Each sweep probes liveness exactly once per stale active turn, so this
+    // counts sweeps without a sleep.
+    const getSessionRuntimeLiveness = vi.fn(() => Effect.succeed(input.runtimeLiveness ?? "dead"));
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(
       (request) =>
         (input.stopSessionImplementation
@@ -179,7 +183,9 @@ describe("ProviderSessionReaper", () => {
       respondToUserInput: () => unsupported(),
       stopSession,
       listSessions: () => Effect.succeed(input.sessions ?? []),
-      getSessionRuntimeLiveness: () => Effect.succeed(input.runtimeLiveness ?? "dead"),
+      getSessionRuntimeLiveness: getSessionRuntimeLiveness as NonNullable<
+        ProviderServiceShape["getSessionRuntimeLiveness"]
+      >,
       getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
       getInstanceInfo: (instanceId) => {
         const driverKind = ProviderDriverKind.make(String(instanceId));
@@ -206,7 +212,7 @@ describe("ProviderSessionReaper", () => {
     );
     const layer = makeProviderSessionReaperLive({
       inactivityThresholdMs: 1_000,
-      sweepIntervalMs: 60_000,
+      sweepIntervalMs: input.sweepIntervalMs ?? 60_000,
     }).pipe(
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provideMerge(runtimeRepositoryLayer),
@@ -252,7 +258,7 @@ describe("ProviderSessionReaper", () => {
     );
 
     runtime = ManagedRuntime.make(layer);
-    return { stopSession, stoppedThreadIds, dispatch };
+    return { stopSession, stoppedThreadIds, dispatch, getSessionRuntimeLiveness };
   }
 
   it("reaps stale persisted sessions without active turns", async () => {
@@ -513,10 +519,75 @@ describe("ProviderSessionReaper", () => {
     );
 
     await startReaper();
+    await waitFor(() => harness.dispatch.mock.calls.length === 1);
     await Effect.runPromise(drainFibers);
 
-    expect(harness.dispatch).not.toHaveBeenCalled();
+    // Escalate, do not kill: a live-but-quiet runtime may be wedged or may be
+    // inside a long tool call, and nothing here separates the two. The turn
+    // is surfaced to the user, never stopped on the reaper's guess.
     expect(harness.stopSession).not.toHaveBeenCalled();
+    const dispatched = harness.dispatch.mock.calls.map((call) => call[0]);
+    expect(dispatched.some((command) => command.type === "thread.session.set")).toBe(false);
+
+    const notice = dispatched.find((command) => command.type === "thread.activity.append");
+    expect(notice).toBeDefined();
+    if (notice?.type !== "thread.activity.append") throw new Error("expected a stall notice");
+    expect(notice.threadId).toEqual(threadId);
+    expect(notice.activity.kind).toBe("provider.session.stalled");
+    expect(notice.activity.turnId).toEqual(turnId);
+    expect(notice.activity.summary).toContain("has not reported");
+  });
+
+  it("notifies once per stall rather than once per sweep", async () => {
+    const threadId = ThreadId.make("thread-reaper-stall-once");
+    const turnId = TurnId.make("turn-reaper-stall-once");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+      runtimeLiveness: "live",
+      sweepIntervalMs: 10,
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-stall-once" },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    // The stall persists across sweeps; each sweep probes liveness once, so
+    // waiting on the probe count proves several sweeps ran without a sleep.
+    await waitFor(() => harness.getSessionRuntimeLiveness.mock.calls.length >= 4);
+    await Effect.runPromise(drainFibers);
+
+    // A notice per sweep would bury the thread it is trying to explain.
+    const notices = harness.dispatch.mock.calls
+      .map((call) => call[0])
+      .filter((command) => command.type === "thread.activity.append");
+    expect(notices).toHaveLength(1);
   });
 
   it("safely skips a stale active OpenCode-style session with unknown runtime liveness", async () => {
@@ -558,10 +629,19 @@ describe("ProviderSessionReaper", () => {
     );
 
     await startReaper();
+    await waitFor(() => harness.dispatch.mock.calls.length === 1);
     await Effect.runPromise(drainFibers);
 
-    expect(harness.dispatch).not.toHaveBeenCalled();
+    // Unknown liveness is the ambiguous case escalation exists for: an
+    // adapter that cannot answer must not have its turn killed on a guess,
+    // but the silence still gets surfaced.
     expect(harness.stopSession).not.toHaveBeenCalled();
+    const dispatched = harness.dispatch.mock.calls.map((call) => call[0]);
+    expect(dispatched.some((command) => command.type === "thread.session.set")).toBe(false);
+    const notice = dispatched.find((command) => command.type === "thread.activity.append");
+    expect(notice).toBeDefined();
+    if (notice?.type !== "thread.activity.append") throw new Error("expected a stall notice");
+    expect(notice.activity.kind).toBe("provider.session.stalled");
   });
 
   it("does not crash a freshly updated active turn without a live provider session", async () => {

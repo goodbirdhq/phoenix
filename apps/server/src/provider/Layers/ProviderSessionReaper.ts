@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
-import { CommandId } from "@t3tools/contracts";
+import { CommandId, EventId, type ThreadId, type TurnId } from "@t3tools/contracts";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -40,6 +40,49 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
 
+    /**
+     * Threads already told about a stalled turn, keyed by thread to the turn
+     * the notice covers. The sweep repeats every few minutes; the user needs
+     * the notice once per stall, not once per sweep. A new turn re-arms it,
+     * and recovery clears the entry.
+     */
+    const stallNotices = new Map<string, string>();
+
+    const appendStalledActivity = (input: {
+      readonly threadId: ThreadId;
+      readonly turnId: TurnId;
+      readonly idleDurationMs: number;
+    }) =>
+      Effect.gen(function* () {
+        const commandId = yield* crypto.randomUUIDv4.pipe(
+          Effect.map((uuid) => CommandId.make(`server:provider-stall-notice:${uuid}`)),
+        );
+        const eventId = yield* crypto.randomUUIDv4.pipe(Effect.map((uuid) => EventId.make(uuid)));
+        const createdAt = DateTime.formatIso(yield* DateTime.now);
+        const idleMinutes = Math.floor(input.idleDurationMs / 60000);
+        yield* orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId,
+          threadId: input.threadId,
+          activity: {
+            id: eventId,
+            tone: "error",
+            kind: "provider.session.stalled",
+            summary: `Provider has not reported for ${idleMinutes} minutes`,
+            payload: {
+              detail:
+                `The provider process is still running but has sent nothing for ${idleMinutes} minutes. ` +
+                `It may be wedged, or still inside a long-running tool call — nothing recorded here tells those apart. ` +
+                `Stop the turn if it is not making progress.`,
+              idleDurationMs: input.idleDurationMs,
+            },
+            turnId: input.turnId,
+            createdAt,
+          },
+          createdAt,
+        });
+      });
+
     const sweep = Effect.gen(function* () {
       const bindings = yield* directory.listBindings();
       const now = yield* Clock.currentTimeMillis;
@@ -65,6 +108,8 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         // shell read and the more conservative session timestamp.
         const idleDurationMs = now - lastSeenMs;
         if (idleDurationMs < inactivityThresholdMs) {
+          // Progressing again: re-arm the notice for a future stall.
+          stallNotices.delete(binding.threadId);
           continue;
         }
 
@@ -99,20 +144,55 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
             now -
             Math.max(lastSeenMs, Number.isNaN(sessionUpdatedMs) ? lastSeenMs : sessionUpdatedMs);
           if (watchdogIdleDurationMs < inactivityThresholdMs) {
+            stallNotices.delete(binding.threadId);
             continue;
           }
           const runtimeLiveness = yield* providerService.getSessionRuntimeLiveness
             ? providerService.getSessionRuntimeLiveness(binding.threadId)
             : Effect.succeed("unknown" as const);
           if (runtimeLiveness !== "dead") {
-            yield* Effect.logDebug("provider.session.reaper.skipped-active-turn-runtime-live", {
-              threadId: binding.threadId,
-              activeTurnId: activeSession.activeTurnId,
-              idleDurationMs: watchdogIdleDurationMs,
-              runtimeLiveness,
-            });
+            // Escalate, do not kill. A live runtime that has gone quiet past
+            // the threshold is either wedged or sitting inside a long tool
+            // call, and nothing recorded here separates the two. Killing
+            // would sometimes destroy live work, and staying silent is what
+            // let a wedged turn look busy for 92 minutes — so say so, and
+            // leave the decision with the user.
+            const stalledTurnId = activeSession.activeTurnId;
+            if (stalledTurnId !== null && stallNotices.get(binding.threadId) !== stalledTurnId) {
+              stallNotices.set(binding.threadId, stalledTurnId);
+              yield* appendStalledActivity({
+                threadId: binding.threadId,
+                turnId: stalledTurnId,
+                idleDurationMs: watchdogIdleDurationMs,
+              }).pipe(
+                Effect.tap(() =>
+                  Effect.logWarning("provider.session.reaper.active-turn-stalled", {
+                    threadId: binding.threadId,
+                    activeTurnId: stalledTurnId,
+                    idleDurationMs: watchdogIdleDurationMs,
+                    runtimeLiveness,
+                  }),
+                ),
+                // A thread that cannot take the notice must not stop the
+                // sweep from reaping everything behind it.
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("provider.session.reaper.stall-notice-failed", {
+                    threadId: binding.threadId,
+                    cause,
+                  }),
+                ),
+              );
+            } else {
+              yield* Effect.logDebug("provider.session.reaper.skipped-active-turn-runtime-live", {
+                threadId: binding.threadId,
+                activeTurnId: activeSession.activeTurnId,
+                idleDurationMs: watchdogIdleDurationMs,
+                runtimeLiveness,
+              });
+            }
             continue;
           }
+          stallNotices.delete(binding.threadId);
 
           const commandId = yield* crypto.randomUUIDv4.pipe(
             Effect.map((uuid) => CommandId.make(`server:provider-active-turn-watchdog:${uuid}`)),
