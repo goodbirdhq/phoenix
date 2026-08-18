@@ -7,6 +7,7 @@ import * as CliError from "effect/unstable/cli/CliError";
 
 import * as NetService from "@t3tools/shared/Net";
 import packageJson from "../package.json" with { type: "json" };
+import { formatCliVersion } from "./buildInfo.ts";
 import { authCommand } from "./cli/auth.ts";
 import { connectCommand } from "./cli/connect.ts";
 import { pairCommand } from "./cli/pair.ts";
@@ -62,7 +63,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
 export const cli = makeCli();
 
 if (import.meta.main) {
-  Command.run(cli, { version: packageJson.version }).pipe(
+  Command.run(cli, { version: formatCliVersion(packageJson.version) }).pipe(
     Effect.scoped,
     Effect.provide(CliRuntimeLayer),
     NodeRuntime.runMain,

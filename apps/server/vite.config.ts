@@ -1,4 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - Build-time git lookup; runs in the
+// bundler config before any Effect runtime exists.
 import "vite-plus/test/config";
+import * as NodeChildProcess from "node:child_process";
+
 import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
@@ -22,6 +26,30 @@ export { shouldBundleCliDependency };
 
 const repoEnv = loadRepoEnv();
 const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
+
+// The revision this bundle was built from, so `phoenix --version` can name the
+// commit an install is actually running. CI passes it explicitly; a local build
+// reads git directly and marks an uncommitted tree, because a dirty build is
+// exactly the case where the version number alone tells you nothing. Resolves
+// to "" wherever git cannot answer (published tarball, checkout with no .git),
+// which `--version` reports as unknown rather than inventing a commit.
+const resolveCliBuildCommit = (): string => {
+  const fromEnv = (process.env.T3CODE_BUILD_COMMIT ?? process.env.GITHUB_SHA ?? "").trim();
+  if (fromEnv !== "") return fromEnv.slice(0, 8);
+  const git = (args: ReadonlyArray<string>): string =>
+    NodeChildProcess.execFileSync("git", [...args], {
+      cwd: import.meta.dirname,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  try {
+    const sha = git(["rev-parse", "--short=8", "HEAD"]);
+    if (sha === "") return "";
+    return git(["status", "--porcelain"]) === "" ? sha : `${sha}-dirty`;
+  } catch {
+    return "";
+  }
+};
 
 export default mergeConfig(
   baseConfig,
@@ -56,6 +84,7 @@ export default mergeConfig(
       },
       define: {
         __T3CODE_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
+        __T3CODE_BUILD_COMMIT__: JSON.stringify(resolveCliBuildCommit()),
         __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
         __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",

@@ -59,8 +59,8 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   and `ProjectionSnapshotQuery`.
 - **Reactor** — `apps/server/src/orchestration/Layers/SessionSpawnReactor.ts` watches
   `thread.report-posted` and `thread.session-set` domain events. A report on a thread with
-  `spawnedByThreadId` appends a typed `session-report.posted` activity on the parent; it wakes a
-  settled or snoozed parent in the client lifecycle but never requests a provider turn. Web and
+  `spawnedByThreadId` appends a typed `session-report.posted` activity on the parent, which wakes a
+  settled or snoozed parent in the client lifecycle. Web and
   desktop group current activities into a capped digest; mobile receives the same typed activity
   and lifecycle visibility, while its dedicated digest UI is deferred. The activity carries child/report IDs, status, origin,
   and the supersession edge; reports remain the source of truth and are pulled with `read_report`
@@ -69,16 +69,22 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   occurs. Delivery after a reactor crash before dispatch acknowledgement remains the existing
   event-stream/recovery concern and is intentionally not claimed as a new guarantee here.
 
-  On upgrade, the queued-turn release path recognizes the exact legacy Phoenix report envelope and
-  cancels that row with `legacy_report_notification`; ordinary queued user messages are never
-  inferred from report-like text and retain their existing delivery behavior.
+  Alongside that activity, the reactor delivers the report to the parent as an ordinary
+  `thread.turn.start` — the same path `send_to_session` uses — so the decider applies the usual
+  rules: an idle parent starts a turn on it, and a busy parent queues it FIFO behind the turn it is
+  already running. The delivered text is `formatReportMessage`, which inlines reports at or under
+  `SESSION_REPORT_INLINE_MAX_CHARS` and otherwise sends the compact envelope pointing at
+  `read_report`. The delivery command and message IDs are deterministic from parent/child/report
+  IDs, so a replay after a crash re-dispatches an already-receipted command rather than delivering
+  the same report twice.
 
-  There is deliberately no report-to-turn delivery mode. Compatibility is explicit: an agent that
-  wants the parent to act sends an ordinary, meaningful `send_to_session` instruction referring to
-  a report ID, retaining that tool's existing queue/receipt semantics. A report itself never adds
-  queued turn work, so a burst cannot create unbounded parent work. A future, separate API may add
-  a bounded report-escalation request with a parent-selected cap/coalescing policy; it must not
-  reuse report posting as implicit escalation.
+  This is a per-child choice, not a global one. `spawn_session` takes `reportDelivery`, stored on
+  the child thread (`projection_threads.report_delivery`) and read back at report time. It defaults
+  to `queue`; `notify-only` keeps the activity and skips the turn, for a parent that would rather
+  poll with `ping_session` than be woken. The cost of the default is explicit: a child that posts
+  six reports costs its parent six turns, because each is delivered like a separate human message.
+  A parent fanning out to cheap children it does not need to hear from should spawn them
+  `notify-only`.
 
 ## Terminal reports
 

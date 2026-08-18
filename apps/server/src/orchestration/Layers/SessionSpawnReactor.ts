@@ -6,6 +6,7 @@ import {
   type OrchestrationSession,
   type OrchestrationSessionStatus,
   type OrchestrationThread,
+  DEFAULT_SESSION_REPORT_DELIVERY,
   type SessionReport,
   type SessionReportNotificationActivity,
   type SessionReportStatus,
@@ -147,16 +148,6 @@ export const reportNotificationActivity = (input: {
   };
 };
 
-const isLegacyQueuedReportMessage = (input: {
-  readonly text: string;
-  readonly createdAt: string;
-  readonly cutoverAt: string;
-}) =>
-  input.createdAt < input.cutoverAt &&
-  /^\[Phoenix\] (?:AMENDED report \(supersedes [^)]+\)\. )?Spawned session "[^"]+" (?:posted a (?:success|failure|partial) report:|ended without posting a report\. Phoenix generated a (?:success|failure|partial) report for it:) [^\n]+\n\n[\s\S]+\n\n\(spawned thread: [^)]+\)(?:, report: [^)]+)?(?:\n\n\[Phoenix\] \d+ queued messages? were not consumed before this report was written: [^\n]+\.)?$/.test(
-    input.text,
-  );
-
 export const formatQueuedReportWarning = (messageIds: ReadonlyArray<MessageId>): string =>
   messageIds.length === 0
     ? ""
@@ -248,52 +239,20 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   // restarts). Synthesize at most one terminal report per episode; a later
   // healthy state re-arms.
   const terminalReportedThreads = new Set<string>();
-  // A legacy report message must predate this digest-capable reactor. Combined
-  // with the canonical envelope check, this prevents cancelling new messages
-  // that merely quote a report.
-  const legacyReportCutoverAt = yield* nowIso;
-
   const releaseNextQueuedTurn = Effect.fn("SessionSpawnReactor.releaseNextQueuedTurn")(function* (
     threadId: ThreadId,
   ) {
-    const queuedRows = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
+    const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).find(
       (entry) => entry.threadId === threadId && entry.state === "queued",
     );
-    for (const queued of queuedRows) {
-      // Single-row indexed lookup: recovery must not hydrate a whole thread
-      // just to distinguish a legacy envelope from a real user instruction.
-      const queuedMessage = snapshotQuery.getThreadMessageById
-        ? yield* snapshotQuery.getThreadMessageById(threadId, queued.messageId)
-        : Option.none();
-      const message = Option.getOrUndefined(queuedMessage);
-      if (
-        message?.role !== "user" ||
-        !isLegacyQueuedReportMessage({ ...message, cutoverAt: legacyReportCutoverAt })
-      ) {
-        yield* engine.dispatch({
-          type: "thread.turn.start.queued",
-          commandId: yield* serverCommandId("queued-turn-start"),
-          threadId,
-          messageId: queued.messageId,
-          createdAt: yield* nowIso,
-        });
-        return;
-      }
-      yield* engine.dispatch({
-        type: "thread.turn.queue.cancel",
-        commandId: yield* serverCommandId("legacy-report-turn-cancel"),
-        threadId,
-        messageId: queued.messageId,
-        reason: "legacy_report_notification",
-        createdAt: yield* nowIso,
-      });
-      yield* Effect.logInfo("cancelled legacy queued child report delivery", {
-        threadId,
-        messageId: queued.messageId,
-      });
-      // Drain adjacent legacy report rows now so a real message behind a
-      // report burst is released at this boundary, not one recovery tick later.
-    }
+    if (queued === undefined) return;
+    yield* engine.dispatch({
+      type: "thread.turn.start.queued",
+      commandId: yield* serverCommandId("queued-turn-start"),
+      threadId,
+      messageId: queued.messageId,
+      createdAt: yield* nowIso,
+    });
   });
 
   const cancelQueuedTurns = Effect.fn("SessionSpawnReactor.cancelQueuedTurns")(function* (input: {
@@ -527,6 +486,29 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         threadId: parent.value.id,
         activity,
         createdAt: notifiedAt,
+      });
+      // The activity above is the durable inbox row and is written either way.
+      // Delivery decides only whether the parent's model hears about it now:
+      // "queue" hands the report over the same path a human message takes, so
+      // an idle parent wakes on it and a busy one receives it after its
+      // current turn. "notify-only" leaves the parent to read on its own
+      // schedule. A child spawned before this was configurable has no stored
+      // preference, so it takes the default.
+      const delivery = child.value.reportDelivery ?? DEFAULT_SESSION_REPORT_DELIVERY;
+      if (delivery === "notify-only") return;
+      yield* notifyParent({
+        childThreadId: event.payload.threadId,
+        text: formatReportMessage(child.value.title, event.payload.report),
+        commandTag: "session-report-delivery",
+        // Deterministic for the same reason the activity is: a replay after a
+        // crash re-dispatches an already-receipted command instead of
+        // delivering the same report to the parent a second time.
+        commandId: CommandId.make(
+          `session-report-delivery:${parent.value.id}:${event.payload.threadId}:${event.payload.report.reportId}`,
+        ),
+        messageId: MessageId.make(
+          `session-report-delivery:${event.payload.threadId}:${event.payload.report.reportId}`,
+        ),
       });
       return;
     }

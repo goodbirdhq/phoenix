@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import {
   HostProcessArguments,
   HostProcessExecutablePath,
@@ -202,4 +202,30 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       expect((yield* service.install.pipe(Effect.flip))._tag).toBe("BootServiceUnsupportedError");
     }),
   );
+});
+
+describe("parseReportedCliVersion", () => {
+  // The pinned-runtime check compares this against the version being installed,
+  // so a format it cannot read fails the install outright.
+  it("reads the version from output that carries a build commit", () => {
+    expect(BootService.parseReportedCliVersion("phoenix v0.0.33 (b421b138)\n")).toBe("0.0.33");
+    expect(BootService.parseReportedCliVersion("phoenix v0.0.33 (b421b138-dirty)\n")).toBe(
+      "0.0.33",
+    );
+    expect(BootService.parseReportedCliVersion("phoenix v0.0.33 (source)\n")).toBe("0.0.33");
+  });
+
+  it("still reads output with no build metadata", () => {
+    expect(BootService.parseReportedCliVersion("phoenix v0.0.33\n")).toBe("0.0.33");
+  });
+
+  it("keeps a full nightly version intact", () => {
+    expect(
+      BootService.parseReportedCliVersion("phoenix v0.0.34-nightly.20260817 (abc12345)\n"),
+    ).toBe("0.0.34-nightly.20260817");
+  });
+
+  it("does not mistake the word version for a version", () => {
+    expect(BootService.parseReportedCliVersion("phoenix version unknown\n")).toBeUndefined();
+  });
 });

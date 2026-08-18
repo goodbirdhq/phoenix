@@ -7,6 +7,7 @@ import {
   canRefreshProviderAvailability,
   isProviderAvailable,
   LIST_SESSIONS_MAX_ENTRIES,
+  DEFAULT_SESSION_REPORT_DELIVERY,
   type ListSessionsInput,
   MessageId,
   type ModelSelection,
@@ -245,7 +246,7 @@ export const buildPingSessionSnapshot = (input: {
 // contract holds across providers without the parent having to remember to
 // ask for it. post_report creates a visible parent notification, not a turn.
 const SPAWNED_SESSION_REPORT_INSTRUCTIONS =
-  "\n\n---\nYou were spawned by another Phoenix agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). If the summary is long, also pass a 1-3 sentence `abstract`. The report creates a durable visible notification for the session that spawned you; it does not start that session's model.\n\nIf you receive a further instruction AFTER you have already posted your report, do the new work and then post an AMENDING report: call `post_report` again with `supersedesReportId` set to the reportId of the report you are replacing. The amended report becomes the record. Never claim in a report that you did something you had not yet done when that report was written — describe what the late instruction was and what you did about it.";
+  '\n\n---\nYou were spawned by another Phoenix agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). If the summary is long, also pass a 1-3 sentence `abstract`. The report is handed to the session that spawned you the way a user message is: it wakes that session if it is idle, or arrives after its current turn if it is busy. A parent that prefers not to be woken spawns you with reportDelivery "notify-only", and then your report simply waits for it.\n\nIf you receive a further instruction AFTER you have already posted your report, do the new work and then post an AMENDING report: call `post_report` again with `supersedesReportId` set to the reportId of the report you are replacing. The amended report becomes the record. Never claim in a report that you did something you had not yet done when that report was written — describe what the late instruction was and what you did about it.';
 
 // Enough to tell the caller what is at stake without turning a refusal into a
 // transcript of a large working tree.
@@ -1033,6 +1034,7 @@ export const make = Effect.gen(function* () {
             branch: null,
             worktreePath: null,
             spawnedByThreadId: scope.threadId,
+            reportDelivery: input.reportDelivery ?? DEFAULT_SESSION_REPORT_DELIVERY,
             createdAt,
           },
           ...(useWorktree

@@ -377,6 +377,17 @@ export type SessionReportStructured = typeof SessionReportStructured.Type;
 export const SessionReportOrigin = Schema.Literals(["agent", "system"]);
 export type SessionReportOrigin = typeof SessionReportOrigin.Type;
 
+// How a spawned child's completion report reaches the parent that spawned it.
+// "queue" hands the report to the parent the way a human message arrives: an
+// idle parent wakes on it, a busy one receives it after its current turn.
+// "notify-only" leaves the report as a passive activity the parent reads when
+// it chooses. Either way the report is still recorded and still rendered as a
+// card, so this only decides whether the parent's model is woken.
+export const SessionReportDelivery = Schema.Literals(["queue", "notify-only"]);
+export type SessionReportDelivery = typeof SessionReportDelivery.Type;
+
+export const DEFAULT_SESSION_REPORT_DELIVERY: SessionReportDelivery = "queue";
+
 export const SessionReport = Schema.Struct({
   reportId: TrimmedNonEmptyString,
   threadId: ThreadId,
@@ -630,6 +641,9 @@ export const OrchestrationThread = Schema.Struct({
   // Set when another thread's agent session spawned this thread. Optional so
   // payloads from pre-spawn servers still decode.
   spawnedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // Null on threads created before report delivery was configurable, and on
+  // threads nobody spawned; both read as the default at delivery time.
+  reportDelivery: Schema.optional(Schema.NullOr(SessionReportDelivery)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -717,6 +731,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   // Set when another thread's agent session spawned this thread. Optional so
   // payloads from pre-spawn servers still decode.
   spawnedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // Null on threads created before report delivery was configurable, and on
+  // threads nobody spawned; both read as the default at delivery time.
+  reportDelivery: Schema.optional(Schema.NullOr(SessionReportDelivery)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -941,6 +958,9 @@ const ThreadCreateCommand = Schema.Struct({
   // Set when another thread's agent session spawned this thread (sessions
   // MCP toolkit). Optional so pre-spawn clients and servers interop.
   spawnedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // Null on threads created before report delivery was configurable, and on
+  // threads nobody spawned; both read as the default at delivery time.
+  reportDelivery: Schema.optional(Schema.NullOr(SessionReportDelivery)),
   createdAt: IsoDateTime,
 });
 
@@ -1069,6 +1089,9 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   spawnedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // Null on threads created before report delivery was configurable, and on
+  // threads nobody spawned; both read as the default at delivery time.
+  reportDelivery: Schema.optional(Schema.NullOr(SessionReportDelivery)),
   createdAt: IsoDateTime,
 });
 
@@ -1476,6 +1499,9 @@ export const ThreadCreatedPayload = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   spawnedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // Null on threads created before report delivery was configurable, and on
+  // threads nobody spawned; both read as the default at delivery time.
+  reportDelivery: Schema.optional(Schema.NullOr(SessionReportDelivery)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
