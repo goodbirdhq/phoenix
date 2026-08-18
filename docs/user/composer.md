@@ -8,16 +8,22 @@ multiple messages, then send again in the same thread.
 
 Stop ends the agent's current turn. It also stops any background work that turn started, such as
 subagents or long-running shells, so a runaway fleet cannot keep burning tokens after you have
-asked it to halt.
+asked it to halt. Background work outlives the turn that started it, so Stop stays available on a
+thread whose turn has already finished while its agents are still running.
 
-If Stop cannot reach the agent, the thread says so rather than appearing to have worked. A stop
-that fails leaves a note in the thread instead of a button that quietly does nothing.
+With Claude, a stop that cannot reach the agent leaves a note in the thread rather than appearing
+to have worked. Other agent CLIs report stop failures less reliably; if a thread keeps working
+after you press Stop, it is still running.
 
 ## When an agent goes quiet
 
-Occasionally an agent stops reporting while its turn still looks active. After a long silence,
-Phoenix adds a note to the thread saying how long it has been since the agent last reported.
+Occasionally an agent stops reporting while its turn still looks active. When that happens, the
+thread's status shows how long it has been since the agent last reported — "Quiet 32m" in place of
+the usual working time — and stops animating.
 
-The note does not mean the work has failed. Phoenix cannot tell a stuck agent apart from one part
-way through a slow step, such as a long build or test run, so it tells you what it knows instead of
-guessing. Phoenix never ends the turn on its own — if the work is no longer progressing, use Stop.
+This is a statement about silence, not a verdict. Phoenix cannot tell a stuck agent apart from one
+part way through a slow step such as a long build, so it shows you what it knows and leaves the
+judgement to you. The status returns to normal by itself the moment the agent reports again.
+
+If an agent's process disappears entirely, Phoenix ends the turn and marks the thread as failed
+rather than leaving it to look busy forever.

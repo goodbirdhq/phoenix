@@ -26,6 +26,10 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
+  formatProviderQuietLabel,
+  resolveProviderQuietForMs,
+} from "@t3tools/client-runtime/state/provider-quiet";
+import {
   scopeProjectRef,
   scopeThreadRef,
   scopedThreadKey,
@@ -232,7 +236,7 @@ function JumpHintBadge(props: { label: string }) {
 }
 
 // Self-ticking so only this span re-renders each second, not the whole row.
-function WorkingDuration(props: { startedAt: string | null }) {
+function WorkingDuration(props: { startedAt: string | null; lastReportedAt: string | null }) {
   const startedMs = props.startedAt !== null ? Date.parse(props.startedAt) : Number.NaN;
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -241,9 +245,19 @@ function WorkingDuration(props: { startedAt: string | null }) {
     return () => window.clearInterval(id);
   }, [startedMs]);
   if (Number.isNaN(startedMs)) return null;
+  // A working row that has heard nothing for minutes says so. Derived from the
+  // timestamp the shell already carries, so it needs no event and disappears
+  // by itself the moment the provider reports again — the row cannot be left
+  // asserting a silence that has since ended.
+  const quietForMs = resolveProviderQuietForMs({
+    lastReportedAt: props.lastReportedAt,
+    nowMs: Date.now(),
+  });
   return (
     <span className="font-mono tabular-nums">
-      {formatWorkingDurationLabel(Date.now() - startedMs)}
+      {quietForMs === null
+        ? formatWorkingDurationLabel(Date.now() - startedMs)
+        : `quiet ${formatProviderQuietLabel(quietForMs)}`}
     </span>
   );
 }
@@ -1499,7 +1513,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         <span role="status">{topStatus.label}</span>
                         {status === "working" ? (
                           <span aria-hidden>
-                            <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
+                            <WorkingDuration
+                              startedAt={resolveWorkingStartedAt(thread)}
+                              lastReportedAt={thread.session?.updatedAt ?? null}
+                            />
                           </span>
                         ) : null}
                       </span>
