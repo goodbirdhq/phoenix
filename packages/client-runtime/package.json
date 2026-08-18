@@ -75,10 +75,6 @@
       "types": "./src/state/presentation.ts",
       "default": "./src/state/presentation.ts"
     },
-    "./state/provider-quiet": {
-      "types": "./src/state/provider-quiet.ts",
-      "default": "./src/state/provider-quiet.ts"
-    },
     "./state/preview": {
       "types": "./src/state/preview.ts",
       "default": "./src/state/preview.ts"

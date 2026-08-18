@@ -1,10 +1,6 @@
 import type { StatusTone } from "../../components/StatusPill";
 import type { OrchestrationLatestTurn, OrchestrationSession } from "@t3tools/contracts";
 import { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import {
-  formatProviderQuietLabel,
-  resolveProviderQuietForMs,
-} from "@t3tools/client-runtime/state/provider-quiet";
 
 export function threadSortValue(thread: EnvironmentThreadShell): number {
   const candidate = Date.parse(thread.updatedAt ?? thread.createdAt);
@@ -52,7 +48,6 @@ function isLatestTurnSettled(
  */
 export function resolveThreadStatus(
   thread: EnvironmentThreadShell,
-  nowMs: number = Date.now(),
 ): ThreadStatusPresentation | null {
   if (thread.hasPendingApprovals) {
     return {
@@ -79,22 +74,14 @@ export function resolveThreadStatus(
   }
 
   if (thread.session?.status === "running") {
-    // A running session that has reported nothing for minutes says how long it
-    // has been quiet, and stops pulsing: an animation that implies progress
-    // while nothing arrives is the same lie as a spinner that never resolves.
-    // The hue is unchanged — this is a statement of fact, not a failure.
-    const quietForMs = resolveProviderQuietForMs({
-      lastReportedAt: thread.session.updatedAt,
-      nowMs,
-    });
     return {
       kind: "working",
-      label: quietForMs === null ? "Working" : `Quiet ${formatProviderQuietLabel(quietForMs)}`,
+      label: "Working",
       pillClassName: "bg-sky-500/12 dark:bg-sky-500/16",
       textClassName: "text-sky-700 dark:text-sky-300",
       iconColor: "#0a84ff",
       iconBackground: "rgba(10,132,255,0.22)",
-      pulse: quietForMs === null,
+      pulse: true,
     };
   }
 
