@@ -39,6 +39,7 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 
 ### Runbooks
 
+- [Updating a self-managed server](./operations/updating-a-self-managed-server.md)
 - [Integrating upstream T3 Code](./operations/upstream-integration.md)
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)

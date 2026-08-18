@@ -10,7 +10,9 @@ the server.
 
 - For a desktop-managed server, update the Phoenix desktop app on the machine that runs it.
 - For a source-built command-line server, check out the matching Phoenix revision, rebuild it, stop
-  the old process after active work finishes, and relaunch it with the same startup options.
+  the old process after active work finishes, and relaunch it with the same startup options. If you
+  run that server under a service definition you manage, follow the step-by-step
+  [self-managed server update runbook](../operations/updating-a-self-managed-server.md).
 
 Phoenix does not currently publish a CLI package, so it cannot safely offer an npm command or a
 remote background-service update. Never substitute `npx t3`: that installs upstream T3 Code, not

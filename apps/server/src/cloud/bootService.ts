@@ -139,6 +139,11 @@ export interface BootServiceStatus {
   readonly current: boolean;
   readonly unitPath: string;
   readonly logPath: string;
+  // What the pinned runtime the service actually executes reports for
+  // `--version`, read by running it. The CLI asking for status can be a
+  // different build than the daemon, which is the whole reason to report it
+  // separately. Null when it is not installed or could not be run.
+  readonly runtimeVersion: string | null;
 }
 
 export class BootService extends Context.Service<
@@ -154,6 +159,18 @@ export interface BootServiceHost {
   readonly execPath: string;
   readonly launcherSourcePath?: string;
 }
+
+/**
+ * Read the version out of `phoenix --version` output.
+ *
+ * The service verifies a pinned runtime by running its `--version` and
+ * comparing, so this has to survive that output growing: it now carries the
+ * build commit after the version, and a pinned runtime can be a different
+ * build than the CLI performing the install. Requiring a digit after the `v`
+ * keeps a word like "version" from being read as the version itself.
+ */
+export const parseReportedCliVersion = (stdout: string): string | undefined =>
+  /\bv(\d\S*)/.exec(stdout)?.[1];
 
 export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   readonly baseDir: string;
@@ -264,7 +281,11 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
                 }),
             ),
             Effect.flatMap((result) => {
-              const reportedVersion = /\bv(\S+)\s*$/.exec(result.stdout)?.[1];
+              // Matches the version token only, ignoring anything after it:
+              // `--version` also reports the build commit, and a pinned runtime
+              // may be a different build than the CLI doing the install. The
+              // digit guard keeps this from capturing a word like "version".
+              const reportedVersion = parseReportedCliVersion(result.stdout);
               return result.code === 0 && reportedVersion === input.cliVersion
                 ? Effect.void
                 : Effect.fail(
@@ -383,10 +404,24 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
 
   const status: BootService["Service"]["status"] = Effect.gen(function* () {
     if (platform !== "linux" || homeDir === "") {
-      return { supported: false, installed: false, current: false, unitPath, logPath };
+      return {
+        supported: false,
+        installed: false,
+        current: false,
+        unitPath,
+        logPath,
+        runtimeVersion: null,
+      };
     }
     if (!(yield* fs.exists(unitPath))) {
-      return { supported: true, installed: false, current: false, unitPath, logPath };
+      return {
+        supported: true,
+        installed: false,
+        current: false,
+        unitPath,
+        logPath,
+        runtimeVersion: null,
+      };
     }
     const [unit, launcherExists, runtimeEntryExists, runtimeSentinel, stateText] =
       yield* Effect.all([
@@ -397,9 +432,25 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         fs.readFileString(statePath).pipe(Effect.option),
       ]);
     const state = Option.isSome(stateText) ? parseServiceState(stateText.value) : undefined;
+    // Ask the binary the daemon runs what it is, rather than assuming it
+    // matches this CLI. Diagnostic only: a runtime that cannot answer still
+    // reports its install state normally.
+    const runtimeVersion = runtimeEntryExists
+      ? yield* runner
+          .run({
+            command: host.execPath,
+            args: [runtimePaths.entryPath, "--version"],
+            timeout: Duration.seconds(30),
+          })
+          .pipe(
+            Effect.map((result) => (result.code === 0 ? result.stdout.trim() : null)),
+            Effect.orElseSucceed(() => null),
+          )
+      : null;
     return {
       supported: true,
       installed: true,
+      runtimeVersion,
       current:
         unit === renderBootServiceUnit(plan) &&
         launcherExists &&

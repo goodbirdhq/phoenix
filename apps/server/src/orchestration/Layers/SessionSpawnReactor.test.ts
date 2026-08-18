@@ -51,6 +51,7 @@ const makeShell = (
   threadId: ThreadId,
   status: OrchestrationSession["status"],
   updatedAt = NOW,
+  reportDelivery: OrchestrationThreadShell["reportDelivery"] = null,
 ): OrchestrationThreadShell => ({
   id: threadId,
   projectId: ProjectId.make("project-1"),
@@ -61,6 +62,7 @@ const makeShell = (
   branch: null,
   worktreePath: null,
   spawnedByThreadId: threadId === CHILD_ID ? PARENT_ID : null,
+  reportDelivery,
   latestTurn: null,
   createdAt: NOW,
   updatedAt,
@@ -163,10 +165,13 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   readonly queuedMessages?: Readonly<
     Record<string, { readonly text: string; readonly createdAt: string }>
   >;
+  readonly reportDelivery?: OrchestrationThreadShell["reportDelivery"];
 }) {
   const commands = yield* Ref.make<Array<OrchestrationCommand>>([]);
   const queuedRows = input.queuedRowsRef ?? (yield* Ref.make([...input.queued]));
-  const childShell = yield* Ref.make(makeShell(CHILD_ID, input.status, input.updatedAt));
+  const childShell = yield* Ref.make(
+    makeShell(CHILD_ID, input.status, input.updatedAt, input.reportDelivery ?? null),
+  );
   const events = yield* PubSub.unbounded<OrchestrationEvent>();
   let sequence = 0;
 
@@ -290,30 +295,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
 });
 
 describe("SessionSpawnReactor queued delivery", () => {
-  it.effect("cancels a positively identified legacy queued report without releasing a turn", () =>
-    Effect.scoped(
-      createHarness({
-        status: "ready",
-        queued: [queued("legacy")],
-        queuedMessageText:
-          '[Phoenix] Spawned session "Child" posted a success report: Done\n\nSummary.\n\n(spawned thread: child-thread)',
-        queuedMessageCreatedAt: "1960-01-01T00:00:00.000Z",
-      }).pipe(
-        Effect.map(({ commands }) => {
-          expect(
-            commands.filter((command) => command.type === "thread.turn.start.queued"),
-          ).toHaveLength(0);
-          const cancelled = commands.find((command) => command.type === "thread.turn.queue.cancel");
-          expect(cancelled?.type === "thread.turn.queue.cancel" && cancelled.reason).toBe(
-            "legacy_report_notification",
-          );
-        }),
-        Effect.provide(NodeServices.layer),
-      ),
-    ),
-  );
-
-  it.effect("keeps a current user message that quotes a legacy report envelope", () =>
+  it.effect("releases a queued user message that quotes a report envelope", () =>
     Effect.scoped(
       createHarness({
         status: "ready",
@@ -334,69 +316,6 @@ describe("SessionSpawnReactor queued delivery", () => {
     ),
   );
 
-  it.effect(
-    "cancels a synthesized terminal report and a report with the legacy queue warning",
-    () =>
-      Effect.scoped(
-        Effect.forEach(
-          [
-            '[Phoenix] Spawned session "Child" ended without posting a report. Phoenix generated a failure report for it: Failed\n\nSummary.\n\n(spawned thread: child-thread)',
-            '[Phoenix] Spawned session "Child" posted a success report: Done\n\nSummary.\n\n(spawned thread: child-thread)\n\n[Phoenix] 2 queued messages were not consumed before this report was written: queued-a, queued-b.',
-          ],
-          (queuedMessageText) =>
-            createHarness({
-              status: "ready",
-              queued: [queued("legacy")],
-              queuedMessageText,
-              queuedMessageCreatedAt: "1960-01-01T00:00:00.000Z",
-            }).pipe(
-              Effect.map(({ commands }) => {
-                expect(
-                  commands.filter((command) => command.type === "thread.turn.queue.cancel"),
-                ).toHaveLength(1);
-                expect(
-                  commands.filter((command) => command.type === "thread.turn.start.queued"),
-                ).toHaveLength(0);
-              }),
-            ),
-          { concurrency: 1 },
-        ).pipe(Effect.provide(NodeServices.layer)),
-      ),
-  );
-
-  it.effect("drains consecutive legacy rows and releases the following user message", () =>
-    Effect.scoped(
-      createHarness({
-        status: "ready",
-        queued: [queued("legacy-1"), queued("legacy-2"), queued("real")],
-        queuedMessages: {
-          "queued-legacy-1": {
-            text: '[Phoenix] Spawned session "Child" posted a success report: Done\n\nSummary.\n\n(spawned thread: child-thread)',
-            createdAt: "1960-01-01T00:00:00.000Z",
-          },
-          "queued-legacy-2": {
-            text: '[Phoenix] Spawned session "Child" posted a success report: Done\n\nSummary.\n\n(spawned thread: child-thread)',
-            createdAt: "1960-01-01T00:00:00.000Z",
-          },
-          "queued-real": {
-            text: "Please review the reports.",
-            createdAt: "1960-01-01T00:00:00.000Z",
-          },
-        },
-      }).pipe(
-        Effect.map(({ commands }) => {
-          expect(
-            commands.filter((command) => command.type === "thread.turn.queue.cancel"),
-          ).toHaveLength(2);
-          const release = commands.find((command) => command.type === "thread.turn.start.queued");
-          expect(release?.type === "thread.turn.start.queued" && release.messageId).toBe(
-            MessageId.make("queued-real"),
-          );
-        }),
-        Effect.provide(NodeServices.layer),
-      ),
-    ),
-  );
   it.effect("releases the FIFO head at a ready turn boundary", () =>
     Effect.scoped(
       createHarness({ status: "ready", queued: [queued("first"), queued("second")] }).pipe(
@@ -512,9 +431,12 @@ describe("SessionSpawnReactor queued delivery", () => {
             reportId: "report-queued-warning",
             childThreadId: CHILD_ID,
           });
-          expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(
-            0,
-          );
+          // The parent is mid-turn, so the report is handed over as an
+          // ordinary turn start and the decider queues it behind that turn —
+          // the same path a human message takes into a busy session.
+          const delivery = commands.filter((command) => command.type === "thread.turn.start");
+          expect(delivery).toHaveLength(1);
+          expect(delivery[0]?.type === "thread.turn.start" && delivery[0].threadId).toBe(PARENT_ID);
         }),
         Effect.provide(NodeServices.layer),
       ),
@@ -810,8 +732,12 @@ describe("SessionSpawnReactor report notifications", () => {
             supersedesReportId: "report-original",
             origin: "agent",
           });
-          expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(
-            0,
+          // An amendment is a new account of the work, so it is delivered like
+          // any other report rather than only updating the inbox row.
+          const delivery = commands.filter((command) => command.type === "thread.turn.start");
+          expect(delivery).toHaveLength(1);
+          expect(delivery[0]?.type === "thread.turn.start" && delivery[0].message.text).toContain(
+            "AMENDED report (supersedes report-original)",
           );
         }),
         Effect.provide(NodeServices.layer),
@@ -819,7 +745,7 @@ describe("SessionSpawnReactor report notifications", () => {
     ),
   );
 
-  it.effect("coalesces a six-report busy-parent burst into activity without queued turns", () =>
+  it.effect("delivers every report in a six-report burst to the parent", () =>
     Effect.scoped(
       createHarness({
         status: "ready",
@@ -839,12 +765,61 @@ describe("SessionSpawnReactor report notifications", () => {
             "report-5",
             "report-6",
           ]);
+          // Every report is also handed to the parent. The parent only ever
+          // runs one turn at a time, so the decider queues the rest behind the
+          // first; a burst costs the parent turns, which is why a caller that
+          // does not want that spawns with "notify-only".
+          const delivery = commands.filter((command) => command.type === "thread.turn.start");
+          expect(delivery).toHaveLength(6);
+          const deliveredMessageIds = delivery.map((command) =>
+            command.type === "thread.turn.start" ? command.message.messageId : undefined,
+          );
+          expect(new Set(deliveredMessageIds).size).toBe(6);
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("records the notification but wakes nobody when delivery is notify-only", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        reportDelivery: "notify-only",
+        boundaryEvents: [reportPostedEvent(report({ reportId: "report-quiet" }), 2)],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const delivered = deliveredToParent(commands);
+          expect(delivered).toHaveLength(1);
+          expect(delivered[0]?.payload).toMatchObject({ reportId: "report-quiet" });
           expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(
             0,
           );
-          expect(
-            commands.filter((command) => command.type === "thread.turn.start.queued"),
-          ).toHaveLength(0);
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("reuses one delivery command id when a report event is replayed", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        boundaryEvents: [
+          reportPostedEvent(report({ reportId: "report-replayed" }), 2),
+          reportPostedEvent(report({ reportId: "report-replayed" }), 2),
+        ],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          // Deterministic command ids are what make redelivery after a crash
+          // idempotent: the engine receipts the first one and the replay is a
+          // no-op rather than a second copy of the report.
+          const deliveryIds = commands
+            .filter((command) => command.type === "thread.turn.start")
+            .map((command) => command.commandId);
+          expect(new Set(deliveryIds).size).toBe(1);
         }),
         Effect.provide(NodeServices.layer),
       ),

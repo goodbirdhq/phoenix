@@ -380,4 +380,58 @@ it.layer(NodeServices.layer)("report decider", (it) => {
       expect(result._tag).toBe("OrchestrationCommandInvariantError");
     }),
   );
+
+  it.effect("carries the spawn-time report delivery choice onto thread.created", () =>
+    Effect.gen(function* () {
+      // thread.create requires its project to exist in the read model.
+      const readModelWithProject: OrchestrationReadModel = {
+        ...readModel,
+        projects: [
+          {
+            id: ProjectId.make("project-1"),
+            title: "Project",
+            workspaceRoot: "/tmp/project-1",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: CREATED_AT,
+            updatedAt: CREATED_AT,
+            deletedAt: null,
+          },
+        ],
+      };
+      const decide = (reportDelivery: "queue" | "notify-only" | undefined) =>
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.create",
+            commandId: CommandId.make(`cmd-create-${reportDelivery ?? "unset"}`),
+            threadId: ThreadId.make(`thread-new-${reportDelivery ?? "unset"}`),
+            projectId: ProjectId.make("project-1"),
+            title: "Spawned worker",
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            spawnedByThreadId: ThreadId.make("thread-1"),
+            ...(reportDelivery === undefined ? {} : { reportDelivery }),
+            createdAt: CREATED_AT,
+          },
+          readModel: readModelWithProject,
+        }).pipe(
+          Effect.map((result) => {
+            const events = Array.isArray(result) ? result : [result];
+            const created = events.find((event) => event.type === "thread.created");
+            return created?.type === "thread.created" ? created.payload.reportDelivery : "missing";
+          }),
+        );
+
+      // The reactor reads this back at report time, and the field is optional,
+      // so a dropped value would silently read as the default rather than
+      // failing — which is exactly why it is asserted here.
+      expect(yield* decide("notify-only")).toBe("notify-only");
+      expect(yield* decide("queue")).toBe("queue");
+      // Threads nobody configured carry null; the reactor applies the default.
+      expect(yield* decide(undefined)).toBeNull();
+    }),
+  );
 });

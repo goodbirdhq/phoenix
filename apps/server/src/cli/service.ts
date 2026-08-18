@@ -5,6 +5,7 @@ import * as Terminal from "effect/Terminal";
 import { Command, GlobalFlag } from "effect/unstable/cli";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { formatCliVersion } from "../buildInfo.ts";
 import * as BootService from "../cloud/bootService.ts";
 import type * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -20,6 +21,7 @@ export const bootServiceLayer = (config: ServerConfig.ServerConfig["Service"]) =
 export function formatServiceStatus(
   status: BootService.BootServiceStatus,
   cliVersion: string,
+  cliBuild: string = formatCliVersion(cliVersion),
 ): string {
   if (!status.supported) {
     return "Phoenix service\n  Status: unavailable on this machine\n  Supported on: Linux with systemd";
@@ -30,6 +32,11 @@ export function formatServiceStatus(
   return [
     "Phoenix service",
     `  Status: ${status.current ? `installed · phoenix@${cliVersion}` : "needs an update or repair"}`,
+    // The daemon runs a pinned copy, so an upgraded CLI does not mean an
+    // upgraded service until it is reinstalled. Naming both builds is what
+    // makes that gap visible instead of something to infer from release dates.
+    `  Service build: ${status.runtimeVersion ?? "unavailable"}`,
+    `  CLI build: ${cliBuild}`,
     `  Unit: ${status.unitPath}`,
     `  Logs: ${status.logPath}`,
     ...(status.current

@@ -357,6 +357,7 @@ export const make = Effect.gen(function* () {
           branch: bootstrap.createThread.branch,
           worktreePath: bootstrap.createThread.worktreePath,
           spawnedByThreadId: bootstrap.createThread.spawnedByThreadId ?? null,
+          reportDelivery: bootstrap.createThread.reportDelivery ?? null,
           createdAt: bootstrap.createThread.createdAt,
         });
         createdThread = true;

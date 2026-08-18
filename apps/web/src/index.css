@@ -1879,6 +1879,65 @@ code {
   }
 }
 
+/* Child-report inbox icon.
+
+   Every animation here is one-shot and event-driven: the icon mounts when a
+   report arrives, replays the flash when another lands (React remounts it by
+   key), and plays the exit once when the parent has read them all. Nothing
+   loops, so an unread report parked in the corner costs no repaints. */
+@keyframes session-inbox-icon-enter {
+  0% {
+    opacity: 0;
+    transform: scale(0.6) translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Two stepped pulses, then rest. steps() keeps this to a handful of paints
+   instead of one per frame for the whole duration. */
+@keyframes session-inbox-icon-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  25%,
+  75% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 45%, transparent);
+    animation-timing-function: steps(4);
+  }
+}
+
+@keyframes session-inbox-icon-exit {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+.session-inbox-icon-enter {
+  animation:
+    session-inbox-icon-enter 180ms ease-out 1,
+    session-inbox-icon-flash 900ms ease-in-out 1;
+}
+
+.session-inbox-icon-exit {
+  animation: session-inbox-icon-exit 180ms ease-in 1 both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-inbox-icon-enter,
+  .session-inbox-icon-exit {
+    animation: none;
+  }
+}
+
 @keyframes provider-update-pill-countdown {
   from {
     transform: scaleX(1);

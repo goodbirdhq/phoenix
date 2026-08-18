@@ -18,6 +18,7 @@ import {
   RuntimeMode,
   SessionReport,
   SessionReportArtifact,
+  SessionReportDelivery,
   SessionReportFinding,
   SessionReportOrigin,
   SessionReportStatus,
@@ -102,6 +103,10 @@ export const SpawnSessionInput = Schema.Struct({
   // thread's own mode.
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  // Whether this child's completion report wakes the calling session.
+  // "queue" (default) delivers it like a human message; "notify-only" leaves
+  // it as a passive notification to read on the caller's own schedule.
+  reportDelivery: Schema.optional(SessionReportDelivery),
 });
 export type SpawnSessionInput = typeof SpawnSessionInput.Type;
 

@@ -62,6 +62,7 @@ import Migration0046 from "./Migrations/046_ProjectionThreadReportAbstract.ts";
 import Migration0047 from "./Migrations/047_ProjectionQueuedTurnReceipts.ts";
 import Migration0048 from "./Migrations/048_ProjectionThreadReportSupersedes.ts";
 import Migration0049 from "./Migrations/049_QueuedDeliveryRecovery.ts";
+import Migration0050 from "./Migrations/050_ProjectionThreadsReportDelivery.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -123,6 +124,7 @@ export const migrationEntries = [
   [47, "ProjectionQueuedTurnReceipts", Migration0047],
   [48, "ProjectionThreadReportSupersedes", Migration0048],
   [49, "QueuedDeliveryRecovery", Migration0049],
+  [50, "ProjectionThreadsReportDelivery", Migration0050],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

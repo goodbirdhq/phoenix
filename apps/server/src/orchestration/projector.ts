@@ -347,6 +347,7 @@ export function projectEvent(
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             spawnedByThreadId: payload.spawnedByThreadId ?? null,
+            reportDelivery: payload.reportDelivery ?? null,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
