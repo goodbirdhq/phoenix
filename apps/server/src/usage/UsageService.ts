@@ -35,8 +35,12 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
-import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
+import {
+  claudeInstanceHomes,
+  claudeProjectsDirCandidates,
+  codexInstanceHomes,
+  type ProviderInstanceHome,
+} from "../provider/providerHomes.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
 import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
@@ -117,6 +121,13 @@ export const layerTest = Layer.succeed(
   }),
 );
 
+/** One physical directory to scan, and the source row it will report as. */
+interface TranscriptDir {
+  readonly provider: UsageProviderKind;
+  readonly dir: string;
+  readonly sourceId: string;
+}
+
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -185,19 +196,22 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Claude's config dir is the home itself when overridden, but a default
-   * install nests transcripts under `~/.claude/projects`. Probe both.
+   * The one directory to scan for a Claude home: the first candidate layout
+   * that exists, or the last one, which then reports itself as missing.
    */
-  const resolveClaudeTranscriptDir = (homePath: string) =>
+  const resolveClaudeTranscriptDir = (home: ProviderInstanceHome) =>
     Effect.gen(function* () {
-      const nested = path.join(homePath, ".claude", "projects");
-      const nestedExists = yield* fileSystem
-        .exists(nested)
-        .pipe(Effect.catchCause(() => Effect.succeed(false)));
-      return nestedExists ? nested : path.join(homePath, "projects");
+      const candidates = yield* claudeProjectsDirCandidates(home);
+      for (const candidate of candidates) {
+        const exists = yield* fileSystem
+          .exists(candidate)
+          .pipe(Effect.catchCause(() => Effect.succeed(false)));
+        if (exists) return candidate;
+      }
+      return candidates[candidates.length - 1] ?? home.homePath;
     });
 
-  /** Resolves the transcript directory for each provider. */
+  /** Resolves the transcript directories of every configured provider instance. */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* () {
     // A settings failure must surface as an error: swallowing it here would
     // present "zero usage from every provider" as a valid answer.
@@ -215,14 +229,28 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-    const claudeHome = yield* resolveClaudeHomePath(settings.providers.claudeAgent);
-    const claudeDir = yield* resolveClaudeTranscriptDir(claudeHome);
-    const codexLayout = yield* resolveCodexHomeLayout(settings.providers.codex);
+    // Every configured instance, not just the default one: a machine with two
+    // signed-in Claude accounts keeps two homes, and scanning one of them
+    // reports half the tokens as all of them.
+    const dirs: TranscriptDir[] = [];
+    const seenDirs = new Set<string>();
+    const addDir = (provider: UsageProviderKind, dir: string) => {
+      if (seenDirs.has(dir)) return;
+      seenDirs.add(dir);
+      // Positional, and meaningful only inside this summary: buckets point at
+      // it so a client can drop one duplicated directory without dropping the
+      // provider's other homes with it.
+      dirs.push({ provider, dir, sourceId: String(dirs.length) });
+    };
 
-    return [
-      { provider: "claude" as const, dir: claudeDir },
-      { provider: "codex" as const, dir: path.join(codexLayout.sharedHomePath, "sessions") },
-    ];
+    for (const home of yield* claudeInstanceHomes(settings)) {
+      addDir("claude", yield* resolveClaudeTranscriptDir(home));
+    }
+    for (const home of yield* codexInstanceHomes(settings)) {
+      addDir("codex", path.join(home.homePath, "sessions"));
+    }
+
+    return dirs;
   });
 
   /**
@@ -353,7 +381,7 @@ export const make = Effect.gen(function* () {
     const livePaths = new Set<string>();
     const walkedRoots: string[] = [];
 
-    for (const { provider, dir } of dirs) {
+    for (const { provider, dir, sourceId } of dirs) {
       const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
       const exists = yield* fileSystem
         .exists(dir)
@@ -362,6 +390,7 @@ export const make = Effect.gen(function* () {
       if (!exists) {
         sources.push({
           fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
+          id: sourceId,
           status: "missing",
           scannedFiles: 0,
           skippedFiles: 0,
@@ -391,7 +420,7 @@ export const make = Effect.gen(function* () {
         for (const record of records) {
           // Only sessions that contributed in-window count: the mtime slack
           // admits boundary files whose records fall outside the range.
-          if (aggregator.add(record) && record.sessionId.length > 0) {
+          if (aggregator.add(record, sourceId) && record.sessionId.length > 0) {
             sessionIds.add(record.sessionId);
           }
         }
@@ -399,6 +428,7 @@ export const make = Effect.gen(function* () {
 
       sources.push({
         fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
+        id: sourceId,
         status: "ok",
         scannedFiles,
         skippedFiles,

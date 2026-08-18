@@ -40,6 +40,7 @@ function summary(
     homePath: string;
     volumeId?: string;
     distinctSessions?: number;
+    id?: string;
   }[],
   contractVersion: number = USAGE_CONTRACT_VERSION,
 ): UsageSummary {
@@ -57,6 +58,7 @@ function summary(
         resolvedHomePath: source.homePath,
         volumeId: source.volumeId ?? `vol-${source.hostId}`,
       },
+      ...(source.id === undefined ? {} : { id: source.id }),
       status: "ok" as const,
       scannedFiles: 1,
       skippedFiles: 0,
@@ -138,6 +140,64 @@ describe("mergeUsage", () => {
       "claude",
       "codex",
     ]);
+  });
+
+  it("counts a shared home once when the other environment reads a second one", () => {
+    // Two signed-in Claude accounts on one machine: env-b scans both homes,
+    // env-a only the first. Attributing buckets to the source they came from
+    // is what keeps the shared home from being counted twice while env-b's
+    // own second account still lands.
+    const sharedClaude = {
+      provider: "claude" as const,
+      hostId: "agents",
+      homePath: "/home/neil/.claude-a",
+    };
+    const merged = mergeUsage(
+      [
+        environment("env-a", summary([bucket({ sourceId: "0" })], [{ ...sharedClaude, id: "0" }])),
+        environment(
+          "env-b",
+          summary(
+            [bucket({ sourceId: "0" }), bucket({ sourceId: "1", costUsd: 3, records: 2 })],
+            [
+              { ...sharedClaude, id: "0" },
+              {
+                provider: "claude" as const,
+                hostId: "agents",
+                homePath: "/home/neil/.claude-b",
+                id: "1",
+              },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    // 10 from the shared home, counted once, plus 3 from the second account.
+    expect(merged.costUsd).toBe(13);
+    expect(merged.records).toBe(7);
+    expect(merged.duplicateSources).toHaveLength(1);
+  });
+
+  it("still drops a duplicate wholesale for an environment that reports no source ids", () => {
+    // An environment built before per-source attribution says only which
+    // provider a bucket belongs to. Dropping that provider entirely is the
+    // only safe reading, and must keep working.
+    const sharedClaude = {
+      provider: "claude" as const,
+      hostId: "agents",
+      homePath: "/home/neil/.claude-a",
+    };
+    const merged = mergeUsage(
+      [
+        environment("env-a", summary([bucket()], [sharedClaude])),
+        environment("env-b", summary([bucket()], [sharedClaude])),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(10);
   });
 
   it("excludes an environment reporting an older contract version", () => {

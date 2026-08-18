@@ -19,6 +19,8 @@ export type SubscriptionAvailabilitySource = {
   readonly instanceId: string;
   readonly driver: string;
   readonly displayName: string;
+  /** The instance's own accent colour, so a card can be recognised at a glance. */
+  readonly accentColor?: string | undefined;
   readonly enabled?: boolean | undefined;
   readonly authenticated?: boolean | undefined;
   readonly availability: ProviderAvailability;
@@ -29,6 +31,19 @@ export type SubscriptionLimit = {
   readonly key: string;
   /** Account name when the provider supplied one, otherwise the connection name. */
   readonly name: string;
+  /** Driver of the instances behind this card, for its provider mark. */
+  readonly driver: string;
+  /**
+   * Configured instances behind this card, by display name.
+   *
+   * A card named by account says who the subscription belongs to but not which
+   * instance in Settings it is, and with two accounts of one provider that is
+   * exactly the question being asked. Empty when the card is already named
+   * after its only instance.
+   */
+  readonly instanceLabels: readonly string[];
+  /** Accent colour of the instance behind this card, when they agree on one. */
+  readonly accentColor: string | undefined;
   readonly availability: ProviderAvailability;
   /** Every environment that contributed this displayed reading. */
   readonly environmentLabels: readonly string[];
@@ -147,16 +162,27 @@ export function deriveSubscriptionLimits(
     else groups.set(key, [source]);
   }
 
-  return [...groups.entries()]
+  const limits = [...groups.entries()]
     .map(([key, members]) => {
       const newest = members.toSorted(
         (left, right) =>
           availabilityObservedAt(right.availability) - availabilityObservedAt(left.availability),
       )[0]!;
       const account = newest.availability.account;
+      const name = account?.displayName ?? newest.displayName;
+      const instanceLabels = [...new Set(members.map((member) => member.displayName))].toSorted();
+      const accentColors = new Set(
+        members.flatMap((member) => (member.accentColor ? [member.accentColor] : [])),
+      );
       return {
         key,
-        name: account?.displayName ?? newest.displayName,
+        name,
+        driver: newest.driver,
+        // A card that already carries the instance's name does not need it
+        // repeated as a tag.
+        instanceLabels:
+          instanceLabels.length === 1 && instanceLabels[0] === name ? [] : instanceLabels,
+        accentColor: accentColors.size === 1 ? [...accentColors][0] : undefined,
         availability: newest.availability,
         environmentLabels: [...new Set(members.map((member) => member.environmentLabel))],
         isAccount: account?.verification === "native_verified",
@@ -170,4 +196,17 @@ export function deriveSubscriptionLimits(
     .toSorted(
       (left, right) => left.name.localeCompare(right.name) || left.key.localeCompare(right.key),
     );
+
+  // A provider that reported real quota somewhere has already answered the
+  // question these cards exist to answer. Its other cards carry no bars — only
+  // a "could not read this one" notice — and repeating that per instance
+  // crowds out the reading the person actually came for. Kept when nothing of
+  // that provider reported anything, since then the notice is the only answer
+  // available.
+  const answeredDrivers = new Set(
+    limits.flatMap((limit) => (limit.availability.windows.length > 0 ? [limit.driver] : [])),
+  );
+  return limits.filter(
+    (limit) => limit.availability.windows.length > 0 || !answeredDrivers.has(limit.driver),
+  );
 }

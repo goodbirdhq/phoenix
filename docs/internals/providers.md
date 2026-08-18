@@ -39,6 +39,18 @@ directory to route session and turn operations for a thread, so callers name a t
 Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
 orchestration, contract, or client change is required for the common case.
 
+### Reading provider state outside the registry
+
+Features that read a provider's files rather than talk to it — usage scanning, workflow script
+containment — must not read `settings.providers.<kind>` directly. That field is the legacy
+single-instance mirror, so a machine with two signed-in accounts would be seen as having one, and
+the second account's history reads as missing. [`providerHomes`][homes] enumerates every configured
+instance of a driver, applies the same legacy-mirror rule the registry hydration does, and
+de-duplicates homes two instances happen to share. It resolves paths only; existence and what to do
+about a missing directory stay with the caller.
+
+[homes]: ../../apps/server/src/provider/providerHomes.ts
+
 ## How provider work is requested
 
 Clients never call a provider directly. They dispatch orchestration commands over the RPC method

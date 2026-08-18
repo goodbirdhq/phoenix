@@ -83,6 +83,18 @@ export const UsageBucket = Schema.Struct({
   day: UsageDay,
   hourStart: Schema.optional(TrimmedNonEmptyString),
   provider: UsageProviderKind,
+  /**
+   * Which {@link UsageSource} on the reporting environment produced this cell.
+   *
+   * One environment can read several homes for the same provider (a machine
+   * with two signed-in Claude accounts, for instance), so provider alone no
+   * longer identifies where a bucket came from. Clients drop duplicated
+   * directories per source, and need this to drop the right buckets with them.
+   *
+   * Optional: an environment built before per-source attribution omits it, and
+   * clients then fall back to dropping duplicates a whole provider at a time.
+   */
+  sourceId: Schema.optional(TrimmedNonEmptyString),
   model: TrimmedNonEmptyString,
   totals: UsageTokenTotals,
   costUsd: Schema.Number,
@@ -130,6 +142,12 @@ export type UsageSourceStatus = typeof UsageSourceStatus.Type;
 
 export const UsageSource = Schema.Struct({
   fingerprint: UsageSourceFingerprint,
+  /**
+   * Identifies this source within its own summary, and nothing beyond it. It
+   * is what {@link UsageBucket.sourceId} points at; the fingerprint remains the
+   * cross-environment identity. Optional for the same reason as `sourceId`.
+   */
+  id: Schema.optional(TrimmedNonEmptyString),
   status: UsageSourceStatus,
   scannedFiles: NonNegativeInt,
   skippedFiles: NonNegativeInt,

@@ -28,6 +28,7 @@ import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../components/AppText";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
+import { ProviderIcon } from "../../components/ProviderIcon";
 import { SettingsSection } from "../settings/components/SettingsSection";
 import { UsageDailyChart } from "./UsageDailyChart";
 import type { UsageChartMetric } from "./usageChartData";
@@ -77,6 +78,7 @@ export function UsageRouteScreen() {
               driver: entry.driver,
               displayName:
                 entry.displayName ?? provider?.displayName ?? providerLimitSourceName(entry.driver),
+              ...(provider?.accentColor ? { accentColor: provider.accentColor } : {}),
               enabled: provider?.enabled === true,
               authenticated: provider?.auth.status === "authenticated",
               availability: entry.availability,
@@ -233,10 +235,31 @@ function SubscriptionLimitsSection(props: {
           {props.limits.map((limit) => (
             <View key={limit.key} className="gap-3 rounded-[16px] border-continuous bg-sheet p-3.5">
               <View className="flex-row items-start justify-between gap-3">
+                <View className="mt-0.5">
+                  <ProviderIcon provider={limit.driver} size={18} />
+                </View>
                 <View className="min-w-0 flex-1 gap-0.5">
-                  <Text className="text-base font-t3-medium text-foreground" numberOfLines={1}>
-                    {limit.name}
-                  </Text>
+                  <View className="flex-row flex-wrap items-center gap-1.5">
+                    <Text
+                      className="shrink text-base font-t3-medium text-foreground"
+                      numberOfLines={1}
+                    >
+                      {limit.name}
+                    </Text>
+                    {limit.instanceLabels.map((label) => (
+                      <Text
+                        key={label}
+                        className="rounded-full border-continuous border border-border px-1.5 py-0.5 text-[10px] font-t3-medium leading-none text-foreground-muted"
+                        style={
+                          limit.accentColor
+                            ? { borderColor: limit.accentColor, color: limit.accentColor }
+                            : undefined
+                        }
+                      >
+                        {label}
+                      </Text>
+                    ))}
+                  </View>
                   <Text className="text-xs leading-relaxed text-foreground-muted">
                     Reported by {limit.environmentLabels.join(", ")}
                     {!limit.isAccount

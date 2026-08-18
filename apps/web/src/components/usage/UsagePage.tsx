@@ -74,6 +74,7 @@ export function UsagePage() {
               driver: entry.driver,
               displayName:
                 entry.displayName ?? provider?.displayName ?? providerLimitSourceName(entry.driver),
+              ...(provider?.accentColor ? { accentColor: provider.accentColor } : {}),
               enabled: provider?.enabled === true,
               authenticated: provider?.auth.status === "authenticated",
               availability: entry.availability,
