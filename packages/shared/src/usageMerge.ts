@@ -131,25 +131,41 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
   return { ownerByFingerprint, duplicates };
 }
 
-/** Sources this environment owns after fingerprint claims, plus their buckets. */
+/**
+ * Sources this environment owns after fingerprint claims, plus their buckets.
+ *
+ * An environment can read several homes for one provider — two signed-in
+ * Claude accounts, for instance — and may own some of them while another
+ * environment owns the rest. So ownership is resolved per source wherever the
+ * buckets say which source they came from, and only falls back to "this
+ * provider, wholesale" for an environment old enough not to say. Without that
+ * fallback the older environment's usage would vanish; without the per-source
+ * rule, its shared directory would be counted twice.
+ */
 function ownedContribution(
   environment: EnvironmentUsage,
   ownerByFingerprint: ReadonlyMap<string, EnvironmentId>,
 ): { readonly buckets: readonly UsageBucket[]; readonly sessions: number } {
   const ownedProviders = new Set<UsageProviderKind>();
+  const ownedSourceIds = new Set<string>();
   let sessions = 0;
   for (const source of environment.summary.sources) {
     if (source.status === "missing") continue;
     const key = fingerprintKey(source.fingerprint);
     if (ownerByFingerprint.get(key) === environment.environmentId) {
       ownedProviders.add(source.fingerprint.provider);
+      if (source.id !== undefined) ownedSourceIds.add(source.id);
       // Distinct within a directory. Summing per-bucket session counts instead
       // would count a session once per day and model it spans.
       sessions += source.distinctSessions;
     }
   }
   return {
-    buckets: environment.summary.buckets.filter((bucket) => ownedProviders.has(bucket.provider)),
+    buckets: environment.summary.buckets.filter((bucket) =>
+      bucket.sourceId === undefined
+        ? ownedProviders.has(bucket.provider)
+        : ownedSourceIds.has(bucket.sourceId),
+    ),
     sessions,
   };
 }

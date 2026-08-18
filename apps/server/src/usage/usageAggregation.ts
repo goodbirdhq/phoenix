@@ -46,7 +46,17 @@ export function makeDayFormatter(timeZone: string): (timestampMs: number) => str
 
 const HOUR_MS = 60 * 60 * 1000;
 
+/** What makes a bucket one cell, kept alongside it rather than re-parsed from its key. */
+interface BucketIdentity {
+  readonly day: string;
+  readonly hourStart: string;
+  readonly provider: UsageRecord["provider"];
+  readonly model: string;
+  readonly sourceId: string | undefined;
+}
+
 interface MutableBucket {
+  readonly identity: BucketIdentity;
   totals: UsageTokenTotals;
   costUsd: number;
   cacheSavingsUsd: number;
@@ -111,7 +121,7 @@ export class UsageAggregator {
    * can derive per-window facts (distinct sessions, for one) from the records
    * that landed rather than everything the mtime prefilter happened to admit.
    */
-  add(record: UsageRecord): boolean {
+  add(record: UsageRecord, sourceId?: string): boolean {
     if (record.dedupeKey !== null) {
       if (this.#seen.has(record.dedupeKey)) {
         this.#duplicatesDropped += 1;
@@ -145,10 +155,14 @@ export class UsageAggregator {
             this.#hourlyWindow.sinceTimeMs +
               Math.floor((record.timestampMs - this.#hourlyWindow.sinceTimeMs) / HOUR_MS) * HOUR_MS,
           ).toISOString();
-    const key = `${day}\u0000${hourStart}\u0000${record.provider}\u0000${record.model}`;
+    // The source is part of the cell identity, not decoration: a client that
+    // drops one duplicated directory has to be able to drop exactly the
+    // records that came from it.
+    const key = `${sourceId ?? ""}\u0000${day}\u0000${hourStart}\u0000${record.provider}\u0000${record.model}`;
     let bucket = this.#buckets.get(key);
     if (bucket === undefined) {
       bucket = {
+        identity: { day, hourStart, provider: record.provider, model: record.model, sourceId },
         totals: EMPTY_TOTALS,
         costUsd: 0,
         cacheSavingsUsd: 0,
@@ -179,12 +193,13 @@ export class UsageAggregator {
 
   finish(): AggregateResult {
     const buckets: UsageBucket[] = [];
-    for (const [key, bucket] of this.#buckets) {
-      const [day = "", hourStart = "", provider = "", model = ""] = key.split("\u0000");
+    for (const bucket of this.#buckets.values()) {
+      const { day, hourStart, provider, model, sourceId } = bucket.identity;
       buckets.push({
         day: day as UsageDay,
         ...(hourStart === "" ? {} : { hourStart }),
-        provider: provider as UsageBucket["provider"],
+        provider,
+        ...(sourceId === undefined ? {} : { sourceId }),
         model,
         totals: bucket.totals,
         costUsd: bucket.costUsd,
@@ -201,7 +216,8 @@ export class UsageAggregator {
         a.day.localeCompare(b.day) ||
         (a.hourStart ?? "").localeCompare(b.hourStart ?? "") ||
         a.provider.localeCompare(b.provider) ||
-        a.model.localeCompare(b.model),
+        a.model.localeCompare(b.model) ||
+        (a.sourceId ?? "").localeCompare(b.sourceId ?? ""),
     );
 
     return {

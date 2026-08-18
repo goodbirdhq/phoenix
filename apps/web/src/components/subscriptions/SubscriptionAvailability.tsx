@@ -6,10 +6,11 @@ import {
   type SubscriptionAvailabilitySource,
   type SubscriptionLimit,
 } from "@t3tools/client-runtime/usage/subscription-availability";
-import type { ProviderAvailability } from "@t3tools/contracts";
+import { ProviderDriverKind, type ProviderAvailability } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { useEffect, useState } from "react";
 
+import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { cn } from "../../lib/utils";
 
 export {
@@ -121,14 +122,40 @@ export function SubscriptionAvailabilitySection({
               className="rounded-lg border border-border bg-background p-4"
             >
               <div className="flex flex-wrap items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <h3 className="truncate font-medium text-foreground">{account.name}</h3>
-                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                    Reported by {account.environmentLabels.join(", ")}
-                    {!account.isAccount
-                      ? ". This provider does not share an account identity, so this reading stays separate."
-                      : ""}
-                  </p>
+                <div className="flex min-w-0 gap-2.5">
+                  <ProviderInstanceIcon
+                    driverKind={ProviderDriverKind.make(account.driver)}
+                    displayName={account.name}
+                    accentColor={account.accentColor}
+                    className="mt-0.5"
+                  />
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <h3 className="truncate font-medium text-foreground">{account.name}</h3>
+                      {account.instanceLabels.map((label) => (
+                        <span
+                          key={label}
+                          className="rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground"
+                          style={
+                            account.accentColor
+                              ? {
+                                  borderColor: account.accentColor,
+                                  color: account.accentColor,
+                                }
+                              : undefined
+                          }
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                      Reported by {account.environmentLabels.join(", ")}
+                      {!account.isAccount
+                        ? ". This provider does not share an account identity, so this reading stays separate."
+                        : ""}
+                    </p>
+                  </div>
                 </div>
                 {account.availability.status === "limited" ? (
                   <span className="rounded-full bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning">

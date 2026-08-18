@@ -72,6 +72,81 @@ describe("deriveSubscriptionLimits", () => {
     expect(limits[0]?.availability.windows[0]?.usedPercent).toBe(80);
   });
 
+  it("tags an account card with the instance it belongs to", () => {
+    // Two Claude accounts: a card named after the person still has to say
+    // which configured instance that is, or Settings and Usage cannot be
+    // read against each other.
+    const limits = deriveSubscriptionLimits([
+      source({
+        instanceId: "claudeAgent_claude_b",
+        displayName: "Claude B",
+        accentColor: "#16a34a",
+        availability: {
+          ...source().availability,
+          account: {
+            id: "goodbird",
+            verification: "native_verified",
+            displayName: "neil@goodbird.ai",
+          },
+        },
+      }),
+    ]);
+
+    expect(limits).toMatchObject([
+      {
+        name: "neil@goodbird.ai",
+        driver: "claudeAgent",
+        instanceLabels: ["Claude B"],
+        accentColor: "#16a34a",
+      },
+    ]);
+  });
+
+  it("does not repeat the instance name as a tag on its own card", () => {
+    expect(deriveSubscriptionLimits([source()])).toMatchObject([
+      { name: "Claude", instanceLabels: [] },
+    ]);
+  });
+
+  it("hides a provider's windowless cards once one of its accounts reports quota", () => {
+    // The agents environment could not read either Claude instance, but the
+    // Mac read one of the accounts. The two "could not read" cards say nothing
+    // the answered card does not.
+    const unreadable = {
+      status: "unknown",
+      source: "claude_cli_usage",
+      observedAt: "2026-08-17T18:00:00.000Z",
+      windows: [],
+    } as const;
+    const limits = deriveSubscriptionLimits([
+      source({ instanceId: "claudeAgent", displayName: "Claude A", availability: unreadable }),
+      source({ instanceId: "claudeAgent_b", displayName: "Claude B", availability: unreadable }),
+      source({
+        environmentId: "mac",
+        environmentLabel: "Neil's MacBook Pro",
+        instanceId: "claudeAgent_b",
+        displayName: "Claude B",
+        availability: {
+          ...source().availability,
+          account: {
+            id: "goodbird",
+            verification: "native_verified",
+            displayName: "neil@goodbird.ai",
+          },
+        },
+      }),
+      // Codex read nothing anywhere, so its notice is the only answer it has.
+      source({
+        instanceId: "codex",
+        driver: "codex",
+        displayName: "Codex",
+        availability: unreadable,
+      }),
+    ]);
+
+    expect(limits.map((limit) => limit.name)).toEqual(["Codex", "neil@goodbird.ai"]);
+  });
+
   it("requires a confirmed enabled and authenticated provider", () => {
     expect(deriveSubscriptionLimits([source()])).toHaveLength(1);
     expect(deriveSubscriptionLimits([source({ enabled: false })])).toEqual([]);

@@ -201,4 +201,45 @@ describe("UsageAggregator", () => {
 
     expect(result.buckets).toHaveLength(3);
   });
+
+  it("keeps two homes' identical cells apart, and tags each with its source", () => {
+    // Two signed-in accounts on one machine: same day, same model, different
+    // directory. A client that drops one of those directories as a duplicate
+    // has to be able to drop only its records.
+    const aggregator = new UsageAggregator({
+      timeZone: "UTC",
+      sinceDay: "2026-08-01",
+      untilDay: "2026-08-31",
+      rates,
+    });
+    aggregator.add(record({ dedupeKey: "msg_a:" }), "0");
+    aggregator.add(record({ dedupeKey: "msg_b:" }), "1");
+    const buckets = aggregator.finish().buckets;
+
+    expect(buckets.map((bucket) => bucket.sourceId)).toEqual(["0", "1"]);
+    expect(buckets.every((bucket) => bucket.records === 1)).toBe(true);
+  });
+
+  it("counts a record copied into both homes once", () => {
+    // Claude copies a message forward when a session is resumed, and a
+    // resumed session can be handed to the other account's home. De-duplication
+    // stays global across sources for exactly that reason.
+    const aggregator = new UsageAggregator({
+      timeZone: "UTC",
+      sinceDay: "2026-08-01",
+      untilDay: "2026-08-31",
+      rates,
+    });
+    expect(aggregator.add(record({ dedupeKey: "msg_1:" }), "0")).toBe(true);
+    expect(aggregator.add(record({ dedupeKey: "msg_1:" }), "1")).toBe(false);
+
+    const buckets = aggregator.finish().buckets;
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0]?.sourceId).toBe("0");
+  });
+
+  it("omits the source when the caller does not name one", () => {
+    const result = aggregate([record()]);
+    expect(result.buckets[0]?.sourceId).toBeUndefined();
+  });
 });

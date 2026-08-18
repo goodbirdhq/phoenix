@@ -4,9 +4,12 @@
  * "{} script" affordance.
  *
  * Containment rules (lifted from the reviewed #3650 inspection service):
- * - the resolved realpath must live under ~/.claude/projects (where the
- *   Claude harness persists workflow scripts) — realpath re-containment
- *   defeats symlink escapes, including a symlinked leaf file;
+ * - the resolved realpath must live under the projects directory of one of
+ *   the configured Claude instances (where the Claude harness persists
+ *   workflow scripts) — realpath re-containment defeats symlink escapes,
+ *   including a symlinked leaf file. Every instance counts: a machine with a
+ *   second signed-in account keeps its scripts under that account's
+ *   `CLAUDE_CONFIG_DIR`, and those scripts are no less real;
  * - only .js leaf files are served;
  * - reads are size-capped rather than failed, with a truncation marker.
  *
@@ -20,11 +23,55 @@ import * as NodePath from "node:path";
 import { OrchestrationGetWorkflowScriptError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
+import { claudeInstanceHomes, claudeProjectsDirCandidates } from "../provider/providerHomes.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+
 const SCRIPT_BYTE_CAP = 256 * 1024;
 
-function scriptsRoot(): string {
-  return NodePath.join(NodeOS.homedir(), ".claude", "projects");
-}
+/**
+ * Candidate roots, before realpath: both layouts of every configured Claude
+ * home. Settings that cannot be read degrade to the default home rather than
+ * taking the feature down — the containment check is what makes a path safe,
+ * and a shorter root list only ever refuses more.
+ */
+const candidateRoots = Effect.fn("orchestration.workflowScriptRoots")(function* () {
+  const settings = yield* ServerSettingsService.pipe(
+    Effect.flatMap((service) => service.getSettings),
+    Effect.catchCause((cause) =>
+      Effect.logDebug("Workflow script roots fell back to the default Claude home.", {
+        cause,
+      }).pipe(Effect.as(null)),
+    ),
+  );
+  const homes =
+    settings === null
+      ? [{ instanceId: "claudeAgent", homePath: NodeOS.homedir(), overridden: false }]
+      : yield* claudeInstanceHomes(settings);
+  const roots: string[] = [];
+  for (const home of homes) {
+    roots.push(...(yield* claudeProjectsDirCandidates(home)));
+  }
+  return roots;
+});
+
+/**
+ * Roots that exist, resolved through symlinks. A home that is configured but
+ * not present on disk simply contributes nothing.
+ */
+const resolveRoots = Effect.fn("orchestration.resolveWorkflowScriptRoots")(function* () {
+  const candidates = yield* candidateRoots();
+  const resolved: string[] = [];
+  for (const candidate of candidates) {
+    const real = yield* Effect.tryPromise(() => NodeFSP.realpath(candidate)).pipe(
+      Effect.catchCause(() => Effect.succeed(null)),
+    );
+    if (real !== null && !resolved.includes(real)) resolved.push(real);
+  }
+  return resolved;
+});
+
+const isContainedBy = (resolved: string, root: string): boolean =>
+  resolved === root || resolved.startsWith(`${root}${NodePath.sep}`);
 
 export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(function* (input: {
   readonly scriptPath: string;
@@ -37,15 +84,15 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
     );
   }
 
-  const root = yield* Effect.tryPromise({
-    try: () => NodeFSP.realpath(scriptsRoot()),
-    catch: (cause) =>
+  const roots = yield* resolveRoots();
+  if (roots.length === 0) {
+    return yield* Effect.fail(
       new OrchestrationGetWorkflowScriptError({
         reason: "root-unavailable",
         scriptPath: requested,
-        cause,
       }),
-  });
+    );
+  }
 
   // Realpath the FILE itself (not just its directory): a symlink named
   // like a script inside a contained directory must not escape.
@@ -59,7 +106,7 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
       }),
   });
 
-  if (resolved !== root && !resolved.startsWith(`${root}${NodePath.sep}`)) {
+  if (!roots.some((root) => isContainedBy(resolved, root))) {
     return yield* Effect.fail(
       new OrchestrationGetWorkflowScriptError({ reason: "outside-root", scriptPath: resolved }),
     );
