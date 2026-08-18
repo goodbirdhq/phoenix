@@ -662,36 +662,6 @@ export function projectEvent(
       });
     }
 
-    case "thread.turn-interrupt-requested": {
-      const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
-      if (!thread) return Effect.succeed(nextBase);
-      const interruptedTurnId = event.payload.turnId;
-      // The SQL projection has always recorded this; without the same case
-      // here the decider's read model kept reporting the turn as running, so
-      // the two projections of one event disagreed after every interrupt.
-      // Scoped to the turn the press actually targets, and only while that
-      // turn is still running — a terminal turn keeps the outcome it already
-      // recorded rather than being rewritten by a late press.
-      if (
-        interruptedTurnId === undefined ||
-        thread.latestTurn?.turnId !== interruptedTurnId ||
-        thread.latestTurn.state !== "running"
-      ) {
-        return Effect.succeed(nextBase);
-      }
-      return Effect.succeed({
-        ...nextBase,
-        threads: updateThread(nextBase.threads, event.payload.threadId, {
-          latestTurn: {
-            ...thread.latestTurn,
-            state: "interrupted",
-            completedAt: thread.latestTurn.completedAt ?? event.payload.createdAt,
-          },
-          updatedAt: event.occurredAt,
-        }),
-      });
-    }
-
     case "thread.turn-start-consumed":
     case "thread.turn-start-cancelled": {
       const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
