@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   ApprovalRequestId,
   EventId,
@@ -50,6 +50,29 @@ export const ProviderSession = Schema.Struct({
 });
 export type ProviderSession = typeof ProviderSession.Type;
 
+/**
+ * Conversation history handed to a provider adapter when a thread starts on a
+ * new provider session (thread migration). Phoenix reconstructs this from its
+ * own event store — provider-native session files are instance-scoped and do
+ * not travel. `messages` is a mechanical transcript (replay); `brief` is a
+ * handoff document written by the origin agent. Either may be present; from
+ * the adapter's perspective both are just content to seed.
+ */
+export const ProviderConversationSeedMessage = Schema.Struct({
+  role: Schema.Literals(["user", "assistant"]),
+  text: Schema.String,
+});
+export type ProviderConversationSeedMessage = typeof ProviderConversationSeedMessage.Type;
+
+export const ProviderConversationSeed = Schema.Struct({
+  messages: Schema.Array(ProviderConversationSeedMessage),
+  brief: Schema.optional(TrimmedNonEmptyString),
+  // Oldest-first truncation is reported, never silent: framed seeds say so in
+  // the prompt and every seed logs it.
+  droppedMessageCount: Schema.optional(NonNegativeInt),
+});
+export type ProviderConversationSeed = typeof ProviderConversationSeed.Type;
+
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
   provider: Schema.optional(ProviderDriverKind),
@@ -62,6 +85,10 @@ export const ProviderSessionStartInput = Schema.Struct({
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   runtimeMode: RuntimeMode,
+  // Present only when a thread is migrating onto this session; the adapter
+  // decides whether its provider takes history natively or framed into the
+  // first prompt (see ProviderAdapterCapabilities.conversationSeeding).
+  seed: Schema.optional(ProviderConversationSeed),
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 

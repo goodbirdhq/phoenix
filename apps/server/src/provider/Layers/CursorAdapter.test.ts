@@ -1497,4 +1497,53 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       // hang until the suite timeout instead of failing here.
     }).pipe(TestClock.withLive),
   );
+  it.effect("frames a conversation seed into the first prompt of the new session", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-conversation-seed");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-acp-seed-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const argvLogPath = NodePath.join(tempDir, "argv.txt");
+      yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
+      const wrapperPath = yield* Effect.promise(() =>
+        makeProbeWrapper(requestLogPath, argvLogPath),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      assert.equal(adapter.capabilities.conversationSeeding, "framed-prompt");
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        seed: {
+          messages: [
+            { role: "user", text: "add a regression test" },
+            { role: "assistant", text: "added it in CursorAdapter.test.ts" },
+          ],
+        },
+      });
+      yield* adapter.sendTurn({ threadId, input: "carry on", attachments: [] });
+      yield* adapter.sendTurn({ threadId, input: "and now the docs", attachments: [] });
+      yield* adapter.stopSession(threadId);
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const prompts = requests.flatMap((entry) =>
+        entry.method === "session/prompt"
+          ? [(entry.params as { prompt: Array<{ type: string; text?: string }> }).prompt]
+          : [],
+      );
+
+      assert.lengthOf(prompts, 2);
+      assert.isTrue(prompts[0]?.[0]?.text?.startsWith("<phoenix-prior-conversation>"));
+      assert.include(prompts[0]?.[0]?.text ?? "", "added it in CursorAdapter.test.ts");
+      assert.equal(prompts[0]?.[1]?.text, "carry on");
+      // The seed rides on the first prompt only.
+      assert.deepEqual(prompts[1], [{ type: "text", text: "and now the docs" }]);
+    }).pipe(TestClock.withLive),
+  );
 });

@@ -65,6 +65,37 @@ Provider output comes back as internal commands such as `thread.message.assistan
 `thread.session.set`, which clients observe through `orchestration.subscribeThread`. See
 [overview.md](./overview.md) for the command/event loop.
 
+## Conversation seeding
+
+A thread that moves to another provider instance starts a fresh provider session, so the
+conversation has to travel with it. It is rebuilt from Phoenix's own read model
+(`projection_thread_messages`) by [`conversationSeed.ts`][seed] and handed to the adapter as the
+optional `seed` on `ProviderSessionStartInput` — the only adapter interface change migration needs.
+Provider-native session files are never the source: they are scoped to the account that wrote them.
+
+The transcript is bounded (newest 60 messages, 60,000 characters, 8,000 per message). Over-budget
+history is dropped oldest-first, and what went missing is logged and stated in the framed text
+rather than silently capped. `brief` carries an origin-written handoff document instead of, or
+alongside, the raw transcript; adapters treat both the same way.
+
+Each adapter declares which of two tiers it uses in `capabilities.conversationSeeding`, so
+orchestration can read the tier from `ProviderService.getCapabilities` before it migrates a thread:
+
+| Tier             | Adapters                       | How the history arrives                                                                                          |
+| ---------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `native-history` | Codex                          | `thread/inject_items` puts the transcript in the app-server's model-visible thread history after `thread/start`. |
+| `framed-prompt`  | Claude, Cursor, Grok, OpenCode | The transcript is framed in a `<phoenix-prior-conversation>` block on the first prompt of the new session.       |
+
+Codex's native path is the typed one. The app-server also documents resume-by-history, but its
+generated `thread/resume` params carry no `history` field, so a payload sent that way would be
+stripped on encode and the thread would start blind while reporting success. When
+`thread/inject_items` fails anyway — an older CLI that does not know the method — the Codex adapter
+logs the failure and falls back to the framed prompt, because a migrated thread continuing on an
+agent with no memory of it is the one outcome worth avoiding.
+
+A session that resumes native provider history is never seeded: it already carries its own
+conversation, and seeding it too would replay the thread into context twice.
+
 ## Subscription availability
 
 `ProviderAvailability` ([`providerAvailability.ts`][availability]) is a per-instance snapshot of a
@@ -205,6 +236,7 @@ when a request opens (approval) or user input is requested, via
 [service]: ../../apps/server/src/provider/Layers/ProviderService.ts
 [availability]: ../../packages/contracts/src/providerAvailability.ts
 [usageprobe]: ../../apps/server/src/provider/Drivers/ClaudeUsageProbe.ts
+[seed]: ../../apps/server/src/provider/conversationSeed.ts
 [contracts]: ../../packages/contracts/src/orchestration.ts
 [worker]: ../../packages/shared/src/DrainableWorker.ts
 [ingest]: ../../apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts

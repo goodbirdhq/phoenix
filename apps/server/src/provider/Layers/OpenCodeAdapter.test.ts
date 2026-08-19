@@ -1441,4 +1441,72 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.deepEqual(closeCallsDuringRun, []);
     }),
   );
+  it.effect("frames a conversation seed into the first prompt of the new session", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-seed");
+
+      NodeAssert.equal(adapter.capabilities.conversationSeeding, "framed-prompt");
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "anthropic/claude-sonnet-4-5",
+        ),
+        seed: {
+          messages: [
+            { role: "user", text: "add a regression test" },
+            { role: "assistant", text: "added it in OpenCodeAdapter.test.ts" },
+          ],
+        },
+      });
+
+      yield* adapter.sendTurn({ threadId, input: "carry on" });
+      const firstParts = (
+        runtimeMock.state.promptCalls.at(-1) as { parts: Array<{ type: string; text?: string }> }
+      ).parts;
+      NodeAssert.equal(firstParts.length, 2);
+      NodeAssert.equal(firstParts[0]?.text?.startsWith("<phoenix-prior-conversation>"), true);
+      NodeAssert.equal(firstParts[0]?.text?.includes("added it in OpenCodeAdapter.test.ts"), true);
+      NodeAssert.equal(firstParts[1]?.text, "carry on");
+
+      // The seed rides on the first prompt only.
+      yield* adapter.sendTurn({ threadId, input: "and now the docs" });
+      NodeAssert.deepEqual((runtimeMock.state.promptCalls.at(-1) as { parts: unknown }).parts, [
+        { type: "text", text: "and now the docs" },
+      ]);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("skips seeding a session that resumes its OpenCode session id", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-seed-resume");
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "anthropic/claude-sonnet-4-5",
+        ),
+        resumeCursor: { schemaVersion: 1, sessionId: "ses_persisted" },
+        seed: { messages: [{ role: "user", text: "add a regression test" }] },
+      });
+
+      yield* adapter.sendTurn({ threadId, input: "carry on" });
+
+      NodeAssert.deepEqual((runtimeMock.state.promptCalls.at(-1) as { parts: unknown }).parts, [
+        { type: "text", text: "carry on" },
+      ]);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
 });

@@ -322,6 +322,7 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+          conversationSeeding: "framed-prompt",
         }),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
