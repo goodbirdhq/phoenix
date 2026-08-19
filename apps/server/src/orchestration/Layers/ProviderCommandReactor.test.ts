@@ -2094,6 +2094,116 @@ describe("ProviderCommandReactor", () => {
   );
 
   effectIt.effect(
+    "migrates a live thread across drivers by restarting the session without the old resume cursor",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-migrate-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-migrate-1"),
+            role: "user",
+            text: "first",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+        yield* harness.engine.dispatch({
+          type: "thread.migrate",
+          commandId: CommandId.make("cmd-migrate-cross-driver"),
+          threadId: ThreadId.make("thread-1"),
+          targetInstanceId: ProviderInstanceId.make("claudeAgent"),
+          targetModel: "claude-opus-4-6",
+          handoffMode: "replay",
+          trigger: "manual",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 2));
+
+        const restartInput = harness.startSession.mock.calls[1]?.[1] as Record<string, unknown>;
+        expect(restartInput).toMatchObject({
+          provider: ProviderDriverKind.make("claudeAgent"),
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-opus-4-6",
+          },
+        });
+        expect(restartInput).not.toHaveProperty("resumeCursor");
+
+        yield* Effect.promise(() =>
+          waitFor(async () => {
+            const readModel = await harness.readModel();
+            const thread = readModel.threads.find(
+              (entry) => entry.id === ThreadId.make("thread-1"),
+            );
+            return thread?.session?.providerName === "claudeAgent";
+          }),
+        );
+        const readModel = yield* Effect.promise(() => harness.readModel());
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("claudeAgent"));
+        expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("claudeAgent"));
+      }),
+  );
+
+  effectIt.effect(
+    "migrates a live thread between compatible instances and keeps the native resume cursor",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-migrate-compat-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-migrate-compat-1"),
+            role: "user",
+            text: "first",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+        yield* harness.engine.dispatch({
+          type: "thread.migrate",
+          commandId: CommandId.make("cmd-migrate-compatible"),
+          threadId: ThreadId.make("thread-1"),
+          targetInstanceId: ProviderInstanceId.make("codex_work"),
+          handoffMode: "replay",
+          trigger: "manual",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 2));
+
+        expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          resumeCursor: { opaque: "resume-1" },
+        });
+      }),
+  );
+
+  effectIt.effect(
     "restarts on a compatible instance persisted via thread.meta.update when the next turn carries no selection",
     () =>
       Effect.gen(function* () {

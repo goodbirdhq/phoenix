@@ -62,7 +62,8 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.migrated";
   }
 >;
 
@@ -1590,6 +1591,24 @@ const make = Effect.gen(function* () {
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
+      case "thread.migrated": {
+        // The decider has already validated the migration (no running turn,
+        // target differs) and the projector has rebound thread.modelSelection.
+        // Keep the reactor's per-thread selection cache in step so unrelated
+        // restarts (e.g. runtime-mode changes) do not resurrect the old account.
+        threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+        const thread = yield* resolveThread(event.payload.threadId);
+        if (!thread?.session || thread.session.status === "stopped") {
+          // No live session: the next turn starts on the target instance via
+          // the rebound thread.modelSelection.
+          return;
+        }
+        yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
+          modelSelection: event.payload.modelSelection,
+          allowMigration: true,
+        });
+        return;
+      }
     }
   });
 
@@ -1635,7 +1654,8 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
-        event.type === "thread.session-stop-requested"
+        event.type === "thread.session-stop-requested" ||
+        event.type === "thread.migrated"
       ) {
         return yield* worker.enqueue(event);
       }
