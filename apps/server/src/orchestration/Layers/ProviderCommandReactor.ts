@@ -503,7 +503,7 @@ const make = Effect.gen(function* () {
       providerService.listSessions().pipe(
         Effect.map((sessions) => {
           const matches = sessions.filter(
-            (session) => session.threadId === threadId && session.status !== "stopped",
+            (session) => session.threadId === threadId && session.status !== "closed",
           );
           const boundInstanceId = thread.session?.providerInstanceId;
           return (

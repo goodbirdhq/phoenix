@@ -665,13 +665,37 @@ export const make = Effect.gen(function* () {
    * treated as bound, the conservative direction for both call sites.
    */
   const resolveHasLiveBinding = () =>
-    providerSessionDirectory.listBindings().pipe(
-      Effect.map((bindings) => {
-        const liveThreadIds = new Set(bindings.map((binding) => binding.threadId));
-        return (threadId: ThreadId) => liveThreadIds.has(threadId);
-      }),
-      Effect.catch(() => Effect.succeed((_threadId: ThreadId) => true)),
-    );
+    Option.match(providerService, {
+      // The runtime session list is the real "is a process still attached"
+      // signal. The persisted directory below is resume state: its rows
+      // deliberately outlive the process so threads can resume later, so a
+      // thread that ever ran would count as live forever — which wedged
+      // settled children against the spawn cap and withheld every archive
+      // cleanup until server restart.
+      onSome: (service) =>
+        service.listSessions().pipe(
+          Effect.map((sessions) => {
+            const liveThreadIds = new Set(
+              sessions
+                .filter((session) => session.status !== "closed")
+                .map((session) => session.threadId),
+            );
+            return (threadId: ThreadId) => liveThreadIds.has(threadId);
+          }),
+          Effect.catch(() => Effect.succeed((_threadId: ThreadId) => true)),
+        ),
+      // Focused tests construct this toolkit without the provider layer and
+      // drive liveness through the directory stub; production always has the
+      // provider service, so this branch is test-only.
+      onNone: () =>
+        providerSessionDirectory.listBindings().pipe(
+          Effect.map((bindings) => {
+            const liveThreadIds = new Set(bindings.map((binding) => binding.threadId));
+            return (threadId: ThreadId) => liveThreadIds.has(threadId);
+          }),
+          Effect.catch(() => Effect.succeed((_threadId: ThreadId) => true)),
+        ),
+    });
 
   const requireShell = (threadId: ThreadId) =>
     getShell(threadId).pipe(
