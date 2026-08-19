@@ -1,5 +1,6 @@
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { GaugeIcon } from "lucide-react";
+import { memo } from "react";
 
 import { Button } from "../ui/button";
 import {
@@ -19,7 +20,7 @@ export interface UsageLimitMigrationTarget {
   readonly remainingQuotaPercent: number | null;
 }
 
-export function UsageLimitMigrationPopup(props: {
+export const UsageLimitMigrationPopup = memo(function UsageLimitMigrationPopup(props: {
   readonly originName: string;
   readonly resetLabel: string | null;
   readonly targets: readonly UsageLimitMigrationTarget[];
@@ -132,4 +133,4 @@ export function UsageLimitMigrationPopup(props: {
       </div>
     </section>
   );
-}
+});

@@ -13,6 +13,7 @@ import {
   deriveMigrationModeAvailability,
   findFailedTurnUserMessage,
   rankMigrationTargets,
+  resolveLimitBoundInstanceId,
   resolveRememberedMigrationTarget,
   shouldShowUsageLimitMigrationPopup,
   type MigrationTargetCandidate,
@@ -132,6 +133,26 @@ describe("rankMigrationTargets", () => {
     expect(
       resolveRememberedMigrationTarget([first], ProviderInstanceId.make("no_longer_configured")),
     ).toBe(first);
+  });
+});
+
+describe("resolveLimitBoundInstanceId", () => {
+  it("binds limit state to the live session account before the thread model selection", () => {
+    const sessionInstanceId = ProviderInstanceId.make("session-account");
+    const pickerInstanceId = ProviderInstanceId.make("picker-account");
+
+    expect(
+      resolveLimitBoundInstanceId({
+        sessionProviderInstanceId: sessionInstanceId,
+        threadModelSelectionInstanceId: pickerInstanceId,
+      }),
+    ).toBe(sessionInstanceId);
+    expect(
+      resolveLimitBoundInstanceId({
+        sessionProviderInstanceId: null,
+        threadModelSelectionInstanceId: pickerInstanceId,
+      }),
+    ).toBe(pickerInstanceId);
   });
 });
 
