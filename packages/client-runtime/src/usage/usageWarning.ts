@@ -49,8 +49,8 @@ export type ThreadUsageWarning = {
   readonly isReadingUnconfirmed: boolean;
   /**
    * Identity of this warning for dismissal. Carries the thread, the instance,
-   * the window, and the reset it counts down to, so dismissing it silences
-   * exactly this window and the next window warns again.
+   * the window, and either its reset or reset-less usage bucket, so dismissing
+   * it silences exactly this reading and a later window can warn again.
    */
   readonly dismissalKey: string;
 };
@@ -102,6 +102,18 @@ const epochMillis = (isoDateTime: string | undefined): number | null => {
 const windowKey = (window: ProviderAvailabilityWindow): string =>
   `${window.kind}:${window.scope ?? ""}`;
 
+const windowDismissalKey = (
+  threadId: string,
+  instanceId: string,
+  window: ProviderAvailabilityWindow,
+): string =>
+  [
+    threadId,
+    instanceId,
+    windowKey(window),
+    window.resetsAt ?? `used:${Math.round(window.usedPercent)}`,
+  ].join(" | ");
+
 /**
  * The most urgent window at or above the threshold for the instance a thread is
  * bound to, or null when there is nothing honest to say.
@@ -137,7 +149,8 @@ export function deriveThreadUsageWarning(input: {
   const candidates = source.availability.windows.filter((window) => {
     if (window.usedPercent < threshold) return false;
     const resetsAtMs = epochMillis(window.resetsAt);
-    return resetsAtMs === null || resetsAtMs > nowMs;
+    if (resetsAtMs !== null && resetsAtMs <= nowMs) return false;
+    return !input.dismissedKeys?.has(windowDismissalKey(threadId, instanceId, window));
   });
   if (candidates.length === 0) return null;
 
@@ -151,8 +164,7 @@ export function deriveThreadUsageWarning(input: {
     return windowKey(left).localeCompare(windowKey(right));
   })[0]!;
 
-  const dismissalKey = [threadId, instanceId, windowKey(window), window.resetsAt ?? ""].join(" | ");
-  if (input.dismissedKeys?.has(dismissalKey)) return null;
+  const dismissalKey = windowDismissalKey(threadId, instanceId, window);
 
   return {
     instanceId,

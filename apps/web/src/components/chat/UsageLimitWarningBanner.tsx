@@ -19,6 +19,7 @@ export const UsageLimitWarningBanner = memo(function UsageLimitWarningBanner({
   onDismiss,
   warning,
 }: {
+  /** Consumed by issue #36's in-flight "hand off now" control. */
   action?: ReactNode;
   onDismiss: () => void;
   warning: ThreadUsageWarning | null;

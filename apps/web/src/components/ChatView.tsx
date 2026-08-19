@@ -281,12 +281,7 @@ import {
   ProviderStatusBanner,
   shouldShowProviderStatusBanner,
 } from "./chat/ProviderStatusBanner";
-import { UsageLimitWarningBanner } from "./chat/UsageLimitWarningBanner";
-import {
-  deriveThreadUsageWarning,
-  subscriptionAvailabilitySources,
-} from "@t3tools/client-runtime/usage/usage-warning";
-import { useProviderAvailability } from "../state/usage";
+import { resolveThreadUsageWarningInstanceId, ThreadUsageWarning } from "./chat/ThreadUsageWarning";
 import {
   dismissThreadErrorBannerForSession,
   getThreadErrorBannerKey,
@@ -2810,6 +2805,10 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.modelSelection.instanceId ??
     activeProject?.defaultModelSelection?.instanceId ??
     null;
+  const usageWarningInstanceId = resolveThreadUsageWarningInstanceId({
+    sessionProviderInstanceId: activeThread?.session?.providerInstanceId,
+    threadModelSelectionInstanceId: activeThread?.modelSelection.instanceId,
+  });
   const activeProviderStatus = useMemo(() => {
     if (activeProviderInstanceId) {
       return (
@@ -2834,32 +2833,7 @@ function ChatViewContent(props: ChatViewProps) {
   )
     ? activeProviderStatus
     : null;
-  // The same cached availability reading the Usage page renders. Dismissals are
-  // keyed by thread and window reset, so silencing one window still warns about
-  // the next one.
-  const providerAvailability = useProviderAvailability();
-  const [dismissedUsageWarningKeys, setDismissedUsageWarningKeys] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-  const usageWarning = useMemo(
-    () =>
-      deriveThreadUsageWarning({
-        threadId: activeThread?.id ?? null,
-        environmentId: activeThread?.environmentId ?? null,
-        instanceId: activeProviderInstanceId,
-        sources: subscriptionAvailabilitySources(providerAvailability),
-        dismissedKeys: dismissedUsageWarningKeys,
-      }),
-    [
-      activeProviderInstanceId,
-      activeThread?.environmentId,
-      activeThread?.id,
-      dismissedUsageWarningKeys,
-      providerAvailability,
-    ],
-  );
-  const hasTimelineTopBanner =
-    Boolean(visibleThreadError) || visibleProviderStatus !== null || usageWarning !== null;
+  const hasTimelineTopBanner = Boolean(visibleThreadError) || visibleProviderStatus !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -6778,13 +6752,10 @@ function ChatViewContent(props: ChatViewProps) {
                 status={visibleProviderStatus}
                 onDismiss={() => setDismissedProviderStatusBannerKey(providerStatusBannerKey)}
               />
-              <UsageLimitWarningBanner
-                warning={usageWarning}
-                onDismiss={() =>
-                  setDismissedUsageWarningKeys((keys) =>
-                    usageWarning ? new Set(keys).add(usageWarning.dismissalKey) : keys,
-                  )
-                }
+              <ThreadUsageWarning
+                environmentId={activeThread.environmentId}
+                instanceId={usageWarningInstanceId}
+                threadId={activeThread.id}
               />
             </div>
             {/* Messages Wrapper */}
