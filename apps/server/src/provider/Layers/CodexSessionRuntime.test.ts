@@ -16,11 +16,13 @@ import {
 } from "../CodexDeveloperInstructions.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
+  buildCodexSeedHistoryItems,
   buildTurnStartParams,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
   openCodexThread,
+  seedCodexThreadHistory,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
@@ -644,6 +646,100 @@ describe("openCodexThread", () => {
 
       NodeAssert.ok(isCodexAppServerRequestError(error));
       NodeAssert.equal(error.errorMessage, "timed out waiting for server");
+    }),
+  );
+});
+
+describe("codex conversation seeding", () => {
+  it("renders a transcript as Responses API message items", () => {
+    const items = buildCodexSeedHistoryItems({
+      messages: [
+        { role: "user", text: "add a test" },
+        { role: "assistant", text: "added it" },
+      ],
+    });
+
+    NodeAssert.deepStrictEqual(items, [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "add a test" }] },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "added it" }],
+      },
+    ]);
+  });
+
+  it("leads with the truncation note and the handoff brief", () => {
+    const items = buildCodexSeedHistoryItems({
+      messages: [{ role: "user", text: "carry on" }],
+      brief: "We refactored the reactor.",
+      droppedMessageCount: 12,
+    });
+
+    NodeAssert.equal(items.length, 3);
+    NodeAssert.ok(items[0]?.content[0]?.text.includes("12 oldest message(s) were dropped"));
+    NodeAssert.ok(items[1]?.content[0]?.text.includes("We refactored the reactor."));
+    NodeAssert.equal(items[2]?.content[0]?.text, "carry on");
+  });
+
+  it.effect("injects the history into the freshly opened codex thread", () =>
+    Effect.gen(function* () {
+      const calls: Array<{ method: string; payload: unknown }> = [];
+      const client = {
+        request: (
+          method: "thread/inject_items",
+          payload: CodexRpc.ClientRequestParamsByMethod["thread/inject_items"],
+        ) => {
+          calls.push({ method, payload });
+          return Effect.succeed(
+            {} as CodexRpc.ClientRequestResponsesByMethod["thread/inject_items"],
+          );
+        },
+      };
+
+      yield* seedCodexThreadHistory({
+        client,
+        providerThreadId: "provider-thread-1",
+        seed: { messages: [{ role: "user", text: "add a test" }] },
+      });
+
+      NodeAssert.deepStrictEqual(calls, [
+        {
+          method: "thread/inject_items",
+          payload: {
+            threadId: "provider-thread-1",
+            items: [
+              {
+                type: "message",
+                role: "user",
+                content: [{ type: "input_text", text: "add a test" }],
+              },
+            ],
+          },
+        },
+      ]);
+    }),
+  );
+
+  it.effect("does not call the app-server for an empty seed", () =>
+    Effect.gen(function* () {
+      let requests = 0;
+      const client = {
+        request: () => {
+          requests += 1;
+          return Effect.succeed(
+            {} as CodexRpc.ClientRequestResponsesByMethod["thread/inject_items"],
+          );
+        },
+      };
+
+      yield* seedCodexThreadHistory({
+        client,
+        providerThreadId: "provider-thread-1",
+        seed: { messages: [] },
+      });
+
+      NodeAssert.equal(requests, 0);
     }),
   );
 });

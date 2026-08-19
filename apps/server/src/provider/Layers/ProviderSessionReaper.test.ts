@@ -180,7 +180,8 @@ describe("ProviderSessionReaper", () => {
       stopSession,
       listSessions: () => Effect.succeed(input.sessions ?? []),
       getSessionRuntimeLiveness: () => Effect.succeed(input.runtimeLiveness ?? "dead"),
-      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      getCapabilities: () =>
+        Effect.succeed({ sessionModelSwitch: "in-session", conversationSeeding: "framed-prompt" }),
       getInstanceInfo: (instanceId) => {
         const driverKind = ProviderDriverKind.make(String(instanceId));
         return Effect.succeed({

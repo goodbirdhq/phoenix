@@ -98,6 +98,11 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
+import {
+  applyConversationSeedPrefix,
+  formatConversationSeedPrompt,
+  seedForFreshSession,
+} from "../conversationSeed.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
@@ -283,6 +288,12 @@ interface ClaudeSessionContext {
   lastKnownTotalProcessedTokens: number | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
+  /**
+   * Prior conversation carried into a migrated thread. Claude has no
+   * start-from-history entry point, so it rides along on the first prompt and
+   * is cleared once sent.
+   */
+  pendingSeedPrompt: string | undefined;
   stopped: boolean;
 }
 
@@ -1271,9 +1282,13 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
     readonly fileSystem: FileSystem.FileSystem;
     readonly attachmentsDir: string;
     readonly boundInstanceId: ProviderInstanceId;
+    readonly seedPrompt?: string | undefined;
   },
 ) {
-  const text = buildPromptText(input, dependencies.boundInstanceId);
+  const promptText = buildPromptText(input, dependencies.boundInstanceId);
+  const text = dependencies.seedPrompt
+    ? applyConversationSeedPrefix({ seedPrompt: dependencies.seedPrompt, text: promptText })
+    : promptText;
   const sdkContent: Array<Record<string, unknown>> = [];
 
   if (text.length > 0) {
@@ -3832,6 +3847,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
       const startedAt = yield* nowIso;
       const resumeState = readClaudeResumeState(input.resumeCursor);
+      const seed = yield* seedForFreshSession({
+        threadId: input.threadId,
+        seed: input.seed,
+        resuming: resumeState?.resume !== undefined,
+      });
       const threadId = input.threadId;
       const existingResumeSessionId = resumeState?.resume;
       const newSessionId = existingResumeSessionId === undefined ? yield* randomUUIDv4 : undefined;
@@ -4327,6 +4347,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastKnownTotalProcessedTokens: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
+        pendingSeedPrompt: seed === undefined ? undefined : formatConversationSeedPrompt(seed),
         stopped: false,
       };
       yield* Ref.set(contextRef, context);
@@ -4501,7 +4522,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       fileSystem,
       attachmentsDir: serverConfig.attachmentsDir,
       boundInstanceId,
+      ...(context.pendingSeedPrompt ? { seedPrompt: context.pendingSeedPrompt } : {}),
     });
+    context.pendingSeedPrompt = undefined;
 
     yield* Queue.offer(context.promptQueue, {
       type: "message",
@@ -4732,6 +4755,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      // No start-from-history entry point in the Claude SDK: the transcript
+      // rides on the first prompt of the new session.
+      conversationSeeding: "framed-prompt",
     },
     startSession,
     sendTurn,

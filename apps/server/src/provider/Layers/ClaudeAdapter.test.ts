@@ -277,6 +277,35 @@ async function readFirstPromptMessage(
   return next.value;
 }
 
+async function readPromptTexts(
+  input:
+    | {
+        readonly prompt: AsyncIterable<SDKUserMessage>;
+      }
+    | undefined,
+  count: number,
+): Promise<Array<string>> {
+  const iterator = input?.prompt[Symbol.asyncIterator]();
+  if (!iterator) {
+    return [];
+  }
+  const texts: Array<string> = [];
+  for (let index = 0; index < count; index += 1) {
+    const next = await iterator.next();
+    if (next.done) {
+      break;
+    }
+    const content = next.value.message.content;
+    if (typeof content === "string") {
+      texts.push(content);
+      continue;
+    }
+    const block = content[0];
+    texts.push(block && block.type === "text" ? block.text : "");
+  }
+  return texts;
+}
+
 const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
@@ -4798,6 +4827,90 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(availability.source, "claude_cli_usage");
       assert.deepEqual([...availability.windows], []);
       assert.equal(availability.account, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+  it.effect("declares the framed-prompt seeding tier", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      assert.equal(adapter.capabilities.conversationSeeding, "framed-prompt");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("frames a conversation seed into the first prompt of the new session", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        seed: {
+          messages: [
+            { role: "user", text: "add a regression test" },
+            { role: "assistant", text: "added it in ClaudeAdapter.test.ts" },
+          ],
+          droppedMessageCount: 3,
+        },
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "carry on",
+        attachments: [],
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "and now the docs",
+        attachments: [],
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      const [first, second] = yield* Effect.promise(() => readPromptTexts(createInput, 2));
+
+      assert.isTrue(first?.startsWith("<phoenix-prior-conversation>"));
+      assert.include(first ?? "", "add a regression test");
+      assert.include(first ?? "", "added it in ClaudeAdapter.test.ts");
+      assert.include(first ?? "", "the 3 oldest message(s) were dropped");
+      assert.isTrue(first?.endsWith("carry on"));
+      // The seed rides on the first prompt only.
+      assert.equal(second, "and now the docs");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("skips seeding a session that resumes its Claude session id", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: RESUME_THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        resumeCursor: {
+          threadId: "resume-thread-seed",
+          resume: "550e8400-e29b-41d4-a716-446655440000",
+          turnCount: 2,
+        },
+        seed: { messages: [{ role: "user", text: "add a regression test" }] },
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "carry on",
+        attachments: [],
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      const promptText = yield* Effect.promise(() => readFirstPromptText(createInput));
+
+      assert.equal(promptText, "carry on");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
