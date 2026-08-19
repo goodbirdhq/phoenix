@@ -130,6 +130,26 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.answers.sandbox_mode).toBe("workspace-write");
   });
 
+  it("decodes additive usage-limit runtime error kinds", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "runtime.error",
+      eventId: "event-usage-limit",
+      provider: "claudeAgent",
+      createdAt: "2026-08-19T00:00:00.000Z",
+      threadId: "thread-usage-limit",
+      payload: {
+        message: "You've hit your 5-hour limit",
+        class: "provider_error",
+        kind: "usage-limit",
+      },
+    });
+
+    expect(parsed.type).toBe("runtime.error");
+    if (parsed.type === "runtime.error") {
+      expect(parsed.payload.kind).toBe("usage-limit");
+    }
+  });
+
   it("rejects legacy message.delta type", () => {
     expect(() =>
       decodeRuntimeEvent({
