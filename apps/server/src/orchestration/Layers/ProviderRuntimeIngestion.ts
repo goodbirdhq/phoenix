@@ -1607,6 +1607,11 @@ const make = Effect.gen(function* () {
               : status === "ready"
                 ? null
                 : (thread.session?.lastError ?? null);
+        const lastErrorKind =
+          event.type === "turn.completed" &&
+          normalizeRuntimeTurnState(event.payload.state) === "failed"
+            ? thread.session?.lastErrorKind
+            : undefined;
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
@@ -1643,6 +1648,7 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: nextActiveTurnId,
               lastError,
+              ...(lastErrorKind ? { lastErrorKind } : {}),
               stoppedBy: thread.session?.stoppedBy ?? null,
               stopRequestedAt: thread.session?.stopRequestedAt ?? null,
               stopReason: thread.session?.stopReason ?? null,
@@ -1901,6 +1907,7 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: eventTurnId ?? null,
               lastError: runtimeErrorMessage,
+              ...(event.payload.kind ? { lastErrorKind: event.payload.kind } : {}),
               stoppedBy: thread.session?.stoppedBy ?? null,
               stopRequestedAt: thread.session?.stopRequestedAt ?? null,
               stopReason: thread.session?.stopReason ?? null,

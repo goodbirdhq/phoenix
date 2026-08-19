@@ -986,6 +986,125 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("uses Claude's native rejected rate-limit signal for the active turn", () => {
+    const instanceId = ProviderInstanceId.make("claude-work");
+    const harness = makeHarness({ instanceId });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 8).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: instanceId,
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "continue",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "five_hour",
+          utilization: 1,
+          resetsAt: 1_787_342_400,
+          overageStatus: "rejected",
+          isUsingOverage: false,
+        },
+        session_id: "sdk-session-rate-limit",
+        uuid: "00000000-0000-4000-8000-000000000001",
+      });
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["Claude turn failed."],
+        session_id: "sdk-session-rate-limit",
+        uuid: "00000000-0000-4000-8000-000000000002",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const rateLimit = runtimeEvents.find((event) => event.type === "account.rate-limits.updated");
+      assert.equal(rateLimit?.type, "account.rate-limits.updated");
+      if (rateLimit?.type === "account.rate-limits.updated") {
+        assert.deepEqual(rateLimit.payload.rateLimits, {
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "rejected",
+            rateLimitType: "five_hour",
+            utilization: 1,
+            resetsAt: 1_787_342_400,
+            overageStatus: "rejected",
+            isUsingOverage: false,
+          },
+          session_id: "sdk-session-rate-limit",
+          uuid: "00000000-0000-4000-8000-000000000001",
+        });
+      }
+      const runtimeError = runtimeEvents.find((event) => event.type === "runtime.error");
+      assert.equal(runtimeError?.type, "runtime.error");
+      if (runtimeError?.type === "runtime.error") {
+        assert.equal(runtimeError.payload.message, "Claude turn failed.");
+        assert.equal(runtimeError.payload.kind, "usage-limit");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("classifies Claude usage-limit result failures", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "continue",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["You've hit your 5-hour limit · resets 9pm (Europe/Berlin)"],
+        session_id: "sdk-session-usage-limit-result",
+        uuid: "result-usage-limit",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const runtimeError = runtimeEvents.find((event) => event.type === "runtime.error");
+      assert.equal(runtimeError?.type, "runtime.error");
+      if (runtimeError?.type === "runtime.error") {
+        assert.equal(
+          runtimeError.payload.message,
+          "You've hit your 5-hour limit · resets 9pm (Europe/Berlin)",
+        );
+        assert.equal(runtimeError.payload.kind, "usage-limit");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("does not emit turn.completed for a result with no active turn", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

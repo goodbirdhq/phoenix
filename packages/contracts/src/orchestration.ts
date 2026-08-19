@@ -22,6 +22,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderRuntimeErrorKind } from "./providerRuntime.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -483,6 +484,9 @@ export const OrchestrationSession = Schema.Struct({
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
+  // Optional so historical session events and older clients continue to
+  // decode. Present only when the latest error has a typed actionable reason.
+  lastErrorKind: Schema.optional(ProviderRuntimeErrorKind),
   // Optional for events and snapshots created before stop auditing shipped.
   stoppedBy: Schema.optional(Schema.NullOr(SessionStoppedBy)),
   stopRequestedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
