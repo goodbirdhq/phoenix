@@ -1,7 +1,6 @@
 import {
   CommandId,
   type OrchestrationEvent,
-  type OrchestrationMessage,
   type ProviderAvailability,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -48,10 +47,6 @@ export const remainingScore = (availability: ProviderAvailability): number => {
   return 100 - worst.usedPercent;
 };
 
-const latestUserMessage = (
-  messages: ReadonlyArray<OrchestrationMessage>,
-): OrchestrationMessage | undefined => messages.findLast((message) => message.role === "user");
-
 export const makeLimitFailoverReactor = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
@@ -72,6 +67,16 @@ export const makeLimitFailoverReactor = Effect.gen(function* () {
     if (group === undefined) {
       // Ungrouped accounts never move automatically; the limit popup owns
       // this moment.
+      return;
+    }
+
+    // One limit episode can emit several error session-sets. Once the thread's
+    // selection has left the limited instance, later events are stale.
+    const currentDetail = yield* snapshotQuery.getThreadDetailById(threadId);
+    if (
+      Option.isNone(currentDetail) ||
+      currentDetail.value.modelSelection.instanceId !== originInstanceId
+    ) {
       return;
     }
 
@@ -115,7 +120,10 @@ export const makeLimitFailoverReactor = Effect.gen(function* () {
       group,
     });
     // Command ids derive from the triggering event so a redelivered event
-    // upserts the same migration and retry instead of duplicating them.
+    // upserts the same migration instead of duplicating it. The failed turn's
+    // retry is dispatched by the provider command reactor's thread.migrated
+    // handler AFTER the session rebinds — dispatching it here raced the
+    // restart and tripped the instance guard.
     yield* engine.dispatch({
       type: "thread.migrate",
       commandId: CommandId.make(`limit-failover:${event.eventId}`),
@@ -123,31 +131,6 @@ export const makeLimitFailoverReactor = Effect.gen(function* () {
       targetInstanceId: target.instanceId as ProviderInstanceId,
       handoffMode: "replay",
       trigger: "auto-failover",
-      createdAt: event.occurredAt,
-    });
-
-    const detail = yield* snapshotQuery.getThreadDetailById(threadId);
-    if (Option.isNone(detail)) {
-      return;
-    }
-    const failedMessage = latestUserMessage(detail.value.messages);
-    if (failedMessage === undefined) {
-      return;
-    }
-    // Same message id: the projection upserts on message_id, so the retried
-    // turn replaces the failed one in history instead of duplicating it.
-    yield* engine.dispatch({
-      type: "thread.turn.start",
-      commandId: CommandId.make(`limit-failover-retry:${event.eventId}`),
-      threadId,
-      message: {
-        messageId: failedMessage.id,
-        role: "user",
-        text: failedMessage.text,
-        attachments: failedMessage.attachments ?? [],
-      },
-      interactionMode: detail.value.interactionMode,
-      runtimeMode: detail.value.runtimeMode,
       createdAt: event.occurredAt,
     });
   });

@@ -1655,6 +1655,30 @@ const make = Effect.gen(function* () {
           modelSelection: event.payload.modelSelection,
           allowMigration: true,
         });
+        // Auto-failover retries the failed turn here, after the rebind, so the
+        // retry can never race the session restart into the instance guard.
+        if (event.payload.trigger === "auto-failover") {
+          const migrated = yield* resolveThread(event.payload.threadId);
+          const failedMessage = migrated?.messages.findLast((message) => message.role === "user");
+          if (migrated && failedMessage) {
+            // Same message id: the projection upserts on message_id, so the
+            // retried turn replaces the failed one instead of duplicating it.
+            yield* orchestrationEngine.dispatch({
+              type: "thread.turn.start",
+              commandId: CommandId.make(`limit-failover-retry:${event.eventId}`),
+              threadId: event.payload.threadId,
+              message: {
+                messageId: failedMessage.id,
+                role: "user",
+                text: failedMessage.text,
+                attachments: failedMessage.attachments ?? [],
+              },
+              interactionMode: migrated.interactionMode,
+              runtimeMode: migrated.runtimeMode,
+              createdAt: event.occurredAt,
+            });
+          }
+        }
         return;
       }
     }
