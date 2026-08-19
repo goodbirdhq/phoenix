@@ -2276,6 +2276,53 @@ describe("ProviderCommandReactor", () => {
         // The retried message reuses its id, so history shows one user message.
         const userMessages = thread?.messages.filter((message) => message.role === "user") ?? [];
         expect(userMessages.length).toBe(1);
+
+        // The limited instance's stop event can land AFTER the migration bind
+        // and clobber the read-model session slot (observed live). A follow-up
+        // turn must still resolve the live target session, not the clobber.
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-straggler-stop"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "stopped",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-failover-after-straggler"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-failover-2"),
+            role: "user",
+            text: "keep going on the healthy account",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 3));
+        const afterStraggler = yield* Effect.promise(() => harness.readModel());
+        const threadAfter = afterStraggler.threads.find(
+          (entry) => entry.id === ThreadId.make("thread-1"),
+        );
+        expect(
+          threadAfter?.activities.find(
+            (activity) => activity.kind === "provider.turn.start.failed",
+          ),
+        ).toBeUndefined();
+        expect(threadAfter?.session?.providerInstanceId).toBe(
+          ProviderInstanceId.make("codex_work"),
+        );
       }),
   );
 

@@ -534,10 +534,13 @@ const make = Effect.gen(function* () {
         detail: `Thread '${threadId}' has an active provider session without a provider instance id.`,
       });
     }
+    // A live runtime session is the strongest truth about which account the
+    // thread is on: the read-model slot can be clobbered by a stale
+    // instance's late stop event (observed live: the old account's stop
+    // landed after the migration bind and overwrote the session as
+    // "stopped" on the old instance).
     const currentInstanceId =
-      activeThreadSession !== null &&
-      activeSession !== undefined &&
-      activeSession.providerInstanceId !== undefined
+      activeSession !== undefined && activeSession.providerInstanceId !== undefined
         ? activeSession.providerInstanceId
         : (thread.session?.providerInstanceId ?? thread.modelSelection.instanceId);
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
