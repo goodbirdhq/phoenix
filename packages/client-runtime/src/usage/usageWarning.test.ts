@@ -191,6 +191,47 @@ describe("deriveThreadUsageWarning", () => {
     // Another thread on the same account has its own dismissal.
     expect(warn({ dismissedKeys, threadId: "thread-2" })).not.toBeNull();
   });
+
+  it("falls through to a sibling window when the top candidate is dismissed", () => {
+    const windows = [
+      { kind: "session", label: "Current session", usedPercent: 98, resetsAt: IN_TWO_HOURS },
+      {
+        kind: "weekly",
+        label: "Weekly",
+        usedPercent: 94,
+        resetsAt: "2026-08-22T12:00:00.000Z",
+      },
+    ];
+    const sources = [source({ availability: { ...source().availability, windows } })];
+    const sessionWarning = warn({ sources });
+
+    expect(sessionWarning).toMatchObject({ windowLabel: "Current session" });
+    expect(warn({ sources, dismissedKeys: new Set([sessionWarning!.dismissalKey]) })).toMatchObject(
+      { windowLabel: "Weekly", usedPercent: 94 },
+    );
+  });
+
+  it("warns again when a reset-less window reaches a higher whole-percent bucket", () => {
+    const resetlessWarning = (usedPercent: number, dismissedKeys?: ReadonlySet<string>) =>
+      warn({
+        dismissedKeys,
+        sources: [
+          source({
+            availability: {
+              ...source().availability,
+              windows: [{ kind: "weekly", label: "Weekly", usedPercent }],
+            },
+          }),
+        ],
+      });
+    const first = resetlessWarning(94);
+    const dismissedKeys = new Set([first!.dismissalKey]);
+
+    expect(resetlessWarning(94, dismissedKeys)).toBeNull();
+    const higherReading = resetlessWarning(95, dismissedKeys);
+    expect(higherReading).not.toBeNull();
+    expect(higherReading?.dismissalKey).not.toBe(first?.dismissalKey);
+  });
 });
 
 describe("subscriptionAvailabilitySources", () => {

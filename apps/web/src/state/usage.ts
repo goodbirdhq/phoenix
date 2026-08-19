@@ -82,9 +82,9 @@ const providerAvailabilityAtom = Atom.family((refresh: boolean) =>
  * The cached per-instance availability reading, for surfaces that want the
  * numbers without the Usage page's summaries.
  *
- * Shares one atom with every other reader, so a chat view watching its own
- * account adds no traffic beyond the read Usage already performs, and never
- * asks a provider CLI for a fresh reading.
+ * Shares one non-refreshing atom with every reader. Mounting a reader subscribes
+ * it to availability changes and may start the cached query, but never asks a
+ * provider CLI for a forced refresh.
  */
 export function useProviderAvailability(): readonly EnvironmentProviderAvailabilityStatus[] {
   return useAtomValue(providerAvailabilityAtom(false));
