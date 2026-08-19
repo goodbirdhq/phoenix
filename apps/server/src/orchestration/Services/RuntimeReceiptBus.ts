@@ -1,20 +1,22 @@
 /**
- * RuntimeReceiptBus - Internal checkpoint-reactor synchronization receipts.
+ * RuntimeReceiptBus - Internal orchestration synchronization receipts.
  *
  * This service exists to expose short-lived orchestration milestones that are
- * useful in tests and harnesses but are not part of the production runtime
- * event model. `CheckpointReactor` publishes receipts such as baseline capture,
- * diff finalization, and turn-processing quiescence so integration tests can
- * wait for those exact points without inferring them indirectly from persisted
- * state.
- *
- * Production code should only call `publish`. Test code may subscribe via
- * `streamEventsForTest`, which is intentionally named to make the intended
- * usage explicit.
+ * useful to in-process workflows but are not part of the persisted runtime
+ * event model. Reactors publish exact milestones so consumers can synchronize
+ * without sleeps or projection polling.
  *
  * @module RuntimeReceiptBus
  */
-import { CheckpointRef, IsoDateTime, NonNegativeInt, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  IsoDateTime,
+  MessageId,
+  NonNegativeInt,
+  ProviderRuntimeTurnStatus,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -49,15 +51,29 @@ export const TurnProcessingQuiescedReceipt = Schema.Struct({
 });
 export type TurnProcessingQuiescedReceipt = typeof TurnProcessingQuiescedReceipt.Type;
 
+export const ProviderTurnCompletedReceipt = Schema.Struct({
+  type: Schema.Literal("provider.turn.completed"),
+  threadId: ThreadId,
+  turnId: TurnId,
+  messageId: Schema.NullOr(MessageId),
+  assistantMessageId: Schema.NullOr(MessageId),
+  state: ProviderRuntimeTurnStatus,
+  errorMessage: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+});
+export type ProviderTurnCompletedReceipt = typeof ProviderTurnCompletedReceipt.Type;
+
 export const OrchestrationRuntimeReceipt = Schema.Union([
   CheckpointBaselineCapturedReceipt,
   CheckpointDiffFinalizedReceipt,
   TurnProcessingQuiescedReceipt,
+  ProviderTurnCompletedReceipt,
 ]);
 export type OrchestrationRuntimeReceipt = typeof OrchestrationRuntimeReceipt.Type;
 
 export interface RuntimeReceiptBusShape {
   readonly publish: (receipt: OrchestrationRuntimeReceipt) => Effect.Effect<void>;
+  readonly streamEvents: Stream.Stream<OrchestrationRuntimeReceipt>;
   readonly streamEventsForTest: Stream.Stream<OrchestrationRuntimeReceipt>;
 }
 

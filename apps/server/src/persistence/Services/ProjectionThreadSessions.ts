@@ -15,6 +15,7 @@ import {
   EventId,
   MessageId,
   ProviderInstanceId,
+  ProviderRuntimeErrorKind,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -33,6 +34,7 @@ export const ProjectionThreadSession = Schema.Struct({
   runtimeMode: RuntimeMode,
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(Schema.String),
+  lastErrorKind: Schema.NullOr(ProviderRuntimeErrorKind),
   stoppedBy: Schema.NullOr(SessionStoppedBy),
   stopRequestedAt: Schema.NullOr(IsoDateTime),
   stopReason: Schema.NullOr(SessionStopReason),

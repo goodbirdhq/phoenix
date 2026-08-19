@@ -19,6 +19,7 @@ import {
   type SettingSource,
   type SDKUserMessage,
   type ModelUsage,
+  USAGE_LIMIT_ERROR_PREFIXES,
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import {
@@ -33,6 +34,7 @@ import {
   type ModelSelection,
   ProviderItemId,
   type ProviderRuntimeEvent,
+  type ProviderRuntimeErrorKind,
   type ProviderRuntimeTurnStatus,
   type ProviderSendTurnInput,
   type ProviderSession,
@@ -143,6 +145,7 @@ interface ClaudeTurnState {
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
+  usageLimitSignaled: boolean;
   nextSyntheticAssistantBlockIndex: number;
 }
 
@@ -394,6 +397,15 @@ function resultUserFacingError(result: SDKResultMessage): string | undefined {
     return undefined;
   }
   return result.errors.find((error) => !error.startsWith("[ede_diagnostic]"));
+}
+
+// Use the SDK's narrow list of genuine subscription-limit messages so generic
+// throttling and unrelated provider failures never trigger future failover.
+function isUsageLimitResult(result: SDKResultMessage): boolean {
+  if (result.subtype === "success" || !Array.isArray(result.errors)) return false;
+  return result.errors.some((error) =>
+    USAGE_LIMIT_ERROR_PREFIXES.some((prefix) => error.trimStart().startsWith(prefix)),
+  );
 }
 
 function isInterruptedResult(result: SDKResultMessage): boolean {
@@ -2019,6 +2031,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     context: ClaudeSessionContext,
     message: string,
     cause?: unknown,
+    kind?: ProviderRuntimeErrorKind,
   ) {
     if (cause !== undefined) {
       void cause;
@@ -2035,6 +2048,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       payload: {
         message,
         class: "provider_error",
+        ...(kind ? { kind } : {}),
         ...(cause !== undefined ? { detail: cause } : {}),
       },
       providerRefs: nativeProviderRefs(context),
@@ -2911,6 +2925,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         assistantTextBlocks: new Map(),
         assistantTextBlockOrder: [],
         capturedProposedPlanKeys: new Set(),
+        usageLimitSignaled: false,
         nextSyntheticAssistantBlockIndex: -1,
       };
       context.session = {
@@ -2988,9 +3003,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     const status = turnStatusFromResult(message);
     const errorMessage = resultUserFacingError(message);
+    const errorKind =
+      status === "failed" &&
+      (context.turnState?.usageLimitSignaled === true || isUsageLimitResult(message))
+        ? ("usage-limit" satisfies ProviderRuntimeErrorKind)
+        : undefined;
 
     if (status === "failed") {
-      yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
+      yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.", undefined, errorKind);
     }
 
     yield* completeTurn(context, status, errorMessage, message);
@@ -3531,6 +3551,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (message.type === "rate_limit_event") {
+      if (message.rate_limit_info.status === "rejected" && context.turnState) {
+        context.turnState.usageLimitSignaled = true;
+      }
       yield* offerRuntimeEvent({
         ...base,
         type: "account.rate-limits.updated",
@@ -4448,6 +4471,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         assistantTextBlocks: new Map(),
         assistantTextBlockOrder: [],
         capturedProposedPlanKeys: new Set(),
+        usageLimitSignaled: false,
         nextSyntheticAssistantBlockIndex: -1,
       };
 

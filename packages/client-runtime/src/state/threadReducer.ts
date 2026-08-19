@@ -223,6 +223,18 @@ export function applyThreadDetailEvent(
         },
       };
 
+    // A migration rebinds the thread to another provider instance; the
+    // history row arrives separately as a thread.activity-appended event.
+    case "thread.migrated":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          modelSelection: event.payload.modelSelection,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
     case "thread.runtime-mode-set":
       return {
         kind: "updated",
