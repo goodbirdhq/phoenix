@@ -690,7 +690,14 @@ export const make = Effect.gen(function* () {
       onNone: () =>
         providerSessionDirectory.listBindings().pipe(
           Effect.map((bindings) => {
-            const liveThreadIds = new Set(bindings.map((binding) => binding.threadId));
+            const liveThreadIds = new Set(
+              bindings
+                // The rows persist as resume state; only status distinguishes
+                // a stopped session from a live one (same filter the reaper
+                // uses).
+                .filter((binding) => binding.status !== "stopped")
+                .map((binding) => binding.threadId),
+            );
             return (threadId: ThreadId) => liveThreadIds.has(threadId);
           }),
           Effect.catch(() => Effect.succeed((_threadId: ThreadId) => true)),
