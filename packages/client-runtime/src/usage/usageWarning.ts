@@ -1,0 +1,197 @@
+/**
+ * The proactive "this account is nearly spent" warning shown in a chat view.
+ *
+ * A thread is bound to one provider instance, and that instance's subscription
+ * windows already arrive with the availability reading the Usage page renders.
+ * This module turns that reading into the single most urgent warning for one
+ * thread, so every client can render the same sentence without repeating the
+ * selection rules.
+ *
+ * @module usage/usageWarning
+ */
+import type {
+  ProviderAvailabilityEntry,
+  ProviderAvailabilityWindow,
+  ServerProvider,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+
+import {
+  providerLimitSourceName,
+  subscriptionLimitWindowLabel,
+  type SubscriptionAvailabilitySource,
+} from "./subscriptionAvailability.ts";
+
+/**
+ * The share of a usage window that counts as "nearly spent".
+ *
+ * Deliberately not configurable in v1. A threshold people can move is one we
+ * have to explain, persist, and support on every surface; a single honest
+ * default is enough until real use tells us where it belongs.
+ */
+export const USAGE_WARNING_THRESHOLD = 0.9;
+
+/** One thread's most urgent nearly-spent window, ready to render. */
+export type ThreadUsageWarning = {
+  readonly instanceId: string;
+  readonly driver: string;
+  /** Account name when the provider supplied one, otherwise the instance's name. */
+  readonly accountName: string;
+  /** The window's own name ("Current session", "Weekly"), never a plan guess. */
+  readonly windowLabel: string;
+  readonly usedPercent: number;
+  readonly resetsAt: string | null;
+  /**
+   * The provider could not confirm this reading is current, so the numbers are
+   * the last ones seen rather than a fresh observation.
+   */
+  readonly isReadingUnconfirmed: boolean;
+  /**
+   * Identity of this warning for dismissal. Carries the thread, the instance,
+   * the window, and the reset it counts down to, so dismissing it silences
+   * exactly this window and the next window warns again.
+   */
+  readonly dismissalKey: string;
+};
+
+/** The per-environment availability read every client already holds. */
+export type ProviderAvailabilityEnvironment = {
+  readonly environmentId: string;
+  readonly label: string;
+  readonly providers: readonly ProviderAvailabilityEntry[];
+  /** Null until the provider projection lands; enabled/auth facts live here. */
+  readonly serverProviders: readonly ServerProvider[] | null;
+};
+
+/**
+ * Pairs each environment's availability entries with the enabled/authenticated
+ * facts from its provider projection. An unknown status must never read as
+ * signed in, so an instance missing from the projection stays unauthenticated.
+ */
+export function subscriptionAvailabilitySources(
+  environments: readonly ProviderAvailabilityEnvironment[],
+): readonly SubscriptionAvailabilitySource[] {
+  return environments.flatMap((environment) =>
+    environment.providers.map((entry) => {
+      const provider = environment.serverProviders?.find(
+        (candidate) => candidate.instanceId === entry.instanceId,
+      );
+      return {
+        environmentId: environment.environmentId,
+        environmentLabel: environment.label,
+        instanceId: entry.instanceId,
+        driver: entry.driver,
+        displayName:
+          entry.displayName ?? provider?.displayName ?? providerLimitSourceName(entry.driver),
+        ...(provider?.accentColor ? { accentColor: provider.accentColor } : {}),
+        enabled: provider?.enabled === true,
+        authenticated: provider?.auth.status === "authenticated",
+        availability: entry.availability,
+      } satisfies SubscriptionAvailabilitySource;
+    }),
+  );
+}
+
+const epochMillis = (isoDateTime: string | undefined): number | null => {
+  if (!isoDateTime) return null;
+  const value = Option.getOrNull(DateTime.make(isoDateTime));
+  return value === null ? null : DateTime.toEpochMillis(value);
+};
+
+const windowKey = (window: ProviderAvailabilityWindow): string =>
+  `${window.kind}:${window.scope ?? ""}`;
+
+/**
+ * The most urgent window at or above the threshold for the instance a thread is
+ * bound to, or null when there is nothing honest to say.
+ *
+ * A window whose reset has already passed is skipped: its percentage describes
+ * a window that is over, and showing it as pressure would be a claim the person
+ * cannot act on.
+ */
+export function deriveThreadUsageWarning(input: {
+  readonly threadId: string | null | undefined;
+  readonly environmentId: string | null | undefined;
+  readonly instanceId: string | null | undefined;
+  readonly sources: readonly SubscriptionAvailabilitySource[];
+  /** Dismissal keys this client has already been told to stop showing. */
+  readonly dismissedKeys?: ReadonlySet<string> | undefined;
+  readonly nowMs?: number | undefined;
+}): ThreadUsageWarning | null {
+  const { threadId, environmentId, instanceId } = input;
+  if (!threadId || !instanceId) return null;
+  const nowMs = input.nowMs ?? DateTime.toEpochMillis(DateTime.nowUnsafe());
+
+  const source = input.sources.find(
+    (candidate) =>
+      candidate.instanceId === instanceId &&
+      (!environmentId || candidate.environmentId === environmentId) &&
+      candidate.enabled === true &&
+      candidate.authenticated === true &&
+      candidate.availability.source !== "unsupported",
+  );
+  if (!source) return null;
+
+  const threshold = USAGE_WARNING_THRESHOLD * 100;
+  const candidates = source.availability.windows.filter((window) => {
+    if (window.usedPercent < threshold) return false;
+    const resetsAtMs = epochMillis(window.resetsAt);
+    return resetsAtMs === null || resetsAtMs > nowMs;
+  });
+  if (candidates.length === 0) return null;
+
+  // Most spent first; between equals, the one resetting soonest is the one the
+  // person is about to run into.
+  const window = candidates.toSorted((left, right) => {
+    if (left.usedPercent !== right.usedPercent) return right.usedPercent - left.usedPercent;
+    const leftReset = epochMillis(left.resetsAt) ?? Number.POSITIVE_INFINITY;
+    const rightReset = epochMillis(right.resetsAt) ?? Number.POSITIVE_INFINITY;
+    if (leftReset !== rightReset) return leftReset - rightReset;
+    return windowKey(left).localeCompare(windowKey(right));
+  })[0]!;
+
+  const dismissalKey = [threadId, instanceId, windowKey(window), window.resetsAt ?? ""].join(" | ");
+  if (input.dismissedKeys?.has(dismissalKey)) return null;
+
+  return {
+    instanceId,
+    driver: source.driver,
+    accountName: source.availability.account?.displayName ?? source.displayName,
+    windowLabel: subscriptionLimitWindowLabel(window),
+    usedPercent: window.usedPercent,
+    resetsAt: window.resetsAt ?? null,
+    isReadingUnconfirmed:
+      source.availability.status === "unknown" || source.availability.stale !== undefined,
+    dismissalKey,
+  };
+}
+
+/**
+ * The reset moment as a local wall-clock time, with the weekday when it does
+ * not land on today. Absolute rather than a countdown: a fixed label stays true
+ * without a repainting timer, and weekly windows reset days out.
+ */
+export function formatUsageWarningReset(
+  resetsAt: string | null,
+  options: { readonly nowMs?: number | undefined; readonly timeZone?: string | undefined } = {},
+): string | null {
+  const resetsAtMs = epochMillis(resetsAt ?? undefined);
+  if (resetsAtMs === null) return null;
+  const nowMs = options.nowMs ?? DateTime.toEpochMillis(DateTime.nowUnsafe());
+  const timeZone = options.timeZone;
+  const format = (epoch: number, intlOptions: Intl.DateTimeFormatOptions): string => {
+    const dateTime = DateTime.makeUnsafe(epoch);
+    return timeZone
+      ? DateTime.format(dateTime, { ...intlOptions, timeZone })
+      : DateTime.formatLocal(dateTime, intlOptions);
+  };
+
+  const dayOptions = { year: "numeric", month: "2-digit", day: "2-digit" } as const;
+  const sameDay = format(nowMs, dayOptions) === format(resetsAtMs, dayOptions);
+  return format(resetsAtMs, {
+    hour: "numeric",
+    minute: "2-digit",
+    ...(sameDay ? {} : { weekday: "short" }),
+  });
+}

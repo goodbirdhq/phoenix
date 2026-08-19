@@ -37,3 +37,14 @@ unknown provider states are left out rather than shown as empty cards. If a prev
 reading expires, Phoenix keeps the account card with an expired-reading notice but removes its
 quota bars until a refresh succeeds. Reading limits never starts an agent turn and never spends
 your quota.
+
+## Warnings in chat
+
+When the account a thread runs on has spent 90% or more of one of its windows, a single line appears
+above that thread's messages: the account, how much of the window is gone, and the local time it
+resets. It is the same reading the Usage page shows, so it costs nothing extra to collect and never
+asks a provider for a fresh one on its own.
+
+Dismiss the line and it stays gone for that thread until the window resets; the next window warns
+again. Other threads on the same account keep their own warning, and a reading a provider could not
+confirm is labelled as the last known one rather than presented as current.
