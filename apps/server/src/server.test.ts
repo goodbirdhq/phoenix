@@ -109,6 +109,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import { HandoffBrief } from "./orchestration/Services/HandoffBrief.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
@@ -793,13 +794,18 @@ const buildAppUnderTest = (options?: {
           ),
         ),
         Layer.provide(
-          Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
-            readEvents: () => Stream.empty,
-            dispatch: () => Effect.succeed({ sequence: 0 }),
-            streamDomainEvents: Stream.empty,
-            latestSequence: Effect.succeed(0),
-            ...options?.layers?.orchestrationEngine,
-          }),
+          Layer.mergeAll(
+            Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
+              readEvents: () => Stream.empty,
+              dispatch: () => Effect.succeed({ sequence: 0 }),
+              streamDomainEvents: Stream.empty,
+              latestSequence: Effect.succeed(0),
+              ...options?.layers?.orchestrationEngine,
+            }),
+            Layer.mock(HandoffBrief)({
+              create: () => Effect.die("HandoffBrief not stubbed in this route test"),
+            }),
+          ),
         ),
         Layer.provide(
           Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({

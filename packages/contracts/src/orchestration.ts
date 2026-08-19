@@ -1123,6 +1123,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   ),
 );
 
+const ThreadMigrationBrief = Schema.String.check(Schema.isMaxLength(32_768));
+
 /**
  * `thread.migrate` — rebind a thread to a different provider instance in
  * place. The thread keeps its id, history, checkpoints and sidebar entry;
@@ -1147,6 +1149,7 @@ const ThreadMigrateCommand = Schema.Struct({
   targetInstanceId: ProviderInstanceId,
   targetModel: Schema.optional(TrimmedNonEmptyString),
   handoffMode: ThreadMigrationHandoffMode,
+  brief: Schema.optional(ThreadMigrationBrief),
   trigger: ThreadMigrationTrigger,
   createdAt: IsoDateTime,
 }).check(
@@ -1697,6 +1700,7 @@ export const ThreadMigratedPayload = Schema.Struct({
   fromModelSelection: ModelSelection,
   modelSelection: ModelSelection,
   handoffMode: ThreadMigrationHandoffMode,
+  brief: Schema.optional(ThreadMigrationBrief),
   trigger: ThreadMigrationTrigger,
   updatedAt: IsoDateTime,
 });

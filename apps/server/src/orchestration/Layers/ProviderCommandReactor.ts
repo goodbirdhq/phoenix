@@ -484,6 +484,7 @@ const make = Effect.gen(function* () {
       // restarts on the target instance, and the native resume cursor is kept
       // only when the continuation identities match (same CLI home).
       readonly allowMigration?: boolean;
+      readonly migrationBrief?: string;
     },
   ) {
     const thread = yield* resolveThread(threadId);
@@ -669,7 +670,10 @@ const make = Effect.gen(function* () {
       if (Option.isNone(detail)) {
         return undefined;
       }
-      const build = buildConversationSeed({ messages: detail.value.messages });
+      const build = buildConversationSeed({
+        messages: detail.value.messages,
+        ...(options?.migrationBrief !== undefined ? { brief: options.migrationBrief } : {}),
+      });
       if (build.seed.messages.length === 0 && build.seed.brief === undefined) {
         return undefined;
       }
@@ -1664,6 +1668,7 @@ const make = Effect.gen(function* () {
         yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
           modelSelection: event.payload.modelSelection,
           allowMigration: true,
+          ...(event.payload.brief !== undefined ? { migrationBrief: event.payload.brief } : {}),
         });
         // Auto-failover retries the failed turn here, after the rebind, so the
         // retry can never race the session restart into the instance guard.
