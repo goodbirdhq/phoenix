@@ -1133,3 +1133,116 @@ describe("orchestration projector", () => {
     expect(thread?.checkpoints.at(-1)?.turnId).toBe("turn-599");
   });
 });
+
+describe("thread migration projection", () => {
+  const createdAt = "2026-08-19T10:00:00.000Z";
+  const migratedAt = "2026-08-19T11:00:00.000Z";
+
+  const createThreadEvent = makeEvent({
+    sequence: 1,
+    type: "thread.created",
+    aggregateKind: "thread",
+    aggregateId: "thread-migrating",
+    occurredAt: createdAt,
+    commandId: "cmd-create",
+    payload: {
+      threadId: "thread-migrating",
+      projectId: "project-1",
+      title: "Migrating thread",
+      modelSelection: { instanceId: "claude_personal", model: "claude-opus-5" },
+      runtimeMode: "full-access",
+      branch: null,
+      worktreePath: null,
+      createdAt,
+      updatedAt: createdAt,
+    },
+  });
+
+  const migratedEvent = makeEvent({
+    sequence: 2,
+    type: "thread.migrated",
+    aggregateKind: "thread",
+    aggregateId: "thread-migrating",
+    occurredAt: migratedAt,
+    commandId: "cmd-migrate",
+    payload: {
+      threadId: "thread-migrating",
+      fromModelSelection: { instanceId: "claude_personal", model: "claude-opus-5" },
+      modelSelection: { instanceId: "claude_work", model: "claude-opus-5" },
+      handoffMode: "replay",
+      trigger: "auto-failover",
+      updatedAt: migratedAt,
+    },
+  });
+
+  effectIt.effect("rebinds the thread's model selection to the target instance", () =>
+    Effect.gen(function* () {
+      const afterCreate = yield* projectEvent(createEmptyReadModel(createdAt), createThreadEvent);
+      const afterMigrate = yield* projectEvent(afterCreate, migratedEvent);
+
+      const thread = afterMigrate.threads[0];
+      expect(thread?.modelSelection).toEqual({
+        instanceId: "claude_work",
+        model: "claude-opus-5",
+      });
+      expect(thread?.updatedAt).toBe(migratedAt);
+      // The migration's history row is its own activity event; the rebinding
+      // event must not invent one.
+      expect(thread?.activities).toEqual([]);
+    }),
+  );
+
+  effectIt.effect("keeps the migration in the thread's history", () =>
+    Effect.gen(function* () {
+      const afterCreate = yield* projectEvent(createEmptyReadModel(createdAt), createThreadEvent);
+      const afterMigrate = yield* projectEvent(afterCreate, migratedEvent);
+      const afterActivity = yield* projectEvent(
+        afterMigrate,
+        makeEvent({
+          sequence: 3,
+          type: "thread.activity-appended",
+          aggregateKind: "thread",
+          aggregateId: "thread-migrating",
+          occurredAt: migratedAt,
+          commandId: "cmd-migrate",
+          payload: {
+            threadId: "thread-migrating",
+            activity: {
+              id: "thread-migration:cmd-migrate",
+              tone: "info",
+              kind: "thread.migrated",
+              summary:
+                "Migrated from claude_personal (claude-opus-5) to claude_work (claude-opus-5)",
+              payload: {
+                fromInstanceId: "claude_personal",
+                fromModel: "claude-opus-5",
+                toInstanceId: "claude_work",
+                toModel: "claude-opus-5",
+                handoffMode: "replay",
+                trigger: "auto-failover",
+              },
+              turnId: null,
+              createdAt: migratedAt,
+            },
+          },
+        }),
+      );
+
+      const activity = afterActivity.threads[0]?.activities[0];
+      expect(activity?.kind).toBe("thread.migrated");
+      expect(activity?.payload).toMatchObject({
+        fromInstanceId: "claude_personal",
+        toInstanceId: "claude_work",
+        trigger: "auto-failover",
+      });
+    }),
+  );
+
+  effectIt.effect("ignores a migration for a thread it has never seen", () =>
+    Effect.gen(function* () {
+      const empty = createEmptyReadModel(createdAt);
+      const projected = yield* projectEvent(empty, migratedEvent);
+      expect(projected.threads).toEqual([]);
+    }),
+  );
+});
