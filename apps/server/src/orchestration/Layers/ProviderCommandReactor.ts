@@ -493,10 +493,22 @@ const make = Effect.gen(function* () {
 
     const desiredRuntimeMode = thread.runtimeMode;
     const requestedModelSelection = options?.modelSelection;
+    // A migrated thread can briefly leave a stale runtime entry for the old
+    // instance behind; prefer the session matching the thread's recorded
+    // binding so the guard never reads the wrong account off a stale entry.
     const resolveActiveSession = (threadId: ThreadId) =>
-      providerService
-        .listSessions()
-        .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
+      providerService.listSessions().pipe(
+        Effect.map((sessions) => {
+          const matches = sessions.filter((session) => session.threadId === threadId);
+          const boundInstanceId = thread.session?.providerInstanceId;
+          return (
+            matches.find(
+              (session) =>
+                boundInstanceId !== undefined && session.providerInstanceId === boundInstanceId,
+            ) ?? matches[0]
+          );
+        }),
+      );
 
     const activeSession = yield* resolveActiveSession(threadId);
     const activeThreadSession =

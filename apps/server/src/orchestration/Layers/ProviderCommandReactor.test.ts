@@ -2171,6 +2171,36 @@ describe("ProviderCommandReactor", () => {
         const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
         expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("claudeAgent"));
         expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("claudeAgent"));
+
+        // A stale runtime entry for the old instance must not trip the guard
+        // on the next turn: the reactor prefers the bound instance's session.
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-migrate-2"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-migrate-2"),
+            role: "user",
+            text: "continue on the new account",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+        const postTurnModel = yield* Effect.promise(() => harness.readModel());
+        const postTurnThread = postTurnModel.threads.find(
+          (entry) => entry.id === ThreadId.make("thread-1"),
+        );
+        expect(
+          postTurnThread?.activities.find(
+            (activity) => activity.kind === "provider.turn.start.failed",
+          ),
+        ).toBeUndefined();
+        expect(postTurnThread?.session?.providerInstanceId).toBe(
+          ProviderInstanceId.make("claudeAgent"),
+        );
       }),
   );
 
