@@ -1825,6 +1825,44 @@ it.effect(
       assert.deepEqual([...expired.windows], []);
       assert.equal(expired.stale, undefined);
 
+      claude.emit({
+        type: "account.rate-limits.updated",
+        eventId: asEventId("claude-sdk-rejected"),
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId: asThreadId("availability-thread"),
+        createdAt: "2026-08-17T21:30:00.000Z",
+        payload: {
+          rateLimits: {
+            type: "rate_limit_event",
+            rate_limit_info: {
+              status: "rejected",
+              rateLimitType: "five_hour",
+              utilization: 1,
+              resetsAt: 1_787_342_400,
+            },
+            session_id: "sdk-session-rate-limit",
+            uuid: "rate-limit-rejected",
+          },
+        },
+      } as LegacyProviderRuntimeEvent);
+      yield* advanceTestClock(1);
+      const limited = yield* provider.getAvailability!(claudeAgentInstanceId, CLAUDE_AGENT_DRIVER);
+      assert.equal(limited.status, "limited");
+      assert.equal(limited.source, "claude_agent_sdk");
+      assert.deepEqual(
+        [...limited.windows],
+        [
+          {
+            kind: "session",
+            label: "Current session",
+            usedPercent: 100,
+            resetsAt: "2026-08-21T20:00:00.000Z",
+            windowDurationMins: 300,
+          },
+        ],
+      );
+
       yield* Scope.close(scope, Exit.void);
     }).pipe(Effect.provide(NodeServices.layer)),
 );

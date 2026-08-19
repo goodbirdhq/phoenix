@@ -18,12 +18,15 @@ import {
   OrchestrationThread,
   OrchestrationThreadShell,
   ProjectCreateCommand,
+  THREAD_MIGRATION_ACTIVITY_KIND,
   ThreadMetaUpdatedPayload,
+  ThreadMigratedPayload,
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
   isProviderSendTurnSupportedImageMimeType,
+  isThreadMigrationActivity,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -43,6 +46,7 @@ const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSessi
 const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
 const encodeThreadCreatedPayload = Schema.encodeEffect(ThreadCreatedPayload);
+const decodeThreadMigratedPayload = Schema.decodeUnknownEffect(ThreadMigratedPayload);
 
 function getOptionValue(
   options: ReadonlyArray<{ id: string; value: unknown }> | undefined,
@@ -1018,4 +1022,138 @@ it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects 
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/png"), true);
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("IMAGE/JPEG"), true);
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
+});
+
+it.effect("thread.migrate carries the target instance, handoff mode, and trigger", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeOrchestrationCommand({
+      type: "thread.migrate",
+      commandId: "cmd-migrate",
+      threadId: "thread-1",
+      targetInstanceId: "claude_work",
+      targetModel: "claude-opus-5",
+      handoffMode: "brief",
+      trigger: "limit-popup",
+      createdAt: "2026-08-19T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "thread.migrate");
+    if (command.type !== "thread.migrate") return;
+    assert.strictEqual(command.targetInstanceId, ProviderInstanceId.make("claude_work"));
+    assert.strictEqual(command.targetModel, "claude-opus-5");
+    assert.strictEqual(command.handoffMode, "brief");
+    assert.strictEqual(command.trigger, "limit-popup");
+  }),
+);
+
+it.effect("thread.migrate keeps the current model when no target model is given", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeOrchestrationCommand({
+      type: "thread.migrate",
+      commandId: "cmd-migrate",
+      threadId: "thread-1",
+      targetInstanceId: "claude_work",
+      handoffMode: "replay",
+      trigger: "manual",
+      createdAt: "2026-08-19T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "thread.migrate");
+    if (command.type !== "thread.migrate") return;
+    assert.strictEqual(command.targetModel, undefined);
+  }),
+);
+
+it.effect("thread.migrate rejects a brief handoff on auto-failover", () =>
+  Effect.gen(function* () {
+    // Auto-failover fires because the origin account is out of capacity, so
+    // it can never spend an origin turn writing a brief.
+    const rejected = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "thread.migrate",
+        commandId: "cmd-migrate",
+        threadId: "thread-1",
+        targetInstanceId: "claude_work",
+        handoffMode: "brief",
+        trigger: "auto-failover",
+        createdAt: "2026-08-19T00:00:00.000Z",
+      }),
+    );
+    assert.strictEqual(rejected._tag, "Failure");
+
+    const accepted = yield* decodeOrchestrationCommand({
+      type: "thread.migrate",
+      commandId: "cmd-migrate",
+      threadId: "thread-1",
+      targetInstanceId: "claude_work",
+      handoffMode: "replay",
+      trigger: "auto-failover",
+      createdAt: "2026-08-19T00:00:00.000Z",
+    });
+    assert.strictEqual(accepted.type, "thread.migrate");
+  }),
+);
+
+it.effect("thread.migrate rejects an unknown trigger or handoff mode", () =>
+  Effect.gen(function* () {
+    for (const invalid of [
+      { handoffMode: "summarize", trigger: "manual" },
+      { handoffMode: "replay", trigger: "cron" },
+    ]) {
+      const result = yield* Effect.exit(
+        decodeOrchestrationCommand({
+          type: "thread.migrate",
+          commandId: "cmd-migrate",
+          threadId: "thread-1",
+          targetInstanceId: "claude_work",
+          ...invalid,
+          createdAt: "2026-08-19T00:00:00.000Z",
+        }),
+      );
+      assert.strictEqual(result._tag, "Failure");
+    }
+  }),
+);
+
+it.effect("thread.migrated records both ends of the move", () =>
+  Effect.gen(function* () {
+    const payload = yield* decodeThreadMigratedPayload({
+      threadId: "thread-1",
+      // Legacy `provider` selections must still decode on replay.
+      fromModelSelection: { provider: "claude_personal", model: "claude-opus-5" },
+      modelSelection: { instanceId: "claude_work", model: "claude-opus-5" },
+      handoffMode: "replay",
+      trigger: "auto-failover",
+      updatedAt: "2026-08-19T00:00:00.000Z",
+    });
+    assert.strictEqual(
+      payload.fromModelSelection.instanceId,
+      ProviderInstanceId.make("claude_personal"),
+    );
+    assert.strictEqual(payload.modelSelection.instanceId, ProviderInstanceId.make("claude_work"));
+    assert.strictEqual(payload.handoffMode, "replay");
+    assert.strictEqual(payload.trigger, "auto-failover");
+  }),
+);
+
+it("recognizes a migration history row", () => {
+  const activity = {
+    id: "thread-migration:cmd-1",
+    tone: "info",
+    kind: THREAD_MIGRATION_ACTIVITY_KIND,
+    summary: "Migrated from claude_personal (claude-opus-5) to claude_work (claude-opus-5)",
+    payload: {
+      fromInstanceId: "claude_personal",
+      fromModel: "claude-opus-5",
+      toInstanceId: "claude_work",
+      toModel: "claude-opus-5",
+      handoffMode: "replay",
+      trigger: "auto-failover",
+    },
+    turnId: null,
+    createdAt: "2026-08-19T00:00:00.000Z",
+  };
+  assert.strictEqual(isThreadMigrationActivity(activity), true);
+  assert.strictEqual(
+    isThreadMigrationActivity({ ...activity, payload: { ...activity.payload, toModel: "" } }),
+    false,
+  );
 });

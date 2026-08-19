@@ -272,6 +272,7 @@ import {
   ProviderStatusBanner,
   shouldShowProviderStatusBanner,
 } from "./chat/ProviderStatusBanner";
+import { resolveThreadUsageWarningInstanceId, ThreadUsageWarning } from "./chat/ThreadUsageWarning";
 import {
   dismissThreadErrorBannerForSession,
   getThreadErrorBannerKey,
@@ -2670,6 +2671,10 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.modelSelection.instanceId ??
     activeProject?.defaultModelSelection?.instanceId ??
     null;
+  const usageWarningInstanceId = resolveThreadUsageWarningInstanceId({
+    sessionProviderInstanceId: activeThread?.session?.providerInstanceId,
+    threadModelSelectionInstanceId: activeThread?.modelSelection.instanceId,
+  });
   const activeProviderStatus = useMemo(() => {
     if (activeProviderInstanceId) {
       return (
@@ -6332,6 +6337,11 @@ function ChatViewContent(props: ChatViewProps) {
               <ProviderStatusBanner
                 status={visibleProviderStatus}
                 onDismiss={() => setDismissedProviderStatusBannerKey(providerStatusBannerKey)}
+              />
+              <ThreadUsageWarning
+                environmentId={activeThread.environmentId}
+                instanceId={usageWarningInstanceId}
+                threadId={activeThread.id}
               />
             </div>
             {/* Messages Wrapper */}

@@ -18,7 +18,11 @@ import {
   PreviewViewportSetting,
   PreviewZoomFactor,
 } from "./preview.ts";
-import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
+import {
+  ProviderInstanceConfig,
+  ProviderInstanceId,
+  WritableProviderInstanceConfigMap,
+} from "./providerInstance.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -713,6 +717,10 @@ export const ServerSettings = Schema.Struct({
   // is `Schema.Unknown` at this layer so envelopes with unknown drivers
   // (forks, downgrades, in-flight PR branches) round-trip without loss.
   // See providerInstance.ts for the forward/backward compatibility invariant.
+  // Deliberately unchecked on the read path: a settings file written by a
+  // newer build, a fork, or a hand edit must still decode. Failover groups
+  // that mix drivers are reported by `failoverGroupDriverConflicts` and
+  // rejected on the write path below.
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -858,7 +866,9 @@ export const ServerSettingsPatch = Schema.Struct({
   // entries is intentionally out of scope: the map is small, and partial
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
-  providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  // Checked map: a saved failover group must not mix drivers, since a group
+  // promises interchangeable accounts.
+  providerInstances: Schema.optionalKey(WritableProviderInstanceConfigMap),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

@@ -51,6 +51,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import { RuntimeReceiptBusLive } from "./RuntimeReceiptBus.ts";
 import { DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -249,6 +250,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(SqlitePersistenceMemory),
     );
     const providerRuntimeLayer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provideMerge(RuntimeReceiptBusLive),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       // Single shared liveness instance across ingestion (writer), the
@@ -2837,7 +2839,55 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime exploded");
+    expect(thread.session?.lastErrorKind).toBeUndefined();
   });
+
+  effectIt.effect("persists a usage-limit runtime error kind in session state", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      harness.emit({
+        type: "runtime.error",
+        eventId: asEventId("evt-runtime-usage-limit"),
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claude-work"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-usage-limit"),
+        payload: {
+          message: "You've hit your 5-hour limit",
+          class: "provider_error",
+          kind: "usage-limit",
+        },
+      });
+
+      yield* Effect.promise(() => harness.drain());
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-turn-completed-usage-limit"),
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claude-work"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-usage-limit"),
+        payload: {
+          state: "failed",
+          errorMessage: "You've hit your 5-hour limit",
+        },
+      });
+      yield* Effect.promise(() => harness.drain());
+
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === asThreadId("thread-1"),
+      );
+      expect(thread?.session?.status).toBe("error");
+      expect(thread?.session?.activeTurnId).toBeNull();
+      expect(thread?.session?.lastError).toBe("You've hit your 5-hour limit");
+      expect(thread?.session?.lastErrorKind).toBe("usage-limit");
+      expect(thread?.session?.providerInstanceId).toBe("claude-work");
+    }),
+  );
 
   it("records runtime.error activities from the typed payload message", async () => {
     const harness = await createHarness();
