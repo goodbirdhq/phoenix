@@ -768,6 +768,7 @@ function ThreadRouteContent(
       <View className="flex-1 bg-screen">
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
+          boundThread={selectedThread}
           contentPresentation={contentPresentation}
           screenTone={connectionTone(routeConnectionState)}
           connectionError={routeConnectionError}

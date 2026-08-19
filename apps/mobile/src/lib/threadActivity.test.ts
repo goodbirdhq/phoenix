@@ -176,6 +176,33 @@ describe("buildThreadFeed", () => {
     expect(buildThreadFeed(thread)).toEqual([]);
   });
 
+  it("renders thread migration as a visible history activity", () => {
+    const thread = makeThread({
+      id: ThreadId.make("migrated-thread"),
+      projectId: ProjectId.make("project-1"),
+      title: "Migrated",
+      activities: [
+        makeActivity({
+          id: EventId.make("thread-migrated"),
+          kind: "thread.migrated",
+          summary: "Migrated from Claude Work to Codex Personal",
+          createdAt: "2026-04-01T00:00:01.000Z",
+        }),
+      ],
+    });
+
+    expect(buildThreadFeed(thread)).toMatchObject([
+      {
+        type: "activity-group",
+        activities: [
+          {
+            summary: "Migrated from Claude Work to Codex Personal",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("keeps historic work entries attributed to their turns", () => {
     const thread = makeThread({
       id: ThreadId.make("thread-1"),

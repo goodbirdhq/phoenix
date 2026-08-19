@@ -78,11 +78,14 @@ import {
   ThreadComposer,
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
+import { ThreadUsageLimitMigrationEntryPoint } from "./ThreadUsageLimitMigrationEntryPoint";
 import { ThreadUsageWarningBanner } from "./ThreadUsageWarningBanner";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 
 export interface ThreadDetailScreenProps {
   readonly selectedThread: OrchestrationThreadShell;
+  /** Durable shell used for provider-session binding; never includes picker drafts. */
+  readonly boundThread: OrchestrationThreadShell;
   readonly contentPresentation: ThreadContentPresentation;
   readonly screenTone: StatusTone;
   readonly connectionError: string | null;
@@ -631,10 +634,15 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           {/* No paddingTop here: the overlay's measured height becomes the
               list's bottom inset, so any padding above the pill/composer
               pushes the resting content floor up by the same amount. */}
+          <ThreadUsageLimitMigrationEntryPoint
+            environmentId={props.environmentId}
+            thread={props.boundThread}
+            onMigrated={props.onUpdateThreadModelSelection}
+          />
           <ThreadUsageWarningBanner
             environmentId={props.environmentId}
             stackedAboveStatus={usageWarningStacksAboveNotice}
-            thread={props.selectedThread}
+            thread={props.boundThread}
           />
 
           <View ref={composerOverlayRef} onLayout={onComposerLayout} className="w-full">
@@ -730,6 +738,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               <ThreadComposer
                 editorRef={composerEditorRef}
                 draftMessage={props.draftMessage}
+                boundThread={props.boundThread}
                 draftAttachments={props.draftAttachments}
                 placeholder="Ask the repo agent, or run a command…"
                 contentMaxWidth={contentMaxWidth}
