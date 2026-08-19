@@ -101,6 +101,12 @@ const RuntimeErrorClass = Schema.Literals([
 ]);
 export type RuntimeErrorClass = typeof RuntimeErrorClass.Type;
 
+// Additive provider-failure classification. Keep this separate from
+// RuntimeErrorClass: the class says which subsystem failed, while the kind is
+// a machine-readable reason clients can act on.
+export const ProviderRuntimeErrorKind = Schema.Literals(["usage-limit"]);
+export type ProviderRuntimeErrorKind = typeof ProviderRuntimeErrorKind.Type;
+
 export const TOOL_LIFECYCLE_ITEM_TYPES = [
   "command_execution",
   "file_change",
@@ -772,6 +778,7 @@ export type RuntimeWarningPayload = typeof RuntimeWarningPayload.Type;
 const RuntimeErrorPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
   class: Schema.optional(RuntimeErrorClass),
+  kind: Schema.optional(ProviderRuntimeErrorKind),
   detail: Schema.optional(Schema.Unknown),
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;

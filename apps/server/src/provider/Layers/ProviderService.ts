@@ -301,6 +301,9 @@ const retainsPreviousReading = (
   previous: ProviderAvailability,
   incoming: ProviderAvailability,
 ): boolean => {
+  // A native rejection is authoritative even when the SDK omits the
+  // representative window that would let Phoenix draw a quota row.
+  if (incoming.status === "limited") return false;
   if (incoming.windows.length > 0) return false;
   if (previous.source === "claude_cli_usage" && incoming.source === "claude_agent_sdk") return true;
   if (previous.source !== incoming.source || incoming.source === "codex_app_server") return false;
@@ -464,6 +467,84 @@ const toIsoDateTime = (unixSeconds: unknown): string | undefined => {
   return DateTime.formatIso(DateTime.makeUnsafe(unixSeconds * 1000));
 };
 
+const claudeWindowIdentity = (
+  rateLimitType: unknown,
+): Omit<ProviderAvailability["windows"][number], "usedPercent" | "resetsAt"> | undefined => {
+  switch (rateLimitType) {
+    case "five_hour":
+      return { kind: "session", label: "Current session", windowDurationMins: 5 * 60 };
+    case "seven_day":
+      return {
+        kind: "weekly",
+        label: "Current week",
+        scope: "all-models",
+        windowDurationMins: 7 * 24 * 60,
+      };
+    case "seven_day_opus":
+      return {
+        kind: "model-weekly",
+        label: "Opus",
+        scope: "opus",
+        windowDurationMins: 7 * 24 * 60,
+      };
+    case "seven_day_sonnet":
+      return {
+        kind: "model-weekly",
+        label: "Sonnet",
+        scope: "sonnet",
+        windowDurationMins: 7 * 24 * 60,
+      };
+    case "seven_day_overage_included":
+      return { kind: "seven_day_overage_included", windowDurationMins: 7 * 24 * 60 };
+    case "overage":
+      return { kind: "overage" };
+    default:
+      return undefined;
+  }
+};
+
+const claudeAvailabilityFromRateLimitEvent = (
+  event: Extract<ProviderRuntimeEvent, { type: "account.rate-limits.updated" }>,
+): ProviderAvailability | undefined => {
+  const rateLimitEvent = event.payload.rateLimits;
+  if (typeof rateLimitEvent !== "object" || rateLimitEvent === null) return undefined;
+  const info = (rateLimitEvent as Record<string, unknown>).rate_limit_info;
+  if (typeof info !== "object" || info === null) return undefined;
+  const fields = info as Record<string, unknown>;
+  const nativeStatus = fields.status;
+  if (
+    nativeStatus !== "allowed" &&
+    nativeStatus !== "allowed_warning" &&
+    nativeStatus !== "rejected"
+  ) {
+    return undefined;
+  }
+
+  const identity = claudeWindowIdentity(fields.rateLimitType);
+  const utilization = fields.utilization;
+  const usedPercent =
+    nativeStatus === "rejected"
+      ? 100
+      : typeof utilization === "number" &&
+          Number.isFinite(utilization) &&
+          utilization >= 0 &&
+          utilization <= 1
+        ? Math.round(utilization * 1_000) / 10
+        : undefined;
+  const resetsAt = toIsoDateTime(fields.resetsAt);
+  const windows =
+    identity && usedPercent !== undefined
+      ? [{ ...identity, usedPercent, ...(resetsAt ? { resetsAt } : {}) }]
+      : [];
+
+  return {
+    status: nativeStatus === "rejected" ? "limited" : "available",
+    source: "claude_agent_sdk",
+    observedAt: event.createdAt,
+    windows,
+  };
+};
+
 // Codex's app-server schema is authoritative here. It calls the two windows
 // primary/secondary, so we preserve that wording instead of guessing that a
 // given plan always means five-hour/weekly.
@@ -510,15 +591,17 @@ export const availabilityFromRuntimeEvent = (
     };
   }
   // Claude's SDK event is deliberately less stable than Codex's documented
-  // app-server schema. Preserve its native provenance but do not invent a
-  // percentage or a five-hour/weekly interpretation from it.
+  // app-server schema. Preserve native provenance and only derive fields the
+  // event identifies explicitly; an unrecognized shape remains unknown.
   if (event.provider === "claudeAgent") {
-    return {
-      status: "unknown",
-      source: "claude_agent_sdk",
-      observedAt: event.createdAt,
-      windows: [],
-    };
+    return (
+      claudeAvailabilityFromRateLimitEvent(event) ?? {
+        status: "unknown",
+        source: "claude_agent_sdk",
+        observedAt: event.createdAt,
+        windows: [],
+      }
+    );
   }
   return undefined;
 };
