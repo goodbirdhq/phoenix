@@ -731,6 +731,30 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("renders thread migrations as compact activity rows", () => {
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "thread-migrated",
+        kind: "thread.migrated",
+        summary: "Migrated from Claude Work to Claude Personal",
+        tone: "info",
+        payload: {
+          sourceInstanceId: "claude_work",
+          targetInstanceId: "claude_personal",
+          handoffMode: "replay",
+          trigger: "manual",
+        },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      label: "Migrated from Claude Work to Claude Personal",
+      sourceActivityKind: "thread.migrated",
+      tone: "info",
+    });
+  });
+
   it("omits tool started entries and keeps completed entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
