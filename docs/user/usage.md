@@ -41,7 +41,7 @@ your quota.
 ## Warnings in chat
 
 When the account a thread runs on has spent 90% or more of one of its windows, a single line appears
-above that thread's messages: the account, how much of the window is gone, and the local time it
+in that thread's chat: the account, how much of the window is gone, and the local time it
 resets. It is the same reading the Usage page shows, so it costs nothing extra to collect and never
 asks a provider for a fresh one on its own.
 
