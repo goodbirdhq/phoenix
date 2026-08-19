@@ -26,11 +26,25 @@ import type * as Stream from "effect/Stream";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
 
+/**
+ * Which seeding tier an adapter uses for `ProviderSessionStartInput.seed`:
+ * `native-history` hands the transcript to the provider as conversation
+ * history, `framed-prompt` holds it and frames it into the first turn's
+ * prompt. Orchestration reads this (via `ProviderService.getCapabilities`) to
+ * know what a migration onto this instance will actually do.
+ */
+export type ProviderConversationSeedingMode = "native-history" | "framed-prompt";
+
 export interface ProviderAdapterCapabilities {
   /**
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /**
+   * Declares how a conversation seed handed to `startSession` reaches the
+   * provider.
+   */
+  readonly conversationSeeding: ProviderConversationSeedingMode;
 }
 
 export type ProviderSessionRuntimeLiveness = "live" | "dead" | "unknown";

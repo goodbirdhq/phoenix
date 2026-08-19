@@ -25,6 +25,7 @@ import {
   ProviderApprovalDecision,
   ThreadId,
   ProviderSendTurnInput,
+  type ProviderConversationSeed,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
@@ -52,6 +53,11 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import {
+  applyConversationSeedPrefix,
+  formatConversationSeedPrompt,
+  seedForFreshSession,
+} from "../conversationSeed.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -93,6 +99,12 @@ interface CodexAdapterSessionContext {
   readonly scope: Scope.Closeable;
   readonly runtime: CodexSessionRuntimeShape;
   readonly eventFiber: Fiber.Fiber<void, never>;
+  /**
+   * Set only when native seeding failed (older app-server without
+   * `thread/inject_items`): the seed is framed into the first prompt instead,
+   * so a migrated thread never continues on an amnesiac agent.
+   */
+  pendingSeedPrompt: string | undefined;
   stopped: boolean;
 }
 
@@ -1644,6 +1656,28 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
 
+  /**
+   * Hand the seed to the app-server as real thread history. Returns a framed
+   * prompt only when that failed, so the caller can degrade to the
+   * prompt-framed tier the other providers use.
+   */
+  const seedNatively = Effect.fn("seedNatively")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly runtime: CodexSessionRuntimeShape;
+    readonly seed: ProviderConversationSeed;
+  }) {
+    const seeded = yield* input.runtime.seedConversation(input.seed).pipe(Effect.result);
+    if (seeded._tag === "Success") {
+      return undefined;
+    }
+    yield* Effect.logWarning("codex.session.seed.native-failed", {
+      threadId: input.threadId,
+      cause: seeded.failure,
+      fallback: "framed-prompt",
+    });
+    return formatConversationSeedPrompt(input.seed);
+  });
+
   const startSession: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1766,11 +1800,21 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ),
         );
 
+        const seed = yield* seedForFreshSession({
+          threadId: input.threadId,
+          seed: input.seed,
+          resuming: isCodexResumeCursorSchema(input.resumeCursor),
+        });
+        const pendingSeedPrompt = seed
+          ? yield* seedNatively({ threadId: input.threadId, runtime, seed })
+          : undefined;
+
         sessions.set(input.threadId, {
           threadId: input.threadId,
           scope: sessionScope,
           runtime,
           eventFiber,
+          pendingSeedPrompt,
           stopped: false,
         });
         sessionScopeTransferred = true;
@@ -1827,9 +1871,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       input.modelSelection?.instanceId === boundInstanceId
         ? getCodexServiceTierOptionValue(input.modelSelection)
         : undefined;
+    // Consumed as the first prompt is built, so a steer never repeats it.
+    const seededInput = session.pendingSeedPrompt
+      ? applyConversationSeedPrefix({
+          seedPrompt: session.pendingSeedPrompt,
+          text: input.input ?? "",
+        })
+      : input.input;
+    session.pendingSeedPrompt = undefined;
     return yield* session.runtime
       .sendTurn({
-        ...(input.input !== undefined ? { input: input.input } : {}),
+        ...(seededInput !== undefined ? { input: seededInput } : {}),
         ...(input.modelSelection?.instanceId === boundInstanceId
           ? { model: input.modelSelection.model }
           : {}),
@@ -1993,6 +2045,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      // Codex takes the transcript as real thread history via
+      // `thread/inject_items`; the framed prompt is only a fallback.
+      conversationSeeding: "native-history",
     },
     startSession,
     sendTurn,

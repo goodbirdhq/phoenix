@@ -50,6 +50,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { acpPermissionOutcome, mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import { formatConversationSeedPrompt, seedForFreshSession } from "../conversationSeed.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -137,6 +138,12 @@ interface CursorSessionContext {
    * >0 means a turn is actively running, so a new sendTurn is a steer that
    * continues it, and only the last remaining prompt settles the turn. */
   promptsInFlight: number;
+  /**
+   * Prior conversation carried into a migrated thread. ACP has no
+   * start-from-history entry point, so it rides along on the first prompt and
+   * is cleared once sent.
+   */
+  pendingSeedPrompt: string | undefined;
   stopped: boolean;
 }
 
@@ -513,6 +520,11 @@ export function makeCursorAdapter(
           let ctx!: CursorSessionContext;
 
           const resumeSessionId = parseCursorResume(input.resumeCursor)?.sessionId;
+          const seed = yield* seedForFreshSession({
+            threadId: input.threadId,
+            seed: input.seed,
+            resuming: resumeSessionId !== undefined,
+          });
           const acpNativeLoggers = makeAcpNativeLoggers({
             nativeEventLogger,
             provider: PROVIDER,
@@ -779,6 +791,7 @@ export function makeCursorAdapter(
             lastPlanFingerprint: undefined,
             activeTurnId: undefined,
             promptsInFlight: 0,
+            pendingSeedPrompt: seed === undefined ? undefined : formatConversationSeedPrompt(seed),
             stopped: false,
           };
 
@@ -967,6 +980,12 @@ export function makeCursorAdapter(
           }
 
           const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
+          // A seeded session leads with the prior conversation so the agent
+          // continues the thread instead of meeting it cold.
+          if (ctx.pendingSeedPrompt) {
+            promptParts.push({ type: "text", text: ctx.pendingSeedPrompt });
+            ctx.pendingSeedPrompt = undefined;
+          }
           if (input.input?.trim()) {
             promptParts.push({ type: "text", text: input.input.trim() });
           }
@@ -1177,7 +1196,12 @@ export function makeCursorAdapter(
 
     return {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session" },
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        // ACP has no start-from-history entry point: the transcript is framed
+        // into the first prompt of the new session.
+        conversationSeeding: "framed-prompt",
+      },
       startSession,
       sendTurn,
       interruptTurn,
