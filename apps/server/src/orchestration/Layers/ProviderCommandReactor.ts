@@ -29,6 +29,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { buildConversationSeed } from "../../provider/conversationSeed.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
@@ -632,9 +633,38 @@ const make = Effect.gen(function* () {
       projects: project ? [project] : [],
     });
 
+    // A session on a different continuation identity cannot resume natively,
+    // so a migrating thread is seeded from Phoenix's own transcript instead.
+    const continuationCompatible =
+      currentInfo.continuationIdentity.continuationKey ===
+      desiredInfo.continuationIdentity.continuationKey;
+    const buildMigrationSeed = Effect.gen(function* () {
+      if (continuationCompatible) {
+        return undefined;
+      }
+      const detail = yield* projectionSnapshotQuery.getThreadDetailById(threadId);
+      if (Option.isNone(detail)) {
+        return undefined;
+      }
+      const build = buildConversationSeed({ messages: detail.value.messages });
+      if (build.seed.messages.length === 0 && build.seed.brief === undefined) {
+        return undefined;
+      }
+      if (build.droppedMessageCount > 0 || build.truncatedMessageCount > 0) {
+        yield* Effect.logInfo("provider command reactor bounded migration seed", {
+          threadId,
+          keptMessages: build.seed.messages.length,
+          droppedMessages: build.droppedMessageCount,
+          truncatedMessages: build.truncatedMessageCount,
+        });
+      }
+      return build.seed;
+    });
+
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
+      readonly seed?: unknown;
     }) =>
       providerService.startSession(threadId, {
         threadId,
@@ -644,6 +674,7 @@ const make = Effect.gen(function* () {
         ...(thread.title ? { title: thread.title } : {}),
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+        ...(input?.seed !== undefined ? { seed: input.seed } : {}),
         runtimeMode: desiredRuntimeMode,
       });
 
@@ -719,9 +750,6 @@ const make = Effect.gen(function* () {
         return existingSessionThreadId;
       }
 
-      const continuationCompatible =
-        currentInfo.continuationIdentity.continuationKey ===
-        desiredInfo.continuationIdentity.continuationKey;
       const resumeCursor =
         shouldRestartForModelChange || !continuationCompatible
           ? undefined
@@ -745,9 +773,11 @@ const make = Effect.gen(function* () {
         shouldRestartForModelSelectionChange,
         hasResumeCursor: resumeCursor !== undefined,
       });
-      const restartedSession = yield* startProviderSession(
-        resumeCursor !== undefined ? { resumeCursor } : undefined,
-      );
+      const migrationSeed = resumeCursor === undefined ? yield* buildMigrationSeed : undefined;
+      const restartedSession = yield* startProviderSession({
+        ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+        ...(migrationSeed !== undefined ? { seed: migrationSeed } : {}),
+      });
       yield* Effect.logInfo("provider command reactor restarted provider session", {
         threadId,
         previousSessionId: existingSessionThreadId,
@@ -760,7 +790,10 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
-    const startedSession = yield* startProviderSession(undefined);
+    const freshSeed = yield* buildMigrationSeed;
+    const startedSession = yield* startProviderSession(
+      freshSeed !== undefined ? { seed: freshSeed } : undefined,
+    );
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
@@ -1598,11 +1631,13 @@ const make = Effect.gen(function* () {
         // restarts (e.g. runtime-mode changes) do not resurrect the old account.
         threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
         const thread = yield* resolveThread(event.payload.threadId);
-        if (!thread?.session || thread.session.status === "stopped") {
-          // No live session: the next turn starts on the target instance via
-          // the rebound thread.modelSelection.
+        if (!thread?.session) {
+          // Never started: the first turn starts on the target instance via
+          // the rebound thread.modelSelection, seeded if history exists.
           return;
         }
+        // A stopped session migrates too — otherwise the stale binding would
+        // trip the instance guard on the next turn.
         yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
           modelSelection: event.payload.modelSelection,
           allowMigration: true,

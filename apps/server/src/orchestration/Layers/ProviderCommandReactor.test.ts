@@ -2142,6 +2142,11 @@ describe("ProviderCommandReactor", () => {
           },
         });
         expect(restartInput).not.toHaveProperty("resumeCursor");
+        const seed = restartInput["seed"] as
+          | { messages: ReadonlyArray<{ role: string; text: string }> }
+          | undefined;
+        expect(seed).toBeDefined();
+        expect(seed?.messages.some((message) => message.text.includes("first"))).toBe(true);
 
         yield* Effect.promise(() =>
           waitFor(async () => {
