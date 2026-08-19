@@ -602,6 +602,61 @@ export type SessionReportReadActivity = typeof SessionReportReadActivity.Type;
 
 export const isSessionReportReadActivity = Schema.is(SessionReportReadActivity);
 
+// ── Thread migration ─────────────────────────────────────────────────
+/**
+ * How the target provider instance is handed the thread's history.
+ *
+ *   - `replay` reconstructs the transcript mechanically from Phoenix's own
+ *     event store. It needs nothing from the origin account, so it still
+ *     works when that subscription is rate-limited or signed out.
+ *   - `brief` spends one origin turn having the origin agent compact the
+ *     thread into a handoff document. Higher fidelity per token, but only
+ *     available while the origin instance still has credit.
+ */
+export const ThreadMigrationHandoffMode = Schema.Literals(["replay", "brief"]);
+export type ThreadMigrationHandoffMode = typeof ThreadMigrationHandoffMode.Type;
+
+/**
+ * What asked for the migration. Purely descriptive — the trigger changes no
+ * mechanics beyond the auto-failover/replay pairing enforced on the command —
+ * but it is what lets a user reconstruct why a thread changed subscription.
+ */
+export const ThreadMigrationTrigger = Schema.Literals(["manual", "limit-popup", "auto-failover"]);
+export type ThreadMigrationTrigger = typeof ThreadMigrationTrigger.Type;
+
+/** Activity kind written alongside every `thread.migrated` event. */
+export const THREAD_MIGRATION_ACTIVITY_KIND = "thread.migrated";
+
+export const ThreadMigrationActivityPayload = Schema.Struct({
+  fromInstanceId: ProviderInstanceId,
+  fromModel: TrimmedNonEmptyString,
+  toInstanceId: ProviderInstanceId,
+  toModel: TrimmedNonEmptyString,
+  handoffMode: ThreadMigrationHandoffMode,
+  trigger: ThreadMigrationTrigger,
+});
+export type ThreadMigrationActivityPayload = typeof ThreadMigrationActivityPayload.Type;
+
+/**
+ * A migration is part of the thread's durable history, not a transient
+ * notice: "which account did which work" must stay reconstructable long
+ * after the fact. Riding the existing activity log means retention, revert
+ * trimming, and client rendering all treat it like any other history row.
+ */
+export const ThreadMigrationActivity = Schema.Struct({
+  id: EventId,
+  tone: Schema.Literal("info"),
+  kind: Schema.Literal(THREAD_MIGRATION_ACTIVITY_KIND),
+  summary: TrimmedNonEmptyString,
+  payload: ThreadMigrationActivityPayload,
+  turnId: Schema.Null,
+  sequence: Schema.optional(NonNegativeInt),
+  createdAt: IsoDateTime,
+});
+export type ThreadMigrationActivity = typeof ThreadMigrationActivity.Type;
+
+export const isThreadMigrationActivity = Schema.is(ThreadMigrationActivity);
+
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",
   "interrupted",
@@ -1064,6 +1119,43 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   ),
 );
 
+/**
+ * `thread.migrate` — rebind a thread to a different provider instance in
+ * place. The thread keeps its id, history, checkpoints and sidebar entry;
+ * only `modelSelection.instanceId` (the routing key) moves, so a migration
+ * is a fact in the thread's history rather than a new thread.
+ *
+ * `targetModel` is optional: omitted, the thread keeps the model slug it is
+ * already on, which is the common case for a same-driver account swap.
+ * Option selections (reasoning effort and friends) ride along only when the
+ * model slug is unchanged — option ids are model-specific, so carrying them
+ * onto a different model would silently apply a setting the user never
+ * picked.
+ *
+ * `auto-failover` is normally dispatched by the server when a usage-limit
+ * signal fires, not by a client; it is in the same command because a
+ * migration is a migration, and the trigger is an audit label.
+ */
+const ThreadMigrateCommand = Schema.Struct({
+  type: Schema.Literal("thread.migrate"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  targetInstanceId: ProviderInstanceId,
+  targetModel: Schema.optional(TrimmedNonEmptyString),
+  handoffMode: ThreadMigrationHandoffMode,
+  trigger: ThreadMigrationTrigger,
+  createdAt: IsoDateTime,
+}).check(
+  Schema.makeFilter(
+    (input) =>
+      input.trigger !== "auto-failover" ||
+      input.handoffMode === "replay" ||
+      // A brief costs one turn on the origin account, which auto-failover
+      // fires precisely because that account is out of capacity.
+      "auto-failover migrations must use the replay handoff mode",
+  ),
+);
+
 const ThreadRuntimeModeSetCommand = Schema.Struct({
   type: Schema.Literal("thread.runtime-mode.set"),
   commandId: CommandId,
@@ -1224,6 +1316,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
   ThreadMetaUpdateCommand,
+  ThreadMigrateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
@@ -1252,6 +1345,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
   ThreadMetaUpdateCommand,
+  ThreadMigrateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
@@ -1431,6 +1525,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.unpinned",
   "thread.pin-reordered",
   "thread.meta-updated",
+  "thread.migrated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
@@ -1584,6 +1679,21 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  updatedAt: IsoDateTime,
+});
+
+/**
+ * A thread moved to another provider instance. `fromModelSelection` is kept
+ * so the history row can name the account that did the earlier work even
+ * after the instance is deleted from settings; `modelSelection` is the
+ * selection the thread rebinds to and is what the read model applies.
+ */
+export const ThreadMigratedPayload = Schema.Struct({
+  threadId: ThreadId,
+  fromModelSelection: ModelSelection,
+  modelSelection: ModelSelection,
+  handoffMode: ThreadMigrationHandoffMode,
+  trigger: ThreadMigrationTrigger,
   updatedAt: IsoDateTime,
 });
 
@@ -1836,6 +1946,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.meta-updated"),
     payload: ThreadMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.migrated"),
+    payload: ThreadMigratedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

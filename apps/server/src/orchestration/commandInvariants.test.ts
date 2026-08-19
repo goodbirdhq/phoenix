@@ -5,17 +5,21 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   ProjectId,
   ThreadId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationReadModel,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
+import { it as effectIt } from "@effect/vitest";
+
 import {
   findThreadById,
   listThreadsByProjectId,
   requireThread,
   requireThreadAbsent,
+  requireThreadTurnNotRunning,
 } from "./commandInvariants.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
@@ -201,4 +205,51 @@ describe("commandInvariants", () => {
       ),
     ).rejects.toThrow("already exists");
   });
+});
+
+describe("requireThreadTurnNotRunning", () => {
+  const thread = readModel.threads[0]!;
+
+  effectIt.effect("passes a thread with no turn in flight", () =>
+    Effect.gen(function* () {
+      yield* requireThreadTurnNotRunning({ commandType: "thread.migrate", thread });
+      // A live session between turns is not a turn in flight.
+      yield* requireThreadTurnNotRunning({
+        commandType: "thread.migrate",
+        thread: {
+          ...thread,
+          latestTurn: {
+            turnId: TurnId.make("turn-1"),
+            state: "completed",
+            requestedAt: now,
+            startedAt: now,
+            completedAt: now,
+            assistantMessageId: null,
+          },
+        },
+      });
+    }),
+  );
+
+  effectIt.effect("rejects a thread whose latest turn is still running", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.exit(
+        requireThreadTurnNotRunning({
+          commandType: "thread.migrate",
+          thread: {
+            ...thread,
+            latestTurn: {
+              turnId: TurnId.make("turn-1"),
+              state: "running",
+              requestedAt: now,
+              startedAt: now,
+              completedAt: null,
+              assistantMessageId: null,
+            },
+          },
+        }),
+      );
+      expect(result._tag).toBe("Failure");
+    }),
+  );
 });
