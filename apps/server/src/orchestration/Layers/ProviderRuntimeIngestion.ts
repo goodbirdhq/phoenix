@@ -1523,7 +1523,22 @@ const make = Effect.gen(function* () {
             Option.isSome(pendingTurnStart)
           : false;
 
+      // A migrated thread's old instance keeps emitting for a moment while it
+      // shuts down; its tail (typically the stop) must not clobber the
+      // thread's single session slot after the new instance has bound.
+      // Stale = the event's instance matches neither the thread's selection
+      // nor the session slot's current instance. Events without an instance
+      // id (legacy) are never stale.
+      const staleInstanceEvent =
+        event.providerInstanceId !== undefined &&
+        thread.modelSelection.instanceId !== event.providerInstanceId &&
+        thread.session?.providerInstanceId !== undefined &&
+        thread.session.providerInstanceId !== event.providerInstanceId;
+
       const shouldApplyThreadLifecycle = (() => {
+        if (staleInstanceEvent) {
+          return false;
+        }
         if (!STRICT_PROVIDER_LIFECYCLE_GUARD) {
           return true;
         }
@@ -1890,9 +1905,13 @@ const make = Effect.gen(function* () {
       if (event.type === "runtime.error") {
         const runtimeErrorMessage = event.payload.message;
 
-        const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
-          ? true
-          : activeTurnId === null || eventTurnId === undefined || sameId(activeTurnId, eventTurnId);
+        const shouldApplyRuntimeError = staleInstanceEvent
+          ? false
+          : !STRICT_PROVIDER_LIFECYCLE_GUARD
+            ? true
+            : activeTurnId === null ||
+              eventTurnId === undefined ||
+              sameId(activeTurnId, eventTurnId);
 
         if (shouldApplyRuntimeError) {
           yield* orchestrationEngine.dispatch({

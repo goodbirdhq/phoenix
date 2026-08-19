@@ -1,21 +1,26 @@
 import {
+  isProviderUsageLimited,
+  resolveThreadBoundInstanceId,
+} from "@t3tools/client-runtime/usage/thread-migration";
+import {
   deriveThreadUsageWarning,
   formatUsageWarningReset,
   subscriptionAvailabilitySources,
   type ProviderAvailabilityEnvironment,
   type ThreadUsageWarning,
 } from "@t3tools/client-runtime/usage/usage-warning";
+import type { ProviderInstanceId } from "@t3tools/contracts";
 
 export type MobileUsageWarningThread = {
   readonly id: string;
-  readonly modelSelection: { readonly instanceId: string };
-  readonly session: { readonly providerInstanceId?: string | undefined } | null;
+  readonly modelSelection: { readonly instanceId: ProviderInstanceId };
+  readonly session: { readonly providerInstanceId?: ProviderInstanceId | undefined } | null;
 };
 
 /**
  * Mobile's small adapter from a thread shell and availability projection to
- * the shared warning derivation. The model selection is deliberately ignored:
- * it may be an unsaved picker choice, while the session is the actual binding.
+ * the shared warning derivation. The session is authoritative; persisted model
+ * selection is only the fallback for threads without an instance-bound session.
  */
 export function deriveMobileThreadUsageWarning(input: {
   readonly thread: MobileUsageWarningThread;
@@ -24,10 +29,20 @@ export function deriveMobileThreadUsageWarning(input: {
   readonly dismissedKeys?: ReadonlySet<string> | undefined;
   readonly nowMs?: number | undefined;
 }): ThreadUsageWarning | null {
+  const instanceId = resolveThreadBoundInstanceId({
+    sessionProviderInstanceId: input.thread.session?.providerInstanceId,
+    threadModelSelectionInstanceId: input.thread.modelSelection.instanceId,
+  });
+  const source = input.environments
+    .find((environment) => environment.environmentId === input.environmentId)
+    ?.providers.find((provider) => provider.instanceId === instanceId);
+  if (isProviderUsageLimited(source?.availability)) {
+    return null;
+  }
   return deriveThreadUsageWarning({
     threadId: input.thread.id,
     environmentId: input.environmentId,
-    instanceId: input.thread.session?.providerInstanceId ?? null,
+    instanceId,
     sources: subscriptionAvailabilitySources(input.environments),
     dismissedKeys: input.dismissedKeys,
     nowMs: input.nowMs,

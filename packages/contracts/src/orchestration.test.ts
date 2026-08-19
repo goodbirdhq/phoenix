@@ -46,6 +46,7 @@ const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSessi
 const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
 const encodeThreadCreatedPayload = Schema.encodeEffect(ThreadCreatedPayload);
+const encodeThreadMigratedPayload = Schema.encodeEffect(ThreadMigratedPayload);
 const decodeThreadMigratedPayload = Schema.decodeUnknownEffect(ThreadMigratedPayload);
 
 function getOptionValue(
@@ -56,6 +57,7 @@ function getOptionValue(
 }
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
+const encodeOrchestrationCommand = Schema.encodeEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 
@@ -1024,23 +1026,26 @@ it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects 
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
 });
 
-it.effect("thread.migrate carries the target instance, handoff mode, and trigger", () =>
+it.effect("thread.migrate round-trips its handoff brief", () =>
   Effect.gen(function* () {
-    const command = yield* decodeOrchestrationCommand({
+    const decoded = yield* decodeOrchestrationCommand({
       type: "thread.migrate",
       commandId: "cmd-migrate",
       threadId: "thread-1",
       targetInstanceId: "claude_work",
       targetModel: "claude-opus-5",
       handoffMode: "brief",
+      brief: "The origin agent finished the schema changes.",
       trigger: "limit-popup",
       createdAt: "2026-08-19T00:00:00.000Z",
     });
+    const command = yield* decodeOrchestrationCommand(yield* encodeOrchestrationCommand(decoded));
     assert.strictEqual(command.type, "thread.migrate");
     if (command.type !== "thread.migrate") return;
     assert.strictEqual(command.targetInstanceId, ProviderInstanceId.make("claude_work"));
     assert.strictEqual(command.targetModel, "claude-opus-5");
     assert.strictEqual(command.handoffMode, "brief");
+    assert.strictEqual(command.brief, "The origin agent finished the schema changes.");
     assert.strictEqual(command.trigger, "limit-popup");
   }),
 );
@@ -1059,6 +1064,24 @@ it.effect("thread.migrate keeps the current model when no target model is given"
     assert.strictEqual(command.type, "thread.migrate");
     if (command.type !== "thread.migrate") return;
     assert.strictEqual(command.targetModel, undefined);
+  }),
+);
+
+it.effect("thread.migrate rejects handoff briefs over 32K characters", () =>
+  Effect.gen(function* () {
+    const rejected = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "thread.migrate",
+        commandId: "cmd-migrate",
+        threadId: "thread-1",
+        targetInstanceId: "claude_work",
+        handoffMode: "brief",
+        brief: "x".repeat(32_769),
+        trigger: "manual",
+        createdAt: "2026-08-19T00:00:00.000Z",
+      }),
+    );
+    assert.strictEqual(rejected._tag, "Failure");
   }),
 );
 
@@ -1113,24 +1136,27 @@ it.effect("thread.migrate rejects an unknown trigger or handoff mode", () =>
   }),
 );
 
-it.effect("thread.migrated records both ends of the move", () =>
+it.effect("thread.migrated round-trips both ends of the move and its handoff brief", () =>
   Effect.gen(function* () {
-    const payload = yield* decodeThreadMigratedPayload({
+    const decoded = yield* decodeThreadMigratedPayload({
       threadId: "thread-1",
       // Legacy `provider` selections must still decode on replay.
       fromModelSelection: { provider: "claude_personal", model: "claude-opus-5" },
       modelSelection: { instanceId: "claude_work", model: "claude-opus-5" },
-      handoffMode: "replay",
-      trigger: "auto-failover",
+      handoffMode: "brief",
+      brief: "Continue by running the focused reactor test.",
+      trigger: "manual",
       updatedAt: "2026-08-19T00:00:00.000Z",
     });
+    const payload = yield* decodeThreadMigratedPayload(yield* encodeThreadMigratedPayload(decoded));
     assert.strictEqual(
       payload.fromModelSelection.instanceId,
       ProviderInstanceId.make("claude_personal"),
     );
     assert.strictEqual(payload.modelSelection.instanceId, ProviderInstanceId.make("claude_work"));
-    assert.strictEqual(payload.handoffMode, "replay");
-    assert.strictEqual(payload.trigger, "auto-failover");
+    assert.strictEqual(payload.handoffMode, "brief");
+    assert.strictEqual(payload.brief, "Continue by running the focused reactor test.");
+    assert.strictEqual(payload.trigger, "manual");
   }),
 );
 

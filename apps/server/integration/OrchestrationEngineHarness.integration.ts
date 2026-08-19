@@ -54,6 +54,7 @@ import * as ThreadBackgroundLiveness from "../src/orchestration/ThreadBackground
 import * as ThreadPlanProgress from "../src/orchestration/ThreadPlanProgress.ts";
 import { RuntimeReceiptBusTest } from "../src/orchestration/Layers/RuntimeReceiptBus.ts";
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
+import { LimitFailoverReactorLive } from "../src/orchestration/Layers/LimitFailoverReactor.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { CheckpointReactor } from "../src/orchestration/Services/CheckpointReactor.ts";
@@ -332,7 +333,10 @@ export const makeOrchestrationIntegrationHarness = (
       generateBranchName: () => Effect.succeed({ branch: "update" }),
       generateThreadTitle: () => Effect.succeed({ title: "New thread" }),
     } as unknown as TextGenerationShape);
-    const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
+    const providerCommandReactorLayer = Layer.mergeAll(
+      ProviderCommandReactorLive,
+      LimitFailoverReactorLive,
+    ).pipe(
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(gitWorkflowLayer),
       Layer.provideMerge(textGenerationLayer),

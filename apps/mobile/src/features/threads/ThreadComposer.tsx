@@ -1,3 +1,4 @@
+import { resolveThreadBoundInstanceId } from "@t3tools/client-runtime/usage/thread-migration";
 import type {
   EnvironmentId,
   MessageId,
@@ -72,6 +73,15 @@ import {
   useExistingThreadSettingsRoutePresentation,
 } from "./ThreadSettingsSheet";
 import {
+  ManualThreadMigrationEntryPoint,
+  type ManualThreadMigrationRequest,
+} from "./ManualThreadMigrationEntryPoint";
+import {
+  providerDisplayName,
+  readyThreadProviderGroups,
+  threadHasStarted,
+} from "./threadMigration";
+import {
   useThreadSettingsSheetPresentation,
   type NavigationWithFinishTransitioning,
 } from "./use-thread-settings-sheet-presentation";
@@ -104,6 +114,8 @@ export interface ThreadComposerProps {
    */
   readonly threadSyncPhase?: "loading" | "syncing" | null;
   readonly selectedThread: OrchestrationThreadShell;
+  /** Durable shell used for provider-session binding; never includes picker drafts. */
+  readonly boundThread: OrchestrationThreadShell;
   readonly serverConfig: T3ServerConfig | null;
   readonly queueCount: number;
   readonly environmentId: EnvironmentId;
@@ -284,6 +296,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   });
   const settingsRoutePresentation = useExistingThreadSettingsRoutePresentation();
   const settingsRoutePresentedRef = useRef(false);
+  const [migrationRequest, setMigrationRequest] = useState<ManualThreadMigrationRequest | null>(
+    null,
+  );
   const wasExpandedBeforePreviewRef = useRef(false);
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
@@ -610,11 +625,49 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     [props.serverConfig, currentModelSelection],
   );
   const providerGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
-  // An existing thread is bound to its harness: sessions can't move between
-  // provider instances, so the picker only offers the thread's own group.
+  const boundInstanceId =
+    resolveThreadBoundInstanceId({
+      sessionProviderInstanceId: props.boundThread.session?.providerInstanceId,
+      threadModelSelectionInstanceId: props.boundThread.modelSelection.instanceId,
+    }) ?? props.boundThread.modelSelection.instanceId;
   const threadProviderGroups = useMemo(
-    () => providerGroups.filter((group) => group.providerKey === currentModelSelection.instanceId),
-    [providerGroups, currentModelSelection.instanceId],
+    () =>
+      readyThreadProviderGroups({
+        groups: providerGroups,
+        providers: props.serverConfig?.providers ?? [],
+        boundInstanceId,
+      }),
+    [boundInstanceId, props.serverConfig?.providers, providerGroups],
+  );
+  const selectModel = useCallback(
+    (option: (typeof modelOptions)[number]) => {
+      if (threadHasStarted(props.boundThread) && option.selection.instanceId !== boundInstanceId) {
+        const source = props.serverConfig?.providers.find(
+          (provider) => provider.instanceId === boundInstanceId,
+        );
+        const target = props.serverConfig?.providers.find(
+          (provider) => provider.instanceId === option.selection.instanceId,
+        );
+        if (!source || !target || target.status !== "ready") return;
+        setMigrationRequest({
+          threadId: props.boundThread.id,
+          boundInstanceId,
+          sourceName: providerDisplayName(source),
+          targetName: providerDisplayName(target),
+          targetSelection: option.selection,
+        });
+        return;
+      }
+      props.onUpdateModelSelection(option.selection);
+    },
+    [
+      boundInstanceId,
+      props.boundThread.id,
+      props.boundThread.latestTurn,
+      props.boundThread.session,
+      props.onUpdateModelSelection,
+      props.serverConfig?.providers,
+    ],
   );
   const currentModelOption =
     modelOptions.find(
@@ -636,7 +689,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       ownerId: settingsOwnerId,
       providerGroups: threadProviderGroups,
       selectedModel: currentModelSelection,
-      onSelectModel: (option) => props.onUpdateModelSelection(option.selection),
+      onSelectModel: selectModel,
       optionDescriptors: providerOptionDescriptors,
       onUpdateOptionSelections: (options) =>
         props.onUpdateModelSelection({ ...currentModelSelection, options }),
@@ -646,7 +699,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     [
       currentModelSelection,
       currentRuntimeMode,
-      props.onUpdateModelSelection,
+      selectModel,
       props.onUpdateRuntimeMode,
       providerOptionDescriptors,
       settingsOwnerId,
@@ -912,6 +965,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         onRequestClose={closePreview}
         swipeToCloseEnabled
         doubleTapToZoomEnabled
+      />
+      <ManualThreadMigrationEntryPoint
+        environmentId={props.environmentId}
+        thread={props.boundThread}
+        request={migrationRequest}
+        onClose={() => setMigrationRequest(null)}
+        onMigrated={(selection) => {
+          props.onUpdateModelSelection(selection);
+        }}
       />
     </Animated.View>
   );

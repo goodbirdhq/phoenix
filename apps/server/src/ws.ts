@@ -74,6 +74,7 @@ import {
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
+import { prepareClientOrchestrationCommand } from "./orchestration/ClientCommandPreparation.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -791,6 +792,7 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
+              const preparedCommand = yield* prepareClientOrchestrationCommand(normalizedCommand);
               // Archive and settle both mean "done with this thread", so a
               // live provider session must not keep running background work
               // (PR monitors, dev servers, subagent fleets) after either
@@ -799,9 +801,9 @@ const makeWsRpcLayer = (
               // stopped session-set does not count as activity, so the stop
               // cannot un-settle the thread it follows.
               const parkingCommand =
-                normalizedCommand.type === "thread.archive" ||
-                normalizedCommand.type === "thread.settle"
-                  ? normalizedCommand
+                preparedCommand.type === "thread.archive" ||
+                preparedCommand.type === "thread.settle"
+                  ? preparedCommand
                   : undefined;
               // Best-effort on purpose: the user's archive/settle must not
               // fail because this cleanup read blipped, so a failed read
@@ -823,7 +825,7 @@ const makeWsRpcLayer = (
                     ),
                   )
                 : false;
-              const result = yield* dispatchNormalizedCommand(normalizedCommand);
+              const result = yield* dispatchNormalizedCommand(preparedCommand);
               if (parkingCommand) {
                 const parkingKind = parkingCommand.type === "thread.archive" ? "archive" : "settle";
                 if (shouldStopSessionAfterCommand) {

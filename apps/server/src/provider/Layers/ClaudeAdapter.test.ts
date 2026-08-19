@@ -1134,6 +1134,57 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("classifies a success-shaped usage-limit result as a failed usage-limit turn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "continue",
+        attachments: [],
+      });
+
+      // The CLI can "answer" with its canned limit message on a success-shaped
+      // result instead of failing the turn. Observed live on 2026-08-19.
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "You've hit your session limit · resets 10pm (Europe/Berlin)",
+        session_id: "sdk-session-usage-limit-success",
+        uuid: "result-usage-limit-success",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const runtimeError = runtimeEvents.find((event) => event.type === "runtime.error");
+      assert.equal(runtimeError?.type, "runtime.error");
+      if (runtimeError?.type === "runtime.error") {
+        assert.equal(
+          runtimeError.payload.message,
+          "You've hit your session limit · resets 10pm (Europe/Berlin)",
+        );
+        assert.equal(runtimeError.payload.kind, "usage-limit");
+      }
+      const completed = runtimeEvents.find((event) => event.type === "turn.completed");
+      if (completed?.type === "turn.completed") {
+        assert.equal(completed.payload.state, "failed");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("does not emit turn.completed for a result with no active turn", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

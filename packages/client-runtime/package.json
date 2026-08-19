@@ -151,6 +151,10 @@
       "types": "./src/usage/subscriptionAvailability.ts",
       "default": "./src/usage/subscriptionAvailability.ts"
     },
+    "./usage/thread-migration": {
+      "types": "./src/usage/threadMigration.ts",
+      "default": "./src/usage/threadMigration.ts"
+    },
     "./usage/usage-warning": {
       "types": "./src/usage/usageWarning.ts",
       "default": "./src/usage/usageWarning.ts"
