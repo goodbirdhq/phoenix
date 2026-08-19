@@ -83,8 +83,8 @@ describe("deriveMobileThreadUsageWarning", () => {
     const warning = deriveMobileThreadUsageWarning({
       thread: {
         id: "thread-1",
-        modelSelection: { instanceId: "claude-picker" },
-        session: { providerInstanceId: "claude-bound" },
+        modelSelection: { instanceId: ProviderInstanceId.make("claude-picker") },
+        session: { providerInstanceId: ProviderInstanceId.make("claude-bound") },
       },
       environmentId: "agents",
       environments: [environment],
@@ -94,16 +94,52 @@ describe("deriveMobileThreadUsageWarning", () => {
     expect(warning?.instanceId).toBe("claude-bound");
   });
 
-  it("does not fall back to the picker when the thread has no bound session", () => {
+  it("falls back to the persisted model selection before a session exists", () => {
     expect(
       deriveMobileThreadUsageWarning({
         thread: {
           id: "thread-1",
-          modelSelection: { instanceId: "claude-picker" },
+          modelSelection: { instanceId: ProviderInstanceId.make("claude-picker") },
           session: null,
         },
         environmentId: "agents",
         environments: [environment],
+        nowMs: NOW,
+      })?.instanceId,
+    ).toBe("claude-picker");
+  });
+
+  it("yields to the hard-limit popup once an account is limited", () => {
+    const limitedEnvironment: ProviderAvailabilityEnvironment = {
+      ...environment,
+      providers: environment.providers.map((provider) =>
+        provider.instanceId === "claude-bound"
+          ? {
+              ...provider,
+              availability: {
+                ...provider.availability,
+                status: "limited",
+                windows: [
+                  {
+                    kind: "session",
+                    usedPercent: 100,
+                    resetsAt: RESET,
+                  },
+                ],
+              },
+            }
+          : provider,
+      ),
+    };
+    expect(
+      deriveMobileThreadUsageWarning({
+        thread: {
+          id: "thread-1",
+          modelSelection: { instanceId: ProviderInstanceId.make("claude-picker") },
+          session: { providerInstanceId: ProviderInstanceId.make("claude-bound") },
+        },
+        environmentId: "agents",
+        environments: [limitedEnvironment],
         nowMs: NOW,
       }),
     ).toBeNull();
