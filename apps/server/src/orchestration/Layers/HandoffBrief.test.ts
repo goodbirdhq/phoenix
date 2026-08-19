@@ -154,7 +154,11 @@ const makeProviderHarness = Effect.fn("makeProviderHarness")(function* (outcome:
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions: () => Effect.succeed([session]),
-    getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+    getCapabilities: () =>
+      Effect.succeed({
+        sessionModelSwitch: "in-session",
+        conversationSeeding: "framed-prompt",
+      } as const),
     getInstanceInfo: (instanceId) =>
       Effect.succeed({
         instanceId,
