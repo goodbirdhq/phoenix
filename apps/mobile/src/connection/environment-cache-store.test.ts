@@ -1,4 +1,11 @@
-import { EnvironmentId, type VcsListRefsResult } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  ScheduleId,
+  type ScheduleListSnapshot,
+  type VcsListRefsResult,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -20,6 +27,33 @@ const REFS: VcsListRefsResult = {
   hasPrimaryRemote: true,
   nextCursor: null,
   totalCount: 1,
+};
+const SCHEDULE_SNAPSHOT: ScheduleListSnapshot = {
+  sequence: 1,
+  schedules: [
+    {
+      id: ScheduleId.make("schedule-1"),
+      projectId: ProjectId.make("project-1"),
+      name: "Morning review",
+      timing: { type: "cron", expression: "0 9 * * 1-5" },
+      timeZone: "Europe/Berlin",
+      execution: {
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        workspaceMode: "worktree",
+        baseBranch: "origin/HEAD",
+      },
+      state: "enabled",
+      nextOccurrenceAt: "2026-08-20T07:00:00.000Z",
+      latestHistory: null,
+      unacknowledgedFailure: false,
+      createdAt: "2026-08-19T10:00:00.000Z",
+      updatedAt: "2026-08-19T10:00:00.000Z",
+      revision: 0,
+    },
+  ],
+  updatedAt: "2026-08-19T10:00:00.000Z",
 };
 
 function cacheId(environmentId: EnvironmentId, kind: ClientCacheKind, cacheKey: string) {
@@ -123,11 +157,17 @@ describe("mobile SQLite environment cache store", () => {
       const otherEnvironmentId = EnvironmentId.make("environment-2");
       yield* store.saveVcsRefs(ENVIRONMENT_ID, "/repo", REFS);
       yield* store.saveVcsRefs(otherEnvironmentId, "/repo", REFS);
+      yield* store.saveScheduleSnapshot!(ENVIRONMENT_ID, SCHEDULE_SNAPSHOT);
+      yield* store.saveScheduleSnapshot!(otherEnvironmentId, SCHEDULE_SNAPSHOT);
 
       yield* store.clear(ENVIRONMENT_ID);
 
       expect(yield* store.loadVcsRefs(ENVIRONMENT_ID, "/repo")).toEqual(Option.none());
       expect(yield* store.loadVcsRefs(otherEnvironmentId, "/repo")).toEqual(Option.some(REFS));
+      expect(yield* store.loadScheduleSnapshot!(ENVIRONMENT_ID)).toEqual(Option.none());
+      expect(yield* store.loadScheduleSnapshot!(otherEnvironmentId)).toEqual(
+        Option.some(SCHEDULE_SNAPSHOT),
+      );
     }),
   );
 });

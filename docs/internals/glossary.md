@@ -9,6 +9,7 @@ This is a living glossary for Phoenix. It explains what common terms mean in thi
 - [Project and workspace](#project-and-workspace)
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
+- [Scheduling](#scheduling)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
 
@@ -87,6 +88,49 @@ A typed signal emitted when an async milestone completes, such as `checkpoint.ba
 #### Quiesced
 
 "Quiesced" means a turn has gone quiet and stable: follow-up work such as [CheckpointReactor.ts][6] has settled. It appears in [the receipt schema][13], so in practice it is something tests wait on rather than a production signal.
+
+### Scheduling
+
+#### Schedule
+
+A named, saved agent prompt owned by one Environment and assigned to one of its Projects, together
+with a one-time or recurring timing rule in an explicitly saved time zone. Each Occurrence creates a
+new Thread. Avoid “scheduled task” and “cron job.” See [Schedule architecture][27].
+
+#### Occurrence
+
+A time at which a Schedule becomes due to Trigger, including an immediate Occurrence created by Run
+now. Avoid “cron tick” and “invocation.”
+
+#### Trigger
+
+The durable creation of a new Thread and acceptance of its first Turn for an Occurrence. Failures
+after this boundary belong to the Scheduled Thread rather than the Schedule.
+
+#### Scheduled Run
+
+The agent work started by a successful Trigger. Scheduled Runs may overlap because serialization
+applies only to Triggering, not to provider execution.
+
+#### Scheduled Thread
+
+The ordinary Thread created by a Trigger. It remains after its Schedule is deleted and follows the
+same settle, resume, archive, delete, and worktree lifecycle as a manually created Thread.
+
+#### Schedule history
+
+The compact record of Triggered, Failed, and skipped Occurrences, including links to Scheduled
+Threads. It records only work before the Trigger boundary.
+
+#### Missed Occurrence
+
+An Occurrence that became due while its Environment could not Trigger it. Only the newest Missed
+Occurrence for each Schedule remains eligible; older times are summarized as skipped.
+
+#### Runnable environment
+
+An Environment whose server is online and capable of accepting new work. This is distinct from
+provider availability, which describes account or quota state.
 
 ### Provider runtime
 
@@ -174,6 +218,7 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 - [Provider architecture][16]
 - [Permission modes][18]
 - [Workspace layout][2]
+- [Schedule architecture][27]
 
 [1]: ../../packages/contracts/src/orchestration.ts
 [2]: ./workspace-layout.md
@@ -201,3 +246,4 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [24]: ./overview.md
 [25]: ../../packages/contracts/src/providerInstance.ts
 [26]: ../../apps/server/src/provider/conversationSeed.ts
+[27]: ./schedules.md

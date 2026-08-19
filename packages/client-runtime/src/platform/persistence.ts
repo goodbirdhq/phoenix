@@ -2,6 +2,9 @@ import {
   type EnvironmentId,
   type OrchestrationShellSnapshot,
   type OrchestrationThreadDetailSnapshot,
+  type ScheduleDetail,
+  type ScheduleId,
+  type ScheduleListSnapshot,
   type ServerConfig,
   type ThreadId,
   type VcsListRefsResult,
@@ -32,6 +35,11 @@ export class ConnectionPersistenceError extends Schema.TaggedErrorClass<Connecti
       "save-vcs-refs",
       "remove-vcs-refs",
       "clear-vcs-refs",
+      "load-schedule-snapshot",
+      "save-schedule-snapshot",
+      "load-schedule-detail",
+      "save-schedule-detail",
+      "remove-schedule-detail",
       "clear-environment",
     ]),
     message: Schema.String,
@@ -115,6 +123,27 @@ export class EnvironmentCacheStore extends Context.Service<
      */
     readonly clearVcsRefs: (
       environmentId: EnvironmentId,
+    ) => Effect.Effect<void, ConnectionPersistenceError>;
+    /** Last-seen Schedule index, kept separate from the live shell cache. */
+    readonly loadScheduleSnapshot?: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<Option.Option<ScheduleListSnapshot>, ConnectionPersistenceError>;
+    readonly saveScheduleSnapshot?: (
+      environmentId: EnvironmentId,
+      snapshot: ScheduleListSnapshot,
+    ) => Effect.Effect<void, ConnectionPersistenceError>;
+    /** Detail/history cache lets an offline Environment remain inspectable. */
+    readonly loadScheduleDetail?: (
+      environmentId: EnvironmentId,
+      scheduleId: ScheduleId,
+    ) => Effect.Effect<Option.Option<ScheduleDetail>, ConnectionPersistenceError>;
+    readonly saveScheduleDetail?: (
+      environmentId: EnvironmentId,
+      detail: ScheduleDetail,
+    ) => Effect.Effect<void, ConnectionPersistenceError>;
+    readonly removeScheduleDetail?: (
+      environmentId: EnvironmentId,
+      scheduleId: ScheduleId,
     ) => Effect.Effect<void, ConnectionPersistenceError>;
     readonly clear: (
       environmentId: EnvironmentId,

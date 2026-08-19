@@ -32,4 +32,5 @@ export * from "./previewAutomation.ts";
 export * from "./sessionOrchestration.ts";
 export * from "./resourceTelemetry.ts";
 export * from "./usage.ts";
+export * from "./schedule.ts";
 export * from "./rpc.ts";

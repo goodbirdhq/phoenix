@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveAgentAwarenessPlatformPresentation } from "./SettingsRouteScreen.logic";
+import {
+  GENERAL_INSIGHT_SETTINGS_ROWS,
+  resolveAgentAwarenessPlatformPresentation,
+} from "./SettingsRouteScreen.logic";
 
 describe("resolveAgentAwarenessPlatformPresentation", () => {
   it("explains that agent awareness settings are unavailable on Android", () => {
@@ -15,5 +18,14 @@ describe("resolveAgentAwarenessPlatformPresentation", () => {
       supported: true,
       subtitle: undefined,
     });
+  });
+});
+
+describe("Settings navigation", () => {
+  it("places Schedules beside Usage", () => {
+    expect(GENERAL_INSIGHT_SETTINGS_ROWS.map((row) => row.target)).toEqual([
+      "SettingsUsage",
+      "SettingsSchedules",
+    ]);
   });
 });

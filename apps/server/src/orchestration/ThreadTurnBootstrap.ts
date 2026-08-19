@@ -4,6 +4,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   CommandId,
@@ -18,6 +19,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
+import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 
 export type ThreadTurnStartCommand = Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
 
@@ -135,6 +137,49 @@ export const resolveWorktreeCheckoutCommit = (
   );
 };
 
+export function findReusableBranchWorktree(
+  worktrees: ReadonlyArray<{ readonly path: string; readonly branch: string }>,
+  branch: string,
+): { readonly path: string; readonly branch: string } | undefined {
+  const canonicalBranch = branch.startsWith("refs/heads/") ? branch : `refs/heads/${branch}`;
+  return worktrees.find(
+    (worktree) =>
+      worktree.branch === branch ||
+      worktree.branch === canonicalBranch ||
+      `refs/heads/${worktree.branch}` === canonicalBranch,
+  );
+}
+
+export function hasRecoveredBootstrapThread(
+  bootstrap: ThreadTurnStartCommand["bootstrap"],
+): boolean {
+  return bootstrap?.recoverExistingThread !== undefined;
+}
+
+export type SetupScriptRecoveryState = "fresh" | "indeterminate" | "completed";
+
+export function setupScriptRecoveryState(
+  activities: ReadonlyArray<{ readonly kind: string; readonly payload: unknown }>,
+  idempotencyKey: string,
+): SetupScriptRecoveryState {
+  const matching = activities.filter(
+    ({ kind, payload }) =>
+      kind.startsWith("setup-script.") &&
+      typeof payload === "object" &&
+      payload !== null &&
+      "idempotencyKey" in payload &&
+      payload.idempotencyKey === idempotencyKey,
+  );
+  if (
+    matching.some(({ kind }) =>
+      ["setup-script.started", "setup-script.completed", "setup-script.failed"].includes(kind),
+    )
+  ) {
+    return "completed";
+  }
+  return matching.some(({ kind }) => kind === "setup-script.requested") ? "indeterminate" : "fresh";
+}
+
 // Runs the "create thread + prepare worktree + setup script + first turn"
 // macro behind `thread.turn.start` bootstrap payloads. Shared by the WS
 // dispatch path and the sessions MCP toolkit so both get the same rollback
@@ -145,6 +190,9 @@ export class ThreadTurnBootstrap extends Context.Service<
     readonly bootstrapTurnStart: (
       command: ThreadTurnStartCommand,
     ) => Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError>;
+    readonly cleanupRecoveredThread: (
+      threadId: ThreadId,
+    ) => Effect.Effect<void, OrchestrationDispatchCommandError>;
   }
 >()("t3/orchestration/ThreadTurnBootstrap") {}
 
@@ -154,6 +202,7 @@ export const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+  const projection = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
 
   const randomUUID = crypto.randomUUIDv4.pipe(
     Effect.mapError(
@@ -175,7 +224,11 @@ export const make = Effect.gen(function* () {
 
   const appendSetupScriptActivity = (input: {
     readonly threadId: ThreadId;
-    readonly kind: "setup-script.requested" | "setup-script.started" | "setup-script.failed";
+    readonly kind:
+      | "setup-script.requested"
+      | "setup-script.started"
+      | "setup-script.completed"
+      | "setup-script.failed";
     readonly summary: string;
     readonly createdAt: string;
     readonly payload: Record<string, unknown>;
@@ -209,10 +262,17 @@ export const make = Effect.gen(function* () {
   )(function* (command) {
     const bootstrap = command.bootstrap;
     const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
-    let createdThread = false;
-    let targetProjectId = bootstrap?.createThread?.projectId;
-    let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
-    let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
+    // A retry owns the deterministic Thread left by its interrupted first
+    // attempt, so a later non-interrupt failure must clean it up too.
+    let createdThread = hasRecoveredBootstrapThread(command.bootstrap);
+    let targetProjectId =
+      bootstrap?.createThread?.projectId ?? bootstrap?.recoverExistingThread?.projectId;
+    let targetProjectCwd =
+      bootstrap?.prepareWorktree?.projectCwd ?? bootstrap?.recoverExistingThread?.projectCwd;
+    let targetWorktreePath =
+      bootstrap?.createThread?.worktreePath ??
+      bootstrap?.recoverExistingThread?.worktreePath ??
+      null;
 
     const cleanupCreatedThread = () =>
       createdThread
@@ -242,6 +302,9 @@ export const make = Effect.gen(function* () {
         payload: {
           detail,
           worktreePath: input.worktreePath,
+          ...(bootstrap?.setupScriptIdempotencyKey === undefined
+            ? {}
+            : { idempotencyKey: bootstrap.setupScriptIdempotencyKey }),
         },
         tone: "error",
       }).pipe(
@@ -270,25 +333,33 @@ export const make = Effect.gen(function* () {
           scriptName: input.scriptName,
           terminalId: input.terminalId,
           worktreePath: input.worktreePath,
+          ...(bootstrap?.setupScriptIdempotencyKey === undefined
+            ? {}
+            : { idempotencyKey: bootstrap.setupScriptIdempotencyKey }),
         };
-        yield* Effect.all([
-          appendSetupScriptActivity({
-            threadId: command.threadId,
-            kind: "setup-script.requested",
-            summary: "Starting setup script",
-            createdAt: input.requestedAt,
-            payload,
-            tone: "info",
-          }),
-          appendSetupScriptActivity({
-            threadId: command.threadId,
-            kind: "setup-script.started",
-            summary: "Setup script started",
-            createdAt: startedAt,
-            payload,
-            tone: "info",
-          }),
-        ]).pipe(
+        const startedActivity = appendSetupScriptActivity({
+          threadId: command.threadId,
+          kind: "setup-script.started",
+          summary: "Setup script started",
+          createdAt: startedAt,
+          payload,
+          tone: "info",
+        });
+        yield* Effect.all(
+          bootstrap?.setupScriptIdempotencyKey === undefined
+            ? [
+                appendSetupScriptActivity({
+                  threadId: command.threadId,
+                  kind: "setup-script.requested",
+                  summary: "Starting setup script",
+                  createdAt: input.requestedAt,
+                  payload,
+                  tone: "info",
+                }),
+                startedActivity,
+              ]
+            : [startedActivity],
+        ).pipe(
           Effect.asVoid,
           Effect.catch((error) =>
             Effect.logWarning(
@@ -312,6 +383,34 @@ export const make = Effect.gen(function* () {
         }
         const worktreePath = targetWorktreePath;
         const requestedAt = yield* nowIso;
+        if (bootstrap.setupScriptIdempotencyKey !== undefined) {
+          const existing = yield* projection.getThreadDetailById(command.threadId);
+          const recoveryState = Option.isSome(existing)
+            ? setupScriptRecoveryState(
+                existing.value.activities,
+                bootstrap.setupScriptIdempotencyKey,
+              )
+            : "fresh";
+          if (recoveryState === "completed") {
+            return;
+          }
+          if (recoveryState === "indeterminate") {
+            return yield* new OrchestrationDispatchCommandError({
+              message: "Setup script launch state is indeterminate after an interrupted bootstrap.",
+            });
+          }
+          yield* appendSetupScriptActivity({
+            threadId: command.threadId,
+            kind: "setup-script.requested",
+            summary: "Starting setup script",
+            createdAt: requestedAt,
+            payload: {
+              idempotencyKey: bootstrap.setupScriptIdempotencyKey,
+              worktreePath,
+            },
+            tone: "info",
+          });
+        }
         yield* projectSetupScriptRunner
           .runForThread({
             threadId: command.threadId,
@@ -329,7 +428,19 @@ export const make = Effect.gen(function* () {
                 }),
               onSuccess: (setupResult) => {
                 if (setupResult.status !== "started") {
-                  return Effect.void;
+                  return bootstrap.setupScriptIdempotencyKey === undefined
+                    ? Effect.void
+                    : appendSetupScriptActivity({
+                        threadId: command.threadId,
+                        kind: "setup-script.completed",
+                        summary: "No setup script configured",
+                        createdAt: requestedAt,
+                        payload: {
+                          idempotencyKey: bootstrap.setupScriptIdempotencyKey,
+                          worktreePath,
+                        },
+                        tone: "info",
+                      }).pipe(Effect.asVoid);
                 }
                 return recordSetupScriptStarted({
                   requestedAt,
@@ -364,53 +475,69 @@ export const make = Effect.gen(function* () {
       }
 
       if (bootstrap?.prepareWorktree) {
-        let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
-        // "Start from origin" is a stored default; repos without an
-        // origin remote fall back to the local base branch instead of
-        // failing the whole bootstrap on `git fetch origin`.
-        const hasExplicitCheckout =
-          bootstrap.prepareWorktree.checkoutRef !== undefined ||
-          bootstrap.prepareWorktree.checkoutPr !== undefined;
-        const startFromOrigin =
-          !hasExplicitCheckout &&
-          bootstrap.prepareWorktree.startFromOrigin === true &&
-          (yield* gitWorkflow.remoteExists({
+        const reusableWorktree =
+          bootstrap.prepareWorktree.reuseExistingBranchWorktree === true &&
+          bootstrap.prepareWorktree.branch !== undefined
+            ? findReusableBranchWorktree(
+                yield* gitWorkflow.listWorktrees({
+                  cwd: bootstrap.prepareWorktree.projectCwd,
+                }),
+                bootstrap.prepareWorktree.branch,
+              )
+            : undefined;
+        let resolvedBranch = bootstrap.prepareWorktree.branch;
+        if (reusableWorktree !== undefined) {
+          targetWorktreePath = reusableWorktree.path;
+        } else {
+          let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
+          // "Start from origin" is a stored default; repos without an
+          // origin remote fall back to the local base branch instead of
+          // failing the whole bootstrap on `git fetch origin`.
+          const hasExplicitCheckout =
+            bootstrap.prepareWorktree.checkoutRef !== undefined ||
+            bootstrap.prepareWorktree.checkoutPr !== undefined;
+          const startFromOrigin =
+            !hasExplicitCheckout &&
+            bootstrap.prepareWorktree.startFromOrigin === true &&
+            (yield* gitWorkflow.remoteExists({
+              cwd: bootstrap.prepareWorktree.projectCwd,
+              remoteName: "origin",
+            }));
+          if (startFromOrigin) {
+            yield* gitWorkflow.fetchRemote({
+              cwd: bootstrap.prepareWorktree.projectCwd,
+              remoteName: "origin",
+            });
+            const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+              cwd: bootstrap.prepareWorktree.projectCwd,
+              refName: bootstrap.prepareWorktree.baseBranch,
+              fallbackRemoteName: "origin",
+            });
+            worktreeBaseRef = resolvedRemoteBase.commitSha;
+          }
+          const checkoutRef = bootstrap.prepareWorktree.checkoutRef ?? worktreeBaseRef;
+          const checkoutCommit = yield* resolveWorktreeCheckoutCommit(gitWorkflow, {
             cwd: bootstrap.prepareWorktree.projectCwd,
-            remoteName: "origin",
-          }));
-        if (startFromOrigin) {
-          yield* gitWorkflow.fetchRemote({
-            cwd: bootstrap.prepareWorktree.projectCwd,
-            remoteName: "origin",
+            checkoutRef,
+            ...(bootstrap.prepareWorktree.checkoutPr !== undefined
+              ? { checkoutPr: bootstrap.prepareWorktree.checkoutPr }
+              : {}),
           });
-          const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+          const worktree = yield* gitWorkflow.createWorktree({
             cwd: bootstrap.prepareWorktree.projectCwd,
-            refName: bootstrap.prepareWorktree.baseBranch,
-            fallbackRemoteName: "origin",
+            refName: checkoutCommit.commitSha,
+            newRefName: bootstrap.prepareWorktree.branch,
+            baseRefName: bootstrap.prepareWorktree.baseBranch,
+            path: null,
           });
-          worktreeBaseRef = resolvedRemoteBase.commitSha;
+          targetWorktreePath = worktree.worktree.path;
+          resolvedBranch = worktree.worktree.refName;
         }
-        const checkoutRef = bootstrap.prepareWorktree.checkoutRef ?? worktreeBaseRef;
-        const checkoutCommit = yield* resolveWorktreeCheckoutCommit(gitWorkflow, {
-          cwd: bootstrap.prepareWorktree.projectCwd,
-          checkoutRef,
-          ...(bootstrap.prepareWorktree.checkoutPr !== undefined
-            ? { checkoutPr: bootstrap.prepareWorktree.checkoutPr }
-            : {}),
-        });
-        const worktree = yield* gitWorkflow.createWorktree({
-          cwd: bootstrap.prepareWorktree.projectCwd,
-          refName: checkoutCommit.commitSha,
-          newRefName: bootstrap.prepareWorktree.branch,
-          baseRefName: bootstrap.prepareWorktree.baseBranch,
-          path: null,
-        });
-        targetWorktreePath = worktree.worktree.path;
         yield* orchestrationEngine.dispatch({
           type: "thread.meta.update",
           commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
           threadId: command.threadId,
-          branch: worktree.worktree.refName,
+          branch: resolvedBranch,
           worktreePath: targetWorktreePath,
         });
         yield* refreshGitStatus(targetWorktreePath);
@@ -432,7 +559,20 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  return ThreadTurnBootstrap.of({ bootstrapTurnStart });
+  const cleanupRecoveredThread: ThreadTurnBootstrap["Service"]["cleanupRecoveredThread"] =
+    Effect.fn("ThreadTurnBootstrap.cleanupRecoveredThread")(function* (threadId) {
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.delete",
+          commandId: yield* serverCommandId("recovered-bootstrap-thread-delete"),
+          threadId,
+        })
+        .pipe(
+          Effect.catchCause((cause) => Effect.fail(toBootstrapDispatchCommandCauseError(cause))),
+        );
+    });
+
+  return ThreadTurnBootstrap.of({ bootstrapTurnStart, cleanupRecoveredThread });
 });
 
 export const layer = Layer.effect(ThreadTurnBootstrap, make);

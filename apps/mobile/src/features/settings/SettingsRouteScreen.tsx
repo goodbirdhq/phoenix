@@ -46,7 +46,11 @@ import { useSavedRemoteConnections } from "../../state/use-remote-environment-re
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
-import { resolveAgentAwarenessPlatformPresentation } from "./SettingsRouteScreen.logic";
+import {
+  GENERAL_INSIGHT_SETTINGS_ROWS,
+  resolveAgentAwarenessPlatformPresentation,
+} from "./SettingsRouteScreen.logic";
+import { useScheduleSettingsValue } from "../schedules/SchedulesRouteScreen";
 
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
 type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "linking";
@@ -533,6 +537,7 @@ function GeneralSettingsSection() {
   const autoSettleOnMerge =
     !AsyncResult.isSuccess(preferencesResult) ||
     preferencesResult.value.autoSettleOnMerge !== false;
+  const schedulesValue = useScheduleSettingsValue();
 
   return (
     <SettingsSection title="General">
@@ -543,7 +548,13 @@ function GeneralSettingsSection() {
         value={autoSettleOnMerge}
         onValueChange={(value) => savePreferences({ autoSettleOnMerge: value })}
       />
-      <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
+      {GENERAL_INSIGHT_SETTINGS_ROWS.map((row) => (
+        <SettingsRow
+          key={row.target}
+          {...row}
+          value={row.target === "SettingsSchedules" ? schedulesValue : undefined}
+        />
+      ))}
     </SettingsSection>
   );
 }

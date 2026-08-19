@@ -58,6 +58,13 @@ import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRoute
 import { SettingsProjectGroupingRouteScreen } from "./features/settings/SettingsProjectGroupingRouteScreen";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
+import { SchedulesRouteScreen } from "./features/schedules/SchedulesRouteScreen";
+import { ScheduleDetailRouteScreen } from "./features/schedules/ScheduleDetailRouteScreen";
+import {
+  ScheduleDuplicateRouteScreen,
+  ScheduleEditRouteScreen,
+  ScheduleNewRouteScreen,
+} from "./features/schedules/ScheduleEditorRouteScreen";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
 import {
   SettingsLegalDocumentCloseHeaderButton,
@@ -197,6 +204,31 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "Usage",
       },
+    }),
+    SettingsSchedules: createNativeStackScreen({
+      screen: SchedulesRouteScreen,
+      linking: "schedules",
+      options: { title: "Schedules" },
+    }),
+    SettingsScheduleDetail: createNativeStackScreen({
+      screen: ScheduleDetailRouteScreen,
+      linking: "schedules/:environmentId/:scheduleId",
+      options: { title: "Schedule" },
+    }),
+    SettingsScheduleNew: createNativeStackScreen({
+      screen: ScheduleNewRouteScreen,
+      linking: "schedules/new",
+      options: { title: "New Schedule" },
+    }),
+    SettingsScheduleEdit: createNativeStackScreen({
+      screen: ScheduleEditRouteScreen,
+      linking: "schedules/:environmentId/:scheduleId/edit",
+      options: { title: "Edit Schedule" },
+    }),
+    SettingsScheduleDuplicate: createNativeStackScreen({
+      screen: ScheduleDuplicateRouteScreen,
+      linking: "schedules/:environmentId/:scheduleId/duplicate",
+      options: { title: "Duplicate Schedule" },
     }),
   },
 });

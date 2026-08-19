@@ -34,6 +34,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  CalendarClockIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
@@ -1622,6 +1623,28 @@ function OpenCommandPaletteDialog(props: {
     icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/settings" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:schedules",
+    searchTerms: ["schedule", "schedules", "automation", "recurring", "cron"],
+    title: "Open Schedules",
+    icon: <CalendarClockIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/schedules" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:schedules:create",
+    searchTerms: ["create schedule", "new schedule", "automation", "cron"],
+    title: "Create Schedule",
+    icon: <CalendarClockIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/schedules", search: { create: true } });
     },
   });
 
