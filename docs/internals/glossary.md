@@ -100,6 +100,22 @@ The backend agent runtime that actually performs work. Five drivers ship built i
 
 The live provider-backed runtime attached to a thread. Session shape is in [the orchestration contracts][1], and lifecycle is managed in [ProviderService.ts][14].
 
+#### Provider instance
+
+One configured account/installation of a driver, named by a user-defined slug (`codex_personal`, `claude_work`). The instance id — not the driver kind — is the routing key threads, sessions, and selections carry. See [providerInstance.ts][25].
+
+#### Thread migration
+
+Moving a thread to a different provider instance in place, including across drivers. The thread keeps its id, history, and checkpoints; only its `modelSelection.instanceId` rebinds. Recorded as a `thread.migrated` event plus a `thread.migrated` activity row, so which account did which work stays reconstructable. See [the contracts][1] and [decider.ts][8].
+
+#### Handoff mode
+
+How a migration hands the thread's history to the target instance. `replay` reconstructs the transcript from Phoenix's own event store and needs nothing from the origin account; `brief` spends one origin turn having the origin agent compact the thread first.
+
+#### Failover group
+
+An optional tag on a provider instance naming a set of interchangeable accounts. Members must share one driver. A usage limit on one member moves its threads to another automatically; untagged instances never move on their own. See [providerInstance.ts][25].
+
 #### Runtime mode
 
 The safety/access mode for a thread or session. [The contracts][1] define four values: `approval-required`, `auto-accept-edits`, `auto`, and `full-access`. See [permission modes][18].
@@ -179,3 +195,4 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[25]: ../../packages/contracts/src/providerInstance.ts
