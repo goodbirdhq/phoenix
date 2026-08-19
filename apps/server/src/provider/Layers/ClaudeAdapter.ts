@@ -3016,11 +3016,24 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return;
     }
 
-    const status = turnStatusFromResult(message);
-    const errorMessage = resultUserFacingError(message);
+    // A usage limit can come back success-shaped: the CLI "answers" with its
+    // canned limit message instead of failing the result. That turn did no
+    // work, so it is a failed usage-limit turn regardless of the subtype.
+    const resultText =
+      message.subtype === "success" && typeof message.result === "string"
+        ? message.result
+        : undefined;
+    const successShapedUsageLimit =
+      resultText !== undefined &&
+      USAGE_LIMIT_ERROR_PREFIXES.some((prefix) => resultText.trimStart().startsWith(prefix));
+
+    const status = successShapedUsageLimit ? "failed" : turnStatusFromResult(message);
+    const errorMessage = successShapedUsageLimit ? resultText : resultUserFacingError(message);
     const errorKind =
       status === "failed" &&
-      (context.turnState?.usageLimitSignaled === true || isUsageLimitResult(message))
+      (successShapedUsageLimit ||
+        context.turnState?.usageLimitSignaled === true ||
+        isUsageLimitResult(message))
         ? ("usage-limit" satisfies ProviderRuntimeErrorKind)
         : undefined;
 
