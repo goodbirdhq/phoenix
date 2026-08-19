@@ -28,10 +28,9 @@ import { UsageChartLegend, UsageProviderChart, type UsageChartMetric } from "./U
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
 import {
   deriveSubscriptionAccounts,
-  providerLimitSourceName,
   SubscriptionAvailabilitySection,
-  type SubscriptionAvailabilitySource,
 } from "../subscriptions/SubscriptionAvailability";
+import { subscriptionAvailabilitySources } from "@t3tools/client-runtime/usage/usage-warning";
 
 const WINDOW_OPTIONS = [
   { days: 1, label: "Past 24h" },
@@ -60,28 +59,7 @@ export function UsagePage() {
     hasProviderAvailabilityError,
   } = useUsage(window);
   const subscriptionAccounts = useMemo(
-    () =>
-      deriveSubscriptionAccounts(
-        providerAvailability.flatMap((environment) =>
-          environment.providers.map((entry) => {
-            const provider = environment.serverProviders?.find(
-              (candidate) => candidate.instanceId === entry.instanceId,
-            );
-            return {
-              environmentId: environment.environmentId,
-              environmentLabel: environment.label,
-              instanceId: entry.instanceId,
-              driver: entry.driver,
-              displayName:
-                entry.displayName ?? provider?.displayName ?? providerLimitSourceName(entry.driver),
-              ...(provider?.accentColor ? { accentColor: provider.accentColor } : {}),
-              enabled: provider?.enabled === true,
-              authenticated: provider?.auth.status === "authenticated",
-              availability: entry.availability,
-            } satisfies SubscriptionAvailabilitySource;
-          }),
-        ),
-      ),
+    () => deriveSubscriptionAccounts(subscriptionAvailabilitySources(providerAvailability)),
     [providerAvailability],
   );
 
