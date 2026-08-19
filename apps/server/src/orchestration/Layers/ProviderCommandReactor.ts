@@ -477,6 +477,10 @@ const make = Effect.gen(function* () {
       readonly modelSelection?: ModelSelection;
       readonly pendingTurnStart?: boolean;
       readonly queuedDeliveryMessageId?: MessageId | null;
+      // Thread migration deliberately crosses the instance guard: the session
+      // restarts on the target instance, and the native resume cursor is kept
+      // only when the continuation identities match (same CLI home).
+      readonly allowMigration?: boolean;
     },
   ) {
     const thread = yield* resolveThread(threadId);
@@ -598,7 +602,11 @@ const make = Effect.gen(function* () {
     // Compare the effective selection, not just the request payload: a
     // thread.meta.update can rewrite thread.modelSelection between turns, and a
     // selection-less turn.start must not slip past the instance guard.
-    if (thread.session !== null && desiredInstanceId !== currentInstanceId) {
+    if (
+      thread.session !== null &&
+      desiredInstanceId !== currentInstanceId &&
+      options?.allowMigration !== true
+    ) {
       if (currentInfo.driverKind !== desiredInfo.driverKind) {
         return yield* new ProviderAdapterRequestError({
           provider: preferredProvider,
@@ -710,9 +718,13 @@ const make = Effect.gen(function* () {
         return existingSessionThreadId;
       }
 
-      const resumeCursor = shouldRestartForModelChange
-        ? undefined
-        : (activeSession?.resumeCursor ?? undefined);
+      const continuationCompatible =
+        currentInfo.continuationIdentity.continuationKey ===
+        desiredInfo.continuationIdentity.continuationKey;
+      const resumeCursor =
+        shouldRestartForModelChange || !continuationCompatible
+          ? undefined
+          : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
         threadId,
         existingSessionThreadId,
