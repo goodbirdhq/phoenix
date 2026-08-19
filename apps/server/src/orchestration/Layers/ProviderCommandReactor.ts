@@ -494,18 +494,25 @@ const make = Effect.gen(function* () {
     const desiredRuntimeMode = thread.runtimeMode;
     const requestedModelSelection = options?.modelSelection;
     // A migrated thread can briefly leave a stale runtime entry for the old
-    // instance behind; prefer the session matching the thread's recorded
-    // binding so the guard never reads the wrong account off a stale entry.
+    // instance behind, and the read-model binding can lag the rebind by an
+    // event. Prefer the effective selection's session, then the recorded
+    // binding, and never read a stopped entry — otherwise the guard computes
+    // the thread's account from the wrong session.
+    const desiredInstanceIdHint = (requestedModelSelection ?? thread.modelSelection).instanceId;
     const resolveActiveSession = (threadId: ThreadId) =>
       providerService.listSessions().pipe(
         Effect.map((sessions) => {
-          const matches = sessions.filter((session) => session.threadId === threadId);
+          const matches = sessions.filter(
+            (session) => session.threadId === threadId && session.status !== "stopped",
+          );
           const boundInstanceId = thread.session?.providerInstanceId;
           return (
+            matches.find((session) => session.providerInstanceId === desiredInstanceIdHint) ??
             matches.find(
               (session) =>
                 boundInstanceId !== undefined && session.providerInstanceId === boundInstanceId,
-            ) ?? matches[0]
+            ) ??
+            matches[0]
           );
         }),
       );
