@@ -44,6 +44,7 @@ import {
   type ProjectionTurnRepositoryShape,
 } from "../../../persistence/Services/ProjectionTurns.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "../../../provider/Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
@@ -137,6 +138,18 @@ interface HarnessOptions {
   // statuses have a binding, "stopped"/null don't) so existing harnesses
   // that don't care about the distinction keep working unchanged.
   readonly hasBinding?: boolean;
+  /**
+   * Provide a runtime ProviderService whose listSessions reflects
+   * sessionStatus, mirroring production where runtime liveness — not the
+   * persisted directory — decides whether a child still holds a slot.
+   */
+  readonly providerRuntime?: boolean;
+  /**
+   * Keep the persisted directory binding forever, which is what the real
+   * provider_session_runtime table does: rows are resume state and outlive
+   * the process by design.
+   */
+  readonly bindingNeverClears?: boolean;
 }
 
 const makeHarness = (options: HarnessOptions) => {
@@ -377,7 +390,7 @@ const makeHarness = (options: HarnessOptions) => {
               }),
             )
           : Effect.sync(() =>
-              hasBinding
+              hasBinding || options.bindingNeverClears === true
                 ? [
                     {
                       threadId: CHILD_THREAD_ID,
@@ -388,6 +401,29 @@ const makeHarness = (options: HarnessOptions) => {
                 : [],
             ),
     } as unknown as ProviderSessionDirectory["Service"]),
+    ...(options.providerRuntime === true
+      ? [
+          Layer.succeed(ProviderService.ProviderService, {
+            listSessions: () =>
+              Effect.sync(() =>
+                sessionStatus !== null && sessionStatus !== "stopped"
+                  ? [
+                      {
+                        threadId: CHILD_THREAD_ID,
+                        provider: "codex",
+                        // Runtime sessions use provider statuses; "ready" is
+                        // the live analogue of the orchestration status here.
+                        status: "ready",
+                        runtimeMode: "full-access",
+                        createdAt: "2026-08-12T00:00:00.000Z",
+                        updatedAt: "2026-08-12T00:00:00.000Z",
+                      },
+                    ]
+                  : [],
+              ),
+          } as unknown as ProviderService.ProviderService["Service"]),
+        ]
+      : []),
     Layer.succeed(ProjectionTurnRepository, {
       listQueuedTurnStarts: Effect.succeed([]),
       listQueuedDeliveryReceipts: () => Effect.succeed([]),
@@ -451,6 +487,27 @@ it.effect("settle_session stops an idle-but-alive session before settling it", (
     expect(harness.calls).toEqual(["dispatch:thread.session.stop", "dispatch:thread.settle"]);
     expect(harness.currentStatus()).toBe("stopped");
   }),
+);
+
+it.effect(
+  "settle_session frees the slot via runtime liveness even though the persisted binding remains",
+  () =>
+    Effect.gen(function* () {
+      // Production shape: the provider_session_runtime row never goes away
+      // (it is resume state), so only the runtime session list can prove the
+      // process is gone. Before the fix this settle warned after the stop
+      // timeout and the child held its spawn slot forever.
+      const harness = makeHarness({
+        sessionStatus: "ready",
+        providerRuntime: true,
+        bindingNeverClears: true,
+      });
+      const result = yield* harness.settle();
+
+      expect(result.settled).toBe(true);
+      expect(result.warning).toBeNull();
+      expect(harness.calls).toEqual(["dispatch:thread.session.stop", "dispatch:thread.settle"]);
+    }),
 );
 
 it.effect("settle_session stops immediately rather than granting a grace period", () =>
