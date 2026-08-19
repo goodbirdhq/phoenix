@@ -150,6 +150,10 @@
     "./usage/subscription-availability": {
       "types": "./src/usage/subscriptionAvailability.ts",
       "default": "./src/usage/subscriptionAvailability.ts"
+    },
+    "./usage/usage-warning": {
+      "types": "./src/usage/usageWarning.ts",
+      "default": "./src/usage/usageWarning.ts"
     }
   },
   "scripts": {

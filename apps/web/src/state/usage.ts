@@ -79,6 +79,18 @@ const providerAvailabilityAtom = Atom.family((refresh: boolean) =>
 );
 
 /**
+ * The cached per-instance availability reading, for surfaces that want the
+ * numbers without the Usage page's summaries.
+ *
+ * Shares one atom with every other reader, so a chat view watching its own
+ * account adds no traffic beyond the read Usage already performs, and never
+ * asks a provider CLI for a fresh reading.
+ */
+export function useProviderAvailability(): readonly EnvironmentProviderAvailabilityStatus[] {
+  return useAtomValue(providerAvailabilityAtom(false));
+}
+
+/**
  * Reads every environment's summary for one window.
  *
  * Keyed by the serialised window so switching ranges does not thrash the atom
