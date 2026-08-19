@@ -100,6 +100,13 @@ export function rankMigrationTargets(input: {
     });
 }
 
+export function resolveLimitBoundInstanceId(input: {
+  readonly sessionProviderInstanceId: ProviderInstanceId | null | undefined;
+  readonly threadModelSelectionInstanceId: ProviderInstanceId | null | undefined;
+}): ProviderInstanceId | null {
+  return input.sessionProviderInstanceId ?? input.threadModelSelectionInstanceId ?? null;
+}
+
 export function shouldShowUsageLimitMigrationPopup(input: {
   readonly boundInstanceId: ProviderInstanceId | null;
   readonly boundInstanceAvailability: ProviderAvailability | null | undefined;
