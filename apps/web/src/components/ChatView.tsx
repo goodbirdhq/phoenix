@@ -16,6 +16,8 @@ import {
   ThreadId,
   type TurnId,
   type KeybindingCommand,
+  type ThreadMigrationHandoffMode,
+  type ThreadMigrationTrigger,
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   ProviderDriverKind,
@@ -32,6 +34,7 @@ import {
   effectiveSnoozed,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
+import { subscriptionLimitResetLabel } from "@t3tools/client-runtime/usage/subscription-availability";
 import {
   parseScopedThreadKey,
   scopedThreadKey,
@@ -185,7 +188,12 @@ import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
+import {
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  NO_PROVIDER_MODEL_SELECTION,
+  sortProviderInstanceEntries,
+} from "../providerInstances";
 import {
   useClientSettings,
   useClientSettingsHydrated,
@@ -244,6 +252,7 @@ import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
+  readThreadShell,
   useProjects,
   useThread,
   useThreadRefs,
@@ -279,6 +288,22 @@ import {
   shouldShowThreadErrorBanner,
   ThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
+import { ThreadMigrationDialog } from "./chat/ThreadMigrationDialog";
+import {
+  UsageLimitMigrationPopup,
+  type UsageLimitMigrationTarget,
+} from "./chat/UsageLimitMigrationPopup";
+import {
+  LAST_MIGRATION_TARGET_BY_PROJECT_KEY,
+  LastMigrationTargetByProjectSchema,
+  MIGRATION_STREAMING_BLOCK_REASON,
+  deriveMigrationModeAvailability,
+  findFailedTurnUserMessage,
+  isProviderUsageLimited,
+  rankMigrationTargets,
+  resolveRememberedMigrationTarget,
+  shouldShowUsageLimitMigrationPopup,
+} from "./chat/threadMigration.logic";
 import {
   resolveDisplayedThreadPr,
   threadChangeRequestSnapshotsAtom,
@@ -309,13 +334,13 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   shouldShowBranchMismatchBanner,
+  threadHasStarted,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
   type LocalDispatchSnapshot,
   PullRequestDialogState,
   cloneComposerImageForRetry,
-  deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
@@ -1190,6 +1215,13 @@ type LocalThreadErrorEntry = {
   readonly message: string | null;
   readonly at: number;
 };
+type ThreadMigrationDialogRequest = {
+  readonly threadId: ThreadId;
+  readonly sourceName: string;
+  readonly target: UsageLimitMigrationTarget;
+  readonly trigger: ThreadMigrationTrigger;
+  readonly retryFailedTurn: boolean;
+};
 
 function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
@@ -1223,6 +1255,9 @@ function ChatViewContent(props: ChatViewProps) {
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const migrateThread = useAtomCommand(threadEnvironment.migrate, {
     reportFailure: false,
   });
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
@@ -1274,6 +1309,15 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const activeServerThread = serverThread ?? loadingServerThread;
   // Pagination window state for the routed server thread: drives the
+  const providerAvailabilityQuery = useEnvironmentQuery(
+    activeServerThread
+      ? serverEnvironment.providerAvailability({
+          environmentId: activeServerThread.environmentId,
+          input: {},
+        })
+      : null,
+  );
+
   // "load earlier turns" header when the loaded window has older history.
   const routeThreadState = useEnvironmentThread(
     routeKind === "server" ? routeThreadRef.environmentId : null,
@@ -1366,6 +1410,12 @@ function ChatViewContent(props: ChatViewProps) {
     ApprovalRequestId[]
   >([]);
 
+  const [migrationDialogRequest, setMigrationDialogRequest] =
+    useState<ThreadMigrationDialogRequest | null>(null);
+  const [migrationDialogError, setMigrationDialogError] = useState<string | null>(null);
+  const [isMigrationPending, setIsMigrationPending] = useState(false);
+  const [isBulkMigrationPending, setIsBulkMigrationPending] = useState(false);
+
   useEffect(() => {
     setIsWorkspaceFileDragActive(false);
   }, [draftId, routeThreadKey]);
@@ -1405,6 +1455,11 @@ function ChatViewContent(props: ChatViewProps) {
   const legendListRef = useRef<LegendListRef | null>(null);
   const [composerOverlayElement, setComposerOverlayElement] = useState<HTMLDivElement | null>(null);
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
+  const [lastMigrationTargetByProjectId, setLastMigrationTargetByProjectId] = useLocalStorage(
+    LAST_MIGRATION_TARGET_BY_PROJECT_KEY,
+    {},
+    LastMigrationTargetByProjectSchema,
+  );
   const isAtEndRef = useRef(true);
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
@@ -2014,11 +2069,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.modelSelection.instanceId ??
     activeProject?.defaultModelSelection?.instanceId ??
     null;
-  const lockedProvider = deriveLockedProvider({
-    thread: activeThread,
-    selectedProvider: selectedProviderByThreadId,
-    threadProvider,
-  });
+  const lockedProvider: ProviderDriverKind | null = null;
   // Once a thread selects an environment, never substitute the primary
   // environment's config while the selected environment is still loading.
   const serverConfig = activeThread
@@ -2211,6 +2262,89 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatchServerLabel,
   ]);
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
+  const providerInstanceEntries = useMemo(
+    () =>
+      sortProviderInstanceEntries(
+        applyProviderInstanceSettings(deriveProviderInstanceEntries(providerStatuses), settings),
+      ),
+    [providerStatuses, settings],
+  );
+  const availabilityByInstanceId = useMemo(
+    () =>
+      new Map(
+        (providerAvailabilityQuery.data?.providers ?? []).map((entry) => [
+          entry.instanceId,
+          entry.availability,
+        ]),
+      ),
+    [providerAvailabilityQuery.data?.providers],
+  );
+  const boundProviderInstanceId = activeThread?.modelSelection.instanceId ?? null;
+  const boundProviderInstance =
+    providerInstanceEntries.find((entry) => entry.instanceId === boundProviderInstanceId) ?? null;
+  const boundProviderAvailability = boundProviderInstanceId
+    ? availabilityByInstanceId.get(boundProviderInstanceId)
+    : undefined;
+  const isTurnStreaming =
+    activeThread?.session?.status === "running" || activeThread?.latestTurn?.state === "running";
+  const usageLimitPopupVisible =
+    isServerThread &&
+    shouldShowUsageLimitMigrationPopup({
+      boundInstanceId: boundProviderInstanceId,
+      boundInstanceAvailability: boundProviderAvailability,
+      sessionProviderInstanceId: activeThread?.session?.providerInstanceId ?? null,
+      sessionErrorKind: activeThread?.session?.lastErrorKind ?? null,
+    });
+  const originIsLimited =
+    isProviderUsageLimited(boundProviderAvailability) ||
+    (activeThread?.session?.lastErrorKind === "usage-limit" &&
+      activeThread.session.providerInstanceId === boundProviderInstanceId);
+  const migrationTargets = useMemo<UsageLimitMigrationTarget[]>(() => {
+    if (!activeThread || !boundProviderInstance) return [];
+    return rankMigrationTargets({
+      originInstanceId: boundProviderInstance.instanceId,
+      originDriverKind: boundProviderInstance.driverKind,
+      candidates: providerInstanceEntries,
+      availabilityByInstanceId,
+    }).flatMap((target) => {
+      const model = resolveAppModelSelectionForInstance(
+        target.instanceId,
+        settings,
+        providerStatuses,
+        target.driverKind === boundProviderInstance.driverKind
+          ? activeThread.modelSelection.model
+          : null,
+      );
+      return model
+        ? [
+            {
+              instanceId: target.instanceId,
+              displayName: target.displayName,
+              model,
+              remainingQuotaPercent: target.remainingQuotaPercent,
+            },
+          ]
+        : [];
+    });
+  }, [
+    activeThread,
+    availabilityByInstanceId,
+    boundProviderInstance,
+    providerInstanceEntries,
+    providerStatuses,
+    settings,
+  ]);
+  const rememberedMigrationTargetId = activeProject
+    ? lastMigrationTargetByProjectId[activeProject.id]
+    : null;
+  const selectedMigrationTarget = resolveRememberedMigrationTarget(
+    migrationTargets,
+    rememberedMigrationTargetId,
+  );
+  const limitedWindow = boundProviderAvailability?.windows
+    .filter((window) => window.usedPercent >= 100)
+    .toSorted((left, right) => right.usedPercent - left.usedPercent)[0];
+  const usageLimitResetLabel = limitedWindow ? subscriptionLimitResetLabel(limitedWindow) : null;
   const unlockedSelectedProvider = resolveSelectableProvider(
     providerStatuses,
     selectedProviderByThreadId ?? threadProvider,
@@ -5904,6 +6038,283 @@ function ChatViewContent(props: ChatViewProps) {
     composerRef,
   ]);
 
+  const failedTurnMessage = findFailedTurnUserMessage(activeThread);
+  const failedTurnAttachmentUrlsReady = Boolean(
+    failedTurnMessage &&
+    (failedTurnMessage.attachments ?? []).every((attachment) =>
+      serverAttachmentUrlById.has(attachment.id),
+    ),
+  );
+  const failedTurnCanRetry = failedTurnMessage !== null && failedTurnAttachmentUrlsReady;
+  const failedTurnRetryUnavailableReason =
+    failedTurnMessage === null
+      ? "There is no failed turn message to retry."
+      : failedTurnAttachmentUrlsReady
+        ? null
+        : "The failed turn's attachments are still loading.";
+
+  const rememberMigrationTarget = useCallback(
+    (instanceId: ProviderInstanceId) => {
+      if (!activeProject) return;
+      setLastMigrationTargetByProjectId((current) => ({
+        ...current,
+        [activeProject.id]: instanceId,
+      }));
+    },
+    [activeProject, setLastMigrationTargetByProjectId],
+  );
+
+  const openLimitMigrationDialog = useCallback(
+    (retryFailedTurn: boolean) => {
+      if (!activeThread || !selectedMigrationTarget || !boundProviderInstance) return;
+      setMigrationDialogError(null);
+      setMigrationDialogRequest({
+        threadId: activeThread.id,
+        sourceName: boundProviderInstance.displayName,
+        target: selectedMigrationTarget,
+        trigger: "limit-popup",
+        retryFailedTurn,
+      });
+    },
+    [activeThread, boundProviderInstance, selectedMigrationTarget],
+  );
+
+  const handleMigrationTargetSelect = useCallback(
+    (instanceId: ProviderInstanceId) => {
+      rememberMigrationTarget(instanceId);
+    },
+    [rememberMigrationTarget],
+  );
+
+  const loadRetryAttachments = useCallback(
+    async (message: ChatMessage) =>
+      await Promise.all(
+        (message.attachments ?? []).map(async (attachment) => {
+          const previewUrl = serverAttachmentUrlById.get(attachment.id);
+          if (!previewUrl) {
+            throw new Error(`Attachment ${attachment.name} is not ready to retry.`);
+          }
+          const response = await fetch(previewUrl);
+          if (!response.ok) {
+            throw new Error(`Could not reload attachment ${attachment.name}.`);
+          }
+          const blob = await response.blob();
+          const file = new File([blob], attachment.name, { type: attachment.mimeType });
+          return {
+            type: "image" as const,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            dataUrl: await readFileAsDataUrl(file),
+          };
+        }),
+      ),
+    [serverAttachmentUrlById],
+  );
+
+  const handleMigrationConfirm = useCallback(
+    async (handoffMode: ThreadMigrationHandoffMode) => {
+      const request = migrationDialogRequest;
+      if (!request || !activeThread || request.threadId !== activeThread.id) return;
+      const modeAvailability = deriveMigrationModeAvailability({
+        isOriginLimited: originIsLimited,
+        isTurnStreaming,
+      });
+      const selectedModeDisabledReason =
+        handoffMode === "brief"
+          ? modeAvailability.briefDisabledReason
+          : modeAvailability.replayDisabledReason;
+      if (selectedModeDisabledReason) {
+        setMigrationDialogError(selectedModeDisabledReason);
+        return;
+      }
+
+      setIsMigrationPending(true);
+      setMigrationDialogError(null);
+
+      let retryMessage: ChatMessage | null = null;
+      let retryAttachments: Awaited<ReturnType<typeof loadRetryAttachments>> = [];
+      if (request.retryFailedTurn) {
+        retryMessage = findFailedTurnUserMessage(activeThread);
+        if (!retryMessage) {
+          setMigrationDialogError("The failed turn is no longer available to retry.");
+          setIsMigrationPending(false);
+          return;
+        }
+        const attachmentsResult = await settlePromise(() => loadRetryAttachments(retryMessage!));
+        if (attachmentsResult._tag === "Failure") {
+          setMigrationDialogError(
+            chatActionErrorMessage(squashAtomCommandFailure(attachmentsResult)),
+          );
+          setIsMigrationPending(false);
+          return;
+        }
+        retryAttachments = attachmentsResult.value;
+      }
+
+      const migrationResult = await migrateThread({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          targetInstanceId: request.target.instanceId,
+          targetModel: request.target.model,
+          handoffMode,
+          trigger: request.trigger,
+        },
+      });
+      if (migrationResult._tag === "Failure") {
+        if (!isAtomCommandInterrupted(migrationResult)) {
+          setMigrationDialogError(
+            chatActionErrorMessage(squashAtomCommandFailure(migrationResult)),
+          );
+        }
+        setIsMigrationPending(false);
+        return;
+      }
+
+      const targetModelSelection: ModelSelection = {
+        instanceId: request.target.instanceId,
+        model: request.target.model,
+      };
+      setComposerDraftModelSelection(
+        scopeThreadRef(activeThread.environmentId, activeThread.id),
+        targetModelSelection,
+      );
+      setStickyComposerModelSelection(targetModelSelection);
+      rememberMigrationTarget(request.target.instanceId);
+      setThreadError(activeThread.id, null);
+      setMigrationDialogRequest(null);
+
+      if (retryMessage) {
+        const retryResult = await startThreadTurn({
+          environmentId: activeThread.environmentId,
+          input: {
+            threadId: activeThread.id,
+            message: {
+              messageId: newMessageId(),
+              role: "user",
+              text: retryMessage.text,
+              attachments: retryAttachments,
+            },
+            modelSelection: targetModelSelection,
+            runtimeMode: activeThread.runtimeMode,
+            interactionMode: activeThread.interactionMode,
+            createdAt: new Date().toISOString(),
+          },
+        });
+        if (retryResult._tag === "Failure" && !isAtomCommandInterrupted(retryResult)) {
+          const error = squashAtomCommandFailure(retryResult);
+          setThreadError(
+            activeThread.id,
+            `Thread switched to ${request.target.displayName}, but the failed turn could not be retried: ${chatActionErrorMessage(error)}`,
+          );
+        }
+      }
+
+      setIsMigrationPending(false);
+    },
+    [
+      activeThread,
+      isTurnStreaming,
+      loadRetryAttachments,
+      migrateThread,
+      migrationDialogRequest,
+      originIsLimited,
+      rememberMigrationTarget,
+      setComposerDraftModelSelection,
+      setStickyComposerModelSelection,
+      setThreadError,
+      startThreadTurn,
+    ],
+  );
+
+  const handleBulkLimitMigration = useCallback(async () => {
+    if (
+      !activeThread ||
+      !selectedMigrationTarget ||
+      !boundProviderInstanceId ||
+      isBulkMigrationPending
+    ) {
+      return;
+    }
+    if (isTurnStreaming) {
+      toastManager.add({
+        type: "warning",
+        title: "Threads cannot migrate mid-turn",
+        description: MIGRATION_STREAMING_BLOCK_REASON,
+      });
+      return;
+    }
+
+    const eligibleThreads = serverThreadRefs.flatMap((ref) => {
+      if (ref.environmentId !== activeThread.environmentId) return [];
+      const shell = readThreadShell(ref);
+      return shell &&
+        shell.archivedAt === null &&
+        shell.modelSelection.instanceId === boundProviderInstanceId
+        ? [{ ref, shell }]
+        : [];
+    });
+    if (eligibleThreads.length === 0) return;
+
+    setIsBulkMigrationPending(true);
+    const inputs = eligibleThreads.flatMap(({ ref, shell }) => {
+      const targetModel = resolveAppModelSelectionForInstance(
+        selectedMigrationTarget.instanceId,
+        settings,
+        providerStatuses,
+        shell.modelSelection.model,
+      );
+      return targetModel ? [{ ref, shell, targetModel }] : [];
+    });
+    const results = await Promise.all(
+      inputs.map(({ ref, shell, targetModel }) =>
+        migrateThread({
+          environmentId: ref.environmentId,
+          input: {
+            threadId: shell.id,
+            targetInstanceId: selectedMigrationTarget.instanceId,
+            targetModel,
+            handoffMode: "replay",
+            trigger: "limit-popup",
+          },
+        }),
+      ),
+    );
+    const failureCount =
+      eligibleThreads.length -
+      inputs.length +
+      results.filter((result) => result._tag === "Failure").length;
+    const successCount = eligibleThreads.length - failureCount;
+
+    rememberMigrationTarget(selectedMigrationTarget.instanceId);
+    toastManager.add(
+      stackedThreadToast({
+        type: failureCount > 0 ? "warning" : "success",
+        title:
+          failureCount > 0
+            ? `Switched ${successCount} of ${eligibleThreads.length} active threads`
+            : `Switched ${successCount} active thread${successCount === 1 ? "" : "s"}`,
+        description:
+          failureCount > 0
+            ? "Threads that are streaming or cannot use the target model stayed on the limited account."
+            : `They will continue on ${selectedMigrationTarget.displayName}.`,
+      }),
+    );
+    setIsBulkMigrationPending(false);
+  }, [
+    activeThread,
+    boundProviderInstanceId,
+    isBulkMigrationPending,
+    isTurnStreaming,
+    migrateThread,
+    providerStatuses,
+    rememberMigrationTarget,
+    selectedMigrationTarget,
+    serverThreadRefs,
+    settings,
+  ]);
+
   const getModelDisabledReason = useCallback(
     (instanceId: ProviderInstanceId, model: string): string | null => {
       if (!activeThread) {
@@ -5913,7 +6324,6 @@ function ChatViewContent(props: ChatViewProps) {
         providers: providerStatuses,
         hasStartedSession: activeThread.session !== null,
         currentModelSelection: activeThread.modelSelection,
-        currentProviderInstanceId: activeThread.session?.providerInstanceId ?? null,
         nextModelSelection: { instanceId, model },
       });
       return reason ? `${reason.description} Start a new thread to use this model.` : null;
@@ -5927,29 +6337,6 @@ function ChatViewContent(props: ChatViewProps) {
       // Look up the configured instance so model normalization and custom
       // model lookup stay scoped to that exact instance. Unknown instance ids
       // are rejected by returning early; the server remains authoritative too.
-      const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
-      const resolvedDriverKind = entry?.driver ?? null;
-      if (
-        lockedProvider !== null &&
-        resolvedDriverKind !== null &&
-        resolvedDriverKind !== lockedProvider
-      ) {
-        scheduleComposerFocus();
-        return;
-      }
-      if (lockedProvider !== null && activeThread.session?.providerInstanceId) {
-        const currentEntry = providerStatuses.find(
-          (snapshot) => snapshot.instanceId === activeThread.session?.providerInstanceId,
-        );
-        if (
-          currentEntry?.continuation?.groupKey &&
-          entry?.continuation?.groupKey &&
-          currentEntry.continuation.groupKey !== entry.continuation.groupKey
-        ) {
-          scheduleComposerFocus();
-          return;
-        }
-      }
       const resolvedModel = resolveAppModelSelectionForInstance(
         instanceId,
         settings,
@@ -5964,11 +6351,37 @@ function ChatViewContent(props: ChatViewProps) {
         instanceId,
         model: resolvedModel,
       };
+      if (
+        threadHasStarted(activeThread) &&
+        activeThread.modelSelection.instanceId !== nextModelSelection.instanceId
+      ) {
+        const targetEntry = providerInstanceEntries.find(
+          (candidate) => candidate.instanceId === nextModelSelection.instanceId,
+        );
+        if (!targetEntry || !boundProviderInstance) {
+          scheduleComposerFocus();
+          return;
+        }
+        setMigrationDialogError(null);
+        setMigrationDialogRequest({
+          threadId: activeThread.id,
+          sourceName: boundProviderInstance.displayName,
+          target: {
+            instanceId: nextModelSelection.instanceId,
+            displayName: targetEntry.displayName,
+            model: nextModelSelection.model,
+            remainingQuotaPercent: null,
+          },
+          trigger: "manual",
+          retryFailedTurn: false,
+        });
+        scheduleComposerFocus();
+        return;
+      }
       const modelChangeBlockReason = getStartedThreadModelChangeBlockReason({
         providers: providerStatuses,
         hasStartedSession: activeThread.session !== null,
         currentModelSelection: activeThread.modelSelection,
-        currentProviderInstanceId: activeThread.session?.providerInstanceId ?? null,
         nextModelSelection,
       });
       if (modelChangeBlockReason) {
@@ -5989,11 +6402,12 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       activeThread,
-      lockedProvider,
+      boundProviderInstance,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
       setStickyComposerModelSelection,
       providerStatuses,
+      providerInstanceEntries,
       settings,
     ],
   );
@@ -6289,7 +6703,7 @@ function ChatViewContent(props: ChatViewProps) {
         </header>
 
         <ThreadErrorBanner
-          error={visibleThreadError}
+          error={activeThread.session?.lastErrorKind === "usage-limit" ? null : visibleThreadError}
           onDismiss={() => {
             setThreadError(activeThread.id, null);
             dismissThreadErrorBannerForSession(threadErrorBannerKey);
@@ -6435,6 +6849,26 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
+                  {usageLimitPopupVisible ? (
+                    <UsageLimitMigrationPopup
+                      originName={
+                        boundProviderInstance?.displayName ??
+                        boundProviderInstanceId ??
+                        "Current provider"
+                      }
+                      resetLabel={usageLimitResetLabel}
+                      targets={migrationTargets}
+                      selectedTarget={selectedMigrationTarget}
+                      failedTurnCanRetry={failedTurnCanRetry}
+                      retryUnavailableReason={failedTurnRetryUnavailableReason}
+                      isBulkPending={isBulkMigrationPending}
+                      bulkDisabledReason={isTurnStreaming ? MIGRATION_STREAMING_BLOCK_REASON : null}
+                      onSelectTarget={handleMigrationTargetSelect}
+                      onSwitchAndRetry={() => openLimitMigrationDialog(true)}
+                      onSwitchOnly={() => openLimitMigrationDialog(false)}
+                      onSwitchAll={() => void handleBulkLimitMigration()}
+                    />
+                  ) : null}
                   {isServerThread ? (
                     <SessionReportDigest
                       activities={threadActivities}
@@ -6598,6 +7032,27 @@ function ChatViewContent(props: ChatViewProps) {
                 bottomInset={isDraftHeroState ? 0 : composerOverlayHeight}
               />
             ) : null}
+
+            <ThreadMigrationDialog
+              open={migrationDialogRequest !== null}
+              sourceName={migrationDialogRequest?.sourceName ?? ""}
+              targetName={migrationDialogRequest?.target.displayName ?? ""}
+              targetModel={migrationDialogRequest?.target.model ?? ""}
+              actionLabel={
+                migrationDialogRequest?.retryFailedTurn ? "Switch and retry" : "Switch thread"
+              }
+              isOriginLimited={originIsLimited}
+              isTurnStreaming={isTurnStreaming}
+              isPending={isMigrationPending}
+              error={migrationDialogError}
+              onOpenChange={(open) => {
+                if (!open && !isMigrationPending) {
+                  setMigrationDialogRequest(null);
+                  setMigrationDialogError(null);
+                }
+              }}
+              onConfirm={(handoffMode) => void handleMigrationConfirm(handoffMode)}
+            />
 
             <AlertDialog open={branchRestoreConfirmOpen} onOpenChange={setBranchRestoreConfirmOpen}>
               <AlertDialogPopup>
