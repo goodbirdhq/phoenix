@@ -2105,7 +2105,7 @@ describe("ProviderCommandReactor", () => {
   );
 
   effectIt.effect(
-    "migrates a live thread across drivers by restarting the session without the old resume cursor",
+    "migrates across drivers without the old resume cursor and delivers the handoff brief in the fresh seed",
     () =>
       Effect.gen(function* () {
         const harness = yield* Effect.promise(() => createHarness());
@@ -2135,7 +2135,8 @@ describe("ProviderCommandReactor", () => {
           threadId: ThreadId.make("thread-1"),
           targetInstanceId: ProviderInstanceId.make("claudeAgent"),
           targetModel: "claude-opus-4-6",
-          handoffMode: "replay",
+          handoffMode: "brief",
+          brief: "The origin agent completed the contract changes; continue with server wiring.",
           trigger: "manual",
           createdAt: now,
         });
@@ -2153,9 +2154,12 @@ describe("ProviderCommandReactor", () => {
         });
         expect(restartInput).not.toHaveProperty("resumeCursor");
         const seed = restartInput["seed"] as
-          | { messages: ReadonlyArray<{ role: string; text: string }> }
+          | { messages: ReadonlyArray<{ role: string; text: string }>; brief?: string }
           | undefined;
         expect(seed).toBeDefined();
+        expect(seed?.brief).toBe(
+          "The origin agent completed the contract changes; continue with server wiring.",
+        );
         expect(seed?.messages.some((message) => message.text.includes("first"))).toBe(true);
 
         yield* Effect.promise(() =>

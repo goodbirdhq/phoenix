@@ -75,7 +75,7 @@ it.layer(NodeServices.layer)("thread migration decider", (it) => {
   it.effect("rebinds the thread to the target instance and records the move", () =>
     Effect.gen(function* () {
       const decided = yield* decideOrchestrationCommand({
-        command: migrateCommand(),
+        command: migrateCommand({ brief: "Continue from the completed contract work." }),
         readModel: makeReadModel(),
       });
       const events = Array.isArray(decided) ? decided : [decided];
@@ -94,6 +94,7 @@ it.layer(NodeServices.layer)("thread migration decider", (it) => {
         options: [{ id: "reasoningEffort", value: "high" }],
       });
       expect(migrated.payload.handoffMode).toBe("replay");
+      expect(migrated.payload.brief).toBe("Continue from the completed contract work.");
       expect(migrated.payload.trigger).toBe("manual");
     }),
   );

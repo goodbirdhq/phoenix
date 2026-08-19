@@ -926,6 +926,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           fromModelSelection,
           modelSelection,
           handoffMode: command.handoffMode,
+          ...(command.brief !== undefined ? { brief: command.brief } : {}),
           trigger: command.trigger,
           updatedAt: command.createdAt,
         },
