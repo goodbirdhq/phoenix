@@ -6,6 +6,7 @@ import {
   type OrchestrationReactorShape,
 } from "../Services/OrchestrationReactor.ts";
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
+import { LimitFailoverReactor } from "../Services/LimitFailoverReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { SessionSpawnReactor } from "../Services/SessionSpawnReactor.ts";
@@ -15,6 +16,7 @@ import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 export const makeOrchestrationReactor = Effect.gen(function* () {
   const providerRuntimeIngestion = yield* ProviderRuntimeIngestionService;
   const providerCommandReactor = yield* ProviderCommandReactor;
+  const limitFailoverReactor = yield* LimitFailoverReactor;
   const checkpointReactor = yield* CheckpointReactor;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const sessionSpawnReactor = yield* SessionSpawnReactor;
@@ -23,6 +25,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
     yield* providerRuntimeIngestion.start();
     yield* providerCommandReactor.start();
+    yield* limitFailoverReactor.start();
     yield* checkpointReactor.start();
     yield* threadDeletionReactor.start();
     yield* sessionSpawnReactor.start();

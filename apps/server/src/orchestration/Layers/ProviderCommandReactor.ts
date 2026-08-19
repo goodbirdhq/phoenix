@@ -6,6 +6,7 @@ import {
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
+  type ProviderConversationSeed,
   type ProjectId,
   type OrchestrationSession,
   ThreadId,
@@ -664,7 +665,7 @@ const make = Effect.gen(function* () {
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
-      readonly seed?: unknown;
+      readonly seed?: ProviderConversationSeed;
     }) =>
       providerService.startSession(threadId, {
         threadId,

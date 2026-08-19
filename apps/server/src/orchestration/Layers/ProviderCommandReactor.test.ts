@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 
 import {
   ModelSelection,
+  ProviderFailoverGroup,
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderDriverKind,
@@ -56,6 +57,8 @@ import {
   ProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { LimitFailoverReactor } from "../Services/LimitFailoverReactor.ts";
+import { LimitFailoverReactorLive } from "./LimitFailoverReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -95,7 +98,10 @@ async function waitFor(
 
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderCommandReactor
+    | ProjectionSnapshotQuery
+    | LimitFailoverReactor,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -153,6 +159,7 @@ describe("ProviderCommandReactor", () => {
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
     readonly testClock?: boolean;
+    readonly settingsOverrides?: Parameters<(typeof ServerSettingsService)["layerTest"]>[0];
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
@@ -391,7 +398,7 @@ describe("ProviderCommandReactor", () => {
         } satisfies OrchestrationEngineService["Service"];
       }),
     ).pipe(Layer.provide(orchestrationLayer));
-    const layer = ProviderCommandReactorLive.pipe(
+    const layer = Layer.mergeAll(ProviderCommandReactorLive, LimitFailoverReactorLive).pipe(
       Layer.provideMerge(reactorOrchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
@@ -416,7 +423,7 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         }),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(ServerSettingsService.layerTest(input?.settingsOverrides)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(input?.testClock === true ? TestClock.layer() : Layer.empty),
@@ -491,7 +498,10 @@ describe("ProviderCommandReactor", () => {
     }
 
     scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
+    const limitFailoverReactor = await runtime.runPromise(Effect.service(LimitFailoverReactor));
+    await Effect.runPromise(
+      Effect.andThen(reactor.start(), limitFailoverReactor.start()).pipe(Scope.provide(scope)),
+    );
     const drain = () => Effect.runPromise(reactor.drain);
 
     return {
@@ -2162,6 +2172,148 @@ describe("ProviderCommandReactor", () => {
         expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("claudeAgent"));
         expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("claudeAgent"));
       }),
+  );
+
+  effectIt.effect(
+    "auto-failover migrates a grouped thread off a usage-limited account and retries the turn",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            settingsOverrides: {
+              providerInstances: {
+                [ProviderInstanceId.make("codex")]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  failoverGroup: ProviderFailoverGroup.make("pool"),
+                },
+                [ProviderInstanceId.make("codex_work")]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  failoverGroup: ProviderFailoverGroup.make("pool"),
+                },
+              },
+            },
+          }),
+        );
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-failover-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-failover-1"),
+            role: "user",
+            text: "please finish the migration feature",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+        // The classified limit failure: session errors with the typed kind.
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-usage-limit"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "error",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: "You've hit your usage limit.",
+            lastErrorKind: "usage-limit",
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+
+        // Failover: migrate to the group member, then retry the failed turn.
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+
+        const readModel = yield* Effect.promise(() => harness.readModel());
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("codex_work"));
+        const migrationActivity = thread?.activities.find(
+          (activity) => activity.kind === "thread.migrated",
+        );
+        expect(migrationActivity).toBeDefined();
+        // The retried message reuses its id, so history shows one user message.
+        const userMessages = thread?.messages.filter((message) => message.role === "user") ?? [];
+        expect(userMessages.length).toBe(1);
+      }),
+  );
+
+  effectIt.effect("does not auto-failover an ungrouped account on a usage limit", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-ungrouped-1"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-ungrouped-1"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+      yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-ungrouped-limit"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "error",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: "You've hit your usage limit.",
+          lastErrorKind: "usage-limit",
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+
+      // A follow-up turn on the same thread is the drain signal: by the time
+      // it lands, the failover worker has processed the limit event.
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-ungrouped-2"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-ungrouped-2"),
+          role: "user",
+          text: "second",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("codex"));
+      expect(
+        thread?.activities.find((activity) => activity.kind === "thread.migrated"),
+      ).toBeUndefined();
+    }),
   );
 
   effectIt.effect(

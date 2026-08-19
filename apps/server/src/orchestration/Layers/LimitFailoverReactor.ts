@@ -1,0 +1,184 @@
+import {
+  CommandId,
+  type OrchestrationEvent,
+  type OrchestrationMessage,
+  type ProviderAvailability,
+  type ProviderInstanceId,
+} from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
+import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+
+import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { forkParked } from "../../serverActivation.ts";
+import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import {
+  LimitFailoverReactor,
+  type LimitFailoverReactorShape,
+} from "../Services/LimitFailoverReactor.ts";
+
+type UsageLimitSessionEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+
+const isUsageLimitSessionError = (event: OrchestrationEvent): event is UsageLimitSessionEvent =>
+  event.type === "thread.session-set" &&
+  event.payload.session.status === "error" &&
+  event.payload.session.lastErrorKind === "usage-limit" &&
+  event.payload.session.providerInstanceId !== undefined;
+
+/**
+ * The session window is the short-horizon quota that usage limits interrupt,
+ * so target selection ranks by it; a member with no reading at all still
+ * beats one that is already limited.
+ */
+export const remainingScore = (availability: ProviderAvailability): number => {
+  if (availability.status === "limited") {
+    return -1;
+  }
+  const windows = availability.windows.filter((window) => window.usedPercent !== undefined);
+  if (windows.length === 0) {
+    return 0;
+  }
+  const sessionWindow = windows.find((window) => window.kind === "session");
+  const worst = sessionWindow ?? windows.reduce((a, b) => (a.usedPercent > b.usedPercent ? a : b));
+  return 100 - worst.usedPercent;
+};
+
+const latestUserMessage = (
+  messages: ReadonlyArray<OrchestrationMessage>,
+): OrchestrationMessage | undefined => messages.findLast((message) => message.role === "user");
+
+export const makeLimitFailoverReactor = Effect.gen(function* () {
+  const engine = yield* OrchestrationEngineService;
+  const providerService = yield* ProviderService;
+  const settingsService = yield* ServerSettingsService;
+  const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+  const processUsageLimit = Effect.fn("processUsageLimit")(function* (
+    event: UsageLimitSessionEvent,
+  ) {
+    const threadId = event.payload.threadId;
+    const originInstanceId = event.payload.session.providerInstanceId;
+    if (originInstanceId === undefined) {
+      return;
+    }
+    const settings = yield* settingsService.getSettings;
+    const instances = settings.providerInstances ?? {};
+    const group = instances[originInstanceId]?.failoverGroup;
+    if (group === undefined) {
+      // Ungrouped accounts never move automatically; the limit popup owns
+      // this moment.
+      return;
+    }
+
+    const candidates = Object.entries(instances).filter(
+      ([instanceId, config]) =>
+        instanceId !== String(originInstanceId) &&
+        config.failoverGroup === group &&
+        config.enabled !== false,
+    );
+    // getAvailability is optional on the service shape; a build without it
+    // cannot rank, so every non-limited member scores as unknown (0).
+    const getAvailability = providerService.getAvailability;
+    const scored = yield* Effect.forEach(candidates, ([instanceId, config]) =>
+      getAvailability === undefined
+        ? Effect.succeed({ instanceId, score: 0 })
+        : getAvailability(instanceId as ProviderInstanceId, config.driver).pipe(
+            Effect.map((availability) => ({ instanceId, score: remainingScore(availability) })),
+          ),
+    );
+    const target = scored
+      .filter((candidate) => candidate.score >= 0)
+      .reduce(
+        (best, candidate) =>
+          best === undefined || candidate.score > best.score ? candidate : best,
+        undefined as { instanceId: string; score: number } | undefined,
+      );
+    if (target === undefined) {
+      yield* Effect.logInfo("limit failover found no usable group member", {
+        threadId,
+        originInstanceId,
+        group,
+        candidates: candidates.map(([instanceId]) => instanceId),
+      });
+      return;
+    }
+
+    yield* Effect.logInfo("limit failover migrating thread", {
+      threadId,
+      originInstanceId,
+      targetInstanceId: target.instanceId,
+      group,
+    });
+    // Command ids derive from the triggering event so a redelivered event
+    // upserts the same migration and retry instead of duplicating them.
+    yield* engine.dispatch({
+      type: "thread.migrate",
+      commandId: CommandId.make(`limit-failover:${event.eventId}`),
+      threadId,
+      targetInstanceId: target.instanceId as ProviderInstanceId,
+      handoffMode: "replay",
+      trigger: "auto-failover",
+      createdAt: event.occurredAt,
+    });
+
+    const detail = yield* snapshotQuery.getThreadDetailById(threadId);
+    if (Option.isNone(detail)) {
+      return;
+    }
+    const failedMessage = latestUserMessage(detail.value.messages);
+    if (failedMessage === undefined) {
+      return;
+    }
+    // Same message id: the projection upserts on message_id, so the retried
+    // turn replaces the failed one in history instead of duplicating it.
+    yield* engine.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make(`limit-failover-retry:${event.eventId}`),
+      threadId,
+      message: {
+        messageId: failedMessage.id,
+        role: "user",
+        text: failedMessage.text,
+        attachments: failedMessage.attachments ?? [],
+      },
+      interactionMode: detail.value.interactionMode,
+      runtimeMode: detail.value.runtimeMode,
+      createdAt: event.occurredAt,
+    });
+  });
+
+  const processSafely = (event: UsageLimitSessionEvent) =>
+    processUsageLimit(event).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.interrupt;
+        }
+        return Effect.logWarning("limit failover reactor failed to process event", {
+          threadId: event.payload.threadId,
+          cause: Cause.pretty(cause),
+        });
+      }),
+    );
+
+  const worker = yield* makeDrainableWorker(processSafely);
+
+  const start: LimitFailoverReactorShape["start"] = Effect.fn("start")(function* () {
+    yield* forkParked(
+      Stream.runForEach(engine.streamDomainEvents, (event) =>
+        isUsageLimitSessionError(event) ? worker.enqueue(event) : Effect.void,
+      ),
+    );
+  });
+
+  return { start } satisfies LimitFailoverReactorShape;
+});
+
+export const LimitFailoverReactorLive = Layer.effect(
+  LimitFailoverReactor,
+  makeLimitFailoverReactor,
+);
