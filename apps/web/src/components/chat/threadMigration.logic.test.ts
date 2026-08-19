@@ -226,10 +226,6 @@ describe("findFailedTurnUserMessage", () => {
         latestTurn: {
           turnId: failedTurnId,
           state: "error",
-          requestedAt: "2026-08-19T10:00:00.000Z",
-          startedAt: "2026-08-19T10:00:01.000Z",
-          completedAt: "2026-08-19T10:00:02.000Z",
-          assistantMessageId: null,
         },
         messages: [makeMessage("older turn", TurnId.make("older-turn")), failedMessage],
       }),
@@ -242,10 +238,6 @@ describe("findFailedTurnUserMessage", () => {
         latestTurn: {
           turnId: TurnId.make("completed-turn"),
           state: "completed",
-          requestedAt: "2026-08-19T10:00:00.000Z",
-          startedAt: "2026-08-19T10:00:01.000Z",
-          completedAt: "2026-08-19T10:00:02.000Z",
-          assistantMessageId: null,
         },
         messages: [],
       }),
