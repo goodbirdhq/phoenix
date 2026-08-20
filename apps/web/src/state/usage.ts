@@ -61,16 +61,21 @@ interface CapacityRefreshTarget {
 
 const capacityRefreshKey = (targets: readonly CapacityRefreshTarget[]): string =>
   JSON.stringify(
-    targets
-      .map((target) => ({
-        environmentId: target.environmentId,
-        instanceId: target.instanceId,
-      }))
-      .toSorted(
-        (left, right) =>
-          left.environmentId.localeCompare(right.environmentId) ||
-          left.instanceId.localeCompare(right.instanceId),
-      ),
+    [
+      ...new Map(
+        targets.map((target) => [
+          JSON.stringify([target.environmentId, target.instanceId]),
+          {
+            environmentId: target.environmentId,
+            instanceId: target.instanceId,
+          },
+        ]),
+      ).values(),
+    ].toSorted(
+      (left, right) =>
+        left.environmentId.localeCompare(right.environmentId) ||
+        left.instanceId.localeCompare(right.instanceId),
+    ),
   );
 
 const parseCapacityRefreshKey = (key: string): readonly CapacityRefreshTarget[] =>
@@ -216,6 +221,8 @@ export interface UsageView {
    * improve by waiting on them, so they must not read as "still reporting".
    */
   readonly isPartial: boolean;
+  /** Historical summaries are being rescanned, including while cached totals remain visible. */
+  readonly isUsageRefreshing: boolean;
   /** Rescans historical usage without probing Provider quota. */
   readonly refreshUsage: (input?: UsageSummaryInput) => void;
   /** Revalidates missing, stale or failed subscription readings without rescanning usage. */
@@ -298,7 +305,9 @@ export function useUsage(
         }),
       );
     }
-    setRefreshKey(capacityRefreshKey(targets));
+    setRefreshKey((current) =>
+      capacityRefreshKey([...parseCapacityRefreshKey(current), ...targets]),
+    );
   }, []);
 
   // A refresh query is one-shot. Once every target settles, re-read the normal
@@ -396,6 +405,7 @@ export function useUsage(
     environments,
     isPending: answeredCount === 0 && stillReporting > 0,
     isPartial: answeredCount > 0 && stillReporting > 0,
+    isUsageRefreshing: environments.some((environment) => environment.isPending),
     refreshUsage,
     refreshCapacity,
     providerAvailability,

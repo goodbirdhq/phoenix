@@ -160,11 +160,13 @@ Reads apply five more rules:
   run the CLI once, and a request that fans out over configured instances collects from at most
   `PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY` of them at a time — neither a burst of CLIs on the
   user's machine nor one slow instance holding up every other answer.
-- Freshness is server-owned. A snapshot older than 15 minutes drops its windows but keeps its source,
-  observation time, and account, so an account card stays put instead of flickering away. A merge
-  that kept the older snapshot keeps its age too: Claude's SDK notifications carry no quota rows, so
-  an empty one neither replaces a `/usage` reading nor makes a stale one look freshly observed. A
-  refresh answers with what the cache now holds rather than with the snapshot it collected.
+- Freshness is server-owned. A snapshot older than 15 minutes keeps its source, observation time,
+  account, and last known windows, but its status becomes `unknown`. Capacity can therefore render
+  immediately from the durable cache without treating an old bar as readiness; the client labels
+  the retained reading unconfirmed and revalidates it. A merge that kept the older snapshot keeps
+  its age too: Claude's SDK notifications carry no quota rows, so an empty one neither replaces a
+  `/usage` reading nor makes a stale one look freshly observed. A refresh answers with what the
+  cache now holds rather than with the snapshot it collected.
 - A snapshot names the channel it came from, including when it failed. A failed Claude refresh
   reports `claude_cli_usage`, because that is what ran — not `claude_agent_sdk`, which never went
   quiet, and it carries the `observedAt` of the attempt so a client can tell "asked just now, learned

@@ -54,6 +54,7 @@ export function UsagePage() {
     environments,
     isPending,
     isPartial,
+    isUsageRefreshing,
     refreshUsage,
     refreshCapacity,
     providerAvailability,
@@ -215,6 +216,7 @@ export function UsagePage() {
                   variant="outline"
                   onClick={refreshWindow}
                   aria-label="Refresh usage"
+                  aria-busy={isUsageRefreshing || undefined}
                 >
                   <RefreshCwIcon className="size-3.5" />
                 </Button>
@@ -269,7 +271,15 @@ export function UsagePage() {
                                 : formatTokens(provider.totalTokens)}
                             </span>
                           </div>
-                          <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+                          <div
+                            role="progressbar"
+                            aria-label={`${PROVIDER_PRESENTATION[provider.provider].label} ${metric} share`}
+                            aria-valuetext={formatPercent(share)}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={share * 100}
+                            className="h-1 w-full overflow-hidden rounded-full bg-muted"
+                          >
                             <div
                               className="h-full"
                               style={{
@@ -295,11 +305,16 @@ export function UsagePage() {
                         {metric === "tokens" ? "processed tokens" : "cost"}
                       </h2>
                       <div className="flex items-center gap-4">
-                        <div className="flex overflow-hidden rounded-md border border-border">
+                        <div
+                          className="flex overflow-hidden rounded-md border border-border"
+                          role="group"
+                          aria-label="Historical usage metric"
+                        >
                           {(["cost", "tokens"] as const).map((option) => (
                             <button
                               key={option}
                               type="button"
+                              aria-pressed={option === metric}
                               onClick={() => setMetric(option)}
                               className={cn(
                                 "cursor-pointer px-2.5 py-1 text-[10px] tracking-wide uppercase",
@@ -363,7 +378,11 @@ export function UsagePage() {
                 <section className="flex flex-col gap-3">
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="text-sm font-medium text-foreground">Breakdown</h2>
-                    <div className="flex overflow-hidden rounded-md border border-border">
+                    <div
+                      className="flex overflow-hidden rounded-md border border-border"
+                      role="group"
+                      aria-label="Historical usage breakdown"
+                    >
                       {(
                         [
                           { value: "model", label: "model" },
@@ -373,6 +392,7 @@ export function UsagePage() {
                         <button
                           key={option.value}
                           type="button"
+                          aria-pressed={option.value === breakdown}
                           onClick={() => setBreakdown(option.value)}
                           className={cn(
                             "cursor-pointer px-2.5 py-1 text-[10px] tracking-wide uppercase",

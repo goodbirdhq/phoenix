@@ -190,7 +190,7 @@ export function SubscriptionAvailabilitySection({
         <div className="flex flex-col gap-5">
           <div className="flex flex-col gap-1">
             <span className="text-xs tracking-wide text-muted-foreground uppercase">
-              {lens === "subscriptions" ? "Available subscriptions" : "Available instances"}
+              Available subscriptions
             </span>
             {isPending && !hasObservedReading ? (
               <div className="my-1.5 h-8 w-24 rounded-sm bg-muted" aria-label="Checking capacity" />
@@ -200,9 +200,8 @@ export function SubscriptionAvailabilitySection({
               </span>
             )}
             <span className="text-xs text-muted-foreground">
-              {lens === "subscriptions"
-                ? "Distinct subscriptions ready for another Turn."
-                : "Configured routing instances ready for another Turn."}
+              Distinct subscriptions ready for another Turn. The lens changes the routing rows, not
+              this total.
             </span>
           </div>
 
@@ -255,12 +254,12 @@ export function SubscriptionAvailabilitySection({
         <CapacityMetric
           label="Ready"
           value={String(capacity.readinessCounts.available)}
-          detail={lens}
+          detail="subscriptions"
         />
         <CapacityMetric
           label="Limited"
           value={String(capacity.readinessCounts.limited)}
-          detail={lens}
+          detail="subscriptions"
         />
         <CapacityMetric
           label="Unknown"
@@ -307,7 +306,6 @@ function ProviderReadinessRow({
   readonly provider: ReturnType<typeof deriveSubscriptionCapacity>["providers"][number];
 }) {
   const counts = provider.readinessCounts;
-  const share = provider.count === 0 ? 0 : (counts.available / provider.count) * 100;
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-3 text-sm">
@@ -316,8 +314,19 @@ function ProviderReadinessRow({
           {counts.available} of {provider.count} ready
         </span>
       </div>
-      <div className="h-1 overflow-hidden rounded-full bg-muted">
-        <div className="h-full bg-primary" style={{ width: `${share.toFixed(1)}%` }} />
+      <div
+        role="progressbar"
+        aria-label={`${providerLimitSourceName(provider.driver)} readiness: ${counts.available} of ${provider.count} subscriptions ready`}
+        aria-valuetext={`${counts.available} of ${provider.count} subscriptions ready`}
+        aria-valuemin={0}
+        aria-valuemax={provider.count}
+        aria-valuenow={counts.available}
+        className="h-1 w-full overflow-hidden rounded-full bg-muted"
+      >
+        <div
+          className="h-full bg-primary"
+          style={{ width: `${((counts.available / provider.count) * 100).toFixed(1)}%` }}
+        />
       </div>
       <span className="text-xs text-muted-foreground">
         {counts.limited} limited · {counts.unknown} unknown
@@ -393,13 +402,7 @@ function CapacityQuotaRow({
   readonly isPending: boolean;
   readonly onRefresh?: ((target?: CapacityRefreshTarget) => void) | undefined;
 }) {
-  const status = member.isRefreshing
-    ? "Updating last reading"
-    : member.readiness === "limited"
-      ? "Limit reached"
-      : member.readiness === "unknown"
-        ? "Availability unknown"
-        : "Ready";
+  const status = capacityMemberStatus(member);
   return (
     <article
       aria-busy={member.isRefreshing || undefined}
@@ -430,22 +433,27 @@ function CapacityQuotaRow({
             Observed {formatRelativeTimeLabel(member.availability.observedAt)}
           </p>
         ) : null}
-        {member.availability.stale ? (
+        {member.enabled === true && member.authenticated !== true ? (
           <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-            This provider&apos;s previous quota reading has expired. Refresh capacity to check
-            again.
+            Sign in to this Provider to collect subscription capacity.
+          </p>
+        ) : !member.isRefreshing && isRetainedUnconfirmedReading(member) ? (
+          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+            This Provider&apos;s previous quota reading is retained but unconfirmed. Retry this
+            Provider to check again.
           </p>
         ) : member.availability.source !== "unsupported" &&
           member.readiness === "unknown" &&
           !(isPending && member.availability.observedAt === undefined) ? (
           <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-            This provider could not confirm that these quota limits are current. Refresh capacity to
-            check again.
+            {member.availability.observedAt === undefined
+              ? "No quota reading has been collected for this Provider yet."
+              : "This Provider could not confirm that these quota limits are current."}
           </p>
         ) : null}
         {onRefresh &&
         member.canRefresh &&
-        member.readiness === "unknown" &&
+        (member.readiness === "unknown" || member.availability.stale !== undefined) &&
         !member.isRefreshing ? (
           <button
             type="button"
@@ -453,7 +461,7 @@ function CapacityQuotaRow({
             onClick={() =>
               onRefresh({
                 environmentId: EnvironmentId.make(member.environmentId),
-                instanceId: ProviderInstanceId.make(member.instanceIds[0]!),
+                instanceId: ProviderInstanceId.make(member.refreshInstanceId!),
               })
             }
           >
@@ -501,8 +509,8 @@ function UnsupportedLimitsSummary({
           </p>
         </div>
         <div className="text-right text-xs text-muted-foreground">
-          {[...byEnvironment.values()].map((environment) => (
-            <p key={environment.label}>
+          {[...byEnvironment].map(([environmentId, environment]) => (
+            <p key={environmentId}>
               {environment.providers.toSorted().join(", ")} · Environment: {environment.label}
             </p>
           ))}
@@ -545,9 +553,18 @@ function CapacityMetric({
   );
 }
 
-function CapacityBreakdownRow({ member }: { readonly member: SubscriptionCapacityMember }) {
+function CapacityBreakdownRow({
+  member,
+  group,
+}: {
+  readonly member: SubscriptionCapacityMember;
+  readonly group: SubscriptionCapacityGroup;
+}) {
+  const limits = member.availability.windows
+    .map((window) => `${subscriptionWindowLabel(window)} ${window.usedPercent}%`)
+    .join(" · ");
   return (
-    <div className="grid gap-x-6 gap-y-1 py-3 text-sm sm:grid-cols-[minmax(10rem,1fr)_minmax(8rem,auto)_minmax(10rem,auto)] sm:items-center">
+    <div className="grid gap-x-6 gap-y-1 py-3 text-sm sm:grid-cols-[minmax(10rem,1fr)_minmax(7rem,auto)_minmax(9rem,auto)_minmax(10rem,auto)] sm:items-center">
       <div className="min-w-0">
         <span className="font-medium text-foreground">{member.name}</span>
         {member.sharedSubscription ? (
@@ -566,14 +583,37 @@ function CapacityBreakdownRow({ member }: { readonly member: SubscriptionCapacit
         ) : null}
       </div>
       <span className="text-xs text-muted-foreground">
-        {member.readiness === "limited"
-          ? "Limit reached"
-          : member.readiness === "unknown"
-            ? "Availability unknown"
-            : "Ready"}
+        {group.isUngrouped ? "Ungrouped" : group.label}
       </span>
       <span className="text-xs text-muted-foreground">Environment: {member.environmentLabel}</span>
+      <span className="text-xs text-muted-foreground">
+        {capacityMemberStatus(member)}
+        {limits ? ` · ${limits}` : " · No limit details"}
+      </span>
     </div>
+  );
+}
+
+function capacityMemberStatus(member: SubscriptionCapacityMember): string {
+  if (member.isRefreshing) return "Updating last reading";
+  if (member.enabled === true && member.authenticated !== true) return "Provider not authenticated";
+  if (member.enabled !== true) return "Provider disabled";
+  if (
+    member.availability.stale?.reason === "refresh_failed" ||
+    member.availability.stale?.reason === "refresh_empty"
+  ) {
+    return "Refresh failed — previous reading unconfirmed";
+  }
+  if (isRetainedUnconfirmedReading(member)) return "Previous reading expired";
+  if (member.readiness === "limited") return "Limit reached";
+  if (member.readiness === "unknown") return "Availability unknown";
+  return "Ready";
+}
+
+function isRetainedUnconfirmedReading(member: SubscriptionCapacityMember): boolean {
+  return (
+    member.availability.stale !== undefined ||
+    (member.availability.status === "unknown" && member.availability.windows.length > 0)
   );
 }
 
@@ -593,7 +633,7 @@ function CapacityBreakdownGroup({ group }: { readonly group: SubscriptionCapacit
       </div>
       <div className="divide-y divide-border/60">
         {group.members.map((member) => (
-          <CapacityBreakdownRow key={member.key} member={member} />
+          <CapacityBreakdownRow key={member.key} member={member} group={group} />
         ))}
       </div>
     </section>

@@ -113,6 +113,8 @@ export type SubscriptionCapacityMember = {
   readonly failoverGroup: string | undefined;
   readonly availability: ProviderAvailability;
   readonly account: ProviderAvailabilityAccount | undefined;
+  readonly enabled: boolean | undefined;
+  readonly authenticated: boolean | undefined;
   readonly readiness: SubscriptionCapacityReadiness;
   /** Alias for consumers that call the readiness badge a status. */
   readonly status: SubscriptionCapacityReadiness;
@@ -124,6 +126,7 @@ export type SubscriptionCapacityMember = {
   readonly crossContextMemberships: readonly SubscriptionCapacityMembership[];
   /** Whether this configured instance/account can service a targeted quota probe. */
   readonly canRefresh: boolean;
+  readonly refreshInstanceId: string | undefined;
   readonly isRefreshing: boolean;
 };
 
@@ -161,17 +164,6 @@ export type SubscriptionCapacityPresentation = {
   readonly failoverGroupCount: number;
   readonly environmentCount: number;
 };
-
-// Short aliases keep the model convenient for the Usage surface while the
-// longer names remain descriptive at the shared package boundary.
-export type CapacityLens = SubscriptionCapacityLens;
-export type CapacityReadiness = SubscriptionCapacityReadiness;
-export type CapacityReadinessCounts = SubscriptionCapacityReadinessCounts;
-export type CapacityMembership = SubscriptionCapacityMembership;
-export type CapacityMember = SubscriptionCapacityMember;
-export type CapacityProviderSummary = SubscriptionCapacityProviderSummary;
-export type CapacityGroup = SubscriptionCapacityGroup;
-export type CapacityPresentation = SubscriptionCapacityPresentation;
 
 /** Presents an unknown extension driver without exposing its implementation slug. */
 export function providerLimitSourceName(driver: string): string {
@@ -321,7 +313,8 @@ const capacityReadiness = (source: SubscriptionCapacitySource): SubscriptionCapa
   if (
     source.enabled !== true ||
     source.authenticated !== true ||
-    source.availability.source === "unsupported"
+    source.availability.source === "unsupported" ||
+    source.availability.stale !== undefined
   ) {
     return "unknown";
   }
@@ -354,15 +347,21 @@ const mostRecentCapacitySource = (
 
 const capacityStatus = (
   sources: readonly SubscriptionCapacitySource[],
-): SubscriptionCapacityReadiness => {
-  const statuses = new Set(sources.map(capacityReadiness));
-  // A shared subscription is only ready if every observed instance agrees that
-  // it is ready. In particular, one limited instance must not be hidden by a
-  // second instance that has not received the same reading yet.
-  if (statuses.has("limited")) return "limited";
-  if (statuses.has("available")) return "available";
-  return "unknown";
-};
+): SubscriptionCapacityReadiness =>
+  sources
+    .map(capacityReadiness)
+    .reduce<SubscriptionCapacityReadiness | undefined>(combineCapacityReadiness, undefined) ??
+  "unknown";
+
+/** A subscription is ready only when every contributing routing target is ready. */
+function combineCapacityReadiness(
+  current: SubscriptionCapacityReadiness | undefined,
+  next: SubscriptionCapacityReadiness,
+): SubscriptionCapacityReadiness {
+  if (current === "limited" || next === "limited") return "limited";
+  if (current === "unknown" || next === "unknown") return "unknown";
+  return "available";
+}
 
 const sortCapacityStrings = (values: Iterable<string>): readonly string[] =>
   [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
@@ -454,6 +453,12 @@ export function deriveSubscriptionCapacity(
                 .filter((membership) => membership.key !== context.key)
                 .toSorted((left, right) => left.key.localeCompare(right.key))
             : [];
+          const refreshSource = members.find(
+            (member) =>
+              member.enabled === true &&
+              member.authenticated === true &&
+              member.availability.source !== "unsupported",
+          );
           return {
             key: `${context.key}:${subscriptionKey}`,
             subscriptionKey,
@@ -471,17 +476,15 @@ export function deriveSubscriptionCapacity(
             failoverGroup: newest.failoverGroup,
             availability: newest.availability,
             account,
+            enabled: members.some((member) => member.enabled === true),
+            authenticated: members.some((member) => member.authenticated === true),
             readiness,
             status: readiness,
             sharedSubscription: instanceIds.length > 1,
             sharedInstanceIds: instanceIds.length > 1 ? instanceIds : [],
             crossContextMemberships,
-            canRefresh: members.some(
-              (member) =>
-                member.enabled === true &&
-                member.authenticated === true &&
-                member.availability.source !== "unsupported",
-            ),
+            canRefresh: refreshSource !== undefined,
+            refreshInstanceId: refreshSource?.instanceId,
             isRefreshing: members.some((member) => member.isRefreshing === true),
           } satisfies SubscriptionCapacityMember;
         })
@@ -508,6 +511,8 @@ export function deriveSubscriptionCapacity(
                   accentColor: source.accentColor,
                   availability: source.availability,
                   account: source.availability.account,
+                  enabled: source.enabled,
+                  authenticated: source.authenticated,
                   readiness,
                   status: readiness,
                   sharedSubscription: subscription.instanceIds.length > 1,
@@ -517,6 +522,12 @@ export function deriveSubscriptionCapacity(
                     source.enabled === true &&
                     source.authenticated === true &&
                     source.availability.source !== "unsupported",
+                  refreshInstanceId:
+                    source.enabled === true &&
+                    source.authenticated === true &&
+                    source.availability.source !== "unsupported"
+                      ? source.instanceId
+                      : undefined,
                   isRefreshing: source.isRefreshing === true,
                 };
               })
@@ -526,7 +537,7 @@ export function deriveSubscriptionCapacity(
               );
 
       const readinessCounts = emptyReadinessCounts();
-      for (const member of members) readinessCounts[member.readiness] += 1;
+      for (const member of subscriptionRows) readinessCounts[member.readiness] += 1;
       return {
         key: context.key,
         environmentId: representative.environmentId,
@@ -546,33 +557,23 @@ export function deriveSubscriptionCapacity(
   const rootSubscriptions = new Map<string, SubscriptionCapacityReadiness>();
   for (const group of groupModels) {
     for (const member of group.members) {
-      const current = rootSubscriptions.get(member.subscriptionKey);
-      if (current === "limited" || member.readiness === "limited")
-        rootSubscriptions.set(member.subscriptionKey, "limited");
-      else if (current === "available" || member.readiness === "available")
-        rootSubscriptions.set(member.subscriptionKey, "available");
-      else rootSubscriptions.set(member.subscriptionKey, "unknown");
+      rootSubscriptions.set(
+        member.subscriptionKey,
+        combineCapacityReadiness(rootSubscriptions.get(member.subscriptionKey), member.readiness),
+      );
     }
   }
   const readinessCounts = emptyReadinessCounts();
-  if (lens === "subscriptions") {
-    for (const readiness of rootSubscriptions.values()) readinessCounts[readiness] += 1;
-  } else {
-    for (const group of groupModels) {
-      for (const member of group.members) readinessCounts[member.readiness] += 1;
-    }
-  }
+  for (const readiness of rootSubscriptions.values()) readinessCounts[readiness] += 1;
 
   const providerRows = new Map<string, Map<string, SubscriptionCapacityReadiness>>();
   for (const group of groupModels) {
     const rows = providerRows.get(group.driver) ?? new Map();
     for (const member of group.members) {
-      const key = lens === "subscriptions" ? member.subscriptionKey : member.key;
-      const current = rows.get(key);
-      if (current === "limited" || member.readiness === "limited") rows.set(key, "limited");
-      else if (current === "available" || member.readiness === "available")
-        rows.set(key, "available");
-      else rows.set(key, "unknown");
+      rows.set(
+        member.subscriptionKey,
+        combineCapacityReadiness(rows.get(member.subscriptionKey), member.readiness),
+      );
     }
     providerRows.set(group.driver, rows);
   }
@@ -600,16 +601,3 @@ export function deriveSubscriptionCapacity(
     environmentCount: new Set(sources.map((source) => source.environmentId)).size,
   };
 }
-
-/** Semantic alias for callers that name the result after the Usage section. */
-export const deriveCapacityPresentation = deriveSubscriptionCapacity;
-
-/** Derive just the ordered group list when the surrounding view owns totals. */
-export function deriveSubscriptionCapacityGroups(
-  sources: readonly SubscriptionCapacitySource[],
-  lens: SubscriptionCapacityLens = "subscriptions",
-): readonly SubscriptionCapacityGroup[] {
-  return deriveSubscriptionCapacity(sources, lens).groups;
-}
-
-export const deriveCapacityGroups = deriveSubscriptionCapacityGroups;

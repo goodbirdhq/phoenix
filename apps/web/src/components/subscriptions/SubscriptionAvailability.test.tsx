@@ -47,7 +47,7 @@ describe("SubscriptionAvailabilitySection", () => {
     expect(markup).not.toContain("Subscription limits");
   });
 
-  it("keeps unconfirmed readings visible and labels their availability honestly", () => {
+  it("keeps an expired reading visible and labels it unconfirmed", () => {
     const markup = renderToStaticMarkup(
       <SubscriptionAvailabilitySection
         onRefresh={() => undefined}
@@ -60,10 +60,50 @@ describe("SubscriptionAvailabilitySection", () => {
       />,
     );
 
-    expect(markup).toContain("Availability unknown");
-    expect(markup).toContain("could not confirm");
+    expect(markup).toContain("Previous reading expired");
+    expect(markup).toContain("previous quota reading is retained but unconfirmed");
     expect(markup).toContain("Observed");
     expect(markup).toContain("Retry this Provider");
+  });
+
+  it("keeps a failed reading visible without counting it ready and offers targeted retry", () => {
+    const markup = renderToStaticMarkup(
+      <SubscriptionAvailabilitySection
+        onRefresh={() => undefined}
+        sources={[
+          {
+            ...source,
+            availability: {
+              ...availability,
+              stale: { reason: "refresh_failed", attemptedAt: "2026-08-17T19:00:00.000Z" },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Refresh failed — previous reading unconfirmed");
+    expect(markup).toContain("Retry this Provider");
+    expect(markup).toContain("Current session 24%");
+    expect(markup).toContain("Unknown");
+  });
+
+  it("distinguishes an unauthenticated Provider from an unread Provider", () => {
+    const markup = renderToStaticMarkup(
+      <SubscriptionAvailabilitySection
+        sources={[
+          {
+            ...source,
+            authenticated: false,
+            availability: { status: "unknown", source: "claude_agent_sdk", windows: [] },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Provider not authenticated");
+    expect(markup).toContain("Sign in to this Provider");
+    expect(markup).not.toContain("No quota reading has been collected");
   });
 
   it("keeps configured group topology visible while only never-read quota fields skeleton", () => {
@@ -83,6 +123,37 @@ describe("SubscriptionAvailabilitySection", () => {
     expect(markup).toContain("Claude Work");
     expect(markup).toContain("Environment: Studio");
     expect(markup).toContain("Checking provider quota");
+  });
+
+  it("distinguishes never-collected and failed empty readings after loading settles", () => {
+    const neverCollected = renderToStaticMarkup(
+      <SubscriptionAvailabilitySection
+        sources={[
+          {
+            ...source,
+            availability: { status: "unknown", source: "claude_agent_sdk", windows: [] },
+          },
+        ]}
+      />,
+    );
+    const failed = renderToStaticMarkup(
+      <SubscriptionAvailabilitySection
+        sources={[
+          {
+            ...source,
+            availability: {
+              status: "unknown",
+              source: "claude_cli_usage",
+              observedAt: "2026-08-17T19:00:00.000Z",
+              windows: [],
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(neverCollected).toContain("No quota reading has been collected");
+    expect(failed).toContain("could not confirm that these quota limits are current");
   });
 
   it("marks only a revalidating row busy while retaining its reading", () => {

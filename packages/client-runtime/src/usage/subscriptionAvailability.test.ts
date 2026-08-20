@@ -342,7 +342,7 @@ describe("deriveSubscriptionCapacity", () => {
     expect(members[0]?.sharedInstanceIds).toEqual(["claude-a", "claude-b"]);
   });
 
-  it("counts readiness in the selected lens", () => {
+  it("keeps readiness subscription-based while the Instances lens expands routing rows", () => {
     const account = {
       id: "shared",
       verification: "native_verified" as const,
@@ -362,17 +362,17 @@ describe("deriveSubscriptionCapacity", () => {
       "instances",
     );
 
-    expect(presentation.readinessCounts).toEqual({ available: 1, limited: 1, unknown: 0 });
+    expect(presentation.readinessCounts).toEqual({ available: 0, limited: 1, unknown: 0 });
     expect(presentation.groups[0]?.readinessCounts).toEqual({
-      available: 1,
+      available: 0,
       limited: 1,
       unknown: 0,
     });
     expect(presentation.providers).toEqual([
       {
         driver: "claudeAgent",
-        readinessCounts: { available: 1, limited: 1, unknown: 0 },
-        count: 2,
+        readinessCounts: { available: 0, limited: 1, unknown: 0 },
+        count: 1,
       },
     ]);
     expect(presentation.subscriptionCount).toBe(1);
@@ -428,6 +428,37 @@ describe("deriveSubscriptionCapacity", () => {
         (member) => member.isRefreshing,
       ),
     ).toEqual([true, false]);
+  });
+
+  it("marks a retained failed reading unknown and keeps its refreshable instance", () => {
+    const account = {
+      id: "shared",
+      verification: "native_verified" as const,
+      displayName: "Neil",
+    };
+    const presentation = deriveSubscriptionCapacity([
+      capacitySource({
+        instanceId: "claude-disabled",
+        enabled: false,
+        availability: { ...source().availability, account },
+      }),
+      capacitySource({
+        instanceId: "claude-refreshable",
+        availability: {
+          ...source().availability,
+          account,
+          observedAt: "2026-08-17T19:00:00.000Z",
+          stale: { reason: "refresh_failed", attemptedAt: "2026-08-17T19:00:00.000Z" },
+        },
+      }),
+    ]);
+
+    expect(presentation.readinessCounts).toEqual({ available: 0, limited: 0, unknown: 1 });
+    expect(presentation.groups[0]?.members[0]).toMatchObject({
+      readiness: "unknown",
+      canRefresh: true,
+      refreshInstanceId: "claude-refreshable",
+    });
   });
 
   it("counts readiness from distinct subscriptions and retains native windows", () => {
