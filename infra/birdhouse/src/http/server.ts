@@ -101,7 +101,7 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
       .update(workflowRun)
       .set({
         status,
-        completedAt: new Date(),
+        completedAt: sql`now()`,
         result: (result ?? null) as Record<string, unknown> | null,
         error: error ?? null,
       })

@@ -92,10 +92,9 @@ async function loadWorkflow(db: Db, workflowKey: string) {
 
 /** Guarded terminal failure: only ever moves a still-open run to 'failed'. */
 async function failRunTerminally(db: Db, runId: string, error: string): Promise<void> {
-  const now = new Date();
   const [updated] = await db
     .update(workflowRun)
-    .set({ status: "failed", error, completedAt: now })
+    .set({ status: "failed", error, completedAt: sql`now()` })
     .where(and(eq(workflowRun.id, runId), inArray(workflowRun.status, [...OPEN_RUN_STATUSES])))
     .returning();
   if (updated) {
@@ -162,14 +161,13 @@ export function createWorkflowLaunchHandler(deps: {
       }
 
       if (run.mode === "fake") {
-        const now = new Date();
         const [completed] = await db
           .update(workflowRun)
           .set({
             status: "succeeded",
             result: { fake: true, input: run.input ?? null },
-            startedAt: now,
-            completedAt: now,
+            startedAt: sql`now()`,
+            completedAt: sql`now()`,
           })
           .where(and(eq(workflowRun.id, runId), eq(workflowRun.status, "pending")))
           .returning();
@@ -257,17 +255,19 @@ export function createWorkflowLaunchHandler(deps: {
         throw error;
       }
 
-      const startedAt = new Date();
+      // Both stamped from the database clock: `timeout_at` is compared
+      // against `now()` by the watch handler and by `sweepExpiredRuns`, so
+      // writing it from the JS clock would make a run's real budget depend on
+      // this host's skew.
       const timeoutMs = resolveWorkflowTimeoutMs(workflowRow.manifest);
-      const timeoutAt = new Date(startedAt.getTime() + timeoutMs);
 
       await db
         .update(workflowRun)
         .set({
           status: "running",
-          startedAt,
+          startedAt: sql`now()`,
           phoenixThreadId: ids.threadId,
-          timeoutAt,
+          timeoutAt: sql`now() + (${timeoutMs} * interval '1 millisecond')`,
         })
         .where(and(eq(workflowRun.id, runId), eq(workflowRun.status, "pending")));
 
@@ -392,7 +392,7 @@ export function createWorkflowWatchHandler(deps: {
           .update(workflowRun)
           .set({
             status: outcome,
-            completedAt: new Date(),
+            completedAt: sql`now()`,
             result: { report, completedVia: "report" },
             ...(outcome === "failed" ? { error: report.title } : {}),
           })
@@ -420,7 +420,7 @@ export function createWorkflowWatchHandler(deps: {
           .update(workflowRun)
           .set({
             status: "failed",
-            completedAt: new Date(),
+            completedAt: sql`now()`,
             error: "Phoenix turn ended in error state",
           })
           .where(and(eq(workflowRun.id, runId), eq(workflowRun.status, "running")))

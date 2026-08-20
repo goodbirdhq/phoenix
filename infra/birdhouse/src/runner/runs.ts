@@ -79,7 +79,6 @@ export async function createWorkflowRun(
     const runId = randomUUID();
     const { token: callbackToken, hash: callbackTokenHash } = mintCallbackToken();
     const timeoutMs = resolveWorkflowTimeoutMs(workflowRow.manifest);
-    const now = new Date();
 
     // Computed from creation time so `sweepExpiredRuns` has a deadline to
     // enforce even if `workflow.launch` never runs at all. The launch
@@ -96,7 +95,7 @@ export async function createWorkflowRun(
         input: (input.input ?? null) as Record<string, unknown> | null,
         mode: workflowRow.mode,
         callbackTokenHash,
-        timeoutAt: new Date(now.getTime() + timeoutMs),
+        timeoutAt: sql`now() + (${timeoutMs} * interval '1 millisecond')`,
       })
       .returning();
     if (!insertedRun) {
