@@ -3,7 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
@@ -174,6 +174,35 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runSchedulerTick", ()
     });
     expect(second.schedulesClaimed).toBe(0);
     expect(calls).toHaveLength(1);
+  });
+
+  // The catastrophic version of this: one tick pointed at a mistyped
+  // BIRDHOUSE_WORKFLOWS_DIR reads as "every workflow vanished", disables all
+  // of them, and the upsert never writes `enabled` back — so fixing the path
+  // fixes nothing and recovery is hand-written SQL.
+  it("leaves synced workflows enabled when the workflows directory can't be read", async () => {
+    const workflowKey = `test-tick-unreadable-${randomUUID()}`;
+    await db.insert(workflow).values({
+      key: workflowKey,
+      title: "Synced workflow",
+      skillPath: "test/SKILL.md",
+      manifest: {},
+      manifestHash: "test",
+      // Disk-synced, so it is exactly the kind of row reconciliation disables.
+      syncedAt: new Date(),
+    });
+
+    const missingDir = join(await mkdtemp(join(tmpdir(), "ops-workflows-gone-")), "not-here");
+    const summary = await runSchedulerTick({
+      db,
+      workflowsDir: missingDir,
+      defaultTimezone: "Europe/London",
+      createRun: async () => ({ runId: randomUUID(), created: true }),
+    });
+
+    expect(summary.workflowLoadErrors).toBe(1);
+    const [row] = await db.select().from(workflow).where(eq(workflow.key, workflowKey)).limit(1);
+    expect(row?.enabled).toBe(true);
   });
 
   it("does not claim a due schedule of a disabled workflow", async () => {

@@ -63,8 +63,15 @@ export async function loadWorkflowDefinitions(
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { definitions: [], errors: [] };
-    throw error;
+    // An unreadable workflows root is an error, never an empty tree. Reading
+    // it as "zero workflows on disk" is indistinguishable from "every
+    // workflow was deleted", and reconciliation would then disable the lot —
+    // a mistyped BIRDHOUSE_WORKFLOWS_DIR, or one tick from the wrong
+    // checkout, taking the whole service offline.
+    return {
+      definitions: [],
+      errors: [{ dir, message: `workflows directory could not be read: ${describeError(error)}` }],
+    };
   }
 
   const definitions: WorkflowDefinition[] = [];
@@ -147,6 +154,8 @@ export type WorkflowSyncSummary = Readonly<{
   schedulesUpserted: number;
   schedulesDisabledMissing: number;
   workflowsDisabledMissing: number;
+  /** False when load errors made the disk view too incomplete to disable anything. */
+  reconciled: boolean;
 }>;
 
 /**
@@ -161,7 +170,15 @@ export type WorkflowSyncSummary = Readonly<{
 export async function syncWorkflows(
   db: Db,
   definitions: readonly WorkflowDefinition[],
+  options: { reconcileMissing?: boolean } = {},
 ): Promise<WorkflowSyncSummary> {
+  // Disabling things disk no longer declares is only sound when this load
+  // saw the whole tree. Callers pass false whenever anything failed to load,
+  // because a workflow that's briefly unreadable (a manifest being edited, a
+  // half-finished checkout) is not a workflow that was deleted — and the
+  // upsert deliberately never writes `enabled` back, so a wrong disable
+  // stands until an operator undoes it by hand.
+  const reconcileMissing = options.reconcileMissing ?? true;
   const now = new Date();
 
   let workflowsUpserted = 0;
@@ -190,6 +207,12 @@ export async function syncWorkflows(
           syncedAt: sql`excluded.synced_at`,
           updatedAt: now,
         },
+        // What `manifest_hash` is for. This runs every tick, and Postgres
+        // rewrites the whole row — jsonb manifest included — for an update
+        // that changes nothing but `synced_at`. Skipping the no-op write
+        // keeps a table of a dozen live rows from accumulating dead tuples
+        // (and WAL) all day on a box that also serves interactive work.
+        setWhere: sql`${workflow.manifestHash} is distinct from excluded.manifest_hash`,
       });
     workflowsUpserted = definitions.length;
   }
@@ -219,6 +242,8 @@ export async function syncWorkflows(
             enabled: sql`excluded.enabled`,
             updatedAt: now,
           },
+          setWhere: sql`${workflowSchedule.timezone} is distinct from excluded.timezone
+            or ${workflowSchedule.enabled} is distinct from excluded.enabled`,
         });
       schedulesUpserted = desired.length;
     }
@@ -227,7 +252,7 @@ export async function syncWorkflows(
   // Disable schedules that were synced from a workflow still on disk, but
   // whose particular cron entry disk no longer declares.
   let schedulesDisabledMissing = 0;
-  for (const def of definitions) {
+  for (const def of reconcileMissing ? definitions : []) {
     const cronsOnDisk = def.manifest.schedules.map((s) => s.cron);
     const result = await db
       .update(workflowSchedule)
@@ -249,25 +274,28 @@ export async function syncWorkflows(
   // previous sync actually created (`synced_at is not null`); a workflow
   // row seeded some other way is left alone.
   const diskKeys = definitions.map((def) => def.key);
-  const missingWorkflows = await db
-    .update(workflow)
-    .set({ enabled: false, updatedAt: now })
-    .where(
-      diskKeys.length > 0
-        ? and(
-            notInArray(workflow.key, diskKeys),
-            eq(workflow.enabled, true),
-            sql`${workflow.syncedAt} is not null`,
-          )
-        : and(eq(workflow.enabled, true), sql`${workflow.syncedAt} is not null`),
-    )
-    .returning({ key: workflow.key });
+  const missingWorkflows = !reconcileMissing
+    ? []
+    : await db
+        .update(workflow)
+        .set({ enabled: false, updatedAt: now })
+        .where(
+          diskKeys.length > 0
+            ? and(
+                notInArray(workflow.key, diskKeys),
+                eq(workflow.enabled, true),
+                sql`${workflow.syncedAt} is not null`,
+              )
+            : and(eq(workflow.enabled, true), sql`${workflow.syncedAt} is not null`),
+        )
+        .returning({ key: workflow.key });
 
   const summary: WorkflowSyncSummary = {
     workflowsUpserted,
     schedulesUpserted,
     schedulesDisabledMissing,
     workflowsDisabledMissing: missingWorkflows.length,
+    reconciled: reconcileMissing,
   };
   console.log(JSON.stringify({ event: "workflows.synced", ...summary }));
   return summary;

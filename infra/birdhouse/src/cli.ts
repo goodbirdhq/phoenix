@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { positionalArgs, readFlag } from "./lib/cliArgs.ts";
+
 const USAGE = `Usage: ops <command>
 
 Commands:
@@ -7,31 +9,12 @@ Commands:
   run <workflow-key> [--input '<json>']
                                 Launch one workflow run immediately, printing its run id
   list [--limit N]             List registered workflows (with next schedule occurrences) and recent runs
+  enable <workflow-key>        Enable a workflow so its schedules and manual runs fire again
+  disable <workflow-key>       Disable a workflow without removing it or its history
 `;
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** Value of a `--flag value` pair, or undefined if the flag isn't present. */
-function readFlag(args: readonly string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  if (index === -1) return undefined;
-  return args[index + 1];
-}
-
-/** Positional args only — everything but a known `--flag value` pair. */
-function positionalArgs(args: readonly string[], flags: readonly string[]): string[] {
-  const positional: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (arg !== undefined && flags.includes(arg)) {
-      i += 1; // skip its value
-      continue;
-    }
-    if (arg !== undefined) positional.push(arg);
-  }
-  return positional;
 }
 
 function padColumns(rows: readonly (readonly string[])[]): string[] {
@@ -224,6 +207,47 @@ async function runListCommand(args: readonly string[]): Promise<void> {
   }
 }
 
+/**
+ * The way back from a disable. Reconciliation writes `workflow.enabled` when
+ * disk stops declaring a workflow, and the sync deliberately never writes it
+ * back — so without this, re-enabling meant editing rows by hand.
+ */
+async function runSetEnabledCommand(args: readonly string[], enabled: boolean): Promise<void> {
+  const [workflowKey] = positionalArgs(args, []);
+  if (!workflowKey) {
+    console.error(`Usage: ops ${enabled ? "enable" : "disable"} <workflow-key>`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const { closeDb, db } = await import("./db/client.ts");
+  const { workflow } = await import("./db/schema.ts");
+  const { eq } = await import("drizzle-orm");
+  const { writeAuditEvent } = await import("./runner/audit.ts");
+  try {
+    const [updated] = await db
+      .update(workflow)
+      .set({ enabled, updatedAt: new Date() })
+      .where(eq(workflow.key, workflowKey))
+      .returning({ key: workflow.key });
+    if (!updated) {
+      console.error(`Unknown workflow "${workflowKey}"`);
+      process.exitCode = 1;
+      return;
+    }
+    await writeAuditEvent(db, {
+      actor: "cli",
+      action: enabled ? "workflow.enabled" : "workflow.disabled",
+      targetType: "workflow",
+      targetId: workflowKey,
+      outcome: "succeeded",
+    });
+    console.log(`${workflowKey} ${enabled ? "enabled" : "disabled"}`);
+  } finally {
+    await closeDb();
+  }
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
 
@@ -242,6 +266,14 @@ async function main(): Promise<void> {
 
     case "list":
       await runListCommand(args);
+      return;
+
+    case "enable":
+      await runSetEnabledCommand(args, true);
+      return;
+
+    case "disable":
+      await runSetEnabledCommand(args, false);
       return;
 
     default:

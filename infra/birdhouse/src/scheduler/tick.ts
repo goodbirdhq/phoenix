@@ -161,7 +161,10 @@ export async function runSchedulerTick(
   if (loadErrors.length > 0) {
     console.warn(JSON.stringify({ event: "workflows.load_errors", errors: loadErrors }));
   }
-  const syncSummary = await syncWorkflows(db, definitions);
+  // Only reconcile against disk when this load saw all of it; see syncWorkflows.
+  const syncSummary = await syncWorkflows(db, definitions, {
+    reconcileMissing: loadErrors.length === 0,
+  });
 
   // Before claiming new work: a stuck run holds no lock, but retiring it
   // promptly is what keeps `timeout_at` meaningful.

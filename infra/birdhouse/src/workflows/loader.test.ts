@@ -113,11 +113,15 @@ describe("loadWorkflowDefinitions", () => {
     expect(result.errors).toEqual([]);
   });
 
-  it("returns empty results for a workflows directory that does not exist", async () => {
+  // Not an empty tree: reconciliation disables everything disk no longer
+  // declares, so "the root is unreadable" and "every workflow was deleted"
+  // must not look the same to the caller.
+  it("reports an unreadable workflows directory as an error, not an empty tree", async () => {
     const root = await fixtureDir();
     const result = await loadWorkflowDefinitions(join(root, "does-not-exist"), DEFAULT_TZ);
     expect(result.definitions).toEqual([]);
-    expect(result.errors).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.message).toMatch(/workflows directory could not be read/);
   });
 
   it("collects a duplicate workflow key across two directories as an error", async () => {
