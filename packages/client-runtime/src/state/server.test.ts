@@ -1,5 +1,8 @@
 import {
   EnvironmentId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ProviderAvailabilityStreamEvent,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
@@ -31,6 +34,7 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import {
   applyServerConfigProjection,
+  applyProviderAvailabilityStreamEvent,
   makeEnvironmentServerConfigState,
   isLegacyUpdateHandoffLoss,
   matchesServerUpdateReadyEvent,
@@ -42,6 +46,16 @@ import {
   serverUpdateStateForServerVersion,
   validateServerUpdateReadyEvent,
 } from "./server.ts";
+
+const availabilityEntry = (instanceId: string, usedPercent: number) => ({
+  instanceId: ProviderInstanceId.make(instanceId),
+  driver: ProviderDriverKind.make("codex"),
+  availability: {
+    status: "available" as const,
+    source: "codex_app_server" as const,
+    windows: [{ kind: "primary", usedPercent }],
+  },
+});
 
 const CONFIG = {
   availableEditors: [],
@@ -75,6 +89,40 @@ function session(client: WsRpcProtocolClient): RpcSession {
     closed: Effect.never,
   };
 }
+
+describe("provider availability stream projection", () => {
+  it("starts from a snapshot and replaces later instance readings in place", () => {
+    const first = availabilityEntry("codex-a", 20);
+    const second = availabilityEntry("codex-b", 40);
+    const update = availabilityEntry("codex-a", 80);
+    const snapshot: ProviderAvailabilityStreamEvent = {
+      version: 1,
+      type: "snapshot",
+      payload: { providers: [first, second] },
+    };
+    const changed: ProviderAvailabilityStreamEvent = {
+      version: 1,
+      type: "updated",
+      payload: update,
+    };
+
+    const afterSnapshot = applyProviderAvailabilityStreamEvent(null, snapshot);
+    const afterUpdate = applyProviderAvailabilityStreamEvent(afterSnapshot, changed);
+
+    expect(afterUpdate.providers).toEqual([update, second]);
+  });
+
+  it("retains an update that arrives before a snapshot is available", () => {
+    const update = availabilityEntry("codex-a", 80);
+    const changed: ProviderAvailabilityStreamEvent = {
+      version: 1,
+      type: "updated",
+      payload: update,
+    };
+
+    expect(applyProviderAvailabilityStreamEvent(null, changed).providers).toEqual([update]);
+  });
+});
 
 describe("update restart reconnect nudges", () => {
   it.effect("retries once per backoff entry instead of only the first", () =>

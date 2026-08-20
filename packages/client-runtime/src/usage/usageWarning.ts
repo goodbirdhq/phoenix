@@ -10,8 +10,10 @@
  * @module usage/usageWarning
  */
 import type {
+  ProviderAvailability,
   ProviderAvailabilityEntry,
   ProviderAvailabilityWindow,
+  ProviderInstanceConfigMap,
   ServerProvider,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -62,7 +64,22 @@ export type ProviderAvailabilityEnvironment = {
   readonly providers: readonly ProviderAvailabilityEntry[];
   /** Null until the provider projection lands; enabled/auth facts live here. */
   readonly serverProviders: readonly ServerProvider[] | null;
+  /** Configured instance metadata supplies Environment-local Failover-group membership. */
+  readonly providerInstances?: ProviderInstanceConfigMap | undefined;
+  /** Instance ids with an explicit or stale revalidation currently in flight. */
+  readonly refreshingInstanceIds?: readonly string[] | undefined;
 };
+
+const emptyAvailabilityForDriver = (driver: string): ProviderAvailability => ({
+  status: "unknown",
+  source:
+    driver === "codex"
+      ? "codex_app_server"
+      : driver === "claudeAgent"
+        ? "claude_agent_sdk"
+        : "unsupported",
+  windows: [],
+});
 
 /**
  * Pairs each environment's availability entries with the enabled/authenticated
@@ -72,11 +89,30 @@ export type ProviderAvailabilityEnvironment = {
 export function subscriptionAvailabilitySources(
   environments: readonly ProviderAvailabilityEnvironment[],
 ): readonly SubscriptionAvailabilitySource[] {
-  return environments.flatMap((environment) =>
-    environment.providers.map((entry) => {
+  return environments.flatMap((environment) => {
+    const configuredIds =
+      environment.serverProviders === null
+        ? null
+        : new Set(environment.serverProviders.map((provider) => provider.instanceId));
+    const entries = new Map(
+      environment.providers
+        .filter((entry) => configuredIds === null || configuredIds.has(entry.instanceId))
+        .map((entry) => [entry.instanceId, entry]),
+    );
+    for (const provider of environment.serverProviders ?? []) {
+      if (entries.has(provider.instanceId)) continue;
+      entries.set(provider.instanceId, {
+        instanceId: provider.instanceId,
+        driver: provider.driver,
+        ...(provider.displayName ? { displayName: provider.displayName } : {}),
+        availability: emptyAvailabilityForDriver(provider.driver),
+      });
+    }
+    return [...entries.values()].map((entry) => {
       const provider = environment.serverProviders?.find(
         (candidate) => candidate.instanceId === entry.instanceId,
       );
+      const instance = environment.providerInstances?.[entry.instanceId];
       return {
         environmentId: environment.environmentId,
         environmentLabel: environment.label,
@@ -85,12 +121,14 @@ export function subscriptionAvailabilitySources(
         displayName:
           entry.displayName ?? provider?.displayName ?? providerLimitSourceName(entry.driver),
         ...(provider?.accentColor ? { accentColor: provider.accentColor } : {}),
+        ...(instance?.failoverGroup ? { failoverGroup: instance.failoverGroup } : {}),
         enabled: provider?.enabled === true,
         authenticated: provider?.auth.status === "authenticated",
+        isRefreshing: environment.refreshingInstanceIds?.includes(entry.instanceId) === true,
         availability: entry.availability,
       } satisfies SubscriptionAvailabilitySource;
-    }),
-  );
+    });
+  });
 }
 
 const epochMillis = (isoDateTime: string | undefined): number | null => {

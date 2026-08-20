@@ -12,30 +12,35 @@ machine's history once.
 
 Use **Past 24h** for an hourly chart covering the exact rolling 24-hour period. The **7 days**,
 **30 days**, and **90 days** ranges use daily resolution. Cost and token toggles update both the
-headline and chart, and refreshing rescans every connected environment.
+headline and chart. Historical activity starts with **All environments** selected; choose one
+environment to inspect only its totals, chart, and breakdown. Refreshing activity rescans the
+selected date range independently from subscription capacity.
 
-## Subscription limits
+## Capacity
 
-Above the token charts, **Subscription limits** shows the limits your providers report themselves —
-one card per connected, signed-in account, with a bar per window (Claude's current session and its
-weekly pools, Codex's two windows) and when each resets. Phoenix shows what the provider says and
-never adds two accounts' limits together: if the same account is reachable from more than one
-environment, its card names them and shows the newest reading.
+At the top of the page, **Capacity** shows which connected subscriptions are ready for another turn
+and the quota windows your providers report themselves. It uses the same open summary, chart, metric
+strip, and flat-breakdown layout as historical Usage instead of placing a set of cards inside the
+page.
 
-Each card carries its provider's mark, and a card named after an account is tagged with the
-instance it belongs to — so a machine running two Claude accounts still tells you which is which.
-When one account of a provider reports its quota, that provider's other cards are hidden if they
-have no reading of their own; a provider that reported nothing anywhere still shows its card and
-says so.
+Capacity is organized by environment-local **Failover groups**. Instances in a group are routing
+alternatives Phoenix can switch between; **Ungrouped** instances never switch automatically. Groups
+with the same name in different environments stay separate. Switch between **Subscriptions** and
+**Instances** to view distinct account capacity or the configured routing topology. Phoenix only
+deduplicates accounts when a provider supplies a verified identity, and it never combines quota
+percentages across accounts or environments.
 
-Opening the Usage page shows the latest retained provider reading. The refresh button rescans every
-connected environment for the selected date range (including **Past 24h**) and explicitly asks
-eligible, signed-in providers for a new quota reading. A provider refresh is shared per instance:
-clicks within thirty seconds reuse the in-flight or recent reading instead of starting another CLI
-request. Providers that publish no limits, accounts that are not confirmed as signed in, and
-unknown provider states are left out rather than shown as empty cards. If a previous provider
-reading expires, Phoenix keeps the account card with an expired-reading notice but removes its
-quota bars until a refresh succeeds. Reading limits never starts an agent turn and never spends
+Phoenix remembers the latest provider reading on the environment that collected it, so returning to
+the page can show known values immediately. Configured groups and instances appear before the first
+reading finishes, with the same static placeholders as the Usage graphs and tables. Missing or stale
+readings refresh automatically when the page opens or regains focus, and provider-published updates
+flow into the page while it is open. There is no continuous polling.
+
+Capacity has its own refresh action. It asks only eligible, signed-in providers whose reading needs
+revalidation; it does not rescan historical transcripts. Concurrent requests for one instance share
+one provider probe, and requests inside the provider cooldown reuse the recent result. A stale or
+failed refresh keeps the last known account and quota values visible but marks their readiness as
+unknown until a current reading arrives. Reading limits never starts an agent turn and never spends
 your quota.
 
 ## Warnings in chat

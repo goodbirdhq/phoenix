@@ -2,6 +2,9 @@ import {
   PROVIDER_AVAILABILITY_CONTRACT_VERSION,
   type EnvironmentId,
   type ProviderAvailabilityInput,
+  type ProviderAvailabilityResult,
+  type ProviderAvailabilityStreamEvent,
+  type ProviderAvailabilitySubscriptionInput,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
@@ -28,6 +31,7 @@ import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
+  createEnvironmentSubscriptionAtomFamily,
   createRuntimeCommand,
   scheduleAtomCommandEffect,
 } from "./runtime.ts";
@@ -304,6 +308,30 @@ export function projectServerConfig(
 ): readonly [Option.Option<ServerConfigProjection>, ReadonlyArray<ServerConfigProjection>] {
   const next = applyServerConfigProjection(current, event);
   return [next, Option.toArray(next)];
+}
+
+/** Apply the initial availability snapshot and subsequent per-instance updates. */
+export function applyProviderAvailabilityStreamEvent(
+  current: ProviderAvailabilityResult | null,
+  event: ProviderAvailabilityStreamEvent,
+): ProviderAvailabilityResult {
+  if (event.type === "snapshot") return event.payload;
+
+  const providers = current?.providers ?? [];
+  const index = providers.findIndex((provider) => provider.instanceId === event.payload.instanceId);
+  if (index === -1) return { providers: [...providers, event.payload] };
+
+  const next = [...providers];
+  next[index] = event.payload;
+  return { providers: next };
+}
+
+export function projectProviderAvailabilityStream(
+  current: ProviderAvailabilityResult | null,
+  event: ProviderAvailabilityStreamEvent,
+): readonly [ProviderAvailabilityResult, ReadonlyArray<ProviderAvailabilityResult>] {
+  const next = applyProviderAvailabilityStreamEvent(current, event);
+  return [next, [next]];
 }
 
 const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEvent => ({
@@ -736,6 +764,19 @@ export function createServerEnvironmentAtoms<R, E>(
         environmentId: target.environmentId,
         input: { ...target.input, contractVersion: PROVIDER_AVAILABILITY_CONTRACT_VERSION },
       }),
+    providerAvailabilityChanges: createEnvironmentSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:provider-availability-changes",
+      subscribe: (input: ProviderAvailabilitySubscriptionInput) =>
+        subscribe(WS_METHODS.subscribeProviderAvailability, {
+          ...input,
+          contractVersion: PROVIDER_AVAILABILITY_CONTRACT_VERSION,
+        }).pipe(
+          Stream.mapAccum(
+            () => null as ProviderAvailabilityResult | null,
+            projectProviderAvailabilityStream,
+          ),
+        ),
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",

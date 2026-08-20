@@ -1,6 +1,6 @@
-import type { UsageProviderKind } from "@t3tools/contracts";
+import { EnvironmentId, type UsageProviderKind } from "@t3tools/contracts";
 import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
 
@@ -26,10 +26,7 @@ import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadc
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "../../workspaceTitlebar";
 import { UsageChartLegend, UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
-import {
-  deriveSubscriptionAccounts,
-  SubscriptionAvailabilitySection,
-} from "../subscriptions/SubscriptionAvailability";
+import { SubscriptionAvailabilitySection } from "../subscriptions/SubscriptionAvailability";
 import { subscriptionAvailabilitySources } from "@t3tools/client-runtime/usage/usage-warning";
 
 const WINDOW_OPTIONS = [
@@ -46,22 +43,37 @@ export function UsagePage() {
   }));
   const [metric, setMetric] = useState<UsageChartMetric>("cost");
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
+  const [historicalEnvironmentId, setHistoricalEnvironmentId] = useState<EnvironmentId | null>(
+    null,
+  );
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
   const {
     merged,
+    allEnvironments,
     environments,
     isPending,
     isPartial,
-    refresh,
+    refreshUsage,
+    refreshCapacity,
     providerAvailability,
     isProviderAvailabilityPending,
+    isCapacityRefreshing,
     hasProviderAvailabilityError,
-  } = useUsage(window);
-  const subscriptionAccounts = useMemo(
-    () => deriveSubscriptionAccounts(subscriptionAvailabilitySources(providerAvailability)),
+  } = useUsage(window, historicalEnvironmentId);
+  const capacitySources = useMemo(
+    () => subscriptionAvailabilitySources(providerAvailability),
     [providerAvailability],
   );
+
+  useEffect(() => {
+    if (
+      historicalEnvironmentId !== null &&
+      !allEnvironments.some((environment) => environment.environmentId === historicalEnvironmentId)
+    ) {
+      setHistoricalEnvironmentId(null);
+    }
+  }, [allEnvironments, historicalEnvironmentId]);
 
   // Hold the content until every environment is terminal. Rendering merged
   // totals while devices are still answering makes every number on the page
@@ -109,9 +121,8 @@ export function UsagePage() {
   };
   const refreshWindow = () => {
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
-    // Rolling windows always advance, including Past 24h. A refresh must
-    // still collect a provider quota reading for the range the user selected.
-    refresh(nextWindow);
+    // Historical usage scans remain independent from provider quota collection.
+    refreshUsage(nextWindow);
     setWindowSelection({ days: windowDays, window: nextWindow });
   };
 
@@ -146,6 +157,14 @@ export function UsagePage() {
 
         <ScrollArea className="min-h-0 flex-1">
           <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-6">
+            <SubscriptionAvailabilitySection
+              sources={capacitySources}
+              isPending={isProviderAvailabilityPending}
+              hasError={hasProviderAvailabilityError}
+              onRefresh={refreshCapacity}
+              isRefreshing={isCapacityRefreshing}
+            />
+
             <div className="flex flex-wrap items-center justify-between gap-4">
               <p className="text-sm text-muted-foreground">
                 {isPast24Hours && window.sinceTime !== undefined && window.untilTime !== undefined
@@ -153,6 +172,26 @@ export function UsagePage() {
                   : `${formatDayShort(window.sinceDay)} to ${formatDayShort(window.untilDay)}`}
               </p>
               <div className="flex items-center gap-2">
+                <label className="sr-only" htmlFor="historical-usage-environment">
+                  Historical usage Environment
+                </label>
+                <select
+                  id="historical-usage-environment"
+                  value={historicalEnvironmentId ?? ""}
+                  onChange={(event) =>
+                    setHistoricalEnvironmentId(
+                      event.target.value === "" ? null : EnvironmentId.make(event.target.value),
+                    )
+                  }
+                  className="h-8 max-w-44 cursor-pointer rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                >
+                  <option value="">All Environments</option>
+                  {allEnvironments.map((environment) => (
+                    <option key={environment.environmentId} value={environment.environmentId}>
+                      {environment.label}
+                    </option>
+                  ))}
+                </select>
                 <div className="flex rounded-md border border-border">
                   {WINDOW_OPTIONS.map((option) => (
                     <button
@@ -185,11 +224,6 @@ export function UsagePage() {
             {settling ? (
               <>
                 {environments.length > 1 ? <UsageDeviceStrip environments={environments} /> : null}
-                <SubscriptionAvailabilitySection
-                  accounts={subscriptionAccounts}
-                  isPending={isProviderAvailabilityPending}
-                  hasError={hasProviderAvailabilityError}
-                />
                 <UsageSkeleton resolution={isPast24Hours ? "hour" : "day"} />
               </>
             ) : (
@@ -199,12 +233,6 @@ export function UsagePage() {
                   duplicateSources={merged.duplicateSources}
                   staleEnvironments={merged.staleEnvironments}
                 />
-                <SubscriptionAvailabilitySection
-                  accounts={subscriptionAccounts}
-                  isPending={isProviderAvailabilityPending}
-                  hasError={hasProviderAvailabilityError}
-                />
-
                 {/* Cost first: the financial answer, then the provider split. */}
                 <section className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
                   {/* The summary follows the chart toggle, so the headline and the

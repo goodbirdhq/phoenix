@@ -1,4 +1,4 @@
-import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderFailoverGroup, ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -263,18 +263,30 @@ describe("subscriptionAvailabilitySources", () => {
         skills: [],
       },
     ],
+    providerInstances: {
+      [ProviderInstanceId.make("claudeAgent")]: {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        failoverGroup: ProviderFailoverGroup.make("work"),
+      },
+    },
     ...overrides,
   });
 
   it("pairs each availability entry with its provider's enabled and auth facts", () => {
-    expect(subscriptionAvailabilitySources([environment()])).toMatchObject([
+    expect(
+      subscriptionAvailabilitySources([
+        environment({ refreshingInstanceIds: [ProviderInstanceId.make("claudeAgent")] }),
+      ]),
+    ).toMatchObject([
       {
         environmentId: "agents",
         environmentLabel: "Agents",
         instanceId: "claudeAgent",
         displayName: "Claude A",
+        failoverGroup: "work",
         enabled: true,
         authenticated: true,
+        isRefreshing: true,
       },
     ]);
   });
@@ -283,6 +295,43 @@ describe("subscriptionAvailabilitySources", () => {
     expect(subscriptionAvailabilitySources([environment({ serverProviders: null })])).toMatchObject(
       [{ displayName: "Claude", enabled: false, authenticated: false }],
     );
+  });
+
+  it("builds the configured Capacity shell before availability answers", () => {
+    expect(subscriptionAvailabilitySources([environment({ providers: [] })])).toMatchObject([
+      {
+        environmentId: "agents",
+        environmentLabel: "Agents",
+        instanceId: "claudeAgent",
+        displayName: "Claude A",
+        failoverGroup: "work",
+        enabled: true,
+        authenticated: true,
+        availability: {
+          status: "unknown",
+          source: "claude_agent_sdk",
+          windows: [],
+        },
+      },
+    ]);
+  });
+
+  it("drops a retained stream entry after the configured Provider is removed", () => {
+    const current = environment();
+    expect(
+      subscriptionAvailabilitySources([
+        environment({
+          providers: [
+            ...current.providers,
+            {
+              instanceId: ProviderInstanceId.make("removed-claude"),
+              driver: ProviderDriverKind.make("claudeAgent"),
+              availability: source().availability,
+            },
+          ],
+        }),
+      ]),
+    ).toHaveLength(1);
   });
 });
 

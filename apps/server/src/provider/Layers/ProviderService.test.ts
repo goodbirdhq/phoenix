@@ -24,11 +24,13 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { it, assert, describe, vi } from "@effect/vitest";
 
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
+import type { PlatformError } from "effect/PlatformError";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
@@ -62,9 +64,38 @@ import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
-const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(
-  Layer.provide(NodeServices.layer),
-);
+const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), {
+  prefix: "t3-provider-service-test-",
+}).pipe(Layer.provide(NodeServices.layer));
+
+const makeAvailabilityProviderLayer = (
+  adapter: ProviderAdapterShape<ProviderAdapterError>,
+  serverConfigLayer: Layer.Layer<ServerConfig.ServerConfig, PlatformError>,
+) => {
+  const registry = makeAdapterRegistryMock({ [adapter.provider]: adapter });
+  const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+    Layer.provide(SqlitePersistenceMemory),
+  );
+  const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+  return Layer.mergeAll(
+    makeProviderServiceLive().pipe(
+      Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(serverConfigLayer),
+      Layer.provideMerge(AnalyticsService.layerTest),
+      Layer.provide(
+        Layer.succeed(
+          ProviderEventLoggers.ProviderEventLoggers,
+          ProviderEventLoggers.NoOpProviderEventLoggers,
+        ),
+      ),
+    ),
+    directoryLayer,
+    runtimeRepositoryLayer,
+    NodeServices.layer,
+  );
+};
 
 const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
@@ -1648,6 +1679,264 @@ it.effect("ProviderServiceLive ignores late availability events from a replaced 
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect("ProviderServiceLive hydrates the last availability after service recreation", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-availability-"))),
+    (tempDir) =>
+      Effect.gen(function* () {
+        const snapshot = {
+          status: "available",
+          source: "claude_cli_usage",
+          observedAt: "2026-08-20T12:00:00.000Z",
+          account: {
+            id: "claude:org-1:maintainer@example.com",
+            verification: "native_verified",
+            displayName: "maintainer@example.com",
+          },
+          windows: [{ kind: "session", label: "Current session", usedPercent: 17 }],
+        } as const;
+        const configLayer = ServerConfig.layerTest(process.cwd(), tempDir).pipe(
+          Layer.provide(NodeServices.layer),
+        );
+        const firstBase = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+        const firstAdapter: ProviderAdapterShape<ProviderAdapterError> = {
+          ...firstBase.adapter,
+          refreshAvailability: () => Effect.succeed(snapshot),
+          get streamEvents() {
+            return firstBase.adapter.streamEvents;
+          },
+        };
+
+        yield* Effect.gen(function* () {
+          const provider = yield* ProviderService.ProviderService;
+          assert.deepEqual(
+            yield* provider.refreshAvailability!(claudeAgentInstanceId, CLAUDE_AGENT_DRIVER),
+            snapshot,
+          );
+        }).pipe(Effect.provide(makeAvailabilityProviderLayer(firstAdapter, configLayer)));
+
+        const secondBase = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+        const secondAdapter: ProviderAdapterShape<ProviderAdapterError> = {
+          ...secondBase.adapter,
+          get streamEvents() {
+            return secondBase.adapter.streamEvents;
+          },
+        };
+        const restored = yield* Effect.gen(function* () {
+          const provider = yield* ProviderService.ProviderService;
+          return yield* provider.getAvailability!(claudeAgentInstanceId, CLAUDE_AGENT_DRIVER);
+        }).pipe(Effect.provide(makeAvailabilityProviderLayer(secondAdapter, configLayer)));
+
+        assert.deepEqual(restored, snapshot);
+      }),
+    (tempDir) => Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true })),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("ProviderServiceLive persists passive rate-limit observations", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-availability-event-"))),
+    (tempDir) =>
+      Effect.gen(function* () {
+        const configLayer = ServerConfig.layerTest(process.cwd(), tempDir).pipe(
+          Layer.provide(NodeServices.layer),
+        );
+        const first = makeFakeCodexAdapter();
+
+        yield* Effect.gen(function* () {
+          const provider = yield* ProviderService.ProviderService;
+          const observed = yield* Stream.take(provider.streamEvents, 1).pipe(
+            Stream.runDrain,
+            Effect.forkChild,
+          );
+          yield* Effect.yieldNow;
+          first.emit(rateLimitEvent("persisted-passive-availability", 64));
+          yield* Fiber.join(observed);
+          assert.equal(
+            (yield* provider.getAvailability!(codexInstanceId, CODEX_DRIVER)).windows[0]
+              ?.usedPercent,
+            64,
+          );
+        }).pipe(Effect.provide(makeAvailabilityProviderLayer(first.adapter, configLayer)));
+
+        const second = makeFakeCodexAdapter();
+        const restored = yield* Effect.gen(function* () {
+          const provider = yield* ProviderService.ProviderService;
+          return yield* provider.getAvailability!(codexInstanceId, CODEX_DRIVER);
+        }).pipe(Effect.provide(makeAvailabilityProviderLayer(second.adapter, configLayer)));
+
+        assert.equal(restored.windows[0]?.usedPercent, 64);
+      }),
+    (tempDir) => Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true })),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("ProviderServiceLive streams the cached availability after passive updates", () =>
+  Effect.gen(function* () {
+    const adapter = makeFakeCodexAdapter();
+
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const subscription = yield* provider.subscribeAvailability!;
+      assert.deepEqual(subscription.latest, []);
+      const updateFiber = yield* Stream.runHead(subscription.changes).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+
+      adapter.emit(rateLimitEvent("streamed-passive-availability", 71));
+      const update = yield* Fiber.join(updateFiber).pipe(Effect.map(Option.getOrThrow));
+
+      assert.deepEqual(update, {
+        instanceId: codexInstanceId,
+        provider: CODEX_DRIVER,
+        availability: {
+          status: "available",
+          source: "codex_app_server",
+          observedAt: "2026-08-16T12:00:00.000Z",
+          windows: [
+            {
+              kind: "primary",
+              usedPercent: 71,
+              resetsAt: "2026-08-09T10:40:00.000Z",
+              windowDurationMins: 300,
+            },
+          ],
+        },
+      });
+    }).pipe(Effect.provide(makeAvailabilityProviderLayer(adapter.adapter, serverConfigTestLayer)));
+  }),
+);
+
+it.effect("ProviderServiceLive ignores a malformed availability cache", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-availability-bad-"))),
+    (tempDir) =>
+      Effect.gen(function* () {
+        const stateDir = NodePath.join(tempDir, "userdata");
+        NodeFS.mkdirSync(stateDir, { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(stateDir, "provider-availability.json"), "{ nope");
+        const configLayer = ServerConfig.layerTest(process.cwd(), tempDir).pipe(
+          Layer.provide(NodeServices.layer),
+        );
+        const adapter = makeFakeCodexAdapter();
+
+        const availability = yield* Effect.gen(function* () {
+          const provider = yield* ProviderService.ProviderService;
+          return yield* provider.getAvailability!(codexInstanceId, CODEX_DRIVER);
+        }).pipe(Effect.provide(makeAvailabilityProviderLayer(adapter.adapter, configLayer)));
+
+        assert.deepEqual(availability, {
+          status: "unknown",
+          source: "codex_app_server",
+          windows: [],
+        });
+      }),
+    (tempDir) => Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true })),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("ProviderServiceLive shares one in-flight availability refresh", () =>
+  Effect.gen(function* () {
+    const base = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let refreshCalls = 0;
+    const snapshot = {
+      status: "available",
+      source: "claude_cli_usage",
+      observedAt: "2026-08-20T12:00:00.000Z",
+      windows: [{ kind: "session", usedPercent: 23 }],
+    } as const;
+    const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+      ...base.adapter,
+      refreshAvailability: () =>
+        Effect.gen(function* () {
+          refreshCalls += 1;
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(release);
+          return snapshot;
+        }),
+      get streamEvents() {
+        return base.adapter.streamEvents;
+      },
+    };
+
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const first = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      const second = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      ).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(release, undefined);
+
+      assert.deepEqual(yield* Fiber.join(first), snapshot);
+      assert.deepEqual(yield* Fiber.join(second), snapshot);
+      assert.equal(refreshCalls, 1);
+    }).pipe(Effect.provide(makeAvailabilityProviderLayer(adapter, serverConfigTestLayer)));
+  }),
+);
+
+it.effect(
+  "ProviderServiceLive keeps the prior observation visible while stale data revalidates",
+  () =>
+    Effect.gen(function* () {
+      const base = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      const initial = {
+        status: "available",
+        source: "claude_cli_usage",
+        observedAt: "2026-08-20T12:00:00.000Z",
+        windows: [{ kind: "session", usedPercent: 23 }],
+      } as const;
+      const updated = {
+        ...initial,
+        observedAt: "2026-08-20T12:16:00.000Z",
+        windows: [{ kind: "session", usedPercent: 27 }],
+      } as const;
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let refreshResult: Effect.Effect<ProviderAvailability, ProviderAdapterError> =
+        Effect.succeed(initial);
+      const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+        ...base.adapter,
+        refreshAvailability: () => refreshResult,
+        get streamEvents() {
+          return base.adapter.streamEvents;
+        },
+      };
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        yield* provider.refreshAvailability!(claudeAgentInstanceId, CLAUDE_AGENT_DRIVER);
+        yield* advanceTestClock(15 * 60 * 1_000 + 1);
+        refreshResult = Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as(updated),
+        );
+        const refresh = yield* provider.refreshAvailability!(
+          claudeAgentInstanceId,
+          CLAUDE_AGENT_DRIVER,
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+
+        const whileRefreshing = yield* provider.getAvailability!(
+          claudeAgentInstanceId,
+          CLAUDE_AGENT_DRIVER,
+        );
+        assert.deepEqual(whileRefreshing.windows, initial.windows);
+        assert.equal(whileRefreshing.observedAt, initial.observedAt);
+        assert.equal(whileRefreshing.status, "unknown");
+
+        yield* Deferred.succeed(release, undefined);
+        assert.deepEqual(yield* Fiber.join(refresh), updated);
+      }).pipe(Effect.provide(makeAvailabilityProviderLayer(adapter, serverConfigTestLayer)));
+    }),
+);
+
 it.effect(
   "ProviderServiceLive keeps a Claude /usage reading, and names the CLI when one fails",
   () =>
@@ -1749,12 +2038,13 @@ it.effect(
       assert.equal(afterPing.windows[0]?.usedPercent, 5);
       assert.equal(afterPing.account?.id, usageSnapshot.account.id);
 
-      // …and must not renew its freshness either: the panel ages out fifteen
-      // minutes after the CLI reported it, not fifteen minutes after a ping.
+      // …and must not renew its freshness either. The last observation stays
+      // visible, but the next refresh still treats it as stale.
       yield* advanceTestClock(60 * 1_000);
       const aged = yield* provider.getAvailability!(claudeAgentInstanceId, CLAUDE_AGENT_DRIVER);
-      assert.deepEqual([...aged.windows], []);
+      assert.deepEqual([...aged.windows], [...usageSnapshot.windows]);
       assert.equal(aged.source, "claude_cli_usage");
+      assert.equal(aged.status, "unknown");
 
       refreshResult = Effect.fail(
         new ProviderAdapterRequestError({
@@ -1771,9 +2061,7 @@ it.effect(
       // Agent SDK, which never went quiet.
       assert.equal(failed.source, "claude_cli_usage");
       assert.equal(failed.status, "unknown");
-      // It is still an observation: "asked just now, learned nothing". Without
-      // a time a client cannot tell it from an instance never read at all.
-      assert.equal(typeof failed.observedAt, "string");
+      assert.equal(failed.stale?.reason, "refresh_failed");
 
       // An adapter that throws arrives as a defect, which a typed-error handler
       // would let straight through and fail the caller's whole fan-out over one
@@ -1788,6 +2076,7 @@ it.effect(
       );
       assert.equal(afterDefect.source, "claude_cli_usage");
       assert.equal(afterDefect.status, "unknown");
+      assert.equal(afterDefect.stale?.reason, "refresh_failed");
       assert.equal(typeof afterDefect.observedAt, "string");
 
       // A refresh that fails while a fresh reading is on screen keeps that
@@ -1818,12 +2107,13 @@ it.effect(
       assert.equal(retained.stale?.reason, "refresh_failed");
       assert.equal(retained.status, "available");
 
-      // And it still ages out on the clock of the reading it kept, not on the
-      // clock of the attempt that failed.
+      // The last observation remains visible after its freshness boundary;
+      // server-owned freshness still makes it eligible for another probe.
       yield* advanceTestClock(15 * 60 * 1_000);
       const expired = yield* provider.getAvailability!(claudeAgentInstanceId, CLAUDE_AGENT_DRIVER);
-      assert.deepEqual([...expired.windows], []);
-      assert.equal(expired.stale, undefined);
+      assert.deepEqual([...expired.windows], [...usageSnapshot.windows]);
+      assert.equal(expired.stale?.reason, "refresh_failed");
+      assert.equal(expired.status, "unknown");
 
       claude.emit({
         type: "account.rate-limits.updated",

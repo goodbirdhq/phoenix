@@ -175,3 +175,39 @@ export const ProviderAvailabilityResult = Schema.Struct({
   providers: ForwardCompatibleArray(ProviderAvailabilityEntry),
 });
 export type ProviderAvailabilityResult = typeof ProviderAvailabilityResult.Type;
+
+/**
+ * Input for the passive availability subscription.
+ *
+ * Unlike {@link ProviderAvailabilityInput}, this input cannot request a
+ * provider probe. The subscription only observes readings already collected
+ * by the server and uses the contract version to narrow values for older
+ * clients.
+ */
+export const ProviderAvailabilitySubscriptionInput = Schema.Struct({
+  contractVersion: Schema.optional(NonNegativeInt),
+});
+export type ProviderAvailabilitySubscriptionInput =
+  typeof ProviderAvailabilitySubscriptionInput.Type;
+
+/** Initial state sent when a passive availability subscription is mounted. */
+export const ProviderAvailabilityStreamSnapshot = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("snapshot"),
+  payload: ProviderAvailabilityResult,
+});
+export type ProviderAvailabilityStreamSnapshot = typeof ProviderAvailabilityStreamSnapshot.Type;
+
+/** One instance changed after the subscription's initial snapshot. */
+export const ProviderAvailabilityStreamUpdate = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("updated"),
+  payload: ProviderAvailabilityEntry,
+});
+export type ProviderAvailabilityStreamUpdate = typeof ProviderAvailabilityStreamUpdate.Type;
+
+export const ProviderAvailabilityStreamEvent = Schema.Union([
+  ProviderAvailabilityStreamSnapshot,
+  ProviderAvailabilityStreamUpdate,
+]);
+export type ProviderAvailabilityStreamEvent = typeof ProviderAvailabilityStreamEvent.Type;
