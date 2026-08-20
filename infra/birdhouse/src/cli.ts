@@ -53,17 +53,11 @@ async function runWorker(): Promise<void> {
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 
-  // The HTTP wave (callback endpoint, health, manual trigger) lands
-  // separately from this one; until it does, `startHttpServer` throws.
-  // Tolerate that so the scheduler and job worker still run standalone.
-  let httpServer: { close: () => Promise<void> } | undefined;
-  try {
-    httpServer = await startHttpServer({ db });
-  } catch (error) {
-    console.warn(
-      JSON.stringify({ event: "worker.http_server_unavailable", error: describeError(error) }),
-    );
-  }
+  // Fail fast rather than degrade: the callback endpoint is how runs report
+  // their results, and its URL is baked into every prompt. A worker that
+  // started without it would launch agents whose results go nowhere, and
+  // every run would quietly wait out its timeout instead.
+  const httpServer = await startHttpServer({ db });
 
   console.log(JSON.stringify({ event: "worker.started", workerId }));
   try {
@@ -78,7 +72,7 @@ async function runWorker(): Promise<void> {
       }),
     ]);
   } finally {
-    if (httpServer) await httpServer.close();
+    await httpServer.close();
     console.log(JSON.stringify({ event: "worker.stopped", workerId }));
     await closeDb();
   }

@@ -292,6 +292,13 @@ function isErrorBody(
   return typeof body === "object" && body !== null;
 }
 
+/**
+ * Per-request deadline. Generous enough for a dispatch the engine takes its
+ * time on, short enough that a stalled socket can't hold the single-job
+ * worker for minutes.
+ */
+const PHOENIX_REQUEST_TIMEOUT_MS = 30_000;
+
 export function createPhoenixClient(
   config: Pick<OpsConfig, "PHOENIX_BASE_URL" | "PHOENIX_BIRDHOUSE_TOKEN">,
 ): PhoenixClient {
@@ -301,6 +308,13 @@ export function createPhoenixClient(
     path: string,
     init: { method: "GET" | "POST"; body?: unknown; signal?: AbortSignal },
   ): Promise<unknown> {
+    // The caller's signal is a lease-loss signal, which never fires while
+    // heartbeats keep succeeding — so on its own it is no deadline at all.
+    // The worker runs one job at a time, so a response that stalls after
+    // connect (undici will wait minutes) freezes every pending launch and
+    // every watch behind it.
+    const deadline = AbortSignal.timeout(PHOENIX_REQUEST_TIMEOUT_MS);
+    const signal = init.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
     // Fail fast, client-side, rather than firing a request known to come
     // back 401: every call site must treat an unset token as unauthenticated
     // (see src/config.ts), and this avoids a wasted round trip plus a less
@@ -318,9 +332,17 @@ export function createPhoenixClient(
           ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
         },
         ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-        ...(init.signal ? { signal: init.signal } : {}),
+        signal,
       });
     } catch (error) {
+      // Our own deadline is "Phoenix is not answering", which is retryable;
+      // only the caller's abort means "stop, the lease is gone".
+      if (error instanceof DOMException && error.name === "TimeoutError") {
+        throw new PhoenixUnreachableError(
+          `Phoenix did not respond to ${path} within ${PHOENIX_REQUEST_TIMEOUT_MS}ms`,
+          { cause: error },
+        );
+      }
       if (error instanceof DOMException && error.name === "AbortError") throw error;
       throw new PhoenixUnreachableError(
         `Could not reach Phoenix at ${baseUrl}${path}: ${error instanceof Error ? error.message : String(error)}`,

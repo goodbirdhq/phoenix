@@ -8,7 +8,11 @@ loadDotenv({ path: [".env.local", ".env"] });
 const envSchema = z.object({
   BIRDHOUSE_DATABASE_URL: z.string().min(1, "BIRDHOUSE_DATABASE_URL is required"),
   BIRDHOUSE_HTTP_PORT: z.coerce.number().int().positive().default(3878),
-  BIRDHOUSE_PUBLIC_URL: z.url().default("http://127.0.0.1:3878"),
+  // Defaulted from BIRDHOUSE_HTTP_PORT below rather than pinned here: this is
+  // the callback URL baked into every run's prompt, and a default that
+  // ignored an overridden port sent every agent's result to a port birdhouse
+  // doesn't own — silently, since the run then just waits out its timeout.
+  BIRDHOUSE_PUBLIC_URL: z.url().optional(),
   PHOENIX_BASE_URL: z.url().default("http://127.0.0.1:3873"),
   // Unset until the Phoenix-side integration issues tokens; every call site
   // must treat this as "unauthenticated" rather than assume it is present.
@@ -32,7 +36,9 @@ const envSchema = z.object({
   BIRDHOUSE_RUN_WATCH_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
 });
 
-export type OpsConfig = Readonly<z.infer<typeof envSchema>>;
+export type OpsConfig = Readonly<
+  Omit<z.infer<typeof envSchema>, "BIRDHOUSE_PUBLIC_URL"> & { BIRDHOUSE_PUBLIC_URL: string }
+>;
 
 function loadConfig(): OpsConfig {
   const parsed = envSchema.safeParse(process.env);
@@ -42,7 +48,11 @@ function loadConfig(): OpsConfig {
       .join("\n");
     throw new Error(`Invalid birdhouse configuration:\n${issues}`);
   }
-  return Object.freeze(parsed.data);
+  return Object.freeze({
+    ...parsed.data,
+    BIRDHOUSE_PUBLIC_URL:
+      parsed.data.BIRDHOUSE_PUBLIC_URL ?? `http://127.0.0.1:${parsed.data.BIRDHOUSE_HTTP_PORT}`,
+  });
 }
 
 // Loaded once at import time so misconfiguration fails fast, at process

@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { config } from "../config.ts";
 import type { Db } from "../db/client.ts";
-import { workflowRun } from "../db/schema.ts";
+import { OPEN_RUN_STATUSES, workflowRun } from "../db/schema.ts";
 import { writeAuditEvent } from "../runner/audit.ts";
 import { verifyCallbackToken } from "../runner/callbackToken.ts";
 import { createWorkflowRun } from "../runner/runs.ts";
@@ -17,7 +17,6 @@ export interface OpsHttpServer {
 }
 
 const RESULT_STATUSES = ["succeeded", "failed"] as const;
-const OPEN_RUN_STATUSES = ["pending", "launching", "running"] as const;
 
 const ResultBodySchema = z.object({
   status: z.enum(RESULT_STATUSES),
@@ -146,16 +145,37 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
       });
       return c.json(result, result.created ? 201 : 200);
     } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : "unknown_error" }, 400);
+      // Only "unknown workflow" and "disabled workflow" are the caller's
+      // fault. Reporting a Postgres outage as 400 tells a client its request
+      // was malformed, so it gives up instead of retrying something that
+      // would have worked a moment later.
+      const message = error instanceof Error ? error.message : "unknown_error";
+      const isClientError = /unknown workflow|is disabled/.test(message);
+      return c.json({ error: message }, isClientError ? 400 : 500);
     }
   });
 
   const boundPort = await new Promise<{ server: ReturnType<typeof serve>; port: number }>(
-    (resolveListen) => {
+    (resolveListen, rejectListen) => {
       const server = serve(
         { fetch: app.fetch, port: deps.port ?? config.BIRDHOUSE_HTTP_PORT, hostname: "127.0.0.1" },
-        (info) => resolveListen({ server, port: info.port }),
+        (info) => {
+          // Startup is over: hand the socket's errors to a logger so a later
+          // one is reported rather than taking the process down, and so the
+          // listener below can't reject an already-settled promise.
+          server.removeListener("error", rejectListen);
+          server.on("error", (error: Error) => {
+            console.error(JSON.stringify({ event: "http.server_error", error: error.message }));
+          });
+          resolveListen({ server, port: info.port });
+        },
       );
+      // A bind failure (EADDRINUSE on a shared box) arrives as an 'error'
+      // event on the next tick, not as a throw from serve(). With no listener
+      // Node re-raises it as an uncaught exception on its own stack, outside
+      // any caller's try/catch — so the worker died on a port conflict while
+      // the code that meant to handle that never ran.
+      server.once("error", rejectListen);
     },
   );
 
