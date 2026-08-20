@@ -77,10 +77,10 @@ export async function enqueueJob(input: EnqueueJobInput & { db: DbOrTx }): Promi
 // ---------------------------------------------------------------------------
 
 const leasableJob = sql`(
-  (${opsJob.status} = 'ready' and ${opsJob.runAfter} <= now()::timestamp)
+  (${opsJob.status} = 'ready' and ${opsJob.runAfter} <= now())
   or (
     ${opsJob.status} = 'leased'
-    and ${opsJob.leaseUntil} <= now()::timestamp
+    and ${opsJob.leaseUntil} <= now()
     and ${opsJob.cancelRequestedAt} is null
   )
 )`;
@@ -202,15 +202,11 @@ export async function renewJobLease(input: {
   const [job] = await input.db
     .update(opsJob)
     .set({
-      leaseUntil: sql`now()::timestamp + (${leaseMs} * interval '1 millisecond')`,
-      updatedAt: sql`now()::timestamp`,
+      leaseUntil: sql`now() + (${leaseMs} * interval '1 millisecond')`,
+      updatedAt: sql`now()`,
     })
     .where(
-      and(
-        currentLease(input),
-        isNull(opsJob.cancelRequestedAt),
-        gt(opsJob.leaseUntil, sql`now()::timestamp`),
-      ),
+      and(currentLease(input), isNull(opsJob.cancelRequestedAt), gt(opsJob.leaseUntil, sql`now()`)),
     )
     .returning();
   return job ?? null;
@@ -262,7 +258,7 @@ async function diagnoseJobLeaseLoss(input: {
       leasedBy: opsJob.leasedBy,
       leaseVersion: opsJob.leaseVersion,
       cancelRequestedAt: opsJob.cancelRequestedAt,
-      expired: sql<boolean>`${opsJob.leaseUntil} is null or ${opsJob.leaseUntil} <= now()::timestamp`,
+      expired: sql<boolean>`${opsJob.leaseUntil} is null or ${opsJob.leaseUntil} <= now()`,
     })
     .from(opsJob)
     .where(eq(opsJob.id, input.jobId))
@@ -503,8 +499,8 @@ export async function requestJobCancellation(input: {
     .set({
       status: sql`case when ${opsJob.status} = 'ready' then 'cancelled' else ${opsJob.status} end`,
       cancelRequestedAt: now,
-      cancelledAt: sql`case when ${opsJob.status} = 'ready' then ${nowLiteral}::timestamp else ${opsJob.cancelledAt} end`,
-      completedAt: sql`case when ${opsJob.status} = 'ready' then ${nowLiteral}::timestamp else ${opsJob.completedAt} end`,
+      cancelledAt: sql`case when ${opsJob.status} = 'ready' then ${nowLiteral}::timestamptz else ${opsJob.cancelledAt} end`,
+      completedAt: sql`case when ${opsJob.status} = 'ready' then ${nowLiteral}::timestamptz else ${opsJob.completedAt} end`,
       updatedAt: now,
     })
     .where(
@@ -624,8 +620,7 @@ export async function failJob(input: {
     retryDelayMs: input.job.retryDelayMs,
     ...(input.retryAfterMs !== undefined ? { retryAfterMs: input.retryAfterMs } : {}),
   });
-  const retryAt =
-    retryAfterMs <= 0 ? sql`now()::timestamp` : new Date(now.getTime() + retryAfterMs);
+  const retryAt = retryAfterMs <= 0 ? sql`now()` : new Date(now.getTime() + retryAfterMs);
   const lastError = input.error instanceof Error ? input.error.message : "Unknown job error";
 
   const [job] = await input.db

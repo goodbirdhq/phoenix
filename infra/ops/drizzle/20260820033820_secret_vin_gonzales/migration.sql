@@ -13,7 +13,7 @@ CREATE TABLE "audit_event" (
 	"outcome" "audit_outcome" NOT NULL,
 	"reason" text,
 	"metadata" jsonb,
-	"created_at" timestamp DEFAULT now() NOT NULL
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "ops_job" (
@@ -27,18 +27,18 @@ CREATE TABLE "ops_job" (
 	"priority" integer DEFAULT 100 NOT NULL,
 	"retry_backoff" "ops_job_retry_backoff" DEFAULT 'exponential'::"ops_job_retry_backoff" NOT NULL,
 	"retry_delay_ms" integer DEFAULT 30000 NOT NULL,
-	"run_after" timestamp DEFAULT now() NOT NULL,
-	"lease_until" timestamp,
+	"run_after" timestamp with time zone DEFAULT now() NOT NULL,
+	"lease_until" timestamp with time zone,
 	"leased_by" text,
 	"lease_version" integer DEFAULT 0 NOT NULL,
 	"progress" jsonb,
-	"cancel_requested_at" timestamp,
-	"cancelled_at" timestamp,
+	"cancel_requested_at" timestamp with time zone,
+	"cancelled_at" timestamp with time zone,
 	"last_error" text,
 	"result" jsonb,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL,
-	"completed_at" timestamp
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"completed_at" timestamp with time zone
 );
 --> statement-breakpoint
 CREATE TABLE "workflow" (
@@ -50,9 +50,9 @@ CREATE TABLE "workflow" (
 	"manifest_hash" text NOT NULL,
 	"mode" "workflow_mode" DEFAULT 'shadow'::"workflow_mode" NOT NULL,
 	"enabled" boolean DEFAULT true NOT NULL,
-	"synced_at" timestamp,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
+	"synced_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "workflow_run" (
@@ -67,10 +67,10 @@ CREATE TABLE "workflow_run" (
 	"phoenix_thread_id" text,
 	"callback_token_hash" text,
 	"job_id" uuid,
-	"timeout_at" timestamp,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"started_at" timestamp,
-	"completed_at" timestamp
+	"timeout_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"started_at" timestamp with time zone,
+	"completed_at" timestamp with time zone
 );
 --> statement-breakpoint
 CREATE TABLE "workflow_schedule" (
@@ -79,10 +79,10 @@ CREATE TABLE "workflow_schedule" (
 	"cron" text NOT NULL,
 	"timezone" text NOT NULL,
 	"enabled" boolean DEFAULT true NOT NULL,
-	"next_run_at" timestamp,
-	"last_enqueued_at" timestamp,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
+	"next_run_at" timestamp with time zone,
+	"last_enqueued_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE INDEX "audit_event_target_idx" ON "audit_event" ("target_type","target_id","created_at");--> statement-breakpoint
