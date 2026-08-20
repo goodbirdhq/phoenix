@@ -1,0 +1,30 @@
+{
+  "name": "@phoenix/ops",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/cli.ts worker",
+    "migrate": "tsx src/db/migrate.ts",
+    "generate": "drizzle-kit generate",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "croner": "^10.0.1",
+    "dotenv": "^17.3.1",
+    "drizzle-orm": "1.0.0-rc.4",
+    "hono": "^4.12.27",
+    "pg": "^8.22.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/pg": "^8.15.6",
+    "drizzle-kit": "1.0.0-rc.4",
+    "tsx": "^4.21.0",
+    "typescript": "catalog:",
+    "vitest": "^4.1.9"
+  }
+}
