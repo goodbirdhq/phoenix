@@ -10,7 +10,7 @@ const layer = it.layer(NodeSqliteClient.layerMemory());
 layer("052_Schedules", (it) => {
   it.effect("creates durable Schedule definitions, Occurrences, receipts, and events", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 51 });
+      yield* runMigrations({ toMigrationInclusive: 52 });
       const sql = yield* SqlClient.SqlClient;
       const tables = yield* sql<{ readonly name: string }>`
         SELECT name

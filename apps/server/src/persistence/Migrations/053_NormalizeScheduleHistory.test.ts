@@ -24,7 +24,7 @@ const decodeStoredDefinitionJson = Schema.decodeUnknownEffect(
 historyLayer("053_NormalizeScheduleHistory", (it) => {
   it.effect("moves existing history into indexed rows and removes it from copied definitions", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 51 });
+      yield* runMigrations({ toMigrationInclusive: 52 });
       const sql = yield* SqlClient.SqlClient;
       const recordJson = encodeJson({
         id: "schedule-1",
@@ -131,7 +131,7 @@ historyLayer("053_NormalizeScheduleHistory", (it) => {
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 52 });
+      yield* runMigrations({ toMigrationInclusive: 53 });
 
       const history = yield* sql<{ readonly kind: string | null }>`
         SELECT json_extract(record_json, '$.type') AS kind FROM schedule_history
@@ -166,7 +166,7 @@ historyLayer("053_NormalizeScheduleHistory", (it) => {
 replayLayer("053_NormalizeScheduleHistory legacy replay", (it) => {
   it.effect("rebases real v51 active and deleted streams into replayable versioned events", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 51 });
+      yield* runMigrations({ toMigrationInclusive: 52 });
       const sql = yield* SqlClient.SqlClient;
       const definition = {
         id: "legacy-replay",
@@ -272,7 +272,7 @@ replayLayer("053_NormalizeScheduleHistory legacy replay", (it) => {
             '2026-08-19T00:05:00.000Z')
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 52 });
+      yield* runMigrations({ toMigrationInclusive: 53 });
 
       const rows = yield* sql<{
         readonly eventType: string;
