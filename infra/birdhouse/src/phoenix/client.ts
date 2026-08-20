@@ -104,17 +104,6 @@ export type PhoenixSessionStatus =
 
 export type PhoenixTurnState = "running" | "interrupted" | "completed" | "error";
 
-/** GET /api/orchestration/shell — one entry per thread, shell-weight only. */
-export interface PhoenixShellThread {
-  id: string;
-  session: { status: PhoenixSessionStatus } | null;
-  latestTurn: { state: PhoenixTurnState } | null;
-}
-
-export interface PhoenixShellSnapshot {
-  threads: PhoenixShellThread[];
-}
-
 export type PhoenixSessionReportStatus = "success" | "failure" | "partial";
 
 /** A subset of SessionReport — only what the watch handler ingests. */
@@ -266,8 +255,6 @@ export interface PhoenixClient {
     input?: { stopReason?: PhoenixSessionStopReason; stoppedBy?: PhoenixSessionStoppedBy },
     options?: PhoenixClientCallOptions,
   ): Promise<void>;
-
-  getShell(options?: PhoenixClientCallOptions): Promise<PhoenixShellSnapshot>;
 
   getThread(threadId: string, options?: PhoenixClientCallOptions): Promise<PhoenixThreadDetail>;
 }
@@ -467,15 +454,6 @@ export function createPhoenixClient(
         body: command,
         ...(options?.signal ? { signal: options.signal } : {}),
       });
-    },
-
-    async getShell(options) {
-      const body = await request("/api/orchestration/shell", {
-        method: "GET",
-        ...(options?.signal ? { signal: options.signal } : {}),
-      });
-      const threads = (body as { threads?: unknown } | undefined)?.threads;
-      return { threads: Array.isArray(threads) ? (threads as PhoenixShellThread[]) : [] };
     },
 
     async getThread(threadId, options) {

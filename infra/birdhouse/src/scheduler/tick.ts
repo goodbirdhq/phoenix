@@ -124,6 +124,8 @@ export type RunSchedulerTickInput = Readonly<{
   createRun?: CreateWorkflowRunFn;
   /** Injection seam for tests; defaults to the real `sweepExpiredRuns`. */
   sweepRuns?: SweepExpiredRunsFn;
+  /** Defaults to `config.BIRDHOUSE_JOB_RETENTION_DAYS`; 0 disables pruning. */
+  jobRetentionDays?: number;
 }>;
 
 /**
@@ -143,10 +145,12 @@ export async function runSchedulerTick(
   const { db } = input;
   let workflowsDir = input.workflowsDir;
   let defaultTimezone = input.defaultTimezone;
-  if (workflowsDir === undefined || defaultTimezone === undefined) {
+  let retentionDays = input.jobRetentionDays;
+  if (workflowsDir === undefined || defaultTimezone === undefined || retentionDays === undefined) {
     const { config } = await import("../config.ts");
     workflowsDir ??= resolveWorkflowsDir(config.BIRDHOUSE_WORKFLOWS_DIR);
     defaultTimezone ??= config.BIRDHOUSE_TIMEZONE;
+    retentionDays ??= config.BIRDHOUSE_JOB_RETENTION_DAYS;
   }
   const runsModule =
     input.createRun === undefined || input.sweepRuns === undefined
@@ -178,6 +182,20 @@ export async function runSchedulerTick(
         error: error instanceof Error ? error.message : String(error),
       }),
     );
+  }
+
+  if (retentionDays > 0) {
+    try {
+      const { pruneTerminalJobs } = await import("../jobs/queue.ts");
+      await pruneTerminalJobs({ db, retentionDays });
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "scheduler.prune_failed",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
   }
 
   const claimed = await claimDueSchedules(db);
@@ -228,6 +246,7 @@ export type StartSchedulerLoopInput = Readonly<{
   defaultTimezone?: string;
   createRun?: CreateWorkflowRunFn;
   sweepRuns?: SweepExpiredRunsFn;
+  jobRetentionDays?: number;
 }>;
 
 /** Resolves `ms` early if `signal` aborts while waiting, so shutdown isn't delayed by a stale timer (mirrors jobs/queue.ts). */
@@ -261,6 +280,7 @@ export async function startSchedulerLoop(input: StartSchedulerLoopInput): Promis
     ...(input.defaultTimezone !== undefined ? { defaultTimezone: input.defaultTimezone } : {}),
     ...(input.createRun !== undefined ? { createRun: input.createRun } : {}),
     ...(input.sweepRuns !== undefined ? { sweepRuns: input.sweepRuns } : {}),
+    ...(input.jobRetentionDays !== undefined ? { jobRetentionDays: input.jobRetentionDays } : {}),
   };
 
   while (!signal?.aborted) {

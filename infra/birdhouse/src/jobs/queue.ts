@@ -700,6 +700,37 @@ export async function failJob(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Retention
+// ---------------------------------------------------------------------------
+
+/**
+ * Deletes jobs that finished longer than `retentionDays` ago.
+ *
+ * Nothing else ever removes a row from this table, and the watch chain mints
+ * one job per run per poll interval — so a handful of runs a day leaves tens
+ * of thousands of permanently-terminal rows a month, each carried in both
+ * `ops_job` indexes. `workflow_run.job_id` is `on delete set null`, so a run
+ * outlives its job and keeps its own history; anything still open by the
+ * cutoff has long since been retired by `sweepExpiredRuns`.
+ */
+export async function pruneTerminalJobs(input: { db: Db; retentionDays: number }): Promise<number> {
+  const deleted = await input.db
+    .delete(opsJob)
+    .where(
+      and(
+        inArray(opsJob.status, ["succeeded", "cancelled", "failed"]),
+        sql`${opsJob.completedAt} is not null`,
+        sql`${opsJob.completedAt} < now() - (${input.retentionDays} * interval '1 day')`,
+      ),
+    )
+    .returning({ id: opsJob.id });
+  if (deleted.length > 0) {
+    console.log(JSON.stringify({ event: "jobs.pruned", count: deleted.length }));
+  }
+  return deleted.length;
+}
+
+// ---------------------------------------------------------------------------
 // Drain loop
 // ---------------------------------------------------------------------------
 

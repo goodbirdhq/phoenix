@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
@@ -18,6 +18,7 @@ import {
   isJobRetryExhausted,
   leaseJobById,
   leaseNextJob,
+  pruneTerminalJobs,
   requestJobCancellation,
   resolveRetryDelayMs,
   runReadyJobs,
@@ -387,5 +388,61 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runReadyJobs resilien
 
     const [row] = await db.select().from(opsJob).where(eq(opsJob.id, enqueued.id)).limit(1);
     expect(row?.status).toBe("succeeded");
+  });
+});
+
+// Nothing else ever deletes from ops_job, and the watch chain mints a row per
+// run per poll — so without pruning the table (and both its indexes) grows
+// without bound.
+describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("pruneTerminalJobs", () => {
+  const pool = new Pool({ connectionString: process.env.BIRDHOUSE_TEST_DATABASE_URL });
+  const db = drizzle({ client: pool });
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it("deletes finished jobs past the cutoff and keeps everything else", async () => {
+    const staleKey = `test:${randomUUID()}`;
+    const recentKey = `test:${randomUUID()}`;
+    const openKey = `test:${randomUUID()}`;
+    const stale = await enqueueJob({
+      db,
+      type: "test.prune",
+      payload: {},
+      idempotencyKey: staleKey,
+    });
+    const recent = await enqueueJob({
+      db,
+      type: "test.prune",
+      payload: {},
+      idempotencyKey: recentKey,
+    });
+    // Still ready, and backdated: age alone must not retire live work.
+    const open = await enqueueJob({ db, type: "test.prune", payload: {}, idempotencyKey: openKey });
+
+    await db
+      .update(opsJob)
+      .set({ status: "succeeded", completedAt: sql`now() - interval '30 days'` })
+      .where(eq(opsJob.id, stale.id));
+    await db
+      .update(opsJob)
+      .set({ status: "succeeded", completedAt: sql`now()` })
+      .where(eq(opsJob.id, recent.id));
+    await db
+      .update(opsJob)
+      .set({ createdAt: sql`now() - interval '30 days'` })
+      .where(eq(opsJob.id, open.id));
+
+    await pruneTerminalJobs({ db, retentionDays: 14 });
+
+    const survivors = await db
+      .select({ id: opsJob.id })
+      .from(opsJob)
+      .where(inArray(opsJob.id, [stale.id, recent.id, open.id]));
+    const ids = survivors.map((row) => row.id);
+    expect(ids).not.toContain(stale.id);
+    expect(ids).toContain(recent.id);
+    expect(ids).toContain(open.id);
   });
 });

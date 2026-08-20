@@ -5,7 +5,8 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { config } from "../config.ts";
 import type { Db } from "../db/client.ts";
 import { OPEN_RUN_STATUSES, workflow, workflowRun } from "../db/schema.ts";
-import { enqueueJob } from "../jobs/queue.ts";
+import { opsJob } from "../db/schema.ts";
+import { enqueueJob, requestJobCancellation } from "../jobs/queue.ts";
 import { writeAuditEvent } from "./audit.ts";
 import { mintCallbackToken } from "./callbackToken.ts";
 
@@ -215,4 +216,68 @@ export async function enqueueStopSession(db: Db, runId: string, threadId: string
     payload: { runId, threadId },
     idempotencyKey: `stop:${runId}`,
   });
+}
+
+export type CancelWorkflowRunResult = Readonly<{
+  /** False when the run had already reached a terminal state. */
+  cancelled: boolean;
+  status: string;
+  /** Outstanding launch/watch jobs this cancellation retired. */
+  jobsCancelled: number;
+}>;
+
+/**
+ * Operator-initiated cancellation: the way out for a run that is queued or
+ * in flight.
+ *
+ * Three things have to happen together, or the run comes back: the run row
+ * goes terminal, the jobs that would otherwise keep driving it (its launch
+ * job, its pending watch) are cancelled, and any Phoenix session it started
+ * is stopped. The run update is guarded on the open statuses, so a run that
+ * finished a moment ago wins the race and is reported as-is rather than
+ * being retroactively marked cancelled.
+ */
+export async function cancelWorkflowRun(db: Db, runId: string): Promise<CancelWorkflowRunResult> {
+  const [existing] = await db.select().from(workflowRun).where(eq(workflowRun.id, runId)).limit(1);
+  if (!existing) {
+    throw new Error(`cancelWorkflowRun: unknown run "${runId}"`);
+  }
+
+  const [cancelled] = await db
+    .update(workflowRun)
+    .set({ status: "cancelled", completedAt: sql`now()`, error: "Cancelled by operator" })
+    .where(and(eq(workflowRun.id, runId), inArray(workflowRun.status, [...OPEN_RUN_STATUSES])))
+    .returning();
+  if (!cancelled) {
+    return { cancelled: false, status: existing.status, jobsCancelled: 0 };
+  }
+
+  // Everything still queued for this run, whichever stage it reached: the
+  // launch job (keyed on the run, or on a schedule's dedupe key) and every
+  // watch job, which are only identifiable through their payload.
+  const outstanding = await db
+    .select({ id: opsJob.id })
+    .from(opsJob)
+    .where(
+      and(inArray(opsJob.status, ["ready", "leased"]), sql`${opsJob.payload}->>'runId' = ${runId}`),
+    );
+  let jobsCancelled = 0;
+  for (const job of outstanding) {
+    if (await requestJobCancellation({ db, jobId: job.id })) jobsCancelled += 1;
+  }
+
+  if (cancelled.phoenixThreadId) {
+    await enqueueStopSession(db, runId, cancelled.phoenixThreadId);
+  }
+
+  await writeAuditEvent(db, {
+    actor: "cli",
+    action: "run.cancelled",
+    targetType: "workflow_run",
+    targetId: runId,
+    outcome: "succeeded",
+    metadata: { previousStatus: existing.status, jobsCancelled },
+  });
+
+  return { cancelled: true, status: "cancelled", jobsCancelled };
 }

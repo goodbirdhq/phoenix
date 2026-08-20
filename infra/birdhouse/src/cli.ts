@@ -11,6 +11,7 @@ Commands:
   list [--limit N]             List registered workflows (with next schedule occurrences) and recent runs
   enable <workflow-key>        Enable a workflow so its schedules and manual runs fire again
   disable <workflow-key>       Disable a workflow without removing it or its history
+  cancel <run-id>              Cancel a queued or in-flight run and stop its agent session
 `;
 
 function describeError(error: unknown): string {
@@ -242,6 +243,31 @@ async function runSetEnabledCommand(args: readonly string[], enabled: boolean): 
   }
 }
 
+async function runCancelCommand(args: readonly string[]): Promise<void> {
+  const [runId] = positionalArgs(args, []);
+  if (!runId) {
+    console.error("Usage: ops cancel <run-id>");
+    process.exitCode = 1;
+    return;
+  }
+
+  const { closeDb, db } = await import("./db/client.ts");
+  const { cancelWorkflowRun } = await import("./runner/runs.ts");
+  try {
+    const result = await cancelWorkflowRun(db, runId);
+    console.log(
+      result.cancelled
+        ? `${runId} cancelled (${result.jobsCancelled} job(s) retired)`
+        : `${runId} already ${result.status}; nothing to cancel`,
+    );
+  } catch (error) {
+    console.error(`Failed to cancel run: ${describeError(error)}`);
+    process.exitCode = 1;
+  } finally {
+    await closeDb();
+  }
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
 
@@ -268,6 +294,10 @@ async function main(): Promise<void> {
 
     case "disable":
       await runSetEnabledCommand(args, false);
+      return;
+
+    case "cancel":
+      await runCancelCommand(args);
       return;
 
     default:

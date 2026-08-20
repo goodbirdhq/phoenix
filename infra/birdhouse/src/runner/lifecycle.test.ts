@@ -23,7 +23,7 @@ import {
   createWorkflowWatchHandler,
 } from "./handlers.ts";
 import { deriveRunPhoenixIds } from "./ids.ts";
-import { createWorkflowRun, sweepExpiredRuns } from "./runs.ts";
+import { cancelWorkflowRun, createWorkflowRun, sweepExpiredRuns } from "./runs.ts";
 
 // Exercises the whole run lifecycle against a real Postgres: the durable
 // job queue, the launch/watch handlers, and the HTTP callback route all
@@ -98,9 +98,6 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
       async stopSession(threadId) {
         state.stopCalls.push(threadId);
       },
-      async getShell() {
-        return { threads: [] };
-      },
       async getThread(threadId) {
         return { ...state.threadDetail, id: threadId };
       },
@@ -110,7 +107,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
 
   async function insertWorkflow(input: {
     key: string;
-    mode: "shadow" | "live";
+    mode: "shadow" | "live" | "fake";
     timeoutMs?: number;
   }) {
     await db.insert(workflow).values({
@@ -386,6 +383,49 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
       .limit(1);
     expect(run?.status).toBe("timed_out");
     expect(await jobByIdempotencyKey(`stop:${created.runId}`)).toBeDefined();
+  });
+
+  it("cancels an in-flight run, retires its jobs, and queues its session stop", async () => {
+    const workflowKey = `test-cancel-${randomUUID()}`;
+    await insertWorkflow({ key: workflowKey, mode: "live", timeoutMs: 60_000 });
+    const { client } = fakePhoenixClient();
+    const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });
+
+    const created = await createWorkflowRun({ db, workflowKey, trigger: "manual" });
+    const launchJob = await jobByIdempotencyKey(`run:${created.runId}`);
+    await launchHandler.handle(launchJob!, fakeLease(launchJob!));
+
+    const result = await cancelWorkflowRun(db, created.runId);
+    expect(result.cancelled).toBe(true);
+    // The pending watch job is what would otherwise keep driving the run.
+    expect(result.jobsCancelled).toBeGreaterThanOrEqual(1);
+
+    const [run] = await db
+      .select()
+      .from(workflowRun)
+      .where(eq(workflowRun.id, created.runId))
+      .limit(1);
+    expect(run?.status).toBe("cancelled");
+
+    const watchJob = await jobByIdempotencyKey(`watch:${created.runId}:1`);
+    expect(watchJob?.cancelRequestedAt).not.toBeNull();
+    expect(await jobByIdempotencyKey(`stop:${created.runId}`)).toBeDefined();
+  });
+
+  it("reports an already-finished run as nothing to cancel", async () => {
+    const workflowKey = `test-cancel-done-${randomUUID()}`;
+    // fake mode completes the run inside the launch handler.
+    await insertWorkflow({ key: workflowKey, mode: "fake", timeoutMs: 60_000 });
+    const { client } = fakePhoenixClient();
+    const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });
+
+    const created = await createWorkflowRun({ db, workflowKey, trigger: "manual" });
+    const launchJob = await jobByIdempotencyKey(`run:${created.runId}`);
+    await launchHandler.handle(launchJob!, fakeLease(launchJob!));
+
+    const result = await cancelWorkflowRun(db, created.runId);
+    expect(result.cancelled).toBe(false);
+    expect(result.status).toBe("succeeded");
   });
 
   it("re-asserts the watch job when a launch replay finds the run already running", async () => {
