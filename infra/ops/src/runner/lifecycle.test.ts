@@ -8,7 +8,6 @@ import { eq } from "drizzle-orm";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { config } from "../config.ts";
 import { opsJob, workflow, workflowRun } from "../db/schema.ts";
 import type { OpsJobRow } from "../jobs/types.ts";
 import type {
@@ -39,7 +38,7 @@ describe.skipIf(!process.env.OPS_TEST_DATABASE_URL)("workflow run lifecycle", ()
     tmpDir = await mkdtemp(join(tmpdir(), "ops-hub-skill-"));
     skillPath = join(tmpDir, "SKILL.md");
     await writeFile(skillPath, "# Test skill\n\nDo the test thing.\n", "utf8");
-    httpServer = await startHttpServer({ db });
+    httpServer = await startHttpServer({ db, port: 0 });
   });
 
   afterAll(async () => {
@@ -183,17 +182,14 @@ describe.skipIf(!process.env.OPS_TEST_DATABASE_URL)("workflow run lifecycle", ()
     expect(watchJob).toBeDefined();
 
     // The agent calling back, over real HTTP.
-    const response = await fetch(
-      `http://127.0.0.1:${config.OPS_HTTP_PORT}/api/runs/${runId}/result`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${rawCallbackToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ status: "succeeded", result: { ok: true } }),
+    const response = await fetch(`http://127.0.0.1:${httpServer.port}/api/runs/${runId}/result`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${rawCallbackToken}`,
+        "Content-Type": "application/json",
       },
-    );
+      body: JSON.stringify({ status: "succeeded", result: { ok: true } }),
+    });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
 
@@ -207,17 +203,14 @@ describe.skipIf(!process.env.OPS_TEST_DATABASE_URL)("workflow run lifecycle", ()
     expect(completed?.completedAt).not.toBeNull();
 
     // A replay with the same token is idempotent, not an error.
-    const replay = await fetch(
-      `http://127.0.0.1:${config.OPS_HTTP_PORT}/api/runs/${runId}/result`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${rawCallbackToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ status: "succeeded", result: { ok: true } }),
+    const replay = await fetch(`http://127.0.0.1:${httpServer.port}/api/runs/${runId}/result`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${rawCallbackToken}`,
+        "Content-Type": "application/json",
       },
-    );
+      body: JSON.stringify({ status: "succeeded", result: { ok: true } }),
+    });
     expect(replay.status).toBe(200);
     expect(await replay.json()).toEqual({ alreadyComplete: true });
 
@@ -239,7 +232,7 @@ describe.skipIf(!process.env.OPS_TEST_DATABASE_URL)("workflow run lifecycle", ()
     await launchHandler.handle(launchJob!, fakeLease(launchJob!));
 
     const response = await fetch(
-      `http://127.0.0.1:${config.OPS_HTTP_PORT}/api/runs/${created.runId}/result`,
+      `http://127.0.0.1:${httpServer.port}/api/runs/${created.runId}/result`,
       {
         method: "POST",
         headers: {

@@ -12,6 +12,8 @@ import { createWorkflowRun } from "../runner/runs.ts";
 
 export interface OpsHttpServer {
   close: () => Promise<void>;
+  /** The actually-bound port (differs from config when a caller passes 0). */
+  port: number;
 }
 
 const RESULT_STATUSES = ["succeeded", "failed"] as const;
@@ -39,7 +41,7 @@ function bearerToken(authorizationHeader: string | undefined): string | undefine
  * trigger). Binds loopback-only per `OPS_HTTP_PORT` — see the comment on the
  * manual-trigger route below for what that assumption buys us.
  */
-export async function startHttpServer(deps: { db: Db }): Promise<OpsHttpServer> {
+export async function startHttpServer(deps: { db: Db; port?: number }): Promise<OpsHttpServer> {
   const { db } = deps;
   const app = new Hono();
 
@@ -148,12 +150,20 @@ export async function startHttpServer(deps: { db: Db }): Promise<OpsHttpServer> 
     }
   });
 
-  const server = serve({ fetch: app.fetch, port: config.OPS_HTTP_PORT, hostname: "127.0.0.1" });
+  const boundPort = await new Promise<{ server: ReturnType<typeof serve>; port: number }>(
+    (resolveListen) => {
+      const server = serve(
+        { fetch: app.fetch, port: deps.port ?? config.OPS_HTTP_PORT, hostname: "127.0.0.1" },
+        (info) => resolveListen({ server, port: info.port }),
+      );
+    },
+  );
 
   return {
+    port: boundPort.port,
     close: () =>
       new Promise<void>((resolvePromise, reject) => {
-        server.close((err) => (err ? reject(err) : resolvePromise()));
+        boundPort.server.close((err) => (err ? reject(err) : resolvePromise()));
       }),
   };
 }
