@@ -83,7 +83,10 @@ describe("deriveMobileThreadUsageWarning", () => {
     const warning = deriveMobileThreadUsageWarning({
       thread: {
         id: "thread-1",
-        modelSelection: { instanceId: ProviderInstanceId.make("claude-picker") },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claude-picker"),
+          model: "claude-sonnet-5",
+        },
         session: { providerInstanceId: ProviderInstanceId.make("claude-bound") },
       },
       environmentId: "agents",
@@ -99,7 +102,10 @@ describe("deriveMobileThreadUsageWarning", () => {
       deriveMobileThreadUsageWarning({
         thread: {
           id: "thread-1",
-          modelSelection: { instanceId: ProviderInstanceId.make("claude-picker") },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claude-picker"),
+            model: "claude-sonnet-5",
+          },
           session: null,
         },
         environmentId: "agents",
@@ -135,7 +141,10 @@ describe("deriveMobileThreadUsageWarning", () => {
       deriveMobileThreadUsageWarning({
         thread: {
           id: "thread-1",
-          modelSelection: { instanceId: ProviderInstanceId.make("claude-picker") },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claude-picker"),
+            model: "claude-sonnet-5",
+          },
           session: { providerInstanceId: ProviderInstanceId.make("claude-bound") },
         },
         environmentId: "agents",

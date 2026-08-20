@@ -14,7 +14,7 @@ import type {
   ThreadId,
   ThreadMigrationHandoffMode,
 } from "@t3tools/contracts";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAssetUrls } from "../../assets/assetUrls";
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -33,6 +33,7 @@ import {
   useEnvironmentThreadRefs,
   useThread,
   useThreadSession,
+  useThreadShell,
 } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import type { ChatMessage } from "../../types";
@@ -50,9 +51,11 @@ import {
   MIGRATION_STREAMING_BLOCK_REASON,
   deriveMigrationModeAvailability,
   findFailedTurnUserMessage,
+  modelUsageLimitWindows,
   rankMigrationTargets,
   resolveRememberedMigrationTarget,
   shouldShowUsageLimitMigrationPopup,
+  usageLimitMigrationEpisodeKey,
 } from "./threadMigration.logic";
 import { useEnvironmentQuery } from "../../state/query";
 
@@ -84,6 +87,7 @@ export const ThreadUsageLimitMigrationEntryPoint = memo(
       [props.environmentId, props.threadId],
     );
     const session = useThreadSession(threadRef);
+    const boundModel = useThreadShell(threadRef)?.modelSelection.model ?? null;
     const availabilityQuery = useEnvironmentQuery(
       serverEnvironment.providerAvailability({
         environmentId: props.environmentId,
@@ -97,16 +101,33 @@ export const ThreadUsageLimitMigrationEntryPoint = memo(
     const isVisible = shouldShowUsageLimitMigrationPopup({
       boundInstanceId: props.instanceId,
       boundInstanceAvailability: originAvailability,
+      boundModel,
       sessionProviderInstanceId: session?.providerInstanceId ?? null,
       sessionErrorKind: session?.lastErrorKind ?? null,
     });
+    // Dismissal is remembered against the limit episode, so the popup stays
+    // closed for this limit but returns when the account is limited again.
+    const episodeKey = usageLimitMigrationEpisodeKey({
+      threadId: props.threadId,
+      boundInstanceId: props.instanceId,
+      boundInstanceAvailability: originAvailability,
+      boundModel,
+    });
+    const [dismissedEpisodeKey, setDismissedEpisodeKey] = useState<string | null>(null);
+    useEffect(() => {
+      if (!isVisible && dismissedEpisodeKey !== null) setDismissedEpisodeKey(null);
+    }, [dismissedEpisodeKey, isVisible]);
+    const handleDismiss = useCallback(() => {
+      setDismissedEpisodeKey(episodeKey);
+    }, [episodeKey]);
 
-    return isVisible ? (
+    return isVisible && dismissedEpisodeKey !== episodeKey ? (
       <ThreadUsageLimitMigrationController
         threadId={props.threadId}
         environmentId={props.environmentId}
         instanceId={props.instanceId}
         availabilityEntries={availabilityEntries}
+        onDismiss={handleDismiss}
       />
     ) : null;
   },
@@ -118,6 +139,7 @@ const ThreadUsageLimitMigrationController = memo(
     readonly environmentId: EnvironmentId;
     readonly instanceId: ProviderInstanceId;
     readonly availabilityEntries: readonly ProviderAvailabilityEntry[];
+    readonly onDismiss: () => void;
   }) {
     const threadRef = useMemo(
       () => scopeThreadRef(props.environmentId, props.threadId),
@@ -198,9 +220,7 @@ const ThreadUsageLimitMigrationController = memo(
     const projectId = thread?.projectId ?? null;
     const rememberedTargetId = projectId ? lastTargetByProjectId[projectId] : null;
     const selectedTarget = resolveRememberedMigrationTarget(targets, rememberedTargetId);
-    const limitedWindow = originAvailability?.windows
-      .filter((window) => window.usedPercent >= 100)
-      .toSorted((left, right) => right.usedPercent - left.usedPercent)[0];
+    const limitedWindow = modelUsageLimitWindows(originAvailability, threadModel)[0];
     const resetLabel = limitedWindow ? subscriptionLimitResetLabel(limitedWindow) : null;
     const originName =
       originAvailability?.account?.displayName ??
@@ -508,6 +528,7 @@ const ThreadUsageLimitMigrationController = memo(
           onSwitchAndRetry={handleSwitchAndRetry}
           onSwitchOnly={handleSwitchOnly}
           onSwitchAll={handleBulkMigration}
+          onDismiss={props.onDismiss}
         />
         <ThreadMigrationDialog
           open={dialogRequest !== null}

@@ -34,7 +34,13 @@ happened and offers the way out:
 - **Switch all chats on this account** moves every active thread off the limited account in
   one go.
 
-The message includes when the window resets, so you can also just wait it out.
+When an account splits its quota into per-model pools, only the threads that draw from the
+spent pool are asked to move. A spent Fable pool leaves an Opus thread alone — you still get
+the warning that the pool is gone, but not the offer to switch a thread that can keep running.
+
+The message includes when the window resets, so you can also just wait it out. If you would
+rather deal with it later, close the message with the X in its corner: it stays out of the way
+for that limit, and comes back the next time the account runs out of room.
 
 ## The early warning
 

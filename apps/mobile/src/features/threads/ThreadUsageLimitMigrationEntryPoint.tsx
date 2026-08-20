@@ -5,9 +5,11 @@ import {
 import {
   MIGRATION_STREAMING_BLOCK_REASON,
   findFailedTurnUserMessage,
+  modelUsageLimitWindows,
   rankMigrationTargets,
   resolveThreadBoundInstanceId,
   shouldShowUsageLimitMigrationPopup,
+  usageLimitMigrationEpisodeKey,
 } from "@t3tools/client-runtime/usage/thread-migration";
 import { subscriptionLimitResetLabel } from "@t3tools/client-runtime/usage/subscription-availability";
 import {
@@ -22,7 +24,7 @@ import {
   type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Alert } from "react-native";
 
 import { makeQueuedMessageMetadata } from "../../lib/commandMetadata";
@@ -90,6 +92,7 @@ export const ThreadUsageLimitMigrationEntryPoint = memo(
     const [dialogError, setDialogError] = useState<string | null>(null);
     const [isMigrationPending, setIsMigrationPending] = useState(false);
     const [isBulkPending, setIsBulkPending] = useState(false);
+    const [dismissedEpisodeKey, setDismissedEpisodeKey] = useState<string | null>(null);
 
     const boundInstanceId = resolveThreadBoundInstanceId({
       sessionProviderInstanceId: props.thread.session?.providerInstanceId,
@@ -113,8 +116,17 @@ export const ThreadUsageLimitMigrationEntryPoint = memo(
     const visible = shouldShowUsageLimitMigrationPopup({
       boundInstanceId,
       boundInstanceAvailability: originAvailability,
+      boundModel: props.thread.modelSelection.model,
       sessionProviderInstanceId: props.thread.session?.providerInstanceId ?? null,
       sessionErrorKind: props.thread.session?.lastErrorKind,
+    });
+    // Dismissal is remembered against the limit episode, so the popup stays
+    // closed for this limit but returns when the account is limited again.
+    const episodeKey = usageLimitMigrationEpisodeKey({
+      threadId: props.thread.id,
+      boundInstanceId,
+      boundInstanceAvailability: originAvailability,
+      boundModel: props.thread.modelSelection.model,
     });
     const serverProviders = environment?.serverProviders ?? [];
     const originProvider = serverProviders.find(
@@ -165,9 +177,10 @@ export const ThreadUsageLimitMigrationEntryPoint = memo(
     ]);
     const selectedTarget =
       targets.find((target) => target.instanceId === selectedTargetId) ?? targets[0] ?? null;
-    const limitedWindow = originAvailability?.windows
-      .filter((window) => window.usedPercent >= 100)
-      .toSorted((left, right) => right.usedPercent - left.usedPercent)[0];
+    const limitedWindow = modelUsageLimitWindows(
+      originAvailability,
+      props.thread.modelSelection.model,
+    )[0];
     const resetLabel = limitedWindow ? subscriptionLimitResetLabel(limitedWindow) : null;
     const originName =
       originAvailability?.account?.displayName ??
@@ -395,7 +408,14 @@ export const ThreadUsageLimitMigrationEntryPoint = memo(
       threadShells,
     ]);
 
-    if (!visible) return null;
+    const dismiss = useCallback(() => {
+      setDismissedEpisodeKey(episodeKey);
+    }, [episodeKey]);
+    useEffect(() => {
+      if (!visible && dismissedEpisodeKey !== null) setDismissedEpisodeKey(null);
+    }, [dismissedEpisodeKey, visible]);
+
+    if (!visible || dismissedEpisodeKey === episodeKey) return null;
 
     return (
       <>
@@ -413,6 +433,7 @@ export const ThreadUsageLimitMigrationEntryPoint = memo(
           onSwitchAndRetry={() => openDialog(true)}
           onSwitchOnly={() => openDialog(false)}
           onSwitchAll={migrateAll}
+          onDismiss={dismiss}
         />
         <ThreadMigrationDialog
           open={dialogRequest !== null}

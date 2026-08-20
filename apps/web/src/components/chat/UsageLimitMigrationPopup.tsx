@@ -1,5 +1,5 @@
 import { ProviderInstanceId } from "@t3tools/contracts";
-import { GaugeIcon } from "lucide-react";
+import { GaugeIcon, XIcon } from "lucide-react";
 import { memo } from "react";
 
 import { Button } from "../ui/button";
@@ -33,6 +33,7 @@ export const UsageLimitMigrationPopup = memo(function UsageLimitMigrationPopup(p
   readonly onSwitchAndRetry: () => void;
   readonly onSwitchOnly: () => void;
   readonly onSwitchAll: () => void;
+  readonly onDismiss: () => void;
 }) {
   const targetItems = props.targets.map((target) => ({
     value: target.instanceId,
@@ -42,15 +43,24 @@ export const UsageLimitMigrationPopup = memo(function UsageLimitMigrationPopup(p
   return (
     <section
       data-usage-limit-migration-popup="true"
-      className="mx-auto mb-2 w-full max-w-3xl rounded-xl border border-warning/35 bg-popover/96 p-3 text-popover-foreground shadow-lg backdrop-blur-xl sm:p-4"
+      className="relative mx-auto mb-2 w-full max-w-3xl rounded-xl border border-warning/35 bg-popover/96 p-3 text-popover-foreground shadow-lg backdrop-blur-xl sm:p-4"
       aria-labelledby="usage-limit-migration-title"
     >
+      <Button
+        aria-label="Dismiss usage limit notice"
+        className="absolute top-2 right-2 text-muted-foreground hover:text-foreground"
+        onClick={props.onDismiss}
+        size="icon-xs"
+        variant="ghost"
+      >
+        <XIcon aria-hidden className="size-3.5" />
+      </Button>
       <div className="flex items-start gap-3">
         <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-warning/12 text-warning-foreground">
           <GaugeIcon className="size-4" aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
-          <h2 id="usage-limit-migration-title" className="font-medium text-sm">
+          <h2 id="usage-limit-migration-title" className="pe-6 font-medium text-sm">
             {props.originName} reached its usage limit
           </h2>
           <p className="mt-0.5 text-muted-foreground text-xs leading-5">

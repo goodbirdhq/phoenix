@@ -2,7 +2,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { isProviderUsageLimited } from "@t3tools/client-runtime/usage/thread-migration";
+import { isProviderUsageLimitedForModel } from "@t3tools/client-runtime/usage/thread-migration";
 import type {
   EnvironmentId,
   ModelSelection,
@@ -54,7 +54,12 @@ export const ManualThreadMigrationEntryPoint = memo(
       ? environment?.providers.find((entry) => entry.instanceId === props.request?.boundInstanceId)
           ?.availability
       : null;
-    const isOriginLimited = isProviderUsageLimited(originAvailability);
+    // Model-aware: another model's spent weekly pool must not disable the brief
+    // handoff on a thread that can still spend the origin account.
+    const isOriginLimited = isProviderUsageLimitedForModel(
+      originAvailability,
+      props.thread.modelSelection.model,
+    );
     const isTurnStreaming = threadTurnIsStreaming(props.thread);
 
     const close = useCallback(() => {
