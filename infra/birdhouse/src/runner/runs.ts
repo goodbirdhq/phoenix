@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 
@@ -76,7 +76,7 @@ export async function createWorkflowRun(
       throw new Error(`createWorkflowRun: workflow "${workflowKey}" is disabled`);
     }
 
-    const runId = randomUUID();
+    const runId = NodeCrypto.randomUUID();
     const { token: callbackToken, hash: callbackTokenHash } = mintCallbackToken();
     const timeoutMs = resolveWorkflowTimeoutMs(workflowRow.manifest);
 

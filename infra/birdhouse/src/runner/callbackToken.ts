@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 /**
  * The run-result callback token: a single-purpose bearer credential handed
@@ -15,11 +15,11 @@ export interface CallbackToken {
 }
 
 export function hashCallbackToken(rawToken: string): string {
-  return createHash("sha256").update(rawToken).digest("hex");
+  return NodeCrypto.createHash("sha256").update(rawToken).digest("hex");
 }
 
 export function mintCallbackToken(): CallbackToken {
-  const token = randomBytes(32).toString("base64url");
+  const token = NodeCrypto.randomBytes(32).toString("base64url");
   return { token, hash: hashCallbackToken(token) };
 }
 
@@ -34,5 +34,5 @@ export function verifyCallbackToken(rawToken: string, storedHashHex: string): bo
   const computed = Buffer.from(hashCallbackToken(rawToken), "utf8");
   const stored = Buffer.from(storedHashHex, "utf8");
   if (computed.length !== stored.length) return false;
-  return timingSafeEqual(computed, stored);
+  return NodeCrypto.timingSafeEqual(computed, stored);
 }

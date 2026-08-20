@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -53,7 +53,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runSchedulerTick", ()
   });
 
   it("claims a due schedule, starts a run, advances next_run_at, and claims nothing on the next tick", async () => {
-    const workflowKey = `test-tick-${randomUUID()}`;
+    const workflowKey = `test-tick-${NodeCrypto.randomUUID()}`;
 
     // syncedAt intentionally left unset: this row was never disk-synced, so
     // the tick's disk-reconciliation step must leave it alone even though
@@ -83,12 +83,14 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runSchedulerTick", ()
       .returning();
     expect(schedule).toBeDefined();
 
-    const emptyWorkflowsDir = await mkdtemp(join(tmpdir(), "ops-workflows-empty-"));
+    const emptyWorkflowsDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "ops-workflows-empty-"),
+    );
 
     const calls: CreateWorkflowRunInput[] = [];
     const createRun = async (input: CreateWorkflowRunInput): Promise<CreateWorkflowRunResult> => {
       calls.push(input);
-      return { runId: randomUUID(), created: true };
+      return { runId: NodeCrypto.randomUUID(), created: true };
     };
 
     const first = await runSchedulerTick({
@@ -124,7 +126,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runSchedulerTick", ()
   });
 
   it("fires a backlogged schedule once and resumes from the present", async () => {
-    const workflowKey = `test-tick-backlog-${randomUUID()}`;
+    const workflowKey = `test-tick-backlog-${NodeCrypto.randomUUID()}`;
     await db.insert(workflow).values({
       key: workflowKey,
       title: "Backlogged workflow",
@@ -147,11 +149,13 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runSchedulerTick", ()
       })
       .returning();
 
-    const emptyWorkflowsDir = await mkdtemp(join(tmpdir(), "ops-workflows-empty-"));
+    const emptyWorkflowsDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "ops-workflows-empty-"),
+    );
     const calls: CreateWorkflowRunInput[] = [];
     const createRun = async (input: CreateWorkflowRunInput): Promise<CreateWorkflowRunResult> => {
       calls.push(input);
-      return { runId: randomUUID(), created: true };
+      return { runId: NodeCrypto.randomUUID(), created: true };
     };
 
     const first = await runSchedulerTick({
@@ -181,7 +185,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runSchedulerTick", ()
   // of them, and the upsert never writes `enabled` back — so fixing the path
   // fixes nothing and recovery is hand-written SQL.
   it("leaves synced workflows enabled when the workflows directory can't be read", async () => {
-    const workflowKey = `test-tick-unreadable-${randomUUID()}`;
+    const workflowKey = `test-tick-unreadable-${NodeCrypto.randomUUID()}`;
     await db.insert(workflow).values({
       key: workflowKey,
       title: "Synced workflow",
@@ -192,12 +196,15 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runSchedulerTick", ()
       syncedAt: new Date(),
     });
 
-    const missingDir = join(await mkdtemp(join(tmpdir(), "ops-workflows-gone-")), "not-here");
+    const missingDir = NodePath.join(
+      await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "ops-workflows-gone-")),
+      "not-here",
+    );
     const summary = await runSchedulerTick({
       db,
       workflowsDir: missingDir,
       defaultTimezone: "Europe/London",
-      createRun: async () => ({ runId: randomUUID(), created: true }),
+      createRun: async () => ({ runId: NodeCrypto.randomUUID(), created: true }),
     });
 
     expect(summary.workflowLoadErrors).toBe(1);
@@ -206,7 +213,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runSchedulerTick", ()
   });
 
   it("does not claim a due schedule of a disabled workflow", async () => {
-    const workflowKey = `test-tick-disabled-${randomUUID()}`;
+    const workflowKey = `test-tick-disabled-${NodeCrypto.randomUUID()}`;
     await db.insert(workflow).values({
       key: workflowKey,
       title: "Disabled workflow",
@@ -222,7 +229,9 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runSchedulerTick", ()
       nextRunAt: new Date(Date.now() - 60_000),
     });
 
-    const emptyWorkflowsDir = await mkdtemp(join(tmpdir(), "ops-workflows-empty-"));
+    const emptyWorkflowsDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "ops-workflows-empty-"),
+    );
     const calls: CreateWorkflowRunInput[] = [];
     const summary = await runSchedulerTick({
       db,
@@ -230,7 +239,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runSchedulerTick", ()
       defaultTimezone: "Europe/London",
       createRun: async (input) => {
         calls.push(input);
-        return { runId: randomUUID(), created: true };
+        return { runId: NodeCrypto.randomUUID(), created: true };
       },
     });
 

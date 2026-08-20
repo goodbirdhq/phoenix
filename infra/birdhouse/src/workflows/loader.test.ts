@@ -1,13 +1,13 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { loadWorkflowDefinitions, resolveWorkflowsDir } from "./loader.ts";
 
 async function fixtureDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "ops-workflows-"));
+  return NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "ops-workflows-"));
 }
 
 /** Writes one workflow subdirectory. `skillContent: null` omits the skill file entirely. */
@@ -16,12 +16,12 @@ async function writeWorkflow(
   name: string,
   options: { manifestJson: string; skillContent?: string | null; skillFile?: string },
 ): Promise<void> {
-  const dir = join(root, name);
-  await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, "manifest.json"), options.manifestJson);
+  const dir = NodePath.join(root, name);
+  await NodeFSP.mkdir(dir, { recursive: true });
+  await NodeFSP.writeFile(NodePath.join(dir, "manifest.json"), options.manifestJson);
   if (options.skillContent !== null) {
-    await writeFile(
-      join(dir, options.skillFile ?? "SKILL.md"),
+    await NodeFSP.writeFile(
+      NodePath.join(dir, options.skillFile ?? "SKILL.md"),
       options.skillContent ?? "# Skill\n",
     );
   }
@@ -47,7 +47,7 @@ describe("loadWorkflowDefinitions", () => {
     const def = result.definitions[0]!;
     expect(def.key).toBe("prospect-research");
     expect(def.manifestHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(def.skillPath).toBe(join("prospect-research", "SKILL.md"));
+    expect(def.skillPath).toBe(NodePath.join("prospect-research", "SKILL.md"));
 
     // An identical fixture, written from scratch elsewhere, hashes the same.
     const root2 = await fixtureDir();
@@ -105,8 +105,8 @@ describe("loadWorkflowDefinitions", () => {
 
   it("ignores subdirectories with no manifest.json", async () => {
     const root = await fixtureDir();
-    await mkdir(join(root, "not-a-workflow"), { recursive: true });
-    await writeFile(join(root, "not-a-workflow", "README.md"), "hi");
+    await NodeFSP.mkdir(NodePath.join(root, "not-a-workflow"), { recursive: true });
+    await NodeFSP.writeFile(NodePath.join(root, "not-a-workflow", "README.md"), "hi");
 
     const result = await loadWorkflowDefinitions(root, DEFAULT_TZ);
     expect(result.definitions).toEqual([]);
@@ -118,7 +118,7 @@ describe("loadWorkflowDefinitions", () => {
   // must not look the same to the caller.
   it("reports an unreadable workflows directory as an error, not an empty tree", async () => {
     const root = await fixtureDir();
-    const result = await loadWorkflowDefinitions(join(root, "does-not-exist"), DEFAULT_TZ);
+    const result = await loadWorkflowDefinitions(NodePath.join(root, "does-not-exist"), DEFAULT_TZ);
     expect(result.definitions).toEqual([]);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]?.message).toMatch(/workflows directory could not be read/);
@@ -147,6 +147,6 @@ describe("resolveWorkflowsDir", () => {
 
   it("resolves a relative path against the package root, not process cwd", () => {
     const resolved = resolveWorkflowsDir("workflows");
-    expect(resolved.endsWith(join("infra", "birdhouse", "workflows"))).toBe(true);
+    expect(resolved.endsWith(NodePath.join("infra", "birdhouse", "workflows"))).toBe(true);
   });
 });

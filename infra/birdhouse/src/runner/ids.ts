@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 /**
  * Deterministic per-run Phoenix ids (threadId, thread.create/turn.start
@@ -30,7 +30,7 @@ export interface RunPhoenixIds {
 }
 
 function deterministicUuid(seed: string): string {
-  const digest = createHash("sha256").update(seed).digest();
+  const digest = NodeCrypto.createHash("sha256").update(seed).digest();
   const bytes = Buffer.from(digest.subarray(0, 16));
   // RFC 4122-shaped, not RFC 4122-derived: version nibble forced to 5
   // ("name-based") and variant bits set, purely so the value passes any

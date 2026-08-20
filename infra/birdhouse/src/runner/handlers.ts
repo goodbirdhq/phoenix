@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 
@@ -27,10 +27,10 @@ import { enqueueStopSession, resolveWorkflowTimeoutMs } from "./runs.ts";
 // that could drift and leave the scheduler syncing a skill this handler
 // can't find.
 async function loadSkillMarkdown(skillPath: string): Promise<string> {
-  const resolved = isAbsolute(skillPath)
+  const resolved = NodePath.isAbsolute(skillPath)
     ? skillPath
-    : resolve(resolveWorkflowsDir(config.BIRDHOUSE_WORKFLOWS_DIR), skillPath);
-  return readFile(resolved, "utf8");
+    : NodePath.resolve(resolveWorkflowsDir(config.BIRDHOUSE_WORKFLOWS_DIR), skillPath);
+  return NodeFSP.readFile(resolved, "utf8");
 }
 
 function stringField(payload: Record<string, unknown>, key: string): string | undefined {

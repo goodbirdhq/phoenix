@@ -376,7 +376,7 @@ export function createPhoenixClient(
       });
     }
     if (response.status === 500) {
-      throw new PhoenixDispatchFailedError({ ...(traceId ? { traceId } : {}) });
+      throw new PhoenixDispatchFailedError(traceId ? { traceId } : {});
     }
     // Any other status (404 thread_not_found, framework 400s on undecodable
     // unions, etc.) — surface generically; callers that care about a

@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, sql } from "drizzle-orm";
@@ -39,15 +39,15 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
   let httpServer: Awaited<ReturnType<typeof startHttpServer>>;
 
   beforeAll(async () => {
-    tmpDir = await mkdtemp(join(tmpdir(), "birdhouse-skill-"));
-    skillPath = join(tmpDir, "SKILL.md");
-    await writeFile(skillPath, "# Test skill\n\nDo the test thing.\n", "utf8");
+    tmpDir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "birdhouse-skill-"));
+    skillPath = NodePath.join(tmpDir, "SKILL.md");
+    await NodeFSP.writeFile(skillPath, "# Test skill\n\nDo the test thing.\n", "utf8");
     httpServer = await startHttpServer({ db, port: 0 });
   });
 
   afterAll(async () => {
     await httpServer.close();
-    await rm(tmpDir, { recursive: true, force: true });
+    await NodeFSP.rm(tmpDir, { recursive: true, force: true });
     await pool.end();
   });
 
@@ -149,7 +149,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
   }
 
   it("runs the happy path: create -> launch -> callback completes -> watch no-ops", async () => {
-    const workflowKey = `test-happy-${randomUUID()}`;
+    const workflowKey = `test-happy-${NodeCrypto.randomUUID()}`;
     await insertWorkflow({ key: workflowKey, mode: "shadow" });
     const { client, state } = fakePhoenixClient();
     const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });
@@ -231,7 +231,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
   });
 
   it("rejects a callback with the wrong token", async () => {
-    const workflowKey = `test-badtoken-${randomUUID()}`;
+    const workflowKey = `test-badtoken-${NodeCrypto.randomUUID()}`;
     await insertWorkflow({ key: workflowKey, mode: "shadow" });
     const { client } = fakePhoenixClient();
     const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });
@@ -262,7 +262,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
   });
 
   it("completes a run from a terminal report when the callback never arrives", async () => {
-    const workflowKey = `test-report-${randomUUID()}`;
+    const workflowKey = `test-report-${NodeCrypto.randomUUID()}`;
     await insertWorkflow({ key: workflowKey, mode: "live" });
     const { client, state } = fakePhoenixClient();
     const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });
@@ -299,7 +299,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
   });
 
   it("times a run out once timeout_at has passed, and queues the session stop", async () => {
-    const workflowKey = `test-timeout-${randomUUID()}`;
+    const workflowKey = `test-timeout-${NodeCrypto.randomUUID()}`;
     await insertWorkflow({ key: workflowKey, mode: "live", timeoutMs: 60_000 });
     const { client, state } = fakePhoenixClient();
     const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });
@@ -338,7 +338,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
   });
 
   it("times out a run whose watch chain never ran, without any Phoenix call", async () => {
-    const workflowKey = `test-sweep-${randomUUID()}`;
+    const workflowKey = `test-sweep-${NodeCrypto.randomUUID()}`;
     await insertWorkflow({ key: workflowKey, mode: "live", timeoutMs: 60_000 });
 
     // A run that never left 'pending' — the shape left behind when
@@ -364,7 +364,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
   });
 
   it("sweeps a launched run whose watch chain broke, and queues its session stop", async () => {
-    const workflowKey = `test-sweep-running-${randomUUID()}`;
+    const workflowKey = `test-sweep-running-${NodeCrypto.randomUUID()}`;
     await insertWorkflow({ key: workflowKey, mode: "live", timeoutMs: 60_000 });
     const { client } = fakePhoenixClient();
     const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });
@@ -386,7 +386,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
   });
 
   it("cancels an in-flight run, retires its jobs, and queues its session stop", async () => {
-    const workflowKey = `test-cancel-${randomUUID()}`;
+    const workflowKey = `test-cancel-${NodeCrypto.randomUUID()}`;
     await insertWorkflow({ key: workflowKey, mode: "live", timeoutMs: 60_000 });
     const { client } = fakePhoenixClient();
     const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });
@@ -413,7 +413,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
   });
 
   it("reports an already-finished run as nothing to cancel", async () => {
-    const workflowKey = `test-cancel-done-${randomUUID()}`;
+    const workflowKey = `test-cancel-done-${NodeCrypto.randomUUID()}`;
     // fake mode completes the run inside the launch handler.
     await insertWorkflow({ key: workflowKey, mode: "fake", timeoutMs: 60_000 });
     const { client } = fakePhoenixClient();
@@ -429,7 +429,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
   });
 
   it("re-asserts the watch job when a launch replay finds the run already running", async () => {
-    const workflowKey = `test-replay-${randomUUID()}`;
+    const workflowKey = `test-replay-${NodeCrypto.randomUUID()}`;
     await insertWorkflow({ key: workflowKey, mode: "live", timeoutMs: 60_000 });
     const { client } = fakePhoenixClient();
     const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });

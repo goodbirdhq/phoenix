@@ -1,5 +1,5 @@
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import * as NodeHttp from "node:http";
+import type * as NodeNet from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -18,7 +18,7 @@ import {
 // taxonomy the job handlers branch on: which failures are terminal, which are
 // retryable, and which are neither.
 describe("createPhoenixClient", () => {
-  let server: Server | undefined;
+  let server: NodeHttp.Server | undefined;
 
   afterEach(async () => {
     if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
@@ -28,7 +28,7 @@ describe("createPhoenixClient", () => {
   /** Serves one canned response and records what it was sent. */
   async function serve(handler: (path: string, body: string) => { status: number; body: string }) {
     const received: { path: string; authorization?: string; body: unknown }[] = [];
-    server = createServer((req, res) => {
+    server = NodeHttp.createServer((req, res) => {
       let raw = "";
       req.on("data", (chunk) => (raw += chunk));
       req.on("end", () => {
@@ -43,7 +43,7 @@ describe("createPhoenixClient", () => {
       });
     });
     await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
-    const { port } = server!.address() as AddressInfo;
+    const { port } = server!.address() as NodeNet.AddressInfo;
     return { received, baseUrl: `http://127.0.0.1:${port}` };
   }
 

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 import { eq, inArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -125,7 +125,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("enqueueJob", () => {
   });
 
   it("returns the existing row instead of erroring on a repeat idempotency key", async () => {
-    const idempotencyKey = `test:${randomUUID()}`;
+    const idempotencyKey = `test:${NodeCrypto.randomUUID()}`;
     const first = await enqueueJob({ db, type: "test.noop", payload: { n: 1 }, idempotencyKey });
     const second = await enqueueJob({ db, type: "test.noop", payload: { n: 2 }, idempotencyKey });
 
@@ -152,7 +152,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("job lifecycle", () =>
       db,
       type: "test.lifecycle",
       payload: {},
-      idempotencyKey: `test:${randomUUID()}`,
+      idempotencyKey: `test:${NodeCrypto.randomUUID()}`,
     });
 
     const leased = await leaseJobById({ db, jobId: enqueued.id, workerId });
@@ -176,7 +176,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("job lifecycle", () =>
       db,
       type: "test.lifecycle",
       payload: {},
-      idempotencyKey: `test:${randomUUID()}`,
+      idempotencyKey: `test:${NodeCrypto.randomUUID()}`,
       maxAttempts: 2,
       retryBackoff: "fixed",
       retryDelayMs: 0,
@@ -211,7 +211,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("job lifecycle", () =>
       db,
       type: "test.lifecycle",
       payload: {},
-      idempotencyKey: `test:${randomUUID()}`,
+      idempotencyKey: `test:${NodeCrypto.randomUUID()}`,
       maxAttempts: 5,
     });
     const leased = await leaseJobById({ db, jobId: enqueued.id, workerId });
@@ -233,7 +233,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("job lifecycle", () =>
       db,
       type: "test.lifecycle",
       payload: {},
-      idempotencyKey: `test:${randomUUID()}`,
+      idempotencyKey: `test:${NodeCrypto.randomUUID()}`,
     });
     const leased = await leaseJobById({ db, jobId: enqueued.id, workerId });
     expect(leased?.id).toBe(enqueued.id);
@@ -256,7 +256,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("job lifecycle", () =>
       db,
       type: "test.lifecycle",
       payload: {},
-      idempotencyKey: `test:${randomUUID()}`,
+      idempotencyKey: `test:${NodeCrypto.randomUUID()}`,
       runAfter: new Date(Date.now() + 3_600_000),
     });
 
@@ -297,7 +297,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("expired lease reclaim
       db,
       type: "test.reclaim",
       payload: {},
-      idempotencyKey: `test:${randomUUID()}`,
+      idempotencyKey: `test:${NodeCrypto.randomUUID()}`,
       maxAttempts: 3,
     });
     const first = await leaseJobById({ db, jobId: enqueued.id, workerId });
@@ -314,7 +314,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("expired lease reclaim
       db,
       type: "test.reclaim",
       payload: {},
-      idempotencyKey: `test:${randomUUID()}`,
+      idempotencyKey: `test:${NodeCrypto.randomUUID()}`,
       maxAttempts: 1,
     });
     const leased = await leaseJobById({ db, jobId: enqueued.id, workerId });
@@ -345,7 +345,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runReadyJobs resilien
   });
 
   it("keeps polling after the queue itself throws, and still drains once it recovers", async () => {
-    const idempotencyKey = `test:${randomUUID()}`;
+    const idempotencyKey = `test:${NodeCrypto.randomUUID()}`;
     const enqueued = await enqueueJob({ db, type: "test.resilience", payload: {}, idempotencyKey });
 
     let failuresLeft = 2;
@@ -403,9 +403,9 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("pruneTerminalJobs", (
   });
 
   it("deletes finished jobs past the cutoff and keeps everything else", async () => {
-    const staleKey = `test:${randomUUID()}`;
-    const recentKey = `test:${randomUUID()}`;
-    const openKey = `test:${randomUUID()}`;
+    const staleKey = `test:${NodeCrypto.randomUUID()}`;
+    const recentKey = `test:${NodeCrypto.randomUUID()}`;
+    const openKey = `test:${NodeCrypto.randomUUID()}`;
     const stale = await enqueueJob({
       db,
       type: "test.prune",

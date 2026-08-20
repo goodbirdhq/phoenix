@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 /**
  * Canonicalizes a JSON-like value: object keys sorted, `undefined`
@@ -52,7 +52,7 @@ export function canonicalJsonHash(value: unknown): string {
   if (json === undefined) {
     throw new TypeError("canonicalJsonHash: value has no canonical JSON form (undefined)");
   }
-  return createHash("sha256").update(json).digest("hex");
+  return NodeCrypto.createHash("sha256").update(json).digest("hex");
 }
 
 /** Structural equality under the canonical form. */

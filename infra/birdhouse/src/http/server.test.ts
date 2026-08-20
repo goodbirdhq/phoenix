@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
-import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -34,7 +33,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("http server", () => {
   });
 
   it("starts a run through the manual trigger", async () => {
-    const key = `test-http-${randomUUID()}`;
+    const key = `test-http-${NodeCrypto.randomUUID()}`;
     await db.insert(workflow).values({
       key,
       title: "Manual trigger workflow",
@@ -60,7 +59,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("http server", () => {
   });
 
   it("rejects a disabled workflow as a client error", async () => {
-    const key = `test-http-disabled-${randomUUID()}`;
+    const key = `test-http-disabled-${NodeCrypto.randomUUID()}`;
     await db.insert(workflow).values({
       key,
       title: "Disabled workflow",

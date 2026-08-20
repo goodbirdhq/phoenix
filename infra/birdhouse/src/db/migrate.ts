@@ -1,10 +1,10 @@
-import { fileURLToPath } from "node:url";
+import * as NodeURL from "node:url";
 
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 
 import { closeDb, db } from "./client.ts";
 
-const migrationsFolder = fileURLToPath(new URL("../../drizzle", import.meta.url));
+const migrationsFolder = NodeURL.fileURLToPath(new URL("../../drizzle", import.meta.url));
 
 export async function runMigrations(): Promise<void> {
   await migrate(db, { migrationsFolder });
@@ -14,7 +14,7 @@ export async function runMigrations(): Promise<void> {
 // Only run when executed directly (`pnpm migrate`); importing this module —
 // e.g. from the CLI's `worker` command, which checks migrations before it
 // starts draining — must not itself trigger a run.
-const isMain = process.argv[1] === fileURLToPath(import.meta.url);
+const isMain = process.argv[1] === NodeURL.fileURLToPath(import.meta.url);
 if (isMain) {
   try {
     await runMigrations();

@@ -1,6 +1,6 @@
-import { access, readdir, readFile } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
 import { and, eq, notInArray, sql } from "drizzle-orm";
 
@@ -13,10 +13,12 @@ import { createWorkflowManifestSchema, type WorkflowManifest } from "./manifest.
 // From src/workflows/loader.ts, two levels up is the package root
 // (infra/birdhouse) — matches BIRDHOUSE_WORKFLOWS_DIR's documented "relative paths
 // resolve against the package root, not the process cwd" contract.
-const PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const PACKAGE_ROOT = NodeURL.fileURLToPath(new URL("../../", import.meta.url));
 
 export function resolveWorkflowsDir(configuredDir: string): string {
-  return isAbsolute(configuredDir) ? configuredDir : resolve(PACKAGE_ROOT, configuredDir);
+  return NodePath.isAbsolute(configuredDir)
+    ? configuredDir
+    : NodePath.resolve(PACKAGE_ROOT, configuredDir);
 }
 
 export type WorkflowDefinition = Readonly<{
@@ -61,7 +63,7 @@ export async function loadWorkflowDefinitions(
 
   let entries;
   try {
-    entries = await readdir(dir, { withFileTypes: true });
+    entries = await NodeFSP.readdir(dir, { withFileTypes: true });
   } catch (error) {
     // An unreadable workflows root is an error, never an empty tree. Reading
     // it as "zero workflows on disk" is indistinguishable from "every
@@ -80,12 +82,12 @@ export async function loadWorkflowDefinitions(
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const workflowDir = join(dir, entry.name);
-    const manifestPath = join(workflowDir, "manifest.json");
+    const workflowDir = NodePath.join(dir, entry.name);
+    const manifestPath = NodePath.join(workflowDir, "manifest.json");
 
     let raw: string;
     try {
-      raw = await readFile(manifestPath, "utf8");
+      raw = await NodeFSP.readFile(manifestPath, "utf8");
     } catch (error) {
       // Not every subdirectory of the workflows root has to be a workflow
       // (shared fixtures, scratch dirs); only a missing manifest.json is
@@ -128,9 +130,9 @@ export async function loadWorkflowDefinitions(
       continue;
     }
 
-    const absoluteSkillPath = join(workflowDir, manifest.skill);
+    const absoluteSkillPath = NodePath.join(workflowDir, manifest.skill);
     try {
-      await access(absoluteSkillPath);
+      await NodeFSP.access(absoluteSkillPath);
     } catch {
       errors.push({ dir: workflowDir, message: `skill file "${manifest.skill}" does not exist` });
       continue;
@@ -142,7 +144,7 @@ export async function loadWorkflowDefinitions(
       dir: workflowDir,
       manifest,
       manifestHash: canonicalJsonHash(manifest),
-      skillPath: join(entry.name, manifest.skill),
+      skillPath: NodePath.join(entry.name, manifest.skill),
     });
   }
 
