@@ -76,6 +76,11 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import {
+  deriveProviderFailoverGroupOptions,
+  providerInstanceWithFailoverGroup,
+  validateProviderFailoverGroupName,
+} from "./ProviderFailoverGroups.logic";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import { searchableSetting } from "./settingsSearch";
 import {
@@ -611,6 +616,15 @@ export function EnvironmentProviderSettings({
     }
   }
 
+  const failoverGroupsByDriver = new Map<
+    ProviderDriverKind,
+    ReturnType<typeof deriveProviderFailoverGroupOptions>
+  >();
+  for (const row of rows) {
+    if (failoverGroupsByDriver.has(row.driver)) continue;
+    failoverGroupsByDriver.set(row.driver, deriveProviderFailoverGroupOptions(rows, row.driver));
+  }
+
   const updateProviderInstance = (
     row: InstanceRow,
     next: ProviderInstanceConfig,
@@ -896,6 +910,16 @@ export function EnvironmentProviderSettings({
                 }}
                 onDelete={row.isDefault ? undefined : () => deleteProviderInstance(row.instanceId)}
                 headerAction={headerAction}
+                failoverGroups={failoverGroupsByDriver.get(row.driver) ?? []}
+                onFailoverGroupChange={(group) =>
+                  updateProviderInstance(
+                    row,
+                    providerInstanceWithFailoverGroup(row.instance, group),
+                  )
+                }
+                validateFailoverGroupName={(group) =>
+                  validateProviderFailoverGroupName(group, rows, row.driver)
+                }
                 hiddenModels={modelPreferences.hiddenModels}
                 favoriteModels={favoriteModels}
                 modelOrder={modelPreferences.modelOrder}

@@ -16,6 +16,7 @@ import {
   ThreadId,
   type TurnId,
   type KeybindingCommand,
+  type ThreadMigrationHandoffMode,
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   ProviderDriverKind,
@@ -186,7 +187,12 @@ import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
+import {
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  NO_PROVIDER_MODEL_SELECTION,
+  sortProviderInstanceEntries,
+} from "../providerInstances";
 import {
   useClientSettings,
   useClientSettingsHydrated,
@@ -273,6 +279,7 @@ import {
   ProviderStatusBanner,
   shouldShowProviderStatusBanner,
 } from "./chat/ProviderStatusBanner";
+import { resolveThreadUsageWarningInstanceId, ThreadUsageWarning } from "./chat/ThreadUsageWarning";
 import {
   dismissThreadErrorBannerForSession,
   getThreadErrorBannerKey,
@@ -280,6 +287,12 @@ import {
   shouldShowThreadErrorBanner,
   ThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
+import { ThreadMigrationDialogBoundary } from "./chat/ThreadMigrationDialogBoundary";
+import { ThreadUsageLimitMigrationEntryPoint } from "./chat/ThreadUsageLimitMigrationEntryPoint";
+import {
+  MIGRATION_STREAMING_BLOCK_REASON,
+  resolveLimitBoundInstanceId,
+} from "./chat/threadMigration.logic";
 import {
   resolveDisplayedThreadPr,
   threadChangeRequestSnapshotsAtom,
@@ -310,13 +323,13 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   shouldShowBranchMismatchBanner,
+  threadHasStarted,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
   type LocalDispatchSnapshot,
   PullRequestDialogState,
   cloneComposerImageForRetry,
-  deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
@@ -1191,6 +1204,15 @@ type LocalThreadErrorEntry = {
   readonly message: string | null;
   readonly at: number;
 };
+type ThreadMigrationDialogRequest = {
+  readonly threadId: ThreadId;
+  readonly sourceName: string;
+  readonly target: {
+    readonly instanceId: ProviderInstanceId;
+    readonly displayName: string;
+    readonly model: string;
+  };
+};
 
 function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
@@ -1224,6 +1246,9 @@ function ChatViewContent(props: ChatViewProps) {
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const migrateThread = useAtomCommand(threadEnvironment.migrate, {
     reportFailure: false,
   });
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
@@ -1366,6 +1391,11 @@ function ChatViewContent(props: ChatViewProps) {
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     ApprovalRequestId[]
   >([]);
+
+  const [migrationDialogRequest, setMigrationDialogRequest] =
+    useState<ThreadMigrationDialogRequest | null>(null);
+  const [migrationDialogError, setMigrationDialogError] = useState<string | null>(null);
+  const [isMigrationPending, setIsMigrationPending] = useState(false);
 
   useEffect(() => {
     setIsWorkspaceFileDragActive(false);
@@ -2023,11 +2053,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.modelSelection.instanceId ??
     activeProject?.defaultModelSelection?.instanceId ??
     null;
-  const lockedProvider = deriveLockedProvider({
-    thread: activeThread,
-    selectedProvider: selectedProviderByThreadId,
-    threadProvider,
-  });
+  const lockedProvider: ProviderDriverKind | null = null;
   // Once a thread selects an environment, never substitute the primary
   // environment's config while the selected environment is still loading.
   const serverConfig = activeThread
@@ -2220,6 +2246,22 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatchServerLabel,
   ]);
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
+  const providerInstanceEntries = useMemo(
+    () =>
+      sortProviderInstanceEntries(
+        applyProviderInstanceSettings(deriveProviderInstanceEntries(providerStatuses), settings),
+      ),
+    [providerStatuses, settings],
+  );
+  const boundProviderInstanceId = activeThread?.modelSelection.instanceId ?? null;
+  const boundProviderInstance =
+    providerInstanceEntries.find((entry) => entry.instanceId === boundProviderInstanceId) ?? null;
+  const limitProviderInstanceId = resolveLimitBoundInstanceId({
+    sessionProviderInstanceId: activeThread?.session?.providerInstanceId,
+    threadModelSelectionInstanceId: boundProviderInstanceId,
+  });
+  const isTurnStreaming =
+    activeThread?.session?.status === "running" || activeThread?.latestTurn?.state === "running";
   const unlockedSelectedProvider = resolveSelectableProvider(
     providerStatuses,
     selectedProviderByThreadId ?? threadProvider,
@@ -2679,6 +2721,10 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.modelSelection.instanceId ??
     activeProject?.defaultModelSelection?.instanceId ??
     null;
+  const usageWarningInstanceId = resolveThreadUsageWarningInstanceId({
+    sessionProviderInstanceId: activeThread?.session?.providerInstanceId,
+    threadModelSelectionInstanceId: activeThread?.modelSelection.instanceId,
+  });
   const activeProviderStatus = useMemo(() => {
     if (activeProviderInstanceId) {
       return (
@@ -5933,6 +5979,81 @@ function ChatViewContent(props: ChatViewProps) {
     composerRef,
   ]);
 
+  const migrationThreadId = activeThread?.id ?? null;
+  const migrationEnvironmentId = activeThread?.environmentId ?? null;
+  const handleMigrationConfirm = useCallback(
+    async (handoffMode: ThreadMigrationHandoffMode) => {
+      const request = migrationDialogRequest;
+      if (
+        !request ||
+        !migrationThreadId ||
+        !migrationEnvironmentId ||
+        request.threadId !== migrationThreadId
+      ) {
+        return;
+      }
+      if (isTurnStreaming) {
+        setMigrationDialogError(MIGRATION_STREAMING_BLOCK_REASON);
+        return;
+      }
+
+      setIsMigrationPending(true);
+      setMigrationDialogError(null);
+      const migrationResult = await migrateThread({
+        environmentId: migrationEnvironmentId,
+        input: {
+          threadId: migrationThreadId,
+          targetInstanceId: request.target.instanceId,
+          targetModel: request.target.model,
+          handoffMode,
+          trigger: "manual",
+        },
+      });
+      if (migrationResult._tag === "Failure") {
+        if (!isAtomCommandInterrupted(migrationResult)) {
+          setMigrationDialogError(
+            chatActionErrorMessage(squashAtomCommandFailure(migrationResult)),
+          );
+        }
+        setIsMigrationPending(false);
+        return;
+      }
+
+      const targetModelSelection: ModelSelection = {
+        instanceId: request.target.instanceId,
+        model: request.target.model,
+      };
+      setComposerDraftModelSelection(
+        scopeThreadRef(migrationEnvironmentId, migrationThreadId),
+        targetModelSelection,
+      );
+      setStickyComposerModelSelection(targetModelSelection);
+      setThreadError(migrationThreadId, null);
+      setMigrationDialogRequest(null);
+      setIsMigrationPending(false);
+    },
+    [
+      isTurnStreaming,
+      migrationEnvironmentId,
+      migrationThreadId,
+      migrateThread,
+      migrationDialogRequest,
+      setComposerDraftModelSelection,
+      setStickyComposerModelSelection,
+      setThreadError,
+    ],
+  );
+
+  const handleMigrationDialogOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open && !isMigrationPending) {
+        setMigrationDialogRequest(null);
+        setMigrationDialogError(null);
+      }
+    },
+    [isMigrationPending],
+  );
+
   const getModelDisabledReason = useCallback(
     (instanceId: ProviderInstanceId, model: string): string | null => {
       if (!activeThread) {
@@ -5942,7 +6063,6 @@ function ChatViewContent(props: ChatViewProps) {
         providers: providerStatuses,
         hasStartedSession: activeThread.session !== null,
         currentModelSelection: activeThread.modelSelection,
-        currentProviderInstanceId: activeThread.session?.providerInstanceId ?? null,
         nextModelSelection: { instanceId, model },
       });
       return reason ? `${reason.description} Start a new thread to use this model.` : null;
@@ -5956,29 +6076,6 @@ function ChatViewContent(props: ChatViewProps) {
       // Look up the configured instance so model normalization and custom
       // model lookup stay scoped to that exact instance. Unknown instance ids
       // are rejected by returning early; the server remains authoritative too.
-      const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
-      const resolvedDriverKind = entry?.driver ?? null;
-      if (
-        lockedProvider !== null &&
-        resolvedDriverKind !== null &&
-        resolvedDriverKind !== lockedProvider
-      ) {
-        scheduleComposerFocus();
-        return;
-      }
-      if (lockedProvider !== null && activeThread.session?.providerInstanceId) {
-        const currentEntry = providerStatuses.find(
-          (snapshot) => snapshot.instanceId === activeThread.session?.providerInstanceId,
-        );
-        if (
-          currentEntry?.continuation?.groupKey &&
-          entry?.continuation?.groupKey &&
-          currentEntry.continuation.groupKey !== entry.continuation.groupKey
-        ) {
-          scheduleComposerFocus();
-          return;
-        }
-      }
       const resolvedModel = resolveAppModelSelectionForInstance(
         instanceId,
         settings,
@@ -5993,11 +6090,34 @@ function ChatViewContent(props: ChatViewProps) {
         instanceId,
         model: resolvedModel,
       };
+      if (
+        threadHasStarted(activeThread) &&
+        activeThread.modelSelection.instanceId !== nextModelSelection.instanceId
+      ) {
+        const targetEntry = providerInstanceEntries.find(
+          (candidate) => candidate.instanceId === nextModelSelection.instanceId,
+        );
+        if (!targetEntry || !boundProviderInstance) {
+          scheduleComposerFocus();
+          return;
+        }
+        setMigrationDialogError(null);
+        setMigrationDialogRequest({
+          threadId: activeThread.id,
+          sourceName: boundProviderInstance.displayName,
+          target: {
+            instanceId: nextModelSelection.instanceId,
+            displayName: targetEntry.displayName,
+            model: nextModelSelection.model,
+          },
+        });
+        scheduleComposerFocus();
+        return;
+      }
       const modelChangeBlockReason = getStartedThreadModelChangeBlockReason({
         providers: providerStatuses,
         hasStartedSession: activeThread.session !== null,
         currentModelSelection: activeThread.modelSelection,
-        currentProviderInstanceId: activeThread.session?.providerInstanceId ?? null,
         nextModelSelection,
       });
       if (modelChangeBlockReason) {
@@ -6018,11 +6138,12 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       activeThread,
-      lockedProvider,
+      boundProviderInstance,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
       setStickyComposerModelSelection,
       providerStatuses,
+      providerInstanceEntries,
       settings,
     ],
   );
@@ -6318,7 +6439,7 @@ function ChatViewContent(props: ChatViewProps) {
         </header>
 
         <ThreadErrorBanner
-          error={visibleThreadError}
+          error={activeThread.session?.lastErrorKind === "usage-limit" ? null : visibleThreadError}
           onDismiss={() => {
             setThreadError(activeThread.id, null);
             dismissThreadErrorBannerForSession(threadErrorBannerKey);
@@ -6361,6 +6482,11 @@ function ChatViewContent(props: ChatViewProps) {
               <ProviderStatusBanner
                 status={visibleProviderStatus}
                 onDismiss={() => setDismissedProviderStatusBannerKey(providerStatusBannerKey)}
+              />
+              <ThreadUsageWarning
+                environmentId={activeThread.environmentId}
+                instanceId={usageWarningInstanceId}
+                threadId={activeThread.id}
               />
             </div>
             {/* Messages Wrapper */}
@@ -6464,6 +6590,13 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
+                  {isServerThread && limitProviderInstanceId ? (
+                    <ThreadUsageLimitMigrationEntryPoint
+                      threadId={activeThread.id}
+                      environmentId={activeThread.environmentId}
+                      instanceId={limitProviderInstanceId}
+                    />
+                  ) : null}
                   {isServerThread ? (
                     <SessionReportDigest
                       activities={threadActivities}
@@ -6625,6 +6758,24 @@ function ChatViewContent(props: ChatViewProps) {
                 threadRef={activeThreadRef}
                 tabId={activePreviewMiniPlayer.tabId}
                 bottomInset={isDraftHeroState ? 0 : composerOverlayHeight}
+              />
+            ) : null}
+
+            {boundProviderInstanceId && migrationDialogRequest ? (
+              <ThreadMigrationDialogBoundary
+                threadId={activeThread.id}
+                environmentId={activeThread.environmentId}
+                instanceId={activeThread.session?.providerInstanceId ?? boundProviderInstanceId}
+                open
+                sourceName={migrationDialogRequest.sourceName}
+                targetName={migrationDialogRequest.target.displayName}
+                targetModel={migrationDialogRequest.target.model}
+                actionLabel="Switch thread"
+                isTurnStreaming={isTurnStreaming}
+                isPending={isMigrationPending}
+                error={migrationDialogError}
+                onOpenChange={handleMigrationDialogOpenChange}
+                onConfirm={handleMigrationConfirm}
               />
             ) : null}
 

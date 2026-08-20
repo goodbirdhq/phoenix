@@ -1264,4 +1264,54 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       // hang until the suite timeout instead of failing here.
     }).pipe(TestClock.withLive),
   );
+  it.effect("frames a conversation seed into the first prompt of the new session", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-conversation-seed");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-acp-seed-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockGrokWrapper({ T3_ACP_REQUEST_LOG_PATH: requestLogPath }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      assert.equal(adapter.capabilities.conversationSeeding, "framed-prompt");
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("grok"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        seed: {
+          messages: [
+            { role: "user", text: "add a regression test" },
+            { role: "assistant", text: "added it in GrokAdapter.test.ts" },
+          ],
+        },
+      });
+      yield* adapter.sendTurn({ threadId, input: "carry on", attachments: [] });
+      yield* adapter.sendTurn({ threadId, input: "and now the docs", attachments: [] });
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const prompts = requests.flatMap((entry) =>
+        entry.method === "session/prompt"
+          ? [(entry.params as { prompt: Array<{ type: string; text?: string }> }).prompt]
+          : [],
+      );
+
+      assert.lengthOf(prompts, 2);
+      assert.deepEqual(
+        prompts[0]?.map((part) => part.type),
+        ["text", "text"],
+      );
+      assert.isTrue(prompts[0]?.[0]?.text?.startsWith("<phoenix-prior-conversation>"));
+      assert.include(prompts[0]?.[0]?.text ?? "", "added it in GrokAdapter.test.ts");
+      assert.equal(prompts[0]?.[1]?.text, "carry on");
+      // The seed rides on the first prompt only.
+      assert.deepEqual(prompts[1], [{ type: "text", text: "and now the docs" }]);
+
+      yield* adapter.stopSession(threadId);
+    }).pipe(TestClock.withLive),
+  );
 });

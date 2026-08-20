@@ -167,6 +167,28 @@ export function requireThreadAbsent(input: {
   );
 }
 
+/**
+ * Rejects commands that must not land mid-turn. `latestTurn.state` is the
+ * authoritative in-flight signal in this read model: the projector marks a
+ * turn running while the session reports it active and settles it as soon as
+ * the session leaves "running". A live session between turns is fine — only
+ * a turn actually in flight blocks.
+ */
+export function requireThreadTurnNotRunning(input: {
+  readonly commandType: OrchestrationCommand["type"];
+  readonly thread: OrchestrationThread;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  if (input.thread.latestTurn?.state !== "running") {
+    return Effect.void;
+  }
+  return Effect.fail(
+    invariantError(
+      input.commandType,
+      `Thread '${input.thread.id}' has a turn in flight and cannot handle command '${input.commandType}'.`,
+    ),
+  );
+}
+
 export function requireNonNegativeInteger(input: {
   readonly commandType: OrchestrationCommand["type"];
   readonly field: string;

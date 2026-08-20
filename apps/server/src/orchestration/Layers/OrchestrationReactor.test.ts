@@ -6,6 +6,7 @@ import * as Scope from "effect/Scope";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
+import { LimitFailoverReactor } from "../Services/LimitFailoverReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { SessionSpawnReactor } from "../Services/SessionSpawnReactor.ts";
@@ -36,6 +37,14 @@ describe("OrchestrationReactor", () => {
               return Effect.void;
             },
             drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(LimitFailoverReactor, {
+            start: () => {
+              started.push("limit-failover-reactor");
+              return Effect.void;
+            },
           }),
         ),
         Layer.provideMerge(
@@ -93,6 +102,7 @@ describe("OrchestrationReactor", () => {
     expect(started).toEqual([
       "provider-runtime-ingestion",
       "provider-command-reactor",
+      "limit-failover-reactor",
       "checkpoint-reactor",
       "thread-deletion-reactor",
       "session-spawn-reactor",

@@ -324,6 +324,43 @@ describe("ServerSettingsPatch.providerInstances", () => {
     );
   });
 
+  it("saves same-driver failover groups and refuses cross-driver ones", () => {
+    const saved = decodeServerSettingsPatch({
+      providerInstances: {
+        claude_personal: { driver: "claudeAgent", failoverGroup: "claude-accounts" },
+        claude_work: { driver: "claudeAgent", failoverGroup: "claude-accounts" },
+        codex_solo: { driver: "codex" },
+      },
+    });
+    expect(saved.providerInstances?.[ProviderInstanceId.make("claude_work")]?.failoverGroup).toBe(
+      "claude-accounts",
+    );
+
+    // A group promises interchangeable accounts; two drivers are not.
+    expect(() =>
+      decodeServerSettingsPatch({
+        providerInstances: {
+          claude_work: { driver: "claudeAgent", failoverGroup: "mixed" },
+          codex_work: { driver: "codex", failoverGroup: "mixed" },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("still reads a settings file whose group mixes drivers", () => {
+    // Hand edits and fork/rollback round-trips must not brick settings; the
+    // runtime downgrades the group instead.
+    const decoded = decodeServerSettings({
+      providerInstances: {
+        claude_work: { driver: "claudeAgent", failoverGroup: "mixed" },
+        ollama_local: { driver: "ollama", failoverGroup: "mixed" },
+      },
+    });
+    expect(decoded.providerInstances[ProviderInstanceId.make("ollama_local")]?.failoverGroup).toBe(
+      "mixed",
+    );
+  });
+
   it("preserves a fork-defined driver entry through patch decoding", () => {
     const patch = decodeServerSettingsPatch({
       providerInstances: {

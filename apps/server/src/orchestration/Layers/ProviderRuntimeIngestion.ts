@@ -41,6 +41,7 @@ import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
 } from "../Services/ProviderRuntimeIngestion.ts";
+import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -883,6 +884,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
+  const receiptBus = yield* RuntimeReceiptBus;
   const serverSettingsService = yield* ServerSettingsService;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
@@ -1521,7 +1523,22 @@ const make = Effect.gen(function* () {
             Option.isSome(pendingTurnStart)
           : false;
 
+      // A migrated thread's old instance keeps emitting for a moment while it
+      // shuts down; its tail (typically the stop) must not clobber the
+      // thread's single session slot after the new instance has bound.
+      // Stale = the event's instance matches neither the thread's selection
+      // nor the session slot's current instance. Events without an instance
+      // id (legacy) are never stale.
+      const staleInstanceEvent =
+        event.providerInstanceId !== undefined &&
+        thread.modelSelection.instanceId !== event.providerInstanceId &&
+        thread.session?.providerInstanceId !== undefined &&
+        thread.session.providerInstanceId !== event.providerInstanceId;
+
       const shouldApplyThreadLifecycle = (() => {
+        if (staleInstanceEvent) {
+          return false;
+        }
         if (!STRICT_PROVIDER_LIFECYCLE_GUARD) {
           return true;
         }
@@ -1607,6 +1624,11 @@ const make = Effect.gen(function* () {
               : status === "ready"
                 ? null
                 : (thread.session?.lastError ?? null);
+        const lastErrorKind =
+          event.type === "turn.completed" &&
+          normalizeRuntimeTurnState(event.payload.state) === "failed"
+            ? thread.session?.lastErrorKind
+            : undefined;
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
@@ -1643,6 +1665,7 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: nextActiveTurnId,
               lastError,
+              ...(lastErrorKind ? { lastErrorKind } : {}),
               stoppedBy: thread.session?.stoppedBy ?? null,
               stopRequestedAt: thread.session?.stopRequestedAt ?? null,
               stopReason: thread.session?.stopReason ?? null,
@@ -1882,9 +1905,13 @@ const make = Effect.gen(function* () {
       if (event.type === "runtime.error") {
         const runtimeErrorMessage = event.payload.message;
 
-        const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
-          ? true
-          : activeTurnId === null || eventTurnId === undefined || sameId(activeTurnId, eventTurnId);
+        const shouldApplyRuntimeError = staleInstanceEvent
+          ? false
+          : !STRICT_PROVIDER_LIFECYCLE_GUARD
+            ? true
+            : activeTurnId === null ||
+              eventTurnId === undefined ||
+              sameId(activeTurnId, eventTurnId);
 
         if (shouldApplyRuntimeError) {
           yield* orchestrationEngine.dispatch({
@@ -1901,6 +1928,7 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: eventTurnId ?? null,
               lastError: runtimeErrorMessage,
+              ...(event.payload.kind ? { lastErrorKind: event.payload.kind } : {}),
               stoppedBy: thread.session?.stoppedBy ?? null,
               stopRequestedAt: thread.session?.stopRequestedAt ?? null,
               stopReason: thread.session?.stopReason ?? null,
@@ -2044,6 +2072,39 @@ const make = Effect.gen(function* () {
           ),
         ),
       ).pipe(Effect.asVoid);
+
+      if (event.type === "turn.completed") {
+        const turnId = toTurnId(event.turnId);
+        if (turnId) {
+          const projectedTurn = yield* projectionTurnRepository.getByTurnId({
+            threadId: thread.id,
+            turnId,
+          });
+          let messageId: MessageId | null = Option.isSome(projectedTurn)
+            ? projectedTurn.value.pendingMessageId
+            : null;
+          const assistantMessageId = Option.isSome(projectedTurn)
+            ? projectedTurn.value.assistantMessageId
+            : null;
+          if (messageId === null) {
+            const pendingStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+              threadId: thread.id,
+            });
+            messageId = Option.isSome(pendingStart) ? pendingStart.value.messageId : null;
+          }
+
+          yield* receiptBus.publish({
+            type: "provider.turn.completed",
+            threadId: thread.id,
+            turnId,
+            messageId,
+            assistantMessageId,
+            state: event.payload.state,
+            errorMessage: event.payload.errorMessage ?? null,
+            createdAt: now,
+          });
+        }
+      }
     });
 
   const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;

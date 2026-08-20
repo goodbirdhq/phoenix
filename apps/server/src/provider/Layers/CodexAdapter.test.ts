@@ -12,6 +12,7 @@ import {
   ProviderInstanceId,
   ProviderItemId,
   type ProviderApprovalDecision,
+  type ProviderConversationSeed,
   type ProviderEvent,
   type ProviderSession,
   type ProviderTurnStartResult,
@@ -43,6 +44,7 @@ import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
+  type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeSendTurnInput,
   type CodexSessionRuntimeShape,
@@ -89,6 +91,13 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   public readonly interruptTurnImpl = vi.fn(
     (_turnId?: TurnId): Promise<void> => Promise.resolve(undefined),
   );
+
+  public readonly seedConversationImpl = vi.fn(
+    (_seed: ProviderConversationSeed): Promise<void> => Promise.resolve(undefined),
+  );
+
+  /** Set to make native seeding fail, as an older app-server would. */
+  public seedConversationError: CodexSessionRuntimeError | undefined = undefined;
 
   public readonly readThreadImpl = vi.fn(
     (): Promise<CodexThreadSnapshot> =>
@@ -138,6 +147,14 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     return Effect.promise(() => this.interruptTurnImpl(turnId));
   }
 
+  seedConversation(seed: ProviderConversationSeed) {
+    return Effect.promise(() => this.seedConversationImpl(seed)).pipe(
+      Effect.flatMap(() =>
+        this.seedConversationError ? Effect.fail(this.seedConversationError) : Effect.void,
+      ),
+    );
+  }
+
   readThread = Effect.promise(() => this.readThreadImpl());
 
   rollbackThread(numTurns: number) {
@@ -173,6 +190,7 @@ function makeRuntimeFactory() {
 
   return {
     factory,
+    runtimes,
     get lastRuntime(): FakeCodexRuntime | undefined {
       return runtimes.at(-1);
     },
@@ -1394,3 +1412,117 @@ it.effect("flushes managed native logs when the adapter layer shuts down", () =>
     }
   }),
 );
+
+const seedingRuntimeFactory = makeRuntimeFactory();
+const seedingLayer = it.layer(
+  Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      return yield* makeCodexAdapter(codexConfig, {
+        makeRuntime: seedingRuntimeFactory.factory,
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+const SEED: ProviderConversationSeed = {
+  messages: [
+    { role: "user", text: "add a regression test" },
+    { role: "assistant", text: "added it in CodexAdapter.test.ts" },
+  ],
+};
+
+seedingLayer("CodexAdapterLive conversation seeding", (it) => {
+  it.effect("declares the native seeding tier", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+
+      NodeAssert.equal(adapter.capabilities.conversationSeeding, "native-history");
+    }),
+  );
+
+  it.effect("hands the seed to the runtime as native thread history", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("sess-seed-native");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+        seed: SEED,
+      });
+      const runtime = seedingRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.deepStrictEqual(runtime.seedConversationImpl.mock.calls[0]?.[0], SEED);
+
+      yield* adapter.sendTurn({ threadId, input: "carry on", attachments: [] });
+
+      // Native seeding means the user's prompt travels untouched.
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls[0]?.[0]?.input, "carry on");
+    }),
+  );
+
+  it.effect("frames the seed into the first prompt when native seeding fails", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("sess-seed-fallback");
+      seedingRuntimeFactory.factory.mockImplementationOnce(
+        (options: CodexSessionRuntimeOptions) => {
+          const runtime = new FakeCodexRuntime(options);
+          runtime.seedConversationError = new CodexErrors.CodexAppServerRequestError({
+            code: -32601,
+            errorMessage: "Method not found: thread/inject_items",
+          });
+          seedingRuntimeFactory.runtimes.push(runtime);
+          return Effect.succeed(runtime);
+        },
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+        seed: SEED,
+      });
+      const runtime = seedingRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+
+      yield* adapter.sendTurn({ threadId, input: "carry on", attachments: [] });
+      const firstInput = runtime.sendTurnImpl.mock.calls[0]?.[0]?.input ?? "";
+      NodeAssert.ok(firstInput.startsWith("<phoenix-prior-conversation>"));
+      NodeAssert.ok(firstInput.includes("add a regression test"));
+      NodeAssert.ok(firstInput.endsWith("carry on"));
+
+      // The seed is consumed once: the next turn is the user's prompt alone.
+      yield* adapter.sendTurn({ threadId, input: "and now the docs", attachments: [] });
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls[1]?.[0]?.input, "and now the docs");
+    }),
+  );
+
+  it.effect("skips seeding a session that resumes its codex thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("sess-seed-resume");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor: { threadId: "provider-thread-1" },
+        seed: SEED,
+      });
+      const runtime = seedingRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.equal(runtime.seedConversationImpl.mock.calls.length, 0);
+
+      yield* adapter.sendTurn({ threadId, input: "carry on", attachments: [] });
+
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls[0]?.[0]?.input, "carry on");
+    }),
+  );
+});

@@ -42,6 +42,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import { formatConversationSeedPrompt, seedForFreshSession } from "../conversationSeed.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -117,6 +118,12 @@ interface GrokSessionContext {
    * continues it, and only the last remaining prompt settles the turn. */
   promptsInFlight: number;
   currentModelId: string | undefined;
+  /**
+   * Prior conversation carried into a migrated thread. ACP has no
+   * start-from-history entry point, so it rides along on the first prompt and
+   * is cleared once sent.
+   */
+  pendingSeedPrompt: string | undefined;
   stopped: boolean;
 }
 
@@ -563,6 +570,11 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           );
 
           const resumeSessionId = parseGrokResume(input.resumeCursor)?.sessionId;
+          const seed = yield* seedForFreshSession({
+            threadId: input.threadId,
+            seed: input.seed,
+            resuming: resumeSessionId !== undefined,
+          });
           const acpNativeLoggers = makeAcpNativeLoggers({
             nativeEventLogger,
             provider: PROVIDER,
@@ -778,6 +790,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             interruptedTurnIds: new Set(),
             promptsInFlight: 0,
             currentModelId: boundModelId,
+            pendingSeedPrompt: seed === undefined ? undefined : formatConversationSeedPrompt(seed),
             stopped: false,
           };
 
@@ -990,7 +1003,14 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                     } satisfies EffectAcpSchema.ContentBlock;
                   }),
               );
+              // A seeded session leads with the prior conversation so the
+              // agent continues the thread instead of meeting it cold.
+              const seedPromptParts: Array<EffectAcpSchema.ContentBlock> = ctx.pendingSeedPrompt
+                ? [{ type: "text" as const, text: ctx.pendingSeedPrompt }]
+                : [];
+              ctx.pendingSeedPrompt = undefined;
               const promptParts: Array<EffectAcpSchema.ContentBlock> = [
+                ...seedPromptParts,
                 ...(text ? [{ type: "text" as const, text }] : []),
                 ...imagePromptParts,
               ];
@@ -1459,7 +1479,12 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
 
     return {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session" },
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        // ACP has no start-from-history entry point: the transcript is framed
+        // into the first prompt of the new session.
+        conversationSeeding: "framed-prompt",
+      },
       startSession,
       sendTurn,
       interruptTurn,

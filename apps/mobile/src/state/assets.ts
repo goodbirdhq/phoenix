@@ -27,3 +27,21 @@ export function useAssetUrl(
   }
   return resolveAssetUrl(preparedConnection.value.httpBaseUrl, result.value.relativeUrl);
 }
+
+/** Resolves an ordered attachment collection without one hook subscription per image. */
+export function useAssetUrls(
+  environmentId: EnvironmentId,
+  resources: ReadonlyArray<AssetResource>,
+): ReadonlyArray<string | null> {
+  const preparedConnection = usePreparedConnection(environmentId);
+  const results = useAtomValue(assetEnvironment.createUrls({ environmentId, resources }));
+  if (preparedConnection._tag === "None") {
+    return resources.map(() => null);
+  }
+  return resources.map((_, index) => {
+    const result = results[index];
+    return result?._tag === "Success"
+      ? resolveAssetUrl(preparedConnection.value.httpBaseUrl, result.value.relativeUrl)
+      : null;
+  });
+}

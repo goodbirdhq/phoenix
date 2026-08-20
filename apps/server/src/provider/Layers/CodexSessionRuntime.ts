@@ -6,6 +6,7 @@ import {
   ProviderItemId,
   type ProviderInstanceId,
   type ProviderApprovalDecision,
+  type ProviderConversationSeed,
   type ProviderEvent,
   type ProviderInteractionMode,
   type ProviderRequestKind,
@@ -140,6 +141,14 @@ export interface CodexSessionRuntimeShape {
     input: CodexSessionRuntimeSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, CodexSessionRuntimeError>;
   readonly interruptTurn: (turnId?: TurnId) => Effect.Effect<void, CodexSessionRuntimeError>;
+  /**
+   * Seed the freshly opened thread with a prior conversation (thread
+   * migration). Fails rather than half-succeeding so the adapter can fall back
+   * to framing the seed into the first prompt.
+   */
+  readonly seedConversation: (
+    seed: ProviderConversationSeed,
+  ) => Effect.Effect<void, CodexSessionRuntimeError>;
   readonly readThread: Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly rollbackThread: (
     numTurns: number,
@@ -461,6 +470,88 @@ interface CodexThreadOpenClient {
     payload: CodexRpc.ClientRequestParamsByMethod[M],
   ) => Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError>;
 }
+
+type CodexSeedHistoryItem = {
+  readonly type: "message";
+  readonly role: "user" | "assistant";
+  readonly content: ReadonlyArray<{
+    readonly type: "input_text" | "output_text";
+    readonly text: string;
+  }>;
+};
+
+/**
+ * Render a conversation seed as Responses API items for the app-server's
+ * model-visible thread history.
+ */
+export function buildCodexSeedHistoryItems(
+  seed: ProviderConversationSeed,
+): ReadonlyArray<CodexSeedHistoryItem> {
+  const items: Array<CodexSeedHistoryItem> = [];
+  const userItem = (text: string): CodexSeedHistoryItem => ({
+    type: "message",
+    role: "user",
+    content: [{ type: "input_text", text }],
+  });
+
+  if (seed.droppedMessageCount !== undefined && seed.droppedMessageCount > 0) {
+    items.push(
+      userItem(
+        `[Phoenix] This thread was migrated from another agent session. The ${seed.droppedMessageCount} oldest message(s) were dropped to fit the transfer budget.`,
+      ),
+    );
+  }
+  if (seed.brief !== undefined) {
+    items.push(userItem(`[Phoenix] Handoff brief from the previous agent:\n\n${seed.brief}`));
+  }
+  for (const message of seed.messages) {
+    items.push(
+      message.role === "user"
+        ? userItem(message.text)
+        : {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: message.text }],
+          },
+    );
+  }
+  return items;
+}
+
+interface CodexThreadSeedClient {
+  readonly request: (
+    method: "thread/inject_items",
+    payload: CodexRpc.ClientRequestParamsByMethod["thread/inject_items"],
+  ) => Effect.Effect<
+    CodexRpc.ClientRequestResponsesByMethod["thread/inject_items"],
+    CodexErrors.CodexAppServerError
+  >;
+}
+
+/**
+ * Hand a prior conversation to a fresh Codex thread natively.
+ *
+ * `thread/inject_items` is the typed route: the app-server also documents a
+ * resume-by-history path, but its generated `thread/resume` params carry no
+ * `history` field, so anything we sent there would be stripped on encode and
+ * the thread would start blind while reporting success.
+ */
+export const seedCodexThreadHistory = (input: {
+  readonly client: CodexThreadSeedClient;
+  readonly providerThreadId: string;
+  readonly seed: ProviderConversationSeed;
+}): Effect.Effect<void, CodexErrors.CodexAppServerError> => {
+  const items = buildCodexSeedHistoryItems(input.seed);
+  if (items.length === 0) {
+    return Effect.void;
+  }
+  return input.client
+    .request("thread/inject_items", {
+      threadId: input.providerThreadId,
+      items,
+    })
+    .pipe(Effect.asVoid);
+};
 
 export const openCodexThread = (input: {
   readonly client: CodexThreadOpenClient;
@@ -1862,6 +1953,17 @@ export const makeCodexSessionRuntime = (
               ? { resumeCursor: { threadId: resumedProviderThreadId } }
               : {}),
           } satisfies ProviderTurnStartResult;
+        }),
+      seedConversation: (seed) =>
+        Effect.gen(function* () {
+          const providerThreadId = yield* readProviderThreadId;
+          yield* seedCodexThreadHistory({ client, providerThreadId, seed });
+          yield* Effect.logInfo("codex.session.seeded", {
+            threadId: options.threadId,
+            providerThreadId,
+            seededMessages: seed.messages.length,
+            hasBrief: seed.brief !== undefined,
+          });
         }),
       interruptTurn: (turnId) =>
         Effect.gen(function* () {

@@ -6,6 +6,7 @@ import {
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
+  type ProviderConversationSeed,
   type ProjectId,
   type OrchestrationSession,
   ThreadId,
@@ -29,6 +30,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { buildConversationSeed } from "../../provider/conversationSeed.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
@@ -62,7 +64,8 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.migrated";
   }
 >;
 
@@ -477,6 +480,11 @@ const make = Effect.gen(function* () {
       readonly modelSelection?: ModelSelection;
       readonly pendingTurnStart?: boolean;
       readonly queuedDeliveryMessageId?: MessageId | null;
+      // Thread migration deliberately crosses the instance guard: the session
+      // restarts on the target instance, and the native resume cursor is kept
+      // only when the continuation identities match (same CLI home).
+      readonly allowMigration?: boolean;
+      readonly migrationBrief?: string;
     },
   ) {
     const thread = yield* resolveThread(threadId);
@@ -486,10 +494,29 @@ const make = Effect.gen(function* () {
 
     const desiredRuntimeMode = thread.runtimeMode;
     const requestedModelSelection = options?.modelSelection;
+    // A migrated thread can briefly leave a stale runtime entry for the old
+    // instance behind, and the read-model binding can lag the rebind by an
+    // event. Prefer the effective selection's session, then the recorded
+    // binding, and never read a stopped entry — otherwise the guard computes
+    // the thread's account from the wrong session.
+    const desiredInstanceIdHint = (requestedModelSelection ?? thread.modelSelection).instanceId;
     const resolveActiveSession = (threadId: ThreadId) =>
-      providerService
-        .listSessions()
-        .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
+      providerService.listSessions().pipe(
+        Effect.map((sessions) => {
+          const matches = sessions.filter(
+            (session) => session.threadId === threadId && session.status !== "closed",
+          );
+          const boundInstanceId = thread.session?.providerInstanceId;
+          return (
+            matches.find((session) => session.providerInstanceId === desiredInstanceIdHint) ??
+            matches.find(
+              (session) =>
+                boundInstanceId !== undefined && session.providerInstanceId === boundInstanceId,
+            ) ??
+            matches[0]
+          );
+        }),
+      );
 
     const activeSession = yield* resolveActiveSession(threadId);
     const activeThreadSession =
@@ -508,12 +535,15 @@ const make = Effect.gen(function* () {
         detail: `Thread '${threadId}' has an active provider session without a provider instance id.`,
       });
     }
+    // A live runtime session is the strongest truth about which account the
+    // thread is on: the read-model slot can be clobbered by a stale
+    // instance's late stop event (observed live: the old account's stop
+    // landed after the migration bind and overwrote the session as
+    // "stopped" on the old instance).
     const currentInstanceId =
-      activeThreadSession !== null &&
-      activeSession !== undefined &&
-      activeSession.providerInstanceId !== undefined
+      activeSession !== undefined && activeSession.providerInstanceId !== undefined
         ? activeSession.providerInstanceId
-        : thread.modelSelection.instanceId;
+        : (thread.session?.providerInstanceId ?? thread.modelSelection.instanceId);
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const desiredInstanceId = desiredModelSelection.instanceId;
     const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
@@ -595,10 +625,13 @@ const make = Effect.gen(function* () {
         requestedModelSelection,
       });
     }
+    // Compare the effective selection, not just the request payload: a
+    // thread.meta.update can rewrite thread.modelSelection between turns, and a
+    // selection-less turn.start must not slip past the instance guard.
     if (
       thread.session !== null &&
-      requestedModelSelection !== undefined &&
-      requestedModelSelection.instanceId !== currentInstanceId
+      desiredInstanceId !== currentInstanceId &&
+      options?.allowMigration !== true
     ) {
       if (currentInfo.driverKind !== desiredInfo.driverKind) {
         return yield* new ProviderAdapterRequestError({
@@ -624,9 +657,41 @@ const make = Effect.gen(function* () {
       projects: project ? [project] : [],
     });
 
+    // A session on a different continuation identity cannot resume natively,
+    // so a migrating thread is seeded from Phoenix's own transcript instead.
+    const continuationCompatible =
+      currentInfo.continuationIdentity.continuationKey ===
+      desiredInfo.continuationIdentity.continuationKey;
+    const buildMigrationSeed = Effect.gen(function* () {
+      if (continuationCompatible) {
+        return undefined;
+      }
+      const detail = yield* projectionSnapshotQuery.getThreadDetailById(threadId);
+      if (Option.isNone(detail)) {
+        return undefined;
+      }
+      const build = buildConversationSeed({
+        messages: detail.value.messages,
+        ...(options?.migrationBrief !== undefined ? { brief: options.migrationBrief } : {}),
+      });
+      if (build.seed.messages.length === 0 && build.seed.brief === undefined) {
+        return undefined;
+      }
+      if (build.droppedMessageCount > 0 || build.truncatedMessageCount > 0) {
+        yield* Effect.logInfo("provider command reactor bounded migration seed", {
+          threadId,
+          keptMessages: build.seed.messages.length,
+          droppedMessages: build.droppedMessageCount,
+          truncatedMessages: build.truncatedMessageCount,
+        });
+      }
+      return build.seed;
+    });
+
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
+      readonly seed?: ProviderConversationSeed;
     }) =>
       providerService.startSession(threadId, {
         threadId,
@@ -636,6 +701,7 @@ const make = Effect.gen(function* () {
         ...(thread.title ? { title: thread.title } : {}),
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+        ...(input?.seed !== undefined ? { seed: input.seed } : {}),
         runtimeMode: desiredRuntimeMode,
       });
 
@@ -693,9 +759,7 @@ const make = Effect.gen(function* () {
       const modelChanged =
         requestedModelSelection !== undefined &&
         requestedModelSelection.model !== activeSession?.model;
-      const instanceChanged =
-        requestedModelSelection !== undefined &&
-        activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
+      const instanceChanged = activeSession?.providerInstanceId !== desiredInstanceId;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
       const previousModelSelection = threadModelSelections.get(threadId);
       const shouldRestartForModelSelectionChange =
@@ -713,9 +777,10 @@ const make = Effect.gen(function* () {
         return existingSessionThreadId;
       }
 
-      const resumeCursor = shouldRestartForModelChange
-        ? undefined
-        : (activeSession?.resumeCursor ?? undefined);
+      const resumeCursor =
+        shouldRestartForModelChange || !continuationCompatible
+          ? undefined
+          : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
         threadId,
         existingSessionThreadId,
@@ -735,9 +800,11 @@ const make = Effect.gen(function* () {
         shouldRestartForModelSelectionChange,
         hasResumeCursor: resumeCursor !== undefined,
       });
-      const restartedSession = yield* startProviderSession(
-        resumeCursor !== undefined ? { resumeCursor } : undefined,
-      );
+      const migrationSeed = resumeCursor === undefined ? yield* buildMigrationSeed : undefined;
+      const restartedSession = yield* startProviderSession({
+        ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+        ...(migrationSeed !== undefined ? { seed: migrationSeed } : {}),
+      });
       yield* Effect.logInfo("provider command reactor restarted provider session", {
         threadId,
         previousSessionId: existingSessionThreadId,
@@ -750,7 +817,10 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
-    const startedSession = yield* startProviderSession(undefined);
+    const freshSeed = yield* buildMigrationSeed;
+    const startedSession = yield* startProviderSession(
+      freshSeed !== undefined ? { seed: freshSeed } : undefined,
+    );
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
@@ -1581,6 +1651,51 @@ const make = Effect.gen(function* () {
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
+      case "thread.migrated": {
+        // The decider has already validated the migration (no running turn,
+        // target differs) and the projector has rebound thread.modelSelection.
+        // Keep the reactor's per-thread selection cache in step so unrelated
+        // restarts (e.g. runtime-mode changes) do not resurrect the old account.
+        threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+        const thread = yield* resolveThread(event.payload.threadId);
+        if (!thread?.session) {
+          // Never started: the first turn starts on the target instance via
+          // the rebound thread.modelSelection, seeded if history exists.
+          return;
+        }
+        // A stopped session migrates too — otherwise the stale binding would
+        // trip the instance guard on the next turn.
+        yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
+          modelSelection: event.payload.modelSelection,
+          allowMigration: true,
+          ...(event.payload.brief !== undefined ? { migrationBrief: event.payload.brief } : {}),
+        });
+        // Auto-failover retries the failed turn here, after the rebind, so the
+        // retry can never race the session restart into the instance guard.
+        if (event.payload.trigger === "auto-failover") {
+          const migrated = yield* resolveThread(event.payload.threadId);
+          const failedMessage = migrated?.messages.findLast((message) => message.role === "user");
+          if (migrated && failedMessage) {
+            // Same message id: the projection upserts on message_id, so the
+            // retried turn replaces the failed one instead of duplicating it.
+            yield* orchestrationEngine.dispatch({
+              type: "thread.turn.start",
+              commandId: CommandId.make(`limit-failover-retry:${event.eventId}`),
+              threadId: event.payload.threadId,
+              message: {
+                messageId: failedMessage.id,
+                role: "user",
+                text: failedMessage.text,
+                attachments: failedMessage.attachments ?? [],
+              },
+              interactionMode: migrated.interactionMode,
+              runtimeMode: migrated.runtimeMode,
+              createdAt: event.occurredAt,
+            });
+          }
+        }
+        return;
+      }
     }
   });
 
@@ -1626,7 +1741,8 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
-        event.type === "thread.session-stop-requested"
+        event.type === "thread.session-stop-requested" ||
+        event.type === "thread.migrated"
       ) {
         return yield* worker.enqueue(event);
       }

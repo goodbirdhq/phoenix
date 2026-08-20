@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 
 import {
   ModelSelection,
+  ProviderFailoverGroup,
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderDriverKind,
@@ -56,6 +57,8 @@ import {
   ProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { LimitFailoverReactor } from "../Services/LimitFailoverReactor.ts";
+import { LimitFailoverReactorLive } from "./LimitFailoverReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -95,7 +98,10 @@ async function waitFor(
 
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderCommandReactor
+    | ProjectionSnapshotQuery
+    | LimitFailoverReactor,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -153,6 +159,7 @@ describe("ProviderCommandReactor", () => {
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
     readonly testClock?: boolean;
+    readonly settingsOverrides?: Parameters<(typeof ServerSettingsService)["layerTest"]>[0];
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
@@ -322,6 +329,7 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+          conversationSeeding: "framed-prompt",
         }),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
@@ -390,7 +398,7 @@ describe("ProviderCommandReactor", () => {
         } satisfies OrchestrationEngineService["Service"];
       }),
     ).pipe(Layer.provide(orchestrationLayer));
-    const layer = ProviderCommandReactorLive.pipe(
+    const layer = Layer.mergeAll(ProviderCommandReactorLive, LimitFailoverReactorLive).pipe(
       Layer.provideMerge(reactorOrchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
@@ -415,7 +423,7 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         }),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(ServerSettingsService.layerTest(input?.settingsOverrides)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(input?.testClock === true ? TestClock.layer() : Layer.empty),
@@ -490,7 +498,10 @@ describe("ProviderCommandReactor", () => {
     }
 
     scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
+    const limitFailoverReactor = await runtime.runPromise(Effect.service(LimitFailoverReactor));
+    await Effect.runPromise(
+      Effect.andThen(reactor.start(), limitFailoverReactor.start()).pipe(Scope.provide(scope)),
+    );
     const drain = () => Effect.runPromise(reactor.drain);
 
     return {
@@ -2012,6 +2023,489 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
   });
+
+  effectIt.effect(
+    "rejects a cross-driver selection persisted via thread.meta.update when the next turn carries no selection",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-meta-bypass-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-meta-bypass-1"),
+            role: "user",
+            text: "first",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+        yield* harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-meta-bypass-selection"),
+          threadId: ThreadId.make("thread-1"),
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-opus-4-6",
+          },
+        });
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-meta-bypass-2"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-meta-bypass-2"),
+            role: "user",
+            text: "second",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() =>
+          waitFor(async () => {
+            const readModel = await harness.readModel();
+            const thread = readModel.threads.find(
+              (entry) => entry.id === ThreadId.make("thread-1"),
+            );
+            return (
+              thread?.activities.some(
+                (activity) => activity.kind === "provider.turn.start.failed",
+              ) ?? false
+            );
+          }),
+        );
+
+        expect(harness.startSession.mock.calls.length).toBe(1);
+        expect(harness.sendTurn.mock.calls.length).toBe(1);
+
+        const readModel = yield* Effect.promise(() => harness.readModel());
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        expect(thread?.session?.providerName).toBe("codex");
+        expect(
+          thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+        ).toMatchObject({
+          payload: {
+            detail: expect.stringContaining("cannot switch to 'claudeAgent'"),
+          },
+        });
+      }),
+  );
+
+  effectIt.effect(
+    "migrates across drivers without the old resume cursor and delivers the handoff brief in the fresh seed",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-migrate-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-migrate-1"),
+            role: "user",
+            text: "first",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+        yield* harness.engine.dispatch({
+          type: "thread.migrate",
+          commandId: CommandId.make("cmd-migrate-cross-driver"),
+          threadId: ThreadId.make("thread-1"),
+          targetInstanceId: ProviderInstanceId.make("claudeAgent"),
+          targetModel: "claude-opus-4-6",
+          handoffMode: "brief",
+          brief: "The origin agent completed the contract changes; continue with server wiring.",
+          trigger: "manual",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 2));
+
+        const restartInput = harness.startSession.mock.calls[1]?.[1] as Record<string, unknown>;
+        expect(restartInput).toMatchObject({
+          provider: ProviderDriverKind.make("claudeAgent"),
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-opus-4-6",
+          },
+        });
+        expect(restartInput).not.toHaveProperty("resumeCursor");
+        const seed = restartInput["seed"] as
+          | { messages: ReadonlyArray<{ role: string; text: string }>; brief?: string }
+          | undefined;
+        expect(seed).toBeDefined();
+        expect(seed?.brief).toBe(
+          "The origin agent completed the contract changes; continue with server wiring.",
+        );
+        expect(seed?.messages.some((message) => message.text.includes("first"))).toBe(true);
+
+        yield* Effect.promise(() =>
+          waitFor(async () => {
+            const readModel = await harness.readModel();
+            const thread = readModel.threads.find(
+              (entry) => entry.id === ThreadId.make("thread-1"),
+            );
+            return thread?.session?.providerName === "claudeAgent";
+          }),
+        );
+        const readModel = yield* Effect.promise(() => harness.readModel());
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("claudeAgent"));
+        expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("claudeAgent"));
+
+        // A stale runtime entry for the old instance must not trip the guard
+        // on the next turn: the reactor prefers the bound instance's session.
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-migrate-2"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-migrate-2"),
+            role: "user",
+            text: "continue on the new account",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+        const postTurnModel = yield* Effect.promise(() => harness.readModel());
+        const postTurnThread = postTurnModel.threads.find(
+          (entry) => entry.id === ThreadId.make("thread-1"),
+        );
+        expect(
+          postTurnThread?.activities.find(
+            (activity) => activity.kind === "provider.turn.start.failed",
+          ),
+        ).toBeUndefined();
+        expect(postTurnThread?.session?.providerInstanceId).toBe(
+          ProviderInstanceId.make("claudeAgent"),
+        );
+      }),
+  );
+
+  effectIt.effect(
+    "auto-failover migrates a grouped thread off a usage-limited account and retries the turn",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            settingsOverrides: {
+              providerInstances: {
+                [ProviderInstanceId.make("codex")]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  failoverGroup: ProviderFailoverGroup.make("pool"),
+                },
+                [ProviderInstanceId.make("codex_work")]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  failoverGroup: ProviderFailoverGroup.make("pool"),
+                },
+              },
+            },
+          }),
+        );
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-failover-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-failover-1"),
+            role: "user",
+            text: "please finish the migration feature",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+        // The classified limit failure: session errors with the typed kind.
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-usage-limit"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "error",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: "You've hit your usage limit.",
+            lastErrorKind: "usage-limit",
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+
+        // Failover: migrate to the group member, then retry the failed turn.
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+
+        const readModel = yield* Effect.promise(() => harness.readModel());
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("codex_work"));
+        const migrationActivity = thread?.activities.find(
+          (activity) => activity.kind === "thread.migrated",
+        );
+        expect(migrationActivity).toBeDefined();
+        // The retried message reuses its id, so history shows one user message.
+        const userMessages = thread?.messages.filter((message) => message.role === "user") ?? [];
+        expect(userMessages.length).toBe(1);
+
+        // The limited instance's stop event can land AFTER the migration bind
+        // and clobber the read-model session slot (observed live). A follow-up
+        // turn must still resolve the live target session, not the clobber.
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-straggler-stop"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "stopped",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-failover-after-straggler"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-failover-2"),
+            role: "user",
+            text: "keep going on the healthy account",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 3));
+        const afterStraggler = yield* Effect.promise(() => harness.readModel());
+        const threadAfter = afterStraggler.threads.find(
+          (entry) => entry.id === ThreadId.make("thread-1"),
+        );
+        expect(
+          threadAfter?.activities.find(
+            (activity) => activity.kind === "provider.turn.start.failed",
+          ),
+        ).toBeUndefined();
+        expect(threadAfter?.session?.providerInstanceId).toBe(
+          ProviderInstanceId.make("codex_work"),
+        );
+      }),
+  );
+
+  effectIt.effect("does not auto-failover an ungrouped account on a usage limit", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-ungrouped-1"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-ungrouped-1"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+      yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-ungrouped-limit"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "error",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: "You've hit your usage limit.",
+          lastErrorKind: "usage-limit",
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+
+      // A follow-up turn on the same thread is the drain signal: by the time
+      // it lands, the failover worker has processed the limit event.
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-ungrouped-2"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-ungrouped-2"),
+          role: "user",
+          text: "second",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("codex"));
+      expect(
+        thread?.activities.find((activity) => activity.kind === "thread.migrated"),
+      ).toBeUndefined();
+    }),
+  );
+
+  effectIt.effect(
+    "migrates a live thread between compatible instances and keeps the native resume cursor",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-migrate-compat-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-migrate-compat-1"),
+            role: "user",
+            text: "first",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+        yield* harness.engine.dispatch({
+          type: "thread.migrate",
+          commandId: CommandId.make("cmd-migrate-compatible"),
+          threadId: ThreadId.make("thread-1"),
+          targetInstanceId: ProviderInstanceId.make("codex_work"),
+          handoffMode: "replay",
+          trigger: "manual",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 2));
+
+        expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          resumeCursor: { opaque: "resume-1" },
+        });
+      }),
+  );
+
+  effectIt.effect(
+    "restarts on a compatible instance persisted via thread.meta.update when the next turn carries no selection",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-meta-compatible-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-meta-compatible-1"),
+            role: "user",
+            text: "first",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+        yield* harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-meta-compatible-selection"),
+          threadId: ThreadId.make("thread-1"),
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex_work"),
+            model: "gpt-5-codex",
+          },
+        });
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-meta-compatible-2"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-meta-compatible-2"),
+            role: "user",
+            text: "second",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+
+        expect(harness.startSession).toHaveBeenCalledTimes(2);
+        expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          resumeCursor: { opaque: "resume-1" },
+        });
+
+        const readModel = yield* Effect.promise(() => harness.readModel());
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
+      }),
+  );
 
   it("restarts the provider session when the thread workspace changes", async () => {
     const harness = await createHarness({

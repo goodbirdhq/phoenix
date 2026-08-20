@@ -38,6 +38,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
+import { formatConversationSeedPrompt, seedForFreshSession } from "../conversationSeed.ts";
 import {
   buildOpenCodePermissionRules,
   OpenCodeRuntime,
@@ -237,6 +238,12 @@ interface OpenCodeSessionContext {
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
   activeVariant: string | undefined;
+  /**
+   * Prior conversation carried into a migrated thread. OpenCode has no
+   * start-from-history entry point, so it rides along on the first prompt and
+   * is cleared once sent.
+   */
+  pendingSeedPrompt: string | undefined;
   /**
    * One-shot guard flipped by `stopOpenCodeContext` / `emitUnexpectedExit`.
    * The session lifecycle is owned by `sessionScope`; this Ref exists only
@@ -1208,6 +1215,11 @@ export function makeOpenCodeAdapter(
         const serverPassword = openCodeSettings.serverPassword;
         const directory = input.cwd ?? serverConfig.cwd;
         const resumeSessionId = parseOpenCodeResume(input.resumeCursor)?.sessionId;
+        const seed = yield* seedForFreshSession({
+          threadId: input.threadId,
+          seed: input.seed,
+          resuming: resumeSessionId !== undefined,
+        });
         const existing = sessions.get(input.threadId);
         if (existing) {
           yield* stopOpenCodeContext(existing);
@@ -1402,6 +1414,7 @@ export function makeOpenCodeAdapter(
           activeTurnId: undefined,
           activeAgent: undefined,
           activeVariant: undefined,
+          pendingSeedPrompt: seed === undefined ? undefined : formatConversationSeedPrompt(seed),
           stopped: yield* Ref.make(false),
           sessionScope: started.sessionScope,
         };
@@ -1472,6 +1485,13 @@ export function makeOpenCodeAdapter(
         });
       }
 
+      // A seeded session leads with the prior conversation so the agent
+      // continues the thread instead of meeting it cold.
+      const seedParts = context.pendingSeedPrompt
+        ? [{ type: "text" as const, text: context.pendingSeedPrompt }]
+        : [];
+      context.pendingSeedPrompt = undefined;
+
       const agent = getModelSelectionStringOptionValue(modelSelection, "agent");
       const variant = getModelSelectionStringOptionValue(modelSelection, "variant");
 
@@ -1505,7 +1525,7 @@ export function makeOpenCodeAdapter(
           model: parsedModel,
           ...(context.activeAgent ? { agent: context.activeAgent } : {}),
           ...(context.activeVariant ? { variant: context.activeVariant } : {}),
-          parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
+          parts: [...seedParts, ...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
         }),
       ).pipe(
         Effect.mapError(toRequestError),
@@ -1730,6 +1750,9 @@ export function makeOpenCodeAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        // OpenCode has no start-from-history entry point: the transcript is
+        // framed into the first prompt of the new session.
+        conversationSeeding: "framed-prompt",
       },
       startSession,
       sendTurn,

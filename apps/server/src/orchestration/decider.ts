@@ -1,6 +1,7 @@
 import {
   checkReportSupersession,
   EventId,
+  THREAD_MIGRATION_ACTIVITY_KIND,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -21,6 +22,7 @@ import {
   requireThreadArchived,
   requireThreadAbsent,
   requireThreadNotArchived,
+  requireThreadTurnNotRunning,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
 
@@ -879,6 +881,89 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: requestIsCurrent ? occurredAt : thread.updatedAt,
         },
       };
+    }
+
+    case "thread.migrate": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // A turn torn between two providers is the one thing migration must
+      // never do: the origin is mid-stream and the target would be seeded
+      // from a transcript that is still being written.
+      yield* requireThreadTurnNotRunning({ commandType: command.type, thread });
+
+      const fromModelSelection = thread.modelSelection;
+      if (fromModelSelection.instanceId === command.targetInstanceId) {
+        return yield* Effect.fail(
+          new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `thread ${command.threadId} is already on provider instance ${command.targetInstanceId}; use thread.meta.update to change model`,
+          }),
+        );
+      }
+
+      const model = command.targetModel ?? fromModelSelection.model;
+      // Option ids are model-specific, so they only survive a migration that
+      // keeps the model slug (the same-driver account swap).
+      const options = model === fromModelSelection.model ? fromModelSelection.options : undefined;
+      const modelSelection = {
+        instanceId: command.targetInstanceId,
+        model,
+        ...(options !== undefined ? { options } : {}),
+      };
+      const migratedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.migrated",
+        payload: {
+          threadId: command.threadId,
+          fromModelSelection,
+          modelSelection,
+          handoffMode: command.handoffMode,
+          ...(command.brief !== undefined ? { brief: command.brief } : {}),
+          trigger: command.trigger,
+          updatedAt: command.createdAt,
+        },
+      };
+      // The history row rides the normal activity log so retention, revert
+      // trimming, and client rendering treat it like any other row. Its id is
+      // derived from the command so a redelivered migrate command upserts the
+      // same row instead of duplicating it.
+      const migrationActivityEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: EventId.make(`thread-migration:${command.commandId}`),
+            tone: "info",
+            kind: THREAD_MIGRATION_ACTIVITY_KIND,
+            summary: `Migrated from ${fromModelSelection.instanceId} (${fromModelSelection.model}) to ${modelSelection.instanceId} (${modelSelection.model})`,
+            payload: {
+              fromInstanceId: fromModelSelection.instanceId,
+              fromModel: fromModelSelection.model,
+              toInstanceId: modelSelection.instanceId,
+              toModel: modelSelection.model,
+              handoffMode: command.handoffMode,
+              trigger: command.trigger,
+            },
+            turnId: null,
+            createdAt: command.createdAt,
+          },
+        },
+      };
+      return [migratedEvent, migrationActivityEvent];
     }
 
     case "thread.runtime-mode.set": {

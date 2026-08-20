@@ -903,3 +903,38 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 });
+
+describe("thread.migrated", () => {
+  it("rebinds the thread to the target provider instance", () => {
+    const result = applyThreadDetailEvent(baseThread, {
+      ...baseEventFields,
+      sequence: 7,
+      occurredAt: "2026-04-01T02:00:00.000Z",
+      aggregateKind: "thread",
+      aggregateId: ThreadId.make("thread-1"),
+      type: "thread.migrated",
+      payload: {
+        threadId: ThreadId.make("thread-1"),
+        fromModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claude_work"),
+          model: "claude-opus-5",
+        },
+        handoffMode: "replay",
+        trigger: "auto-failover",
+        updatedAt: "2026-04-01T02:00:00.000Z",
+      },
+    });
+
+    expect(result.kind).toBe("updated");
+    if (result.kind !== "updated") return;
+    expect(result.thread.modelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("claude_work"),
+      model: "claude-opus-5",
+    });
+    expect(result.thread.updatedAt).toBe("2026-04-01T02:00:00.000Z");
+  });
+});

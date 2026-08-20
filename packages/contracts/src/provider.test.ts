@@ -226,3 +226,45 @@ describe("providerInstanceId routing key (slice-2 invariant)", () => {
     ).toThrow();
   });
 });
+
+describe("ProviderSessionStartInput conversation seed", () => {
+  it("decodes a session start without a seed (the ordinary case)", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-1",
+      provider: "codex",
+      runtimeMode: "full-access",
+    });
+    expect(parsed.seed).toBeUndefined();
+  });
+
+  it("decodes a migrated thread's transcript and handoff brief", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-1",
+      provider: "codex",
+      runtimeMode: "full-access",
+      seed: {
+        messages: [
+          { role: "user", text: "add a regression test" },
+          { role: "assistant", text: "added it" },
+        ],
+        brief: "We refactored the reactor.",
+        droppedMessageCount: 12,
+      },
+    });
+
+    expect(parsed.seed?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(parsed.seed?.brief).toBe("We refactored the reactor.");
+    expect(parsed.seed?.droppedMessageCount).toBe(12);
+  });
+
+  it("rejects seed roles the adapters cannot render", () => {
+    expect(() =>
+      decodeProviderSessionStartInput({
+        threadId: "thread-1",
+        provider: "codex",
+        runtimeMode: "full-access",
+        seed: { messages: [{ role: "system", text: "session started" }] },
+      }),
+    ).toThrow();
+  });
+});

@@ -45,6 +45,8 @@ import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { SubscriptionAvailabilityBars } from "../subscriptions/SubscriptionAvailability";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
+import { ProviderFailoverGroupControl } from "./ProviderFailoverGroupControl";
+import type { ProviderFailoverGroupOption } from "./ProviderFailoverGroups.logic";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import {
   getProviderVersionAdvisoryPresentation,
@@ -345,6 +347,9 @@ interface ProviderInstanceCardProps {
    * omit it.
    */
   readonly headerAction?: ReactNode | undefined;
+  readonly failoverGroups: ReadonlyArray<ProviderFailoverGroupOption>;
+  readonly onFailoverGroupChange: (group: string | null) => void;
+  readonly validateFailoverGroupName: (group: string) => string | null;
   readonly hiddenModels: ReadonlyArray<string>;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
@@ -388,6 +393,9 @@ export function ProviderInstanceCard({
   onUpdate,
   onDelete,
   headerAction,
+  failoverGroups,
+  onFailoverGroupChange,
+  validateFailoverGroupName,
   hiddenModels,
   favoriteModels,
   modelOrder,
@@ -541,6 +549,11 @@ export function ProviderInstanceCard({
         <code className="truncate rounded bg-muted/60 px-1 py-0.5 text-[10px] text-muted-foreground">
           {instanceId}
         </code>
+      ) : null}
+      {instance.failoverGroup ? (
+        <Badge variant="info" size="sm" className="max-w-48 truncate">
+          Failover · {instance.failoverGroup}
+        </Badge>
       ) : null}
       {driverOption?.badgeLabel ? (
         <Badge variant="warning" size="sm" className="shrink-0">
@@ -770,6 +783,14 @@ export function ProviderInstanceCard({
                 description="Used to distinguish this instance in picker rails and model lists."
               />
             </div>
+
+            <ProviderFailoverGroupControl
+              currentGroup={instance.failoverGroup ?? null}
+              driverLabel={driverOption?.label ?? String(instance.driver)}
+              groups={failoverGroups}
+              onGroupChange={onFailoverGroupChange}
+              validateNewGroupName={validateFailoverGroupName}
+            />
 
             <div>
               <ProviderEnvironmentSection

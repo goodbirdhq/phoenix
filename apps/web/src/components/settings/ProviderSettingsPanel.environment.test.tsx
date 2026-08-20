@@ -3,6 +3,7 @@ import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
   ProviderDriverKind,
+  ProviderFailoverGroup,
   ProviderInstanceId,
   type ServerProvider,
   type UnifiedSettings,
@@ -270,5 +271,57 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(Object.keys(resetPatch ?? {}).sort()).toEqual(["providerInstances", "providers"]);
     expect(resetPatch).not.toHaveProperty("favorites");
     expect(resetPatch).not.toHaveProperty("providerModelPreferences");
+  });
+  it("binds same-driver failover groups to provider instance updates", () => {
+    const codexGroup = ProviderFailoverGroup.make("codex-accounts");
+    const claudeGroup = ProviderFailoverGroup.make("claude-accounts");
+    const claudeId = ProviderInstanceId.make("claude_work");
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [codexId]: {
+          driver: ProviderDriverKind.make("codex"),
+          displayName: "Work",
+          failoverGroup: codexGroup,
+        },
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          displayName: "Personal",
+          failoverGroup: codexGroup,
+        },
+        [claudeId]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          displayName: "Claude Work",
+          failoverGroup: claudeGroup,
+        },
+      },
+    };
+
+    const panel = renderPanel();
+    const customCard = visitElements(panel, (element) => element.props.instanceId === customId);
+    expect(customCard?.props.failoverGroups).toEqual([
+      {
+        name: codexGroup,
+        memberLabels: ["Work", "Personal"],
+      },
+    ]);
+
+    const validateGroupName = customCard?.props.validateFailoverGroupName as
+      | ((group: string) => string | null)
+      | undefined;
+    expect(validateGroupName?.("claude-accounts")).toContain("another provider");
+
+    (customCard?.props.onFailoverGroupChange as ((group: string | null) => void) | undefined)?.(
+      null,
+    );
+
+    const patch = settingsState.updateSettings.mock.lastCall?.[0] as
+      | Partial<UnifiedSettings>
+      | undefined;
+    expect(patch?.providerInstances?.[customId]).toEqual({
+      driver: ProviderDriverKind.make("codex"),
+      displayName: "Personal",
+    });
+    expect(patch?.providerInstances?.[codexId]?.failoverGroup).toBe(codexGroup);
   });
 });

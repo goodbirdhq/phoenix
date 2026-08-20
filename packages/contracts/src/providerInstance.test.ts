@@ -2,11 +2,15 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import {
+  failoverGroupDriverConflicts,
+  groupProviderInstancesByFailoverGroup,
   ProviderDriverKind,
+  ProviderFailoverGroup,
   ProviderInstanceConfig,
   ProviderInstanceConfigMap,
   ProviderInstanceId,
   ProviderInstanceRef,
+  WritableProviderInstanceConfigMap,
 } from "./providerInstance.ts";
 
 const decodeProviderDriverKind = Schema.decodeUnknownSync(ProviderDriverKind);
@@ -14,6 +18,9 @@ const decodeProviderInstanceId = Schema.decodeUnknownSync(ProviderInstanceId);
 const decodeProviderInstanceRef = Schema.decodeUnknownSync(ProviderInstanceRef);
 const decodeProviderInstanceConfig = Schema.decodeUnknownSync(ProviderInstanceConfig);
 const decodeProviderInstanceConfigMap = Schema.decodeUnknownSync(ProviderInstanceConfigMap);
+const decodeWritableProviderInstanceConfigMap = Schema.decodeUnknownSync(
+  WritableProviderInstanceConfigMap,
+);
 
 describe("provider slug validation (shared by driver + instance ids)", () => {
   const cases = [
@@ -204,5 +211,87 @@ describe("ProviderInstanceConfigMap", () => {
         "1codex": { driver: "codex" },
       }),
     ).toThrow();
+  });
+});
+
+describe("failover groups", () => {
+  const claudeGroup = ProviderFailoverGroup.make("claude-accounts");
+
+  it("tags instances with an optional group and leaves untagged ones alone", () => {
+    const decoded = decodeProviderInstanceConfigMap({
+      claude_personal: { driver: "claudeAgent", failoverGroup: "claude-accounts" },
+      claude_work: { driver: "claudeAgent", failoverGroup: "claude-accounts" },
+      codex_solo: { driver: "codex" },
+    });
+
+    expect(decoded[ProviderInstanceId.make("claude_personal")]?.failoverGroup).toBe(
+      "claude-accounts",
+    );
+    expect(decoded[ProviderInstanceId.make("codex_solo")]?.failoverGroup).toBeUndefined();
+  });
+
+  it("groups members by tag and omits untagged instances", () => {
+    const groups = groupProviderInstancesByFailoverGroup(
+      decodeProviderInstanceConfigMap({
+        claude_personal: { driver: "claudeAgent", failoverGroup: "claude-accounts" },
+        claude_work: { driver: "claudeAgent", failoverGroup: "claude-accounts" },
+        codex_solo: { driver: "codex" },
+      }),
+    );
+
+    expect(groups.size).toBe(1);
+    expect(groups.get(claudeGroup)?.map((member) => member.instanceId)).toEqual([
+      "claude_personal",
+      "claude_work",
+    ]);
+  });
+
+  it("reports a group whose members disagree on the driver", () => {
+    const conflicts = failoverGroupDriverConflicts(
+      decodeProviderInstanceConfigMap({
+        claude_work: { driver: "claudeAgent", failoverGroup: "mixed" },
+        codex_work: { driver: "codex", failoverGroup: "mixed" },
+      }),
+    );
+
+    expect(conflicts).toEqual([{ group: "mixed", drivers: ["claudeAgent", "codex"] }]);
+  });
+
+  it("reports nothing for same-driver groups", () => {
+    expect(
+      failoverGroupDriverConflicts(
+        decodeProviderInstanceConfigMap({
+          claude_personal: { driver: "claudeAgent", failoverGroup: "claude-accounts" },
+          claude_work: { driver: "claudeAgent", failoverGroup: "claude-accounts" },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps reading a hand-edited map that mixes drivers in one group", () => {
+    // The read path must never brick a settings file: an unknown driver, a
+    // fork, or a hand edit can produce this, and the runtime downgrades it.
+    const decoded = decodeProviderInstanceConfigMap({
+      claude_work: { driver: "claudeAgent", failoverGroup: "mixed" },
+      ollama_local: { driver: "ollama", failoverGroup: "mixed" },
+    });
+    expect(Object.keys(decoded).length).toBe(2);
+  });
+
+  it("refuses to write a group that mixes drivers", () => {
+    expect(() =>
+      decodeWritableProviderInstanceConfigMap({
+        claude_work: { driver: "claudeAgent", failoverGroup: "mixed" },
+        codex_work: { driver: "codex", failoverGroup: "mixed" },
+      }),
+    ).toThrow();
+
+    expect(() =>
+      decodeWritableProviderInstanceConfigMap({
+        claude_personal: { driver: "claudeAgent", failoverGroup: "claude-accounts" },
+        claude_work: { driver: "claudeAgent", failoverGroup: "claude-accounts" },
+        codex_solo: { driver: "codex" },
+      }),
+    ).not.toThrow();
   });
 });
