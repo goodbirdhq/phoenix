@@ -78,12 +78,25 @@ Structure:
   company's too small/large for the ICP, etc. Leave this section empty if
   there's nothing worth flagging — don't invent a risk to fill it.
 
-Write this to the Notion page via the Notion MCP: update `notionPageUrl` if
-you were given one, otherwise create a new page. Which database new pages go
-into is configured by whoever's running this — don't assume a name or ID.
-If no Notion database is reachable, don't fail the run: include the full
-dossier in the run result instead, and say plainly in the result that Notion
-wasn't reachable so it doesn't get lost.
+Write this into the **Goodbird CRM** in Notion (parent page
+`3c2ada73-e530-81e1-97ab-e7d50523c82c`):
+
+- **Accounts** (data source `99e47d6b-a6dd-457d-bf01-1c2e2d8dbcd8`): upsert
+  the firm — search by name/domain first, never create a duplicate. Fill
+  firmographics (Industry, Employees, HQ, ICP, Sponsorship evidence) and set
+  Stage to "Researching" if it's currently "New".
+- **Contacts** (data source `402355f7-31d6-4e17-8611-3c8a4d05d125`): upsert
+  the person, relate them to the Account, and write the dossier as the
+  contact page's **body** (update `notionPageUrl`'s page if you were given
+  one). Set Status to "Researched", then "Draft ready" once the Gmail draft
+  exists, and put the draft link in "Gmail draft".
+- **Activity** (data source `01eb2982-56b2-440e-8ae4-4f71b3e2235a`): do NOT
+  log research here — Activity rows are real touches (emails actually sent,
+  replies, meetings), created when they happen, "Logged by" = Agent.
+
+If Notion is unreachable, don't fail the run: include the full dossier in
+the run result instead, and say plainly in the result that Notion wasn't
+reachable so it doesn't get lost.
 
 ### 4. Draft the email
 
@@ -138,8 +151,9 @@ TOUCH]` markers) but not a voice. If drafts read wrong, the fix is
 - **Source priority** — right now web search leads and Clay confirms. If
   Clay turns out to have better narrative data than search for your ICP,
   swap the order in step 2.
-- **Which Notion database** — this skill deliberately doesn't name one; it's
-  set wherever the operator configures the Notion MCP connection, not here.
+- **Which Notion database** — the Goodbird CRM (Accounts / Contacts /
+  Activity) created 2026-08-20; ids are in step 3. If you restructure the
+  CRM, update the ids and conventions there.
 
 To edit this workflow: change this file and `manifest.json` directly, they're
 plain files under version control. To add a schedule (e.g. run nightly on
