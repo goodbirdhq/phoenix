@@ -41,6 +41,11 @@ git merge --no-commit --no-ff "$upstream_head"
 Record all three hashes in the integration report. Never describe a sync only as “latest”; upstream
 can move during review.
 
+Check `merge_base` against the previous report's upstream head before going further. They should be
+the same commit. A `merge_base` that is older means upstream ancestry was lost from `main` and this
+sync is about to replay commits an earlier one already integrated; stop and
+[record the ancestry](#7-record-upstream-ancestry-after-a-squash-merge) first.
+
 Before resolving anything, capture the size of the divergence:
 
 ```bash
@@ -168,6 +173,36 @@ The integration report should include:
 
 Commit the completed merge on the integration branch. Do not merge it into Phoenix `main`, push it,
 or open a pull request unless a maintainer explicitly asks.
+
+## 7. Record upstream ancestry after a squash merge
+
+Squash-merging an integration pull request keeps the files and discards the second parent, so
+upstream's history stops being reachable from `main`. Nothing looks wrong until the next sync,
+which computes its merge base from that history: it resolves to the base of the sync before last,
+and the integration replays every commit the squashed pull request already handled. Those replays
+arrive as conflicts against code that already holds their resolutions, and the Phoenix adaptations
+inside them — identity, quarantines, conflict decisions — all come up for re-litigation.
+
+After a squashed integration lands, record the ancestry on `main`:
+
+```bash
+git switch -c ancestry-<upstream_head> origin/main
+git merge -s ours "$upstream_head" -m "chore: record upstream ancestry through <upstream_head>"
+```
+
+Prove it changed nothing before it goes anywhere:
+
+```bash
+test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse origin/main^{tree})"  # identical trees
+git merge-base --is-ancestor "$upstream_head" HEAD                           # ancestry restored
+git merge-base HEAD upstream/main                                            # now the upstream head
+```
+
+The tree must be identical: this commit exists to carry a parent, not a change. Push it to `main`
+only when a maintainer asks, the same as any other write to the default branch.
+
+A merge-commit merge needs none of this, and is the better default for integration pull requests
+where the repository allows it.
 
 ## Lessons from the first recurring integration
 
