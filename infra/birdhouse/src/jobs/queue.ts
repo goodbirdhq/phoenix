@@ -17,6 +17,14 @@ export const DEFAULT_JOB_LEASE_MS = 60_000;
 export const DEFAULT_JOB_LEASE_HEARTBEAT_MS = 20_000;
 export const DEFAULT_RETRY_DELAY_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
+/**
+ * Ceiling for the idle poll backoff. The queue is empty the overwhelming
+ * majority of the time at this scale, and every poll is a full transaction
+ * against a Postgres that also serves this box's interactive work — so an
+ * idle worker backs off towards this instead of asking once a second
+ * forever. Any enqueue is picked up within this bound at worst.
+ */
+const DEFAULT_MAX_POLL_INTERVAL_MS = 15_000;
 
 // Re-exported so callers have one import surface for the queue: errors and
 // the handler registry are defined elsewhere only to keep this file's size
@@ -73,7 +81,11 @@ export async function enqueueJob(input: EnqueueJobInput & { db: DbOrTx }): Promi
 // parameters serialise as local wall-clock time against these UTC columns,
 // and run_after defaults to the database's now(), which can sit ahead of the
 // JS clock and make a freshly enqueued job look not yet due. Every due/lease
-// comparison below runs as SQL against now(), never a JS Date.
+// comparison below runs as SQL against now(), never a JS Date — and so does
+// every timestamp *written* here. Writing a deadline from the JS clock and
+// reading it back against now() reintroduces the same skew from the other
+// side: on a host running a few seconds behind Postgres, a lease is
+// re-leasable before its holder's own elapsed-time check calls it lost.
 // ---------------------------------------------------------------------------
 
 const leasableJob = sql`(
@@ -82,16 +94,32 @@ const leasableJob = sql`(
     ${opsJob.status} = 'leased'
     and ${opsJob.leaseUntil} <= now()
     and ${opsJob.cancelRequestedAt} is null
+    and ${opsJob.attempts} < ${opsJob.maxAttempts}
   )
 )`;
+
+/**
+ * A lease that lapsed without its holder reporting back — the worker died
+ * mid-handler — spends an attempt but never reaches `failJob`, which is the
+ * only place the attempt budget is otherwise enforced. Without this, a job
+ * whose handler reliably kills the process is re-leased forever: it keeps
+ * its original `run_after`, so it also sorts ahead of newer work on every
+ * restart and starves the queue behind it.
+ */
+const reclaimExhaustedLease = and(
+  eq(opsJob.status, "leased"),
+  lte(opsJob.leaseUntil, sql`now()`),
+  isNull(opsJob.cancelRequestedAt),
+  sql`${opsJob.attempts} >= ${opsJob.maxAttempts}`,
+);
 
 export async function leaseNextJob(input: {
   db: Db;
   workerId: string;
   leaseMs?: number;
 }): Promise<OpsJobRow | null> {
-  const now = new Date();
-  const leaseUntil = new Date(now.getTime() + (input.leaseMs ?? DEFAULT_JOB_LEASE_MS));
+  const leaseMs = input.leaseMs ?? DEFAULT_JOB_LEASE_MS;
+  const leaseUntil = sql`now() + (${leaseMs} * interval '1 millisecond')`;
 
   return input.db.transaction(async (tx) => {
     // No worker is coming back to acknowledge a cancellation whose lease has
@@ -100,19 +128,33 @@ export async function leaseNextJob(input: {
       .update(opsJob)
       .set({
         status: "cancelled",
-        cancelledAt: now,
-        completedAt: now,
+        cancelledAt: sql`now()`,
+        completedAt: sql`now()`,
         leaseUntil: null,
         leasedBy: null,
-        updatedAt: now,
+        updatedAt: sql`now()`,
       })
       .where(
         and(
           eq(opsJob.status, "leased"),
-          lte(opsJob.leaseUntil, now),
+          lte(opsJob.leaseUntil, sql`now()`),
           isNotNull(opsJob.cancelRequestedAt),
         ),
       );
+
+    // Dead-letter work whose holder died with no budget left, so it stops
+    // being a leasable candidate rather than looping forever.
+    await tx
+      .update(opsJob)
+      .set({
+        status: "failed",
+        completedAt: sql`now()`,
+        leaseUntil: null,
+        leasedBy: null,
+        lastError: sql`coalesce(${opsJob.lastError}, 'Lease expired with no attempts remaining')`,
+        updatedAt: sql`now()`,
+      })
+      .where(reclaimExhaustedLease);
 
     const result = await tx.execute<{ id: string }>(sql`
       select ${opsJob.id} as id
@@ -133,7 +175,7 @@ export async function leaseNextJob(input: {
         leaseUntil,
         attempts: sql`${opsJob.attempts} + 1`,
         leaseVersion: sql`${opsJob.leaseVersion} + 1`,
-        updatedAt: now,
+        updatedAt: sql`now()`,
       })
       .where(eq(opsJob.id, candidate.id))
       .returning();
@@ -152,8 +194,8 @@ export async function leaseJobById(input: {
   workerId: string;
   leaseMs?: number;
 }): Promise<OpsJobRow | null> {
-  const now = new Date();
-  const leaseUntil = new Date(now.getTime() + (input.leaseMs ?? DEFAULT_JOB_LEASE_MS));
+  const leaseMs = input.leaseMs ?? DEFAULT_JOB_LEASE_MS;
+  const leaseUntil = sql`now() + (${leaseMs} * interval '1 millisecond')`;
 
   return input.db.transaction(async (tx) => {
     const result = await tx.execute<{ id: string }>(sql`
@@ -173,7 +215,7 @@ export async function leaseJobById(input: {
         leaseUntil,
         attempts: sql`${opsJob.attempts} + 1`,
         leaseVersion: sql`${opsJob.leaseVersion} + 1`,
-        updatedAt: now,
+        updatedAt: sql`now()`,
       })
       .where(eq(opsJob.id, input.jobId))
       .returning();
@@ -322,7 +364,15 @@ export async function withJobLeaseHeartbeat<T>(input: {
   run: (lease: ActiveJobLease) => Promise<T>;
 }): Promise<T> {
   const leaseMs = input.leaseMs ?? DEFAULT_JOB_LEASE_MS;
-  const heartbeatMs = input.heartbeatMs ?? DEFAULT_JOB_LEASE_HEARTBEAT_MS;
+  // Clamped to a third of the lease so the contract above holds for any
+  // lease length: at the flat default a caller asking for a lease shorter
+  // than the cadence would have the lease lapse before the first beat ever
+  // fired, handing the job to another worker while this one runs on with no
+  // abort signal. Two renewals must fit inside every window.
+  const heartbeatMs = Math.max(
+    1,
+    Math.min(input.heartbeatMs ?? DEFAULT_JOB_LEASE_HEARTBEAT_MS, Math.floor(leaseMs / 3)),
+  );
   const observe = input.observer ?? logJobLeaseEvent;
   const leaseLost = new AbortController();
   const lease: ActiveJobLease = {
@@ -457,16 +507,15 @@ export async function completeJob(input: {
   leaseVersion: number;
   result?: Record<string, unknown>;
 }): Promise<OpsJobRow | null> {
-  const now = new Date();
   const [job] = await input.db
     .update(opsJob)
     .set({
       status: "succeeded",
       result: input.result ?? null,
-      completedAt: now,
+      completedAt: sql`now()`,
       leaseUntil: null,
       leasedBy: null,
-      updatedAt: now,
+      updatedAt: sql`now()`,
     })
     .where(and(currentLease(input), isNull(opsJob.cancelRequestedAt)))
     .returning();
@@ -482,7 +531,7 @@ export async function updateJobProgress(input: {
 }): Promise<OpsJobRow | null> {
   const [job] = await input.db
     .update(opsJob)
-    .set({ progress: input.progress, updatedAt: new Date() })
+    .set({ progress: input.progress, updatedAt: sql`now()` })
     .where(currentLease(input))
     .returning();
   return job ?? null;
@@ -492,16 +541,14 @@ export async function requestJobCancellation(input: {
   db: DbOrTx;
   jobId: string;
 }): Promise<OpsJobRow | null> {
-  const now = new Date();
-  const nowLiteral = now.toISOString();
   const [job] = await input.db
     .update(opsJob)
     .set({
       status: sql`case when ${opsJob.status} = 'ready' then 'cancelled' else ${opsJob.status} end`,
-      cancelRequestedAt: now,
-      cancelledAt: sql`case when ${opsJob.status} = 'ready' then ${nowLiteral}::timestamptz else ${opsJob.cancelledAt} end`,
-      completedAt: sql`case when ${opsJob.status} = 'ready' then ${nowLiteral}::timestamptz else ${opsJob.completedAt} end`,
-      updatedAt: now,
+      cancelRequestedAt: sql`now()`,
+      cancelledAt: sql`case when ${opsJob.status} = 'ready' then now() else ${opsJob.cancelledAt} end`,
+      completedAt: sql`case when ${opsJob.status} = 'ready' then now() else ${opsJob.completedAt} end`,
+      updatedAt: sql`now()`,
     })
     .where(
       and(
@@ -537,16 +584,15 @@ export async function acknowledgeJobCancellation(input: {
   /** Handler error observed before the cancellation was acknowledged; preserved for diagnostics. */
   error?: unknown;
 }): Promise<OpsJobRow | null> {
-  const now = new Date();
   const [job] = await input.db
     .update(opsJob)
     .set({
       status: "cancelled",
-      cancelledAt: now,
-      completedAt: now,
+      cancelledAt: sql`now()`,
+      completedAt: sql`now()`,
       leaseUntil: null,
       leasedBy: null,
-      updatedAt: now,
+      updatedAt: sql`now()`,
       ...(input.error === undefined
         ? {}
         : { lastError: input.error instanceof Error ? input.error.message : "Unknown job error" }),
@@ -613,14 +659,18 @@ export async function failJob(input: {
     ...(input.attemptNeutral !== undefined ? { attemptNeutral: input.attemptNeutral } : {}),
     ...(input.terminal !== undefined ? { terminal: input.terminal } : {}),
   });
-  const now = new Date();
   const retryAfterMs = resolveRetryDelayMs({
     attempts: input.job.attempts,
     retryBackoff: input.job.retryBackoff,
     retryDelayMs: input.job.retryDelayMs,
     ...(input.retryAfterMs !== undefined ? { retryAfterMs: input.retryAfterMs } : {}),
   });
-  const retryAt = retryAfterMs <= 0 ? sql`now()` : new Date(now.getTime() + retryAfterMs);
+  // On the database clock, like every other due comparison here: a JS-clock
+  // deadline read back against `now()` shortens a provider-supplied pacing
+  // window by whatever the host clock skew happens to be, which turns a 429
+  // backoff into an early retry that earns another 429.
+  const retryAt =
+    retryAfterMs <= 0 ? sql`now()` : sql`now() + (${retryAfterMs} * interval '1 millisecond')`;
   const lastError = input.error instanceof Error ? input.error.message : "Unknown job error";
 
   const [job] = await input.db
@@ -632,8 +682,8 @@ export async function failJob(input: {
       leasedBy: null,
       ...(input.attemptNeutral ? { attempts: sql`greatest(${opsJob.attempts} - 1, 0)` } : {}),
       lastError,
-      completedAt: terminal ? now : null,
-      updatedAt: now,
+      completedAt: terminal ? sql`now()` : null,
+      updatedAt: sql`now()`,
     })
     .where(
       and(
@@ -671,7 +721,9 @@ type JobQueueLogEvent =
     }>
   | Readonly<{ event: "job.cancelled"; jobId: string; jobType: string; workerId: string }>
   /** Neither complete, fail, nor cancel could write a terminal state: another worker holds the lease now. */
-  | Readonly<{ event: "job.lease.lost"; jobId: string; jobType: string; workerId: string }>;
+  | Readonly<{ event: "job.lease.lost"; jobId: string; jobType: string; workerId: string }>
+  /** The drain loop itself threw — the queue is unreachable, not a job failing. */
+  | Readonly<{ event: "job.loop.error"; workerId: string; error: string }>;
 
 function logJobQueueEvent(event: JobQueueLogEvent): void {
   console.log(JSON.stringify(event));
@@ -681,6 +733,8 @@ export type RunReadyJobsOptions = Readonly<{
   signal?: AbortSignal;
   leaseMs?: number;
   pollIntervalMs?: number;
+  /** Ceiling the idle/error backoff grows towards. Defaults to `DEFAULT_MAX_POLL_INTERVAL_MS`. */
+  maxPollIntervalMs?: number;
 }>;
 
 /** Resolves `ms` early if `signal` aborts while waiting, so shutdown isn't delayed by a stale poll timer. */
@@ -808,7 +862,16 @@ async function runLeasedJob(input: {
   }
 }
 
-/** Leases and runs ready jobs until `signal` aborts. One job at a time, by design — this is a foundation, not a pool. */
+/**
+ * Leases and runs ready jobs until `signal` aborts. One job at a time, by
+ * design — this is a foundation, not a pool.
+ *
+ * A throw from the queue itself (a Postgres restart, a reset connection) is
+ * logged and retried on the next poll rather than allowed to escape: this
+ * promise settling is how the worker process ends, so an unhandled blip
+ * would stop all job execution until someone restarted it by hand. Handler
+ * failures never reach here — `runLeasedJob` records those against the job.
+ */
 export async function runReadyJobs(
   db: Db,
   registry: JobHandlerRegistry,
@@ -817,14 +880,31 @@ export async function runReadyJobs(
 ): Promise<void> {
   const leaseMs = options.leaseMs ?? DEFAULT_JOB_LEASE_MS;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const maxPollIntervalMs = Math.max(
+    pollIntervalMs,
+    options.maxPollIntervalMs ?? DEFAULT_MAX_POLL_INTERVAL_MS,
+  );
   const signal = options.signal;
+  let backoffMs = pollIntervalMs;
 
   while (!signal?.aborted) {
-    const job = await leaseNextJob({ db, workerId, leaseMs });
-    if (!job) {
-      await sleep(pollIntervalMs, signal);
-      continue;
+    try {
+      const job = await leaseNextJob({ db, workerId, leaseMs });
+      if (!job) {
+        await sleep(backoffMs, signal);
+        backoffMs = Math.min(backoffMs * 2, maxPollIntervalMs);
+        continue;
+      }
+      backoffMs = pollIntervalMs;
+      await runLeasedJob({ db, job, registry, workerId, leaseMs });
+    } catch (error) {
+      logJobQueueEvent({
+        event: "job.loop.error",
+        workerId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sleep(backoffMs, signal);
+      backoffMs = Math.min(backoffMs * 2, maxPollIntervalMs);
     }
-    await runLeasedJob({ db, job, registry, workerId, leaseMs });
   }
 }

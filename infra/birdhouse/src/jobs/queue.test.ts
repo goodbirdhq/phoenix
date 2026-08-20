@@ -1,20 +1,26 @@
 import { randomUUID } from "node:crypto";
 
+import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 
+import { opsJob } from "../db/schema.ts";
 import { isTerminalJobError, TerminalJobError } from "./errors.ts";
 import {
   acknowledgeJobCancellation,
   completeJob,
+  createJobHandlerRegistry,
   DEFAULT_RETRY_DELAY_MS,
+  defineJobHandler,
   enqueueJob,
   failJob,
   isJobRetryExhausted,
   leaseJobById,
+  leaseNextJob,
   requestJobCancellation,
   resolveRetryDelayMs,
+  runReadyJobs,
 } from "./queue.ts";
 
 describe("resolveRetryDelayMs", () => {
@@ -256,5 +262,130 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("job lifecycle", () =>
     const requested = await requestJobCancellation({ db, jobId: enqueued.id });
     expect(requested?.status).toBe("cancelled");
     expect(requested?.completedAt).not.toBeNull();
+  });
+});
+
+// A worker that dies mid-handler never reports the attempt it spent, so the
+// only enforcement of the retry budget (failJob) never runs for it. These
+// exercise the reclaim path directly: expiring a lease by hand is exactly
+// what a crashed worker leaves behind.
+describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("expired lease reclaim", () => {
+  const pool = new Pool({ connectionString: process.env.BIRDHOUSE_TEST_DATABASE_URL });
+  const db = drizzle({ client: pool });
+  const workerId = "test-worker-reclaim";
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  /** Backdates the lease so the row looks like a worker that died holding it. */
+  async function expireLease(jobId: string): Promise<void> {
+    await db
+      .update(opsJob)
+      .set({ leaseUntil: sql`now() - interval '1 second'` })
+      .where(eq(opsJob.id, jobId));
+  }
+
+  async function readJob(jobId: string) {
+    const [row] = await db.select().from(opsJob).where(eq(opsJob.id, jobId)).limit(1);
+    return row;
+  }
+
+  it("re-leases a crashed job while it still has attempts left", async () => {
+    const enqueued = await enqueueJob({
+      db,
+      type: "test.reclaim",
+      payload: {},
+      idempotencyKey: `test:${randomUUID()}`,
+      maxAttempts: 3,
+    });
+    const first = await leaseJobById({ db, jobId: enqueued.id, workerId });
+    expect(first?.attempts).toBe(1);
+
+    await expireLease(enqueued.id);
+    const second = await leaseJobById({ db, jobId: enqueued.id, workerId });
+    expect(second?.id).toBe(enqueued.id);
+    expect(second?.attempts).toBe(2);
+  });
+
+  it("dead-letters a job that burns its last attempt without reporting back", async () => {
+    const enqueued = await enqueueJob({
+      db,
+      type: "test.reclaim",
+      payload: {},
+      idempotencyKey: `test:${randomUUID()}`,
+      maxAttempts: 1,
+    });
+    const leased = await leaseJobById({ db, jobId: enqueued.id, workerId });
+    expect(leased?.attempts).toBe(1);
+
+    await expireLease(enqueued.id);
+    // Not a leasable candidate any more, so the drain loop can't pick it up
+    // and crash on it again.
+    expect(await leaseJobById({ db, jobId: enqueued.id, workerId })).toBeNull();
+
+    // leaseNextJob's sweep is what actually retires it.
+    await leaseNextJob({ db, workerId });
+    const reaped = await readJob(enqueued.id);
+    expect(reaped?.status).toBe("failed");
+    expect(reaped?.completedAt).not.toBeNull();
+    expect(reaped?.leasedBy).toBeNull();
+  });
+});
+
+// The drain loop settling is how the worker process ends, so a queue-level
+// throw must not escape it.
+describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runReadyJobs resilience", () => {
+  const pool = new Pool({ connectionString: process.env.BIRDHOUSE_TEST_DATABASE_URL });
+  const db = drizzle({ client: pool });
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it("keeps polling after the queue itself throws, and still drains once it recovers", async () => {
+    const idempotencyKey = `test:${randomUUID()}`;
+    const enqueued = await enqueueJob({ db, type: "test.resilience", payload: {}, idempotencyKey });
+
+    let failuresLeft = 2;
+    const brokenThenHealthy = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "transaction" && failuresLeft > 0) {
+          failuresLeft -= 1;
+          return () => Promise.reject(new Error("connection terminated unexpectedly"));
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as typeof db;
+
+    const controller = new AbortController();
+    let resolveHandled: () => void;
+    const handled = new Promise<void>((r) => {
+      resolveHandled = r;
+    });
+    const registry = createJobHandlerRegistry([
+      defineJobHandler({
+        type: "test.resilience",
+        handle: async () => {
+          resolveHandled();
+          return { ok: true };
+        },
+      }),
+    ]);
+    const draining = runReadyJobs(brokenThenHealthy, registry, "test-worker-resilience", {
+      signal: controller.signal,
+      pollIntervalMs: 1,
+      maxPollIntervalMs: 5,
+    });
+
+    // Abort once the handler has run, then await the loop itself: it only
+    // settles after the in-flight job has been marked complete.
+    await handled;
+    controller.abort();
+    await draining;
+    expect(failuresLeft).toBe(0);
+
+    const [row] = await db.select().from(opsJob).where(eq(opsJob.id, enqueued.id)).limit(1);
+    expect(row?.status).toBe("succeeded");
   });
 });
