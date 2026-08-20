@@ -12,12 +12,13 @@ import { detectSourceControlProviderFromRemoteUrl } from "./sourceControl.ts";
 
 export const WORKTREE_BRANCH_PREFIX = "phoenix";
 const LEGACY_WORKTREE_BRANCH_PREFIX = "t3code";
-// Canonical form is `phoenix/<8 hex>`. Older builds used `t3code/<8 hex>`, and
+// Interactive canonical form is `phoenix/<8 hex>`. Scheduled work uses an
+// ownership-qualified 128-bit form. Older builds used `t3code/<8 hex>`, and
 // older mobile builds generated `t3code/<uuid>` via Crypto.randomUUID() (always
 // RFC 4122 v4). Keep recognizing both legacy shapes so existing threads remain
 // eligible for branch regeneration and safe cleanup.
 const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(
-  `^(?:${WORKTREE_BRANCH_PREFIX}\/[0-9a-f]{8}|${LEGACY_WORKTREE_BRANCH_PREFIX}\/(?:[0-9a-f]{8}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}))$`,
+  `^(?:${WORKTREE_BRANCH_PREFIX}/[0-9a-f]{8}|${WORKTREE_BRANCH_PREFIX}/schedule/[a-z0-9_-]{1,64}/[a-z0-9_-]{1,64}/[0-9a-f]{32}|${LEGACY_WORKTREE_BRANCH_PREFIX}/(?:[0-9a-f]{8}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}))$`,
 );
 
 /**
@@ -103,6 +104,20 @@ export function buildTemporaryWorktreeBranchName(
     .replace(/[^0-9a-f]/g, "")
     .slice(0, 8);
   return `${WORKTREE_BRANCH_PREFIX}/${token}`;
+}
+
+export function buildScheduledWorktreeBranchName(
+  projectId: string,
+  scheduleId: string,
+  occurrenceId: string,
+): string {
+  const occurrenceToken = occurrenceId.toLowerCase().replace(/[^0-9a-f]/g, "");
+  if (occurrenceToken.length !== 32) {
+    throw new Error("A Scheduled worktree requires a 128-bit Occurrence identity.");
+  }
+  const project = sanitizeBranchFragment(projectId).replace(/\//g, "-");
+  const schedule = sanitizeBranchFragment(scheduleId).replace(/\//g, "-");
+  return `${WORKTREE_BRANCH_PREFIX}/schedule/${project}/${schedule}/${occurrenceToken}`;
 }
 
 export function isTemporaryWorktreeBranch(refName: string): boolean {

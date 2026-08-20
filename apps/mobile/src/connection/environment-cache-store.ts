@@ -15,6 +15,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as MobileDatabase from "../persistence/mobile-database";
+import { makeScheduleCacheStore } from "../features/schedules/schedule-cache-store";
 
 const SHELL_SNAPSHOT_CACHE_SCHEMA_VERSION = 1;
 // v3 adds windowed (paginated) snapshots carrying `page` metadata; the bump
@@ -75,6 +76,10 @@ function mapDatabaseError(operation: CacheOperation) {
   return (error: MobileDatabase.MobileDatabaseError) => persistenceError(operation, error);
 }
 
+function mapScheduleCacheError(operation: CacheOperation) {
+  return (error: unknown) => persistenceError(operation, error);
+}
+
 function loadDecodedCache<A, B>(input: {
   readonly database: MobileDatabase.MobileDatabase["Service"];
   readonly environmentId: EnvironmentId;
@@ -115,6 +120,7 @@ function loadDecodedCache<A, B>(input: {
 
 export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
   const database = yield* MobileDatabase.MobileDatabase;
+  const schedules = makeScheduleCacheStore(database);
   return EnvironmentCacheStore.of({
     loadShell: Effect.fn("MobileEnvironmentCache.loadShell")((environmentId) =>
       loadDecodedCache({
@@ -235,6 +241,36 @@ export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
       database
         .clearCacheKind(environmentId, "vcs-refs")
         .pipe(Effect.mapError(mapDatabaseError("clear-vcs-refs"))),
+    ),
+    loadScheduleSnapshot: Effect.fn("MobileEnvironmentCache.loadScheduleSnapshot")(
+      (environmentId) =>
+        schedules
+          .loadSnapshot(environmentId)
+          .pipe(Effect.mapError(mapDatabaseError("load-schedule-snapshot"))),
+    ),
+    saveScheduleSnapshot: Effect.fn("MobileEnvironmentCache.saveScheduleSnapshot")(
+      (environmentId, snapshot) =>
+        schedules
+          .saveSnapshot(environmentId, snapshot)
+          .pipe(Effect.mapError(mapScheduleCacheError("save-schedule-snapshot"))),
+    ),
+    loadScheduleDetail: Effect.fn("MobileEnvironmentCache.loadScheduleDetail")(
+      (environmentId, scheduleId) =>
+        schedules
+          .loadDetail(environmentId, scheduleId)
+          .pipe(Effect.mapError(mapDatabaseError("load-schedule-detail"))),
+    ),
+    saveScheduleDetail: Effect.fn("MobileEnvironmentCache.saveScheduleDetail")(
+      (environmentId, detail) =>
+        schedules
+          .saveDetail(environmentId, detail)
+          .pipe(Effect.mapError(mapScheduleCacheError("save-schedule-detail"))),
+    ),
+    removeScheduleDetail: Effect.fn("MobileEnvironmentCache.removeScheduleDetail")(
+      (environmentId, scheduleId) =>
+        schedules
+          .removeDetail(environmentId, scheduleId)
+          .pipe(Effect.mapError(mapDatabaseError("remove-schedule-detail"))),
     ),
     clear: Effect.fn("MobileEnvironmentCache.clear")((environmentId) =>
       database

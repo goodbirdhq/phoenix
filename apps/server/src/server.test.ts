@@ -124,6 +124,7 @@ import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDir
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as ScheduleService from "./schedule/ScheduleService.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -633,6 +634,7 @@ const buildAppUnderTest = (options?: {
       // own pipe step: the pipe below is already at the 20-argument overload
       // ceiling.
       .pipe(Layer.provideMerge(ThreadTurnBootstrap.layer))
+      .pipe(Layer.provide(Layer.mock(ScheduleService.ScheduleService)({})))
       // settle_session reads merged pull requests through this registry to
       // prove a branch is safe to delete; no route test here takes that path,
       // so the mock only has to satisfy the graph.
@@ -7357,6 +7359,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
         const bootstrapGitOperations: string[] = [];
+        const setupTimeline: string[] = [];
         const refreshStatus = vi.fn((_: string) =>
           Effect.succeed({
             isRepo: true,
@@ -7417,12 +7420,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]
             >[0],
           ) =>
-            Effect.succeed({
-              status: "started" as const,
-              scriptId: "setup",
-              scriptName: "Setup",
-              terminalId: "setup-setup",
-              cwd: "/tmp/bootstrap-worktree",
+            Effect.sync(() => {
+              setupTimeline.push("run");
+              return {
+                status: "started" as const,
+                scriptId: "setup",
+                scriptName: "Setup",
+                terminalId: "setup-setup",
+                cwd: "/tmp/bootstrap-worktree",
+              };
             }),
         );
 
@@ -7441,6 +7447,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               dispatch: (command) =>
                 Effect.sync(() => {
                   dispatchedCommands.push(command);
+                  if (
+                    command.type === "thread.activity.append" &&
+                    command.activity.kind === "setup-script.requested"
+                  ) {
+                    setupTimeline.push("requested");
+                  }
                   return { sequence: dispatchedCommands.length };
                 }),
               readEvents: () => Stream.empty,
@@ -7486,6 +7498,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   startFromOrigin: true,
                 },
                 runSetupScript: true,
+                setupScriptIdempotencyKey: "schedule:occurrence-1:setup",
               },
               createdAt,
             }),
@@ -7541,6 +7554,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           setupActivities.map((command) => command.activity.kind),
           ["setup-script.requested", "setup-script.started"],
         );
+        assert.deepEqual(setupTimeline, ["requested", "run"]);
         const finalCommand = dispatchedCommands[4];
         assertTrue(finalCommand?.type === "thread.turn.start");
         if (finalCommand?.type === "thread.turn.start") {

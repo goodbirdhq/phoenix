@@ -1201,12 +1201,28 @@ const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   checkoutRef: Schema.optional(TrimmedNonEmptyString),
   checkoutPr: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  // Opt-in crash recovery for callers with a deterministic branch identity.
+  // If that branch is already checked out, bootstrap reuses its worktree
+  // instead of attempting to create a duplicate.
+  reuseExistingBranchWorktree: Schema.optional(Schema.Boolean),
 });
 
 const ThreadTurnStartBootstrap = Schema.Struct({
   createThread: Schema.optional(ThreadTurnStartBootstrapCreateThread),
   prepareWorktree: Schema.optional(ThreadTurnStartBootstrapPrepareWorktree),
+  // Carries the durable shell context when a retry finds that an earlier
+  // bootstrap attempt already created the deterministic Thread.
+  recoverExistingThread: Schema.optional(
+    Schema.Struct({
+      projectId: ProjectId,
+      projectCwd: TrimmedNonEmptyString,
+      worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+    }),
+  ),
   runSetupScript: Schema.optional(Schema.Boolean),
+  // Callers that recover a deterministic bootstrap can claim this durable key
+  // before launching setup, making that external side effect at-most-once.
+  setupScriptIdempotencyKey: Schema.optional(TrimmedNonEmptyString),
 });
 
 export type ThreadTurnStartBootstrap = typeof ThreadTurnStartBootstrap.Type;

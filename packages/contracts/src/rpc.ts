@@ -193,6 +193,18 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  SCHEDULE_WS_METHODS,
+  ScheduleCommand,
+  ScheduleDetail,
+  ScheduleDispatchResult,
+  ScheduleGetDetailInput,
+  ScheduleGetHistoryInput,
+  ScheduleHistoryPage,
+  ScheduleListSnapshot,
+  ScheduleListStreamEvent,
+  ScheduleOperationError,
+} from "./schedule.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -993,6 +1005,37 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
   stream: true,
 });
 
+export const WsScheduleDispatchCommandRpc = Rpc.make(SCHEDULE_WS_METHODS.dispatchCommand, {
+  payload: ScheduleCommand,
+  success: ScheduleDispatchResult,
+  error: Schema.Union([ScheduleOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsScheduleGetSnapshotRpc = Rpc.make(SCHEDULE_WS_METHODS.getSnapshot, {
+  payload: Schema.Struct({}),
+  success: ScheduleListSnapshot,
+  error: Schema.Union([ScheduleOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsScheduleGetDetailRpc = Rpc.make(SCHEDULE_WS_METHODS.getDetail, {
+  payload: ScheduleGetDetailInput,
+  success: ScheduleDetail,
+  error: Schema.Union([ScheduleOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsScheduleGetHistoryRpc = Rpc.make(SCHEDULE_WS_METHODS.getHistory, {
+  payload: ScheduleGetHistoryInput,
+  success: ScheduleHistoryPage,
+  error: Schema.Union([ScheduleOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsScheduleSubscribeRpc = Rpc.make(SCHEDULE_WS_METHODS.subscribe, {
+  payload: Schema.Struct({}),
+  success: ScheduleListStreamEvent,
+  error: Schema.Union([ScheduleOperationError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1086,6 +1129,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsScheduleDispatchCommandRpc,
+  WsScheduleGetSnapshotRpc,
+  WsScheduleGetDetailRpc,
+  WsScheduleGetHistoryRpc,
+  WsScheduleSubscribeRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,

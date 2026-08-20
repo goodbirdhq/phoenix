@@ -112,6 +112,7 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
+import * as ScheduleService from "./schedule/ScheduleService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -375,10 +376,15 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
-const RuntimeCoreDependenciesLive = Layer.mergeAll(
+const ScheduleRuntimeLayerLive = ScheduleService.reactorLayer.pipe(
+  Layer.provideMerge(ScheduleService.layer),
+);
+
+const RuntimeCoreProviderDependenciesLive = Layer.mergeAll(
   ReactorLayerLive,
-  ThreadTurnBootstrap.layer,
+  ScheduleRuntimeLayerLive,
 ).pipe(
+  Layer.provideMerge(ThreadTurnBootstrap.layer),
   // Core Services
   Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(CheckpointingLayerLive),
@@ -408,6 +414,9 @@ const RuntimeCoreDependenciesLive = Layer.mergeAll(
   // no longer transitively provides it. Exposing it at the runtime level
   // keeps a single Live for all opencode consumers.
   Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+);
+
+const RuntimeCoreDependenciesLive = RuntimeCoreProviderDependenciesLive.pipe(
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
