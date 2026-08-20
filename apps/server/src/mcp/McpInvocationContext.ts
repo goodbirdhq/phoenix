@@ -2,13 +2,14 @@ import {
   type EnvironmentId,
   PreviewAutomationUnavailableError,
   type ProviderInstanceId,
+  ScheduleOrchestrationDeniedError,
   SessionOrchestrationDeniedError,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
-export type McpCapability = "preview" | "sessions";
+export type McpCapability = "preview" | "sessions" | "schedules";
 
 export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;
@@ -49,6 +50,19 @@ export const requireMcpSessionsCapability = Effect.fn("mcp.requireSessionsCapabi
       return yield* new SessionOrchestrationDeniedError({
         reason: "capability_unavailable",
         message: "This session's MCP credential does not carry the sessions capability.",
+      });
+    }
+    return invocation;
+  },
+);
+
+export const requireMcpSchedulesCapability = Effect.fn("mcp.requireSchedulesCapability")(
+  function* () {
+    const invocation = yield* McpInvocationContext;
+    if (!invocation.capabilities.has("schedules")) {
+      return yield* new ScheduleOrchestrationDeniedError({
+        reason: "capability_unavailable",
+        message: "This session's MCP credential does not carry the schedules capability.",
       });
     }
     return invocation;

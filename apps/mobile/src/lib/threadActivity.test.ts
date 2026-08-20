@@ -831,3 +831,64 @@ describe("quiet timeline: nested agents", () => {
     expect(ids).not.toContain("shell-done");
   });
 });
+
+describe("buildThreadFeed schedule writes", () => {
+  const scheduleCarrier = {
+    action: "created",
+    scheduleId: "schedule-1",
+    name: "Nightly audit",
+    state: "enabled",
+    timeZone: "Europe/London",
+    cadence: "Weekdays at 06:00",
+    nextOccurrenceAt: "2026-08-21T05:00:00.000Z",
+    projectId: "project-1",
+  };
+
+  const threadWith = (tool: string) =>
+    makeThread({
+      id: ThreadId.make("thread-1"),
+      projectId: ProjectId.make("project-1"),
+      title: "Working",
+      activities: [
+        makeActivity({
+          id: EventId.make(`schedule-${tool}`),
+          kind: "tool.completed",
+          summary: `phoenix · ${tool}`,
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: {
+            itemType: "mcp_tool_call",
+            data: {
+              item: { type: "mcp_tool_call", server: "phoenix", tool },
+              scheduleActivity: scheduleCarrier,
+            },
+          },
+        }),
+      ],
+    });
+
+  const activityOf = (tool: string) => {
+    for (const entry of buildThreadFeed(threadWith(tool))) {
+      if (entry.type === "activity") return entry.activity;
+      if (entry.type === "activity-group") return entry.activities[0] ?? null;
+    }
+    return null;
+  };
+
+  it("rewrites the heading and shows the cadence in plain language", () => {
+    const activity = activityOf("create_schedule");
+
+    expect(activity?.summary).toBe("Created schedule");
+    expect(activity?.detail).toBe("Nightly audit · Weekdays at 06:00 · Europe/London");
+    expect(activity?.icon).toBe("calendar");
+    // Folding must not hide a durable change to the user's environment.
+    expect(activity?.alwaysVisible).toBe(true);
+  });
+
+  it("leaves a read as an ordinary MCP row", () => {
+    const activity = activityOf("list_schedules");
+
+    expect(activity?.summary).not.toBe("Created schedule");
+    expect(activity?.icon).not.toBe("calendar");
+    expect(activity?.alwaysVisible).not.toBe(true);
+  });
+});

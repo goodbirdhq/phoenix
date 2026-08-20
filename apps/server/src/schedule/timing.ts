@@ -87,7 +87,7 @@ export function previewScheduleTiming(
   timing: ScheduleTiming,
   timeZone: string,
   after: string,
-  options?: { readonly allowPastOneTime?: boolean },
+  options?: { readonly allowPastOneTime?: boolean; readonly previewCount?: number },
 ): ReadonlyArray<string> {
   assertTimeZone(timeZone);
   const afterDate = DateTime.makeUnsafe(decodeScheduleInstant(after));
@@ -105,6 +105,10 @@ export function previewScheduleTiming(
 
   const cron = parseCron(timing.expression, timeZone);
   const sequence = validCronOccurrences(cron, timeZone, afterDate);
+  const previewCount = Math.min(
+    Math.max(options?.previewCount ?? PREVIEW_COUNT, 1),
+    VALIDATION_OCCURRENCE_COUNT,
+  );
   const preview: Array<string> = [];
   let previousMillis = DateTime.toEpochMillis(afterDate);
   for (let index = 0; index < VALIDATION_OCCURRENCE_COUNT; index += 1) {
@@ -115,7 +119,7 @@ export function previewScheduleTiming(
     if (next.getTime() - previousMillis < MINIMUM_RECURRENCE_MS && index > 0) {
       throw new Error("Recurring Schedules must be at least five minutes apart.");
     }
-    if (preview.length < PREVIEW_COUNT) preview.push(next.toISOString());
+    if (preview.length < previewCount) preview.push(next.toISOString());
     previousMillis = next.getTime();
   }
   return preview;

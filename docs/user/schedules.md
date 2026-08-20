@@ -60,6 +60,39 @@ and accept its first turn. Provider or agent failures after that point appear on
 The recent history page is shown first; while the Environment is online, use **Load older** to
 page through earlier entries. Offline inspection uses the most recently cached page.
 
+## Ask an agent to manage Schedules
+
+Agent sessions can read, create, edit, pause, and trigger Schedules on your behalf, so you can say
+"run the dependency audit every weekday at 6am" instead of filling in the editor yourself. An agent
+that creates a Schedule reports the cadence in plain language and the next few run times, so you can
+check the rule means what you asked for before it fires.
+
+Agents work under narrower rules than you do:
+
+- **They cannot delete a Schedule.** The strongest thing an agent can do is pause one. If you want a
+  Schedule gone for good, delete it from the Schedules page.
+- **They can only change Schedules in the project they are working in.** An agent can list Schedules
+  across every project when you ask what you have scheduled, but it cannot edit or trigger one
+  outside its own project.
+- **They inherit their own settings.** A Schedule an agent creates runs with the provider, model,
+  permission mode, and workspace mode of the session that created it, unless you ask for something
+  different.
+- **They cannot clear a failure notice.** The red badge on a failing Schedule stays until you
+  acknowledge it yourself.
+
+A Schedule an agent creates is enabled straight away and will fire on its next occurrence. Each
+firing starts a new thread and uses provider quota, so an agent asked for a frequent cadence will
+tell you how many threads per day that works out as.
+
+When an agent creates, edits, pauses, resumes, or triggers a Schedule, a row appears in the chat
+showing what changed, the cadence in plain language, and its time zone. The row links to the
+Schedules page. It is a record of what happened at that moment, not a live view — a Schedule you
+later pause still shows as created in the older chat row.
+
+Turn this off under **Settings → General → Schedule management**. The switch covers reading as well
+as changing, applies to the whole environment, and takes effect immediately, including for sessions
+that are already running.
+
 ## Frequency and retention
 
 A Schedule that runs every five minutes can create 288 ordinary threads per day and about 105,000

@@ -24,6 +24,8 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+import { SchedulesToolkitHandlersLive } from "./toolkits/schedules/handlers.ts";
+import { SchedulesToolkit } from "./toolkits/schedules/tools.ts";
 import { SessionsToolkitHandlersLive } from "./toolkits/sessions/handlers.ts";
 import { SessionsToolkit } from "./toolkits/sessions/tools.ts";
 
@@ -229,6 +231,10 @@ const SessionsToolkitRegistrationLive = McpServer.toolkit(SessionsToolkit).pipe(
   Layer.provide(SessionsToolkitHandlersLive.pipe(Layer.provide(GitRepositoryLock.layer))),
 );
 
+const SchedulesToolkitRegistrationLive = McpServer.toolkit(SchedulesToolkit).pipe(
+  Layer.provide(SchedulesToolkitHandlersLive),
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "Phoenix",
   version: packageJson.version,
@@ -239,4 +245,5 @@ const McpTransportLive = McpServer.layerHttp({
 export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   SessionsToolkitRegistrationLive,
+  SchedulesToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));
