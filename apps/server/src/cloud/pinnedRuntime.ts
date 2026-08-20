@@ -9,8 +9,8 @@ import * as ProcessRunner from "../processRunner.ts";
 
 /**
  * A pinned runtime is an exact server build installed into
- * <baseDir>/runtime/versions/<version>. The inherited boot service can reuse a
- * complete runtime here, but Phoenix does not currently download new ones.
+ * <baseDir>/runtime/versions/<version>. The inherited boot service points its
+ * unit or launch agent here, but Phoenix does not currently download new ones.
  */
 
 const PINNED_RUNTIME_DIR = "runtime";

@@ -2,7 +2,9 @@ import {
   CommandId,
   type OrchestrationEvent,
   type ProviderAvailability,
+  type ProviderInstanceConfig,
   type ProviderInstanceId,
+  resolveProviderInstanceEnabled,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -47,6 +49,26 @@ export const remainingScore = (availability: ProviderAvailability): number => {
   return 100 - worst.usedPercent;
 };
 
+/**
+ * Members of `group` that could receive a failing-over thread, excluding the
+ * limited instance itself.
+ *
+ * Enabled state goes through `resolveProviderInstanceEnabled`, not a bare
+ * `enabled !== false`: drivers that are off by default (Grok, Cursor,
+ * OpenCode) carry no explicit flag, and a bare inequality would fail a
+ * thread over onto an instance the server never probed or registered.
+ */
+export const failoverCandidates = (
+  instances: Readonly<Record<string, ProviderInstanceConfig>>,
+  input: { readonly originInstanceId: ProviderInstanceId; readonly group: string },
+): ReadonlyArray<readonly [string, ProviderInstanceConfig]> =>
+  Object.entries(instances).filter(
+    ([instanceId, config]) =>
+      instanceId !== String(input.originInstanceId) &&
+      config.failoverGroup === input.group &&
+      resolveProviderInstanceEnabled(config),
+  );
+
 export const makeLimitFailoverReactor = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
@@ -80,12 +102,7 @@ export const makeLimitFailoverReactor = Effect.gen(function* () {
       return;
     }
 
-    const candidates = Object.entries(instances).filter(
-      ([instanceId, config]) =>
-        instanceId !== String(originInstanceId) &&
-        config.failoverGroup === group &&
-        config.enabled !== false,
-    );
+    const candidates = failoverCandidates(instances, { originInstanceId, group });
     // getAvailability is optional on the service shape; a build without it
     // cannot rank, so every non-limited member scores as unknown (0).
     const getAvailability = providerService.getAvailability;
