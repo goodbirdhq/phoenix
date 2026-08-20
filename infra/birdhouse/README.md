@@ -32,28 +32,41 @@ Required env vars are validated at startup (`src/config.ts`); see
 
 ```
 src/
-  config.ts          env validation (zod)
-  cli.ts              entry point: worker | migrate | run <key> | list
+  config.ts           env validation (zod)
+  cli.ts              entry point: worker | migrate | run | list | enable |
+                       disable | cancel
   db/
-    schema.ts          drizzle schema — ops_job, workflow, workflow_schedule,
-                        workflow_run, audit_event
-    client.ts           pg Pool + drizzle instance
-    migrate.ts           drizzle-kit migration runner
+    schema.ts         drizzle schema — ops_job, workflow, workflow_schedule,
+                       workflow_run, audit_event
+    client.ts         pg Pool + drizzle instance
+    migrate.ts        drizzle-kit migration runner
   jobs/
-    types.ts             job/handler/lease types, defineJobHandler
-    errors.ts             TerminalJobError, JobLeaseLostError
-    queue.ts              the durable job queue: enqueue, lease, heartbeat,
-                           complete/fail, cancellation, the drain loop
-    queue.test.ts          unit tests (retry policy, terminal-error
-                            classification) + DB tests gated on
-                            BIRDHOUSE_TEST_DATABASE_URL
+    types.ts          job/handler/lease types, defineJobHandler
+    errors.ts         TerminalJobError, JobLeaseLostError
+    queue.ts          the durable job queue: enqueue, lease, heartbeat,
+                       complete/fail, cancellation, retention, the drain loop
   scheduler/
-    tick.ts               runSchedulerTick(db) — stub, next wave
+    tick.ts           one pass: sync definitions from disk, sweep runs past
+                       their deadline, prune finished jobs, claim due
+                       schedules and start their runs
+  runner/
+    runs.ts           create/cancel a run, and sweepExpiredRuns — the
+                       backstop that makes timeout_at mean something even
+                       when a run's job chain breaks
+    handlers.ts       workflow.launch / workflow.watch / workflow.stop
+    prompt.ts         the turn text sent to the agent
+    callbackToken.ts  per-run result-callback bearer tokens
+  http/
+    server.ts         loopback-only: result callback, health, manual trigger
   phoenix/
-    client.ts              PhoenixClient interface + createPhoenixClient —
-                            stub, seam for the Phoenix-side integration
-drizzle/                  generated SQL migrations
+    client.ts         PhoenixClient interface + createPhoenixClient
+  workflows/
+    loader.ts         read manifests from disk, project them into the DB
+drizzle/              generated SQL migrations
 ```
+
+Every module has a `*.test.ts` beside it. Tests that need Postgres are gated
+on `BIRDHOUSE_TEST_DATABASE_URL` and skip without it.
 
 ## Design principles
 
@@ -227,6 +240,20 @@ Both print/return a `runId`; `pnpm --dir infra/birdhouse exec tsx src/cli.ts lis
 shows recent runs and their status.
 
 ## Operations
+
+### Everyday commands
+
+```sh
+ops list                     # workflows, their next occurrence, recent runs
+ops run <workflow-key>       # start one run now, printing its id
+ops cancel <run-id>          # stop a queued or in-flight run and its session
+ops disable <workflow-key>   # stop scheduling it, keep it and its history
+ops enable <workflow-key>    # undo a disable
+```
+
+`enable` is also how you recover from an automatic disable: when a workflow
+stops appearing on disk, reconciliation disables it, and the sync never
+re-enables anything on its own.
 
 ### Token expiry
 

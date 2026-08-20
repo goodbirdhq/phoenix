@@ -11,6 +11,7 @@ This is a living glossary for Phoenix. It explains what common terms mean in thi
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
+- [Birdhouse workflows](#birdhouse-workflows)
 
 ## Concepts
 
@@ -160,6 +161,28 @@ The patch difference between two checkpoints. Query logic lives in [CheckpointDi
 
 The file patch and changed-file summary for one turn. It is usually computed in [CheckpointDiffQuery.ts][20], represented in [the contracts][1], and recorded into thread state by [projector.ts][4].
 
+### Birdhouse workflows
+
+Terms belonging to [birdhouse][27], the separate service that runs business workflows as Phoenix agent threads. Everything here lives outside the app — nothing in `apps/` or `packages/` uses these words — but they collide with product terms often enough to be worth pinning down. See [birdhouse.md][28].
+
+#### Workflow
+
+A repeatable unit of business work, defined on disk as a directory holding `manifest.json` and `SKILL.md`. The repo owns the definition; birdhouse's database owns only its mode and whether it is enabled.
+
+#### Run
+
+One execution of a workflow. A run drives exactly one **thread** and one **turn** in the senses above — birdhouse launches a real Phoenix thread per run and starts a single turn on it.
+
+#### Workflow mode
+
+How far a run's side effects may go: `fake` (complete immediately, touch nothing), `shadow` (do the work, record what it would have changed), or `live`. New workflows start in `shadow`.
+
+Not to be confused with **runtime mode** above, which is the Phoenix permission mode the launched thread runs under. Both are in play on the same run: a workflow's mode decides whether it should act, the thread's runtime mode decides what its harness will let it do. When either appears unqualified in a birdhouse context, it means the workflow one.
+
+#### Job
+
+A row in birdhouse's own Postgres-backed durable queue — leased with `for update skip locked`, heartbeated, retried. Unrelated to any queue in the app.
+
 ## Practical Shortcuts
 
 - If you see `requested`, think "intent recorded".
@@ -174,6 +197,7 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 - [Provider architecture][16]
 - [Permission modes][18]
 - [Workspace layout][2]
+- [Birdhouse][28]
 
 [1]: ../../packages/contracts/src/orchestration.ts
 [2]: ./workspace-layout.md
@@ -201,3 +225,5 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [24]: ./overview.md
 [25]: ../../packages/contracts/src/providerInstance.ts
 [26]: ../../apps/server/src/provider/conversationSeed.ts
+[27]: ../../infra/birdhouse/README.md
+[28]: ./birdhouse.md
