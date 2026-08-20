@@ -292,3 +292,17 @@ journal yet.
   can reach `127.0.0.1:$BIRDHOUSE_HTTP_PORT` on this box can start any enabled
   workflow. That's an accepted tradeoff for a same-box CLI/script trigger
   in v1 — it is not safe to expose beyond loopback as-is.
+- **An agent's tools are not scoped per run.** A workflow agent gets
+  whatever toolkit the Phoenix harness grants it, and the orchestration
+  dispatch contract has no per-thread tool allowlist to narrow it (see
+  `docs/phoenix-http-contract.md`). Workflows that research the open web
+  therefore read attacker-influenceable text — a prospect's own site, a
+  transcript, a CRM field someone else filled in — while holding tools that
+  can send mail and write to shared systems. Birdhouse mitigates this from
+  its own layer only: the run prompt states that fetched content is data
+  rather than instructions and that outward-facing actions need explicit
+  workflow authority (`src/runner/prompt.ts`), and new workflows default to
+  `shadow`. Those are mitigations, not a boundary. Treat "this workflow
+  cannot send email" as a property no code enforces today; the real fix is a
+  per-thread capability allowlist on the Phoenix side, and until it exists,
+  review a workflow's tool surface before flipping it to `live`.

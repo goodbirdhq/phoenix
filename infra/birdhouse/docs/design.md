@@ -123,6 +123,15 @@ keys, deterministic ids, and status-guarded updates — at every hop.
   has no auth beyond the loopback bind (see README's "Security notes");
   there's no concept of "who" triggered a run beyond the `trigger` enum
   (`schedule`/`manual`/`api`) and the audit log's `actor` string.
+- **No capability scoping per run.** Workflow mode (`fake`/`shadow`/`live`)
+  and the SKILL's own rules are prose the agent is asked to honour, not a
+  sandbox: nothing stops a `shadow` run's agent from calling a write tool,
+  because the dispatch contract carries no per-thread tool allowlist. The
+  run prompt's "Untrusted content" section narrows the obvious
+  prompt-injection path, and `runtime_mode` (global or per-workflow via
+  `manifest.phoenix.runtime_mode`) is the only real lever available today.
+  Scoping tools per run needs a Phoenix-side change and is the main thing
+  standing between this and running untrusted-input workflows in `live`.
 - **Report ingestion is best-effort.** The Phoenix HTTP contract itself
   flags this (`docs/phoenix-http-contract.md`, "Notes for the runner"):
   whether a root (non-spawned) thread can post a structured report at all is
