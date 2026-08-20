@@ -34,7 +34,16 @@ import {
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type FormEvent,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 
 import { requestConfirmDialog } from "../../confirmDialog";
 import { isElectron } from "../../env";
@@ -56,14 +65,13 @@ import { SidebarInset } from "../ui/sidebar";
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
-  chooseScheduleModelSelection,
   latestScheduleHistoryListText,
   modelSelectionValue,
   prependOlderScheduleHistory,
-  resolveScheduleBaseBranch,
-  resolveScheduleWorkspaceModeDefault,
+  reconcileScheduleEditorDefaults,
   scheduleFailureAttentionVersion,
   scheduleHistoryEntryKey,
+  schedulePauseFieldLabel,
   scheduleWorktreeCapability,
 } from "./SchedulesPage.logic";
 
@@ -644,7 +652,7 @@ function ScheduleEditor(props: {
   readonly environments: ReturnType<typeof useWebEnvironmentSchedules>["environments"];
   readonly projects: ReturnType<typeof useProjects>;
   readonly pending: boolean;
-  readonly onChange: (draft: ScheduleEditorDraft) => void;
+  readonly onChange: Dispatch<SetStateAction<ScheduleEditorDraft>>;
   readonly onCancel: () => void;
   readonly onSubmit: (event: FormEvent) => void;
 }) {
@@ -652,8 +660,9 @@ function ScheduleEditor(props: {
   const environment = props.environments.find(
     (entry) => entry.environment.environmentId === props.draft.environmentId,
   );
-  const availableProjects = props.projects.filter(
-    (project) => project.environmentId === props.draft.environmentId,
+  const availableProjects = useMemo(
+    () => props.projects.filter((project) => project.environmentId === props.draft.environmentId),
+    [props.draft.environmentId, props.projects],
   );
   const selectedProject = availableProjects.find((project) => project.id === props.draft.projectId);
   const vcsRefs = useBranches({
@@ -689,59 +698,37 @@ function ScheduleEditor(props: {
         })
       : null;
   const patchDraft = (patch: Partial<ScheduleEditorDraft>) =>
-    props.onChange({ ...props.draft, ...patch });
-  const defaultWorkspaceMode = (
-    project: (typeof availableProjects)[number] | undefined,
-  ): ScheduleEditorDraft["workspaceMode"] =>
-    resolveScheduleWorkspaceModeDefault(
-      project?.id === selectedProject?.id ? (vcsRefs.data?.isRepo ?? null) : null,
-      project?.defaultThreadEnvMode ??
-        environment?.environment.serverConfig?.settings.defaultThreadEnvMode,
-    );
+    props.onChange((current) => ({ ...current, ...patch }));
 
   useEffect(() => {
-    if (!availableProjects.some((project) => project.id === props.draft.projectId)) {
-      const project = availableProjects[0];
-      patchDraft({
-        projectId: project?.id ?? "",
-        ...(!props.draft.workspaceCustomized
-          ? { workspaceMode: defaultWorkspaceMode(project) }
-          : {}),
-      });
-    }
-  }, [availableProjects, props.draft.projectId]);
-  useEffect(() => {
-    if (props.draft.workspaceCustomized || selectedProject === undefined) return;
-    const workspaceMode = defaultWorkspaceMode(selectedProject);
-    if (workspaceMode !== props.draft.workspaceMode) patchDraft({ workspaceMode });
-  }, [props.draft.workspaceCustomized, props.draft.workspaceMode, selectedProject, vcsRefs.data]);
-  useEffect(() => {
-    if (
-      !modelOptions.some((model) => model.value === modelSelectionValue(props.draft.modelSelection))
-    ) {
-      patchDraft({
-        modelSelection: chooseScheduleModelSelection(
-          [
-            selectedProject?.defaultModelSelection,
-            environment?.environment.serverConfig?.settings.textGenerationModelSelection,
-          ],
-          modelOptions,
-        ),
-      });
-    }
+    props.onChange((current) =>
+      reconcileScheduleEditorDefaults(current, {
+        environmentId: props.draft.environmentId,
+        projects: availableProjects,
+        modelChoices: modelOptions,
+        serverDefaultModelSelection:
+          environment?.environment.serverConfig?.settings.textGenerationModelSelection,
+        isRepo: selectedProject === undefined ? null : (vcsRefs.data?.isRepo ?? null),
+        branchRefs,
+        editing: props.editing,
+      }),
+    );
   }, [
+    availableProjects,
+    branchRefs,
     environment?.environment.serverConfig?.settings.textGenerationModelSelection,
     modelOptions,
+    props.draft.baseBranch,
+    props.draft.environmentId,
     props.draft.modelSelection,
+    props.draft.projectId,
+    props.draft.workspaceCustomized,
+    props.draft.workspaceMode,
+    props.editing,
+    props.onChange,
     selectedProject?.defaultModelSelection,
+    vcsRefs.data?.isRepo,
   ]);
-  useEffect(() => {
-    if (props.editing || props.draft.workspaceMode !== "worktree") return;
-    const baseBranch = resolveScheduleBaseBranch(branchRefs);
-    if (baseBranch !== null && props.draft.baseBranch === "origin/HEAD") {
-      patchDraft({ baseBranch });
-    }
-  }, [branchRefs, props.draft.baseBranch, props.draft.workspaceMode, props.editing]);
 
   return (
     <Card>
@@ -791,13 +778,9 @@ function ScheduleEditor(props: {
             label="Project"
             value={props.draft.projectId}
             onChange={(projectId) => {
-              const project = availableProjects.find((candidate) => candidate.id === projectId);
               patchDraft({
                 projectId,
                 modelSelection: null,
-                ...(!props.draft.workspaceCustomized
-                  ? { workspaceMode: defaultWorkspaceMode(project) }
-                  : {}),
               });
             }}
           >
@@ -1002,14 +985,16 @@ function ScheduleEditor(props: {
                   : "Phoenix could not confirm this Project is a Git repository. Use the shared project workspace."}
             </p>
           ) : null}
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={props.draft.createPaused}
-              onChange={(event) => patchDraft({ createPaused: event.target.checked })}
-            />
-            Create Paused
-          </label>
+          {schedulePauseFieldLabel(props.editing) ? (
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={props.draft.createPaused}
+                onChange={(event) => patchDraft({ createPaused: event.target.checked })}
+              />
+              {schedulePauseFieldLabel(props.editing)}
+            </label>
+          ) : null}
           <div className="flex justify-end gap-2 md:col-span-2">
             <Button type="button" variant="ghost" onClick={props.onCancel}>
               Cancel

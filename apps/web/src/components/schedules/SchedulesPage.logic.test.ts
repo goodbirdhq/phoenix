@@ -11,8 +11,10 @@ import {
   latestScheduleHistoryListText,
   latestScheduleHistorySummary,
   prependOlderScheduleHistory,
+  reconcileScheduleEditorDefaults,
   resolveScheduleBaseBranch,
   resolveScheduleWorkspaceModeDefault,
+  schedulePauseFieldLabel,
   scheduleFailureAttentionVersion,
   scheduleWorktreeCapability,
 } from "./SchedulesPage.logic";
@@ -73,11 +75,96 @@ describe("Schedule editor logic", () => {
     });
   });
 
-  it("defaults non-repositories and unknown repositories to the local workspace", () => {
-    expect(resolveScheduleWorkspaceModeDefault(true, "worktree")).toBe("worktree");
-    expect(resolveScheduleWorkspaceModeDefault(true, "local")).toBe("local");
-    expect(resolveScheduleWorkspaceModeDefault(false, "worktree")).toBe("local");
-    expect(resolveScheduleWorkspaceModeDefault(null, "worktree")).toBe("local");
+  it("defaults confirmed Git projects to a worktree independently of thread preferences", () => {
+    expect(resolveScheduleWorkspaceModeDefault(true)).toBe("worktree");
+    expect(resolveScheduleWorkspaceModeDefault(false)).toBe("local");
+    expect(resolveScheduleWorkspaceModeDefault(null)).toBe("local");
+  });
+
+  it("settles editor defaults without overwriting a newly selected Environment", () => {
+    const empty = {
+      environmentId: "agents",
+      projectId: "",
+      modelSelection: null,
+      workspaceMode: "local" as const,
+      workspaceCustomized: false,
+      baseBranch: "origin/HEAD",
+    };
+    const noData = {
+      environmentId: "agents",
+      projects: [],
+      modelChoices: [],
+      serverDefaultModelSelection: null,
+      isRepo: null,
+      branchRefs: [],
+      editing: false,
+    };
+
+    expect(reconcileScheduleEditorDefaults(empty, noData)).toBe(empty);
+
+    const withProject = reconcileScheduleEditorDefaults(empty, {
+      ...noData,
+      projects: [
+        { id: "project-1", defaultModelSelection: null, defaultThreadEnvMode: "local" as const },
+      ],
+    });
+    expect(withProject).toMatchObject({
+      environmentId: "agents",
+      projectId: "project-1",
+      workspaceMode: "local",
+    });
+
+    const repositoryConfirmed = reconcileScheduleEditorDefaults(withProject, {
+      ...noData,
+      projects: [
+        { id: "project-1", defaultModelSelection: null, defaultThreadEnvMode: "local" as const },
+      ],
+      isRepo: true,
+      branchRefs: [{ name: "origin/main", current: false, isDefault: true, isRemote: true }],
+    });
+    expect(repositoryConfirmed).toMatchObject({
+      environmentId: "agents",
+      workspaceMode: "worktree",
+      baseBranch: "origin/main",
+    });
+    expect(
+      reconcileScheduleEditorDefaults(repositoryConfirmed, {
+        ...noData,
+        projects: [
+          { id: "project-1", defaultModelSelection: null, defaultThreadEnvMode: "local" as const },
+        ],
+        isRepo: true,
+        branchRefs: [{ name: "origin/main", current: false, isDefault: true, isRemote: true }],
+      }),
+    ).toBe(repositoryConfirmed);
+  });
+
+  it("retains an explicit shared-workspace override after Git is confirmed", () => {
+    const draft = {
+      environmentId: "agents",
+      projectId: "project-1",
+      modelSelection: null,
+      workspaceMode: "local" as const,
+      workspaceCustomized: true,
+      baseBranch: "origin/HEAD",
+    };
+
+    expect(
+      reconcileScheduleEditorDefaults(draft, {
+        environmentId: "agents",
+        projects: [{ id: "project-1", defaultModelSelection: null }],
+        modelChoices: [],
+        serverDefaultModelSelection: null,
+        isRepo: true,
+        branchRefs: [],
+        editing: false,
+      }),
+    ).toBe(draft);
+  });
+
+  it("uses mode-appropriate pause copy", () => {
+    expect(schedulePauseFieldLabel(false)).toBe("Create Paused");
+    expect(schedulePauseFieldLabel(true)).toBeNull();
   });
 });
 

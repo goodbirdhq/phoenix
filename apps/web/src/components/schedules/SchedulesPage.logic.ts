@@ -5,6 +5,34 @@ export interface ScheduleModelChoice {
   readonly isDefault: boolean;
 }
 
+interface ScheduleEditorDefaultsDraft {
+  readonly environmentId: string;
+  readonly projectId: string;
+  readonly modelSelection: ModelSelection | null;
+  readonly workspaceMode: "local" | "worktree";
+  readonly workspaceCustomized: boolean;
+  readonly baseBranch: string;
+}
+
+interface ScheduleEditorDefaultsInput {
+  readonly environmentId: string;
+  readonly projects: ReadonlyArray<{
+    readonly id: string;
+    readonly defaultModelSelection: ModelSelection | null | undefined;
+    readonly defaultThreadEnvMode?: "local" | "worktree" | null | undefined;
+  }>;
+  readonly modelChoices: ReadonlyArray<ScheduleModelChoice>;
+  readonly serverDefaultModelSelection: ModelSelection | null | undefined;
+  readonly isRepo: boolean | null;
+  readonly branchRefs: ReadonlyArray<{
+    readonly name: string;
+    readonly current: boolean;
+    readonly isDefault: boolean;
+    readonly isRemote?: boolean | undefined;
+  }>;
+  readonly editing: boolean;
+}
+
 function sameModel(left: ModelSelection, right: ModelSelection): boolean {
   return left.instanceId === right.instanceId && left.model === right.model;
 }
@@ -51,11 +79,57 @@ export function scheduleWorktreeCapability(isRepo: boolean | null): {
   };
 }
 
-export function resolveScheduleWorkspaceModeDefault(
-  isRepo: boolean | null,
-  preferred: "local" | "worktree" | null | undefined,
-): "local" | "worktree" {
-  return isRepo === true ? (preferred ?? "worktree") : "local";
+export function resolveScheduleWorkspaceModeDefault(isRepo: boolean | null): "local" | "worktree" {
+  return isRepo === true ? "worktree" : "local";
+}
+
+/** Applies asynchronously discovered editor defaults without emitting no-op state updates. */
+export function reconcileScheduleEditorDefaults<T extends ScheduleEditorDefaultsDraft>(
+  draft: T,
+  input: ScheduleEditorDefaultsInput,
+): T {
+  if (draft.environmentId !== input.environmentId) return draft;
+
+  const project =
+    input.projects.find((candidate) => candidate.id === draft.projectId) ?? input.projects[0];
+  const projectId = project?.id ?? "";
+  const modelSelection = input.modelChoices.some(
+    (choice) => draft.modelSelection !== null && sameModel(choice.selection, draft.modelSelection),
+  )
+    ? draft.modelSelection
+    : chooseScheduleModelSelection(
+        [project?.defaultModelSelection, input.serverDefaultModelSelection],
+        input.modelChoices,
+      );
+  const workspaceMode = draft.workspaceCustomized
+    ? draft.workspaceMode
+    : resolveScheduleWorkspaceModeDefault(project === undefined ? null : input.isRepo);
+  const resolvedBranch =
+    !input.editing && workspaceMode === "worktree" && draft.baseBranch === "origin/HEAD"
+      ? resolveScheduleBaseBranch(input.branchRefs)
+      : null;
+  const baseBranch = resolvedBranch ?? draft.baseBranch;
+
+  if (
+    projectId === draft.projectId &&
+    modelSelection === draft.modelSelection &&
+    workspaceMode === draft.workspaceMode &&
+    baseBranch === draft.baseBranch
+  ) {
+    return draft;
+  }
+
+  return {
+    ...draft,
+    projectId,
+    modelSelection,
+    workspaceMode,
+    baseBranch,
+  };
+}
+
+export function schedulePauseFieldLabel(editing: boolean): "Create Paused" | null {
+  return editing ? null : "Create Paused";
 }
 
 export function scheduleFailureAttentionVersion(
