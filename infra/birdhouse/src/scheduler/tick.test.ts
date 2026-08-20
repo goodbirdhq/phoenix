@@ -123,6 +123,59 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runSchedulerTick", ()
     expect(calls).toHaveLength(1);
   });
 
+  it("fires a backlogged schedule once and resumes from the present", async () => {
+    const workflowKey = `test-tick-backlog-${randomUUID()}`;
+    await db.insert(workflow).values({
+      key: workflowKey,
+      title: "Backlogged workflow",
+      skillPath: "test/SKILL.md",
+      manifest: {},
+      manifestHash: "test",
+    });
+
+    // Hourly, last fired three days ago: the shape left behind by downtime.
+    // Stepping one occurrence per claim would work through ~72 stale
+    // occurrences, each starting a real agent run.
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1_000);
+    const [schedule] = await db
+      .insert(workflowSchedule)
+      .values({
+        workflowKey,
+        cron: "0 * * * *",
+        timezone: "Europe/London",
+        nextRunAt: threeDaysAgo,
+      })
+      .returning();
+
+    const emptyWorkflowsDir = await mkdtemp(join(tmpdir(), "ops-workflows-empty-"));
+    const calls: CreateWorkflowRunInput[] = [];
+    const createRun = async (input: CreateWorkflowRunInput): Promise<CreateWorkflowRunResult> => {
+      calls.push(input);
+      return { runId: randomUUID(), created: true };
+    };
+
+    const first = await runSchedulerTick({
+      db,
+      workflowsDir: emptyWorkflowsDir,
+      defaultTimezone: "Europe/London",
+      createRun,
+    });
+    expect(first.schedulesClaimed).toBe(1);
+
+    // Advanced past now, not to the next of the 72 missed occurrences.
+    const updated = await readScheduleTimestamps(db, schedule!.id);
+    expect(updated.nextRunAtMs!).toBeGreaterThan(Date.now());
+
+    const second = await runSchedulerTick({
+      db,
+      workflowsDir: emptyWorkflowsDir,
+      defaultTimezone: "Europe/London",
+      createRun,
+    });
+    expect(second.schedulesClaimed).toBe(0);
+    expect(calls).toHaveLength(1);
+  });
+
   it("does not claim a due schedule of a disabled workflow", async () => {
     const workflowKey = `test-tick-disabled-${randomUUID()}`;
     await db.insert(workflow).values({

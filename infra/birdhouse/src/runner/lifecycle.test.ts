@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { drizzle } from "drizzle-orm/node-postgres";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -17,9 +17,13 @@ import type {
   PhoenixThreadDetail,
 } from "../phoenix/client.ts";
 import { startHttpServer } from "../http/server.ts";
-import { createWorkflowLaunchHandler, createWorkflowWatchHandler } from "./handlers.ts";
+import {
+  createWorkflowLaunchHandler,
+  createWorkflowStopHandler,
+  createWorkflowWatchHandler,
+} from "./handlers.ts";
 import { deriveRunPhoenixIds } from "./ids.ts";
-import { createWorkflowRun } from "./runs.ts";
+import { createWorkflowRun, sweepExpiredRuns } from "./runs.ts";
 
 // Exercises the whole run lifecycle against a real Postgres: the durable
 // job queue, the launch/watch handlers, and the HTTP callback route all
@@ -128,6 +132,14 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
       leaseMs: 60_000,
       leaseLostSignal: new AbortController().signal,
     };
+  }
+
+  /** Backdates a run's deadline on the database clock, the one the handlers compare against. */
+  async function expireRunDeadline(runId: string): Promise<void> {
+    await db
+      .update(workflowRun)
+      .set({ timeoutAt: sql`now() - interval '1 second'` })
+      .where(eq(workflowRun.id, runId));
   }
 
   async function jobByIdempotencyKey(idempotencyKey: string) {
@@ -289,22 +301,24 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
     expect((run?.result as { completedVia?: string } | null)?.completedVia).toBe("report");
   });
 
-  it("times a run out once timeout_at has passed, and stops the session", async () => {
+  it("times a run out once timeout_at has passed, and queues the session stop", async () => {
     const workflowKey = `test-timeout-${randomUUID()}`;
-    // A negative-ish timeout (1ms) so it's already in the past by the time
-    // the watch handler runs.
-    await insertWorkflow({ key: workflowKey, mode: "live", timeoutMs: 1 });
+    await insertWorkflow({ key: workflowKey, mode: "live", timeoutMs: 60_000 });
     const { client, state } = fakePhoenixClient();
     const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });
     const watchHandler = createWorkflowWatchHandler({ db, phoenixClient: client });
+    const stopHandler = createWorkflowStopHandler({ db, phoenixClient: client });
 
     const created = await createWorkflowRun({ db, workflowKey, trigger: "manual" });
     const launchJob = await jobByIdempotencyKey(`run:${created.runId}`);
     await launchHandler.handle(launchJob!, fakeLease(launchJob!));
     const watchJob = await jobByIdempotencyKey(`watch:${created.runId}:1`);
 
-    // Give the 1ms timeout time to elapse relative to the DB clock.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Put the deadline in the past on the database's own clock rather than
+    // sleeping against a short timeout: the handler compares `timeout_at` to
+    // SQL `now()`, so a JS-side wait only ever approximates the condition
+    // under test, and does it more slowly.
+    await expireRunDeadline(created.runId);
 
     const result = await watchHandler.handle(watchJob!, fakeLease(watchJob!));
     expect(result).toEqual({ timedOut: true });
@@ -315,6 +329,82 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("workflow run lifecycl
       .where(eq(workflowRun.id, created.runId))
       .limit(1);
     expect(run?.status).toBe("timed_out");
+
+    // The stop is durable work now, not an inline best-effort call: the
+    // watch job queues it, and draining that job is what reaches Phoenix.
+    const stopJob = await jobByIdempotencyKey(`stop:${created.runId}`);
+    expect(stopJob).toBeDefined();
+    expect(state.stopCalls).toEqual([]);
+
+    await stopHandler.handle(stopJob!, fakeLease(stopJob!));
     expect(state.stopCalls).toContain(deriveRunPhoenixIds(created.runId).threadId);
+  });
+
+  it("times out a run whose watch chain never ran, without any Phoenix call", async () => {
+    const workflowKey = `test-sweep-${randomUUID()}`;
+    await insertWorkflow({ key: workflowKey, mode: "live", timeoutMs: 60_000 });
+
+    // A run that never left 'pending' — the shape left behind when
+    // `workflow.launch` dead-letters (an expired token, a dispatch that keeps
+    // 500ing). No watch job exists, so nothing in the job chain can ever
+    // retire it.
+    const created = await createWorkflowRun({ db, workflowKey, trigger: "manual" });
+    await expireRunDeadline(created.runId);
+
+    const swept = await sweepExpiredRuns(db);
+    expect(swept.timedOut).toBeGreaterThanOrEqual(1);
+
+    const [run] = await db
+      .select()
+      .from(workflowRun)
+      .where(eq(workflowRun.id, created.runId))
+      .limit(1);
+    expect(run?.status).toBe("timed_out");
+    expect(run?.completedAt).not.toBeNull();
+
+    // Never launched, so there is no session to stop.
+    expect(await jobByIdempotencyKey(`stop:${created.runId}`)).toBeUndefined();
+  });
+
+  it("sweeps a launched run whose watch chain broke, and queues its session stop", async () => {
+    const workflowKey = `test-sweep-running-${randomUUID()}`;
+    await insertWorkflow({ key: workflowKey, mode: "live", timeoutMs: 60_000 });
+    const { client } = fakePhoenixClient();
+    const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });
+
+    const created = await createWorkflowRun({ db, workflowKey, trigger: "manual" });
+    const launchJob = await jobByIdempotencyKey(`run:${created.runId}`);
+    await launchHandler.handle(launchJob!, fakeLease(launchJob!));
+    await expireRunDeadline(created.runId);
+
+    await sweepExpiredRuns(db);
+
+    const [run] = await db
+      .select()
+      .from(workflowRun)
+      .where(eq(workflowRun.id, created.runId))
+      .limit(1);
+    expect(run?.status).toBe("timed_out");
+    expect(await jobByIdempotencyKey(`stop:${created.runId}`)).toBeDefined();
+  });
+
+  it("re-asserts the watch job when a launch replay finds the run already running", async () => {
+    const workflowKey = `test-replay-${randomUUID()}`;
+    await insertWorkflow({ key: workflowKey, mode: "live", timeoutMs: 60_000 });
+    const { client } = fakePhoenixClient();
+    const launchHandler = createWorkflowLaunchHandler({ db, phoenixClient: client });
+
+    const created = await createWorkflowRun({ db, workflowKey, trigger: "manual" });
+    const launchJob = await jobByIdempotencyKey(`run:${created.runId}`);
+    await launchHandler.handle(launchJob!, fakeLease(launchJob!));
+
+    // The shape a crash between the 'running' update and the watch enqueue
+    // leaves behind: run is running, watch job is absent.
+    await db.delete(opsJob).where(eq(opsJob.idempotencyKey, `watch:${created.runId}:1`));
+    expect(await jobByIdempotencyKey(`watch:${created.runId}:1`)).toBeUndefined();
+
+    const replay = await launchHandler.handle(launchJob!, fakeLease(launchJob!));
+    expect(replay).toEqual({ skipped: true, status: "running" });
+    expect(await jobByIdempotencyKey(`watch:${created.runId}:1`)).toBeDefined();
   });
 });

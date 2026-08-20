@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { config } from "../config.ts";
 import type { Db } from "../db/client.ts";
-import { workflow, workflowRun } from "../db/schema.ts";
+import { OPEN_RUN_STATUSES, workflow, workflowRun } from "../db/schema.ts";
 import { enqueueJob } from "../jobs/queue.ts";
 import { writeAuditEvent } from "./audit.ts";
 import { mintCallbackToken } from "./callbackToken.ts";
@@ -80,12 +80,11 @@ export async function createWorkflowRun(
     const timeoutMs = resolveWorkflowTimeoutMs(workflowRow.manifest);
     const now = new Date();
 
-    // This timeoutAt is a placeholder computed from creation time, good
-    // enough to serve as a safety bound if `workflow.launch` never runs. The
-    // launch handler overwrites it with a fresh `now + timeout` computed at
-    // the moment the Phoenix turn actually starts — queue backlog between
-    // "pending" and "running" would otherwise silently eat into the run's
-    // timeout budget.
+    // Computed from creation time so `sweepExpiredRuns` has a deadline to
+    // enforce even if `workflow.launch` never runs at all. The launch
+    // handler overwrites it with a fresh `now + timeout` at the moment the
+    // Phoenix turn actually starts — queue backlog between "pending" and
+    // "running" would otherwise silently eat into the run's budget.
     const [insertedRun] = await tx
       .insert(workflowRun)
       .values({
@@ -147,5 +146,73 @@ export async function createWorkflowRun(
     });
 
     return { runId, created: true };
+  });
+}
+
+export type ExpiredRunSweepSummary = Readonly<{ timedOut: number }>;
+
+/**
+ * Terminally fails every still-open run whose deadline has passed.
+ *
+ * The watch job enforces a run's timeout while its chain is alive, but that
+ * chain is not guaranteed: a `workflow.launch` or `workflow.watch` job can
+ * dead-letter (an expired Phoenix token, a deleted thread, a dispatch that
+ * keeps 500ing), and nothing re-creates it. Without a sweep, a run whose
+ * chain broke sits `pending`/`running` forever — no timeout, no failure, no
+ * signal. This is the backstop that makes `timeout_at` mean something on
+ * every path, so it runs on the scheduler's cadence rather than inside the
+ * job chain it exists to cover for.
+ *
+ * The comparison runs in SQL against `now()`, and the status guard makes the
+ * update idempotent against a watch job or callback completing the same run
+ * concurrently — exactly one writer wins.
+ */
+export async function sweepExpiredRuns(db: Db): Promise<ExpiredRunSweepSummary> {
+  const expired = await db
+    .update(workflowRun)
+    .set({
+      status: "timed_out",
+      completedAt: sql`now()`,
+      error: "Run exceeded its timeout before reporting a result",
+    })
+    .where(
+      and(
+        inArray(workflowRun.status, [...OPEN_RUN_STATUSES]),
+        sql`${workflowRun.timeoutAt} is not null and now() > ${workflowRun.timeoutAt}`,
+      ),
+    )
+    .returning({ id: workflowRun.id, phoenixThreadId: workflowRun.phoenixThreadId });
+
+  for (const run of expired) {
+    await writeAuditEvent(db, {
+      actor: "system",
+      action: "run.completed",
+      targetType: "workflow_run",
+      targetId: run.id,
+      outcome: "failed",
+      reason: "timed_out",
+      metadata: { completedVia: "sweep" },
+    });
+    // A run we timed out from outside its watch chain still has a live agent
+    // session on the Phoenix side; stopping it is durable work, not
+    // best-effort, so it goes through the queue.
+    if (run.phoenixThreadId) {
+      await enqueueStopSession(db, run.id, run.phoenixThreadId);
+    }
+  }
+
+  if (expired.length > 0) {
+    console.log(JSON.stringify({ event: "runs.swept_timed_out", count: expired.length }));
+  }
+  return { timedOut: expired.length };
+}
+
+/** Queues the Phoenix session stop for a run that has already gone terminal. */
+export async function enqueueStopSession(db: Db, runId: string, threadId: string): Promise<void> {
+  await enqueueJob({
+    db,
+    type: "workflow.stop",
+    payload: { runId, threadId },
+    idempotencyKey: `stop:${runId}`,
   });
 }

@@ -3,7 +3,11 @@ import { db } from "../db/client.ts";
 import { createJobHandlerRegistry } from "../jobs/types.ts";
 import type { JobHandlerRegistry } from "../jobs/types.ts";
 import { createPhoenixClient } from "../phoenix/client.ts";
-import { createWorkflowLaunchHandler, createWorkflowWatchHandler } from "./handlers.ts";
+import {
+  createWorkflowLaunchHandler,
+  createWorkflowStopHandler,
+  createWorkflowWatchHandler,
+} from "./handlers.ts";
 
 // Importing `db/client.ts` validates BIRDHOUSE_DATABASE_URL at import time (see
 // that module's own comment) — same as every other real (non-stub) module in
@@ -21,4 +25,5 @@ const phoenixClient = createPhoenixClient(config);
 export const jobHandlerRegistry: JobHandlerRegistry = createJobHandlerRegistry([
   createWorkflowLaunchHandler({ db, phoenixClient }),
   createWorkflowWatchHandler({ db, phoenixClient }),
+  createWorkflowStopHandler({ db, phoenixClient }),
 ]);

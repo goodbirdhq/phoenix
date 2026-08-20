@@ -1,12 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { config } from "../config.ts";
 import type { Db } from "../db/client.ts";
-import { workflow, workflowRun } from "../db/schema.ts";
+import { isTerminalRunStatus, OPEN_RUN_STATUSES, workflow, workflowRun } from "../db/schema.ts";
 import { TerminalJobError } from "../jobs/errors.ts";
 import { enqueueJob } from "../jobs/queue.ts";
 import type { ActiveJobLease, JobHandlerDefinition, OpsJobRow } from "../jobs/types.ts";
@@ -16,43 +15,69 @@ import {
   type PhoenixClient,
   type PhoenixThreadDetail,
 } from "../phoenix/client.ts";
+import { resolveWorkflowsDir } from "../workflows/loader.ts";
 import { writeAuditEvent } from "./audit.ts";
 import { deriveRunPhoenixIds } from "./ids.ts";
 import { buildRunPrompt } from "./prompt.ts";
-import { resolveWorkflowTimeoutMs } from "./runs.ts";
-
-// infra/birdhouse/src/runner/handlers.ts -> package root (infra/birdhouse) is two
-// directories up.
-const PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+import { enqueueStopSession, resolveWorkflowTimeoutMs } from "./runs.ts";
 
 // `workflow.skill_path` is stored relative to the workflows root
-// (`BIRDHOUSE_WORKFLOWS_DIR`), not the package root directly — confirmed against
-// src/workflows/loader.ts's `WorkflowDefinition.skillPath` doc comment
-// ("relative to the workflows root"). `BIRDHOUSE_WORKFLOWS_DIR` itself resolves
-// against the package root when relative (see src/config.ts). Reimplemented
-// locally rather than imported from src/workflows/loader.ts (owned by a
-// concurrent wave) to stay decoupled from its in-flight API.
-function resolveWorkflowsRoot(): string {
-  return isAbsolute(config.BIRDHOUSE_WORKFLOWS_DIR)
-    ? config.BIRDHOUSE_WORKFLOWS_DIR
-    : resolve(PACKAGE_ROOT, config.BIRDHOUSE_WORKFLOWS_DIR);
-}
-
+// (`BIRDHOUSE_WORKFLOWS_DIR`), which is where the loader wrote it — so the
+// launcher resolves it with the loader's own rule rather than a second copy
+// that could drift and leave the scheduler syncing a skill this handler
+// can't find.
 async function loadSkillMarkdown(skillPath: string): Promise<string> {
-  const resolved = isAbsolute(skillPath) ? skillPath : resolve(resolveWorkflowsRoot(), skillPath);
+  const resolved = isAbsolute(skillPath)
+    ? skillPath
+    : resolve(resolveWorkflowsDir(config.BIRDHOUSE_WORKFLOWS_DIR), skillPath);
   return readFile(resolved, "utf8");
-}
-
-const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "cancelled"] as const;
-type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
-
-function isTerminalRunStatus(status: string): status is TerminalRunStatus {
-  return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
 }
 
 function stringField(payload: Record<string, unknown>, key: string): string | undefined {
   const value = payload[key];
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Per-workflow Phoenix overrides from `manifest.phoenix`, falling back to the
+ * process defaults. The manifest schema has always accepted these; reading
+ * them here is what makes them mean anything — a workflow declaring, say,
+ * `runtime_mode: "approval-required"` because it touches real email must not
+ * quietly launch under the global default.
+ */
+function resolvePhoenixLaunchSettings(manifest: unknown): {
+  providerInstanceId: string;
+  model: string;
+  runtimeMode: typeof config.PHOENIX_RUNTIME_MODE;
+} {
+  const phoenix =
+    typeof manifest === "object" && manifest !== null
+      ? (manifest as { phoenix?: Record<string, unknown> }).phoenix
+      : undefined;
+  const providerInstanceId = phoenix?.provider_instance_id;
+  const model = phoenix?.model;
+  const runtimeMode = phoenix?.runtime_mode;
+  return {
+    providerInstanceId:
+      typeof providerInstanceId === "string" && providerInstanceId.length > 0
+        ? providerInstanceId
+        : config.PHOENIX_PROVIDER_INSTANCE_ID,
+    model: typeof model === "string" && model.length > 0 ? model : config.PHOENIX_MODEL,
+    runtimeMode: (typeof runtimeMode === "string" && runtimeMode.length > 0
+      ? runtimeMode
+      : config.PHOENIX_RUNTIME_MODE) as typeof config.PHOENIX_RUNTIME_MODE,
+  };
+}
+
+/** Idempotent on `watch:{runId}:{attempt}`, so re-asserting an existing link is a no-op. */
+async function enqueueWatch(db: Db, runId: string, attempt: number): Promise<void> {
+  await enqueueJob({
+    db,
+    type: "workflow.watch",
+    payload: { runId, attempt },
+    idempotencyKey: `watch:${runId}:${attempt}`,
+    runAfter: new Date(Date.now() + config.BIRDHOUSE_RUN_WATCH_INTERVAL_MS),
+  });
 }
 
 async function loadRun(db: Db, runId: string) {
@@ -71,12 +96,7 @@ async function failRunTerminally(db: Db, runId: string, error: string): Promise<
   const [updated] = await db
     .update(workflowRun)
     .set({ status: "failed", error, completedAt: now })
-    .where(
-      and(
-        eq(workflowRun.id, runId),
-        inArray(workflowRun.status, ["pending", "launching", "running"]),
-      ),
-    )
+    .where(and(eq(workflowRun.id, runId), inArray(workflowRun.status, [...OPEN_RUN_STATUSES])))
     .returning();
   if (updated) {
     await writeAuditEvent(db, {
@@ -121,6 +141,16 @@ export function createWorkflowLaunchHandler(deps: {
       // launch flow below (across retries too): dispatch idempotency, not a
       // status flag, is what protects against duplicate thread creation.
       if (run.status !== "pending") {
+        // The status flip to 'running' and the watch enqueue below are two
+        // statements; a crash between them leaves a running run with no
+        // watch job, and this early return is where that replay lands. The
+        // enqueue is idempotent on `watch:{runId}:1`, so re-asserting it
+        // costs nothing when the chain is alive and repairs it when it
+        // isn't. Without this the run would never be watched, and its
+        // timeout would fall to `sweepExpiredRuns` an hour later.
+        if (run.status === "running" && run.phoenixThreadId) {
+          await enqueueWatch(db, runId, 1);
+        }
         return { skipped: true, status: run.status };
       }
 
@@ -158,6 +188,10 @@ export function createWorkflowLaunchHandler(deps: {
 
       const projectId = config.PHOENIX_PROJECT_ID;
       if (!projectId) {
+        // Terminal for the job, so it must be terminal for the run too —
+        // otherwise the job dead-letters and the run sits 'pending' with
+        // nothing left to move it.
+        await failRunTerminally(db, runId, "PHOENIX_PROJECT_ID is not configured");
         throw new TerminalJobError("workflow.launch: PHOENIX_PROJECT_ID is not configured");
       }
 
@@ -172,16 +206,18 @@ export function createWorkflowLaunchHandler(deps: {
         callbackToken,
       });
 
+      const launchSettings = resolvePhoenixLaunchSettings(workflowRow.manifest);
+
       const createCommand = phoenixClient.createThread({
         commandId: ids.createCommandId,
         threadId: ids.threadId,
         projectId,
         title: `${workflowRow.title} — run ${runId}`,
         modelSelection: {
-          instanceId: config.PHOENIX_PROVIDER_INSTANCE_ID,
-          model: config.PHOENIX_MODEL,
+          instanceId: launchSettings.providerInstanceId,
+          model: launchSettings.model,
         },
-        runtimeMode: config.PHOENIX_RUNTIME_MODE,
+        runtimeMode: launchSettings.runtimeMode,
       });
 
       try {
@@ -205,7 +241,7 @@ export function createWorkflowLaunchHandler(deps: {
         threadId: ids.threadId,
         messageId: ids.messageId,
         text: promptText,
-        runtimeMode: config.PHOENIX_RUNTIME_MODE,
+        runtimeMode: launchSettings.runtimeMode,
       });
 
       try {
@@ -235,13 +271,7 @@ export function createWorkflowLaunchHandler(deps: {
         })
         .where(and(eq(workflowRun.id, runId), eq(workflowRun.status, "pending")));
 
-      await enqueueJob({
-        db,
-        type: "workflow.watch",
-        payload: { runId, attempt: 1 },
-        idempotencyKey: `watch:${runId}:1`,
-        runAfter: new Date(Date.now() + config.BIRDHOUSE_RUN_WATCH_INTERVAL_MS),
-      });
+      await enqueueWatch(db, runId, 1);
 
       await writeAuditEvent(db, {
         actor: "system",
@@ -267,13 +297,7 @@ async function rescheduleWatch(
   attempt: number,
 ): Promise<Record<string, unknown>> {
   const next = attempt + 1;
-  await enqueueJob({
-    db,
-    type: "workflow.watch",
-    payload: { runId, attempt: next },
-    idempotencyKey: `watch:${runId}:${next}`,
-    runAfter: new Date(Date.now() + config.BIRDHOUSE_RUN_WATCH_INTERVAL_MS),
-  });
+  await enqueueWatch(db, runId, next);
   return { rescheduled: next };
 }
 
@@ -320,11 +344,45 @@ export function createWorkflowWatchHandler(deps: {
         return rescheduleWatch(db, runId, attempt);
       }
 
+      // (a) Timeout first, before any Phoenix call. The deadline is ours to
+      // enforce and needs nothing from Phoenix, so checking it here keeps it
+      // working when Phoenix is exactly what's broken: a deleted thread
+      // (404) or an expired token (401) makes `getThread` throw on every
+      // attempt until this job dead-letters, and a run whose deadline passed
+      // in the meantime would never be marked timed out. Compared against
+      // the database clock, same discipline as the job queue.
+      const [timedOut] = await db
+        .update(workflowRun)
+        .set({ status: "timed_out", completedAt: sql`now()` })
+        .where(
+          and(
+            eq(workflowRun.id, runId),
+            eq(workflowRun.status, "running"),
+            sql`${workflowRun.timeoutAt} is not null and now() > ${workflowRun.timeoutAt}`,
+          ),
+        )
+        .returning();
+      if (timedOut) {
+        // The run is terminal now, but its agent session is still live on the
+        // Phoenix side. Stopping it is durable work with its own retries, not
+        // a best-effort call this job's success depends on.
+        await enqueueStopSession(db, runId, run.phoenixThreadId);
+        await writeAuditEvent(db, {
+          actor: "system",
+          action: "run.completed",
+          targetType: "workflow_run",
+          targetId: runId,
+          outcome: "failed",
+          reason: "timed_out",
+        });
+        return { timedOut: true };
+      }
+
       const detail = await phoenixClient.getThread(run.phoenixThreadId, {
         signal: lease.leaseLostSignal,
       });
 
-      // (a) A terminal report is best-effort enrichment per the contract
+      // (b) A terminal report is best-effort enrichment per the contract
       // notes, but if the callback never arrives it is also the only signal
       // we have — ingest it and complete the run from it.
       const report = latestTerminalReport(detail);
@@ -356,7 +414,7 @@ export function createWorkflowWatchHandler(deps: {
         return { alreadyTerminal: true };
       }
 
-      // (b) The turn itself errored out with no report ever posted.
+      // (c) The turn itself errored out with no report ever posted.
       if (detail.latestTurn?.state === "error") {
         const [updated] = await db
           .update(workflowRun)
@@ -381,52 +439,44 @@ export function createWorkflowWatchHandler(deps: {
         return { alreadyTerminal: true };
       }
 
-      // (c) Timeout — compared against the database clock, not JS's, same
-      // discipline as the job queue's own due/lease comparisons.
-      const [timedOut] = await db
-        .update(workflowRun)
-        .set({ status: "timed_out", completedAt: sql`now()` })
-        .where(
-          and(
-            eq(workflowRun.id, runId),
-            eq(workflowRun.status, "running"),
-            sql`${workflowRun.timeoutAt} is not null and now() > ${workflowRun.timeoutAt}`,
-          ),
-        )
-        .returning();
-      if (timedOut) {
-        // Best-effort: the run is already terminal, so a stop failure must
-        // not fail this job (a retry would no-op on the terminal run and the
-        // stop would never be reattempted anyway).
-        try {
-          await phoenixClient.stopSession(
-            run.phoenixThreadId,
-            { stopReason: "parent_stopped", stoppedBy: "system" },
-            { signal: lease.leaseLostSignal },
-          );
-        } catch (error) {
-          console.log(
-            JSON.stringify({
-              event: "run.stop_session_failed",
-              runId,
-              threadId: run.phoenixThreadId,
-              error: error instanceof Error ? error.message : String(error),
-            }),
-          );
-        }
-        await writeAuditEvent(db, {
-          actor: "system",
-          action: "run.completed",
-          targetType: "workflow_run",
-          targetId: runId,
-          outcome: "failed",
-          reason: "timed_out",
-        });
-        return { timedOut: true };
-      }
-
       // (d) Still running — check again next interval.
       return rescheduleWatch(db, runId, attempt);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// workflow.stop
+// ---------------------------------------------------------------------------
+
+/**
+ * Stops the Phoenix session behind a run that has already gone terminal
+ * without the agent finishing — a timeout, whether caught by the watch job
+ * or by `sweepExpiredRuns`. Its own job rather than an inline best-effort
+ * call so a transient failure is retried instead of silently leaving an
+ * agent session running against the box's provider quota.
+ */
+export function createWorkflowStopHandler(deps: {
+  db: Db;
+  phoenixClient: PhoenixClient;
+}): JobHandlerDefinition {
+  const { phoenixClient } = deps;
+
+  return defineJobHandler({
+    type: "workflow.stop",
+    async handle(job: OpsJobRow, lease: ActiveJobLease) {
+      const threadId = stringField(job.payload, "threadId");
+      if (!threadId) {
+        throw new TerminalJobError(
+          `workflow.stop payload missing threadId: ${JSON.stringify(job.payload)}`,
+        );
+      }
+      await phoenixClient.stopSession(
+        threadId,
+        { stopReason: "parent_stopped", stoppedBy: "system" },
+        { signal: lease.leaseLostSignal },
+      );
+      return { stopped: threadId };
     },
   });
 }

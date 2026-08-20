@@ -435,17 +435,16 @@ export function createPhoenixClient(
         ...(input?.stopReason ? { stopReason: input.stopReason } : {}),
         ...(input?.stoppedBy ? { stoppedBy: input.stoppedBy } : {}),
       };
-      try {
-        await request("/api/orchestration/dispatch", {
-          method: "POST",
-          body: command,
-          ...(options?.signal ? { signal: options.signal } : {}),
-        });
-      } catch (error) {
-        // Best-effort: a stop that fails to land leaves the session running
-        // until Phoenix's own lifecycle handling reaps it. Never propagate.
-        if (error instanceof DOMException && error.name === "AbortError") throw error;
-      }
+      // Throws like every other method here. Swallowing the failure hid the
+      // one case worth knowing about — a stop that never landed leaves an
+      // agent session running — and left the caller's own failure log unable
+      // to fire. Whether a failed stop is fatal is the caller's call: the
+      // `workflow.stop` job wants the retry, so it lets this propagate.
+      await request("/api/orchestration/dispatch", {
+        method: "POST",
+        body: command,
+        ...(options?.signal ? { signal: options.signal } : {}),
+      });
     },
 
     async getShell(options) {

@@ -133,6 +133,34 @@ export const workflowRunStatusEnum = pgEnum("workflow_run_status", [
   "cancelled",
 ]);
 
+export type WorkflowRunStatus = (typeof workflowRunStatusEnum.enumValues)[number];
+
+/** States a run never leaves. `satisfies` keeps these honest against the enum. */
+export const TERMINAL_RUN_STATUSES = [
+  "succeeded",
+  "failed",
+  "timed_out",
+  "cancelled",
+] as const satisfies readonly WorkflowRunStatus[];
+
+export type TerminalWorkflowRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
+
+export function isTerminalRunStatus(status: string): status is TerminalWorkflowRunStatus {
+  return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * The complement of the terminal set, derived rather than hand-listed: every
+ * guard that partitions run status reads from here, so adding a status to
+ * the enum can't silently leave it out of one list and in another. A new
+ * status defaults to "still open", which keeps the watch and callback paths
+ * working on it instead of treating it as already complete.
+ */
+export const OPEN_RUN_STATUSES = workflowRunStatusEnum.enumValues.filter(
+  (status): status is Exclude<WorkflowRunStatus, TerminalWorkflowRunStatus> =>
+    !isTerminalRunStatus(status),
+);
+
 export const workflowRun = pgTable(
   "workflow_run",
   {

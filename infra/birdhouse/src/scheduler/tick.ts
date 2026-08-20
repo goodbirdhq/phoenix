@@ -19,6 +19,8 @@ export type CreateWorkflowRunFn = (
   input: CreateWorkflowRunInput,
 ) => Promise<CreateWorkflowRunResult>;
 
+export type SweepExpiredRunsFn = (db: Db) => Promise<{ timedOut: number }>;
+
 type ClaimedSchedule = Readonly<{
   id: string;
   workflowKey: string;
@@ -37,18 +39,24 @@ type ClaimedSchedule = Readonly<{
  */
 async function claimDueSchedules(db: Db): Promise<ClaimedSchedule[]> {
   return db.transaction(async (tx) => {
+    // One read of the database clock for the whole claim, so every advance in
+    // this transaction is measured from the same instant (and from Postgres's
+    // clock, not the host's).
+    const clock = await tx.execute<{ now_epoch_ms: string }>(
+      sql`select extract(epoch from now()) * 1000 as now_epoch_ms`,
+    );
+    const nowEpochMs = clock.rows[0]?.now_epoch_ms ?? String(Date.now());
+
     const due = await tx.execute<{
       id: string;
       workflow_key: string;
       cron: string;
       timezone: string;
-      // `next_run_at` is a `timestamp` (no time zone) column, so `pg`'s
-      // default parser reads the naive wall-clock text back through the
-      // *Node process's* local time zone rather than UTC — invisible when
-      // the process happens to run with TZ=UTC, silently off by the host's
-      // offset otherwise. Extracting the epoch sidesteps that parser
-      // entirely; every other query in this file compares the column in SQL
-      // only (never materializing it as a JS Date), which is unaffected.
+      // Read as an epoch rather than letting `pg` hand back a Date: the
+      // value is only ever used as an instant to compute the next cron
+      // occurrence from, and going through the epoch keeps that arithmetic
+      // independent of the driver's parsing and the process's local zone.
+      // Every other query here compares the column in SQL only.
       next_run_at_epoch_ms: string;
     }>(sql`
       select ${workflowSchedule.id} as id,
@@ -66,9 +74,20 @@ async function claimDueSchedules(db: Db): Promise<ClaimedSchedule[]> {
     `);
 
     const claimed: ClaimedSchedule[] = [];
+    const claimedAt = new Date(Number(nowEpochMs));
     for (const row of due.rows) {
       const occurrence = new Date(Number(row.next_run_at_epoch_ms));
-      const next = nextCronOccurrence(row.cron, row.timezone, occurrence);
+      // Advance from now, not from the occurrence we just fired. Stepping one
+      // occurrence at a time replays the whole backlog after any downtime:
+      // an every-15-minutes schedule that was down for a day would fire ~96
+      // real agent runs, one per tick, for occurrences long past. A missed
+      // window is a missed window — fire once for it, then resume the
+      // schedule from the present.
+      const next = nextCronOccurrence(
+        row.cron,
+        row.timezone,
+        occurrence > claimedAt ? occurrence : claimedAt,
+      );
       await tx
         .update(workflowSchedule)
         .set({ nextRunAt: next, lastEnqueuedAt: sql`now()`, updatedAt: sql`now()` })
@@ -91,6 +110,8 @@ export type SchedulerTickSummary = Readonly<{
   schedulesClaimed: number;
   runsStarted: number;
   runsFailed: number;
+  /** Open runs past their deadline that this tick retired. */
+  runsTimedOut: number;
 }>;
 
 export type RunSchedulerTickInput = Readonly<{
@@ -101,14 +122,20 @@ export type RunSchedulerTickInput = Readonly<{
   defaultTimezone?: string;
   /** Injection seam for tests; defaults to the real `createWorkflowRun`. */
   createRun?: CreateWorkflowRunFn;
+  /** Injection seam for tests; defaults to the real `sweepExpiredRuns`. */
+  sweepRuns?: SweepExpiredRunsFn;
 }>;
 
 /**
- * One pass of the scheduler: sync workflow definitions from disk (cheap at
- * this scale — every tick is fine), claim whatever schedules are due, and
+ * One pass of the scheduler: sync workflow definitions from disk, retire any
+ * run that has outlived its deadline, claim whatever schedules are due, and
  * start a run for each. A schedule whose run fails to start is logged and
  * skipped rather than aborting the rest of the tick; it already advanced
  * past this occurrence, so its next due firing is its next chance.
+ *
+ * The sweep lives here, on a cadence outside the job chain, precisely
+ * because it exists to cover for that chain breaking — see
+ * `sweepExpiredRuns`.
  */
 export async function runSchedulerTick(
   input: RunSchedulerTickInput,
@@ -121,7 +148,12 @@ export async function runSchedulerTick(
     workflowsDir ??= resolveWorkflowsDir(config.BIRDHOUSE_WORKFLOWS_DIR);
     defaultTimezone ??= config.BIRDHOUSE_TIMEZONE;
   }
-  const createRun = input.createRun ?? (await import("../runner/runs.ts")).createWorkflowRun;
+  const runsModule =
+    input.createRun === undefined || input.sweepRuns === undefined
+      ? await import("../runner/runs.ts")
+      : undefined;
+  const createRun = input.createRun ?? runsModule!.createWorkflowRun;
+  const sweepRuns = input.sweepRuns ?? runsModule!.sweepExpiredRuns;
 
   const { definitions, errors: loadErrors } = await loadWorkflowDefinitions(workflowsDir, {
     defaultTimezone,
@@ -130,6 +162,20 @@ export async function runSchedulerTick(
     console.warn(JSON.stringify({ event: "workflows.load_errors", errors: loadErrors }));
   }
   const syncSummary = await syncWorkflows(db, definitions);
+
+  // Before claiming new work: a stuck run holds no lock, but retiring it
+  // promptly is what keeps `timeout_at` meaningful.
+  let runsTimedOut = 0;
+  try {
+    runsTimedOut = (await sweepRuns(db)).timedOut;
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "scheduler.sweep_failed",
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }
 
   const claimed = await claimDueSchedules(db);
   let runsStarted = 0;
@@ -164,6 +210,7 @@ export async function runSchedulerTick(
     schedulesClaimed: claimed.length,
     runsStarted,
     runsFailed,
+    runsTimedOut,
   };
   console.log(JSON.stringify({ event: "scheduler.tick", ...summary }));
   return summary;
@@ -177,6 +224,7 @@ export type StartSchedulerLoopInput = Readonly<{
   workflowsDir?: string;
   defaultTimezone?: string;
   createRun?: CreateWorkflowRunFn;
+  sweepRuns?: SweepExpiredRunsFn;
 }>;
 
 /** Resolves `ms` early if `signal` aborts while waiting, so shutdown isn't delayed by a stale timer (mirrors jobs/queue.ts). */
@@ -209,6 +257,7 @@ export async function startSchedulerLoop(input: StartSchedulerLoopInput): Promis
     ...(input.workflowsDir !== undefined ? { workflowsDir: input.workflowsDir } : {}),
     ...(input.defaultTimezone !== undefined ? { defaultTimezone: input.defaultTimezone } : {}),
     ...(input.createRun !== undefined ? { createRun: input.createRun } : {}),
+    ...(input.sweepRuns !== undefined ? { sweepRuns: input.sweepRuns } : {}),
   };
 
   while (!signal?.aborted) {
