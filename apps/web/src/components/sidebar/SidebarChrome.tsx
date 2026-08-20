@@ -1,16 +1,22 @@
 import {
+  aggregateSchedules,
+  unacknowledgedScheduleFailureCount,
+} from "@t3tools/client-runtime/schedules";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+import {
   ArrowLeftIcon,
+  CalendarClockIcon,
   ChartNoAxesColumnIcon,
   GitPullRequestIcon,
   SettingsIcon,
 } from "lucide-react";
 import { memo, useCallback } from "react";
-import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { APP_BASE_NAME } from "~/branding";
 import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
+import { useWebEnvironmentSchedules } from "../../state/schedules";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -108,11 +114,27 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     select: (location) =>
       location.pathname === "/usage"
         ? "usage"
-        : location.pathname === "/pull-requests"
-          ? "pull-requests"
-          : null,
+        : location.pathname === "/schedules"
+          ? "schedules"
+          : location.pathname === "/pull-requests"
+            ? "pull-requests"
+            : null,
   });
   const { environments } = useEnvironments();
+  const { environments: scheduleEnvironments } = useWebEnvironmentSchedules();
+  const scheduleFailureCount = unacknowledgedScheduleFailureCount(
+    aggregateSchedules(
+      scheduleEnvironments.map((entry) => ({
+        environmentId: entry.environment.environmentId,
+        environmentLabel: entry.environment.label,
+        source: entry.source,
+        online: entry.online,
+        supportsSchedules: entry.supportsSchedules,
+        snapshotSequence: entry.snapshotSequence,
+        schedules: entry.schedules,
+      })),
+    ),
+  );
   // The page reads every connected server, so one of them offering pull requests is enough for
   // the link to lead somewhere.
   const pullRequestsSupported = environments.some(
@@ -138,6 +160,11 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     }
     void navigate({ to: "/usage" });
   }, [isMobile, navigate, setOpenMobile]);
+
+  const handleSchedulesClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/schedules" });
+  }, [closeMobileSidebar, navigate]);
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
@@ -192,6 +219,32 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
                 </Tooltip>
               </SidebarMenuItem>
             ) : null}
+            <SidebarMenuItem className="shrink-0">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton
+                      aria-label={
+                        scheduleFailureCount > 0
+                          ? `Schedules, ${scheduleFailureCount} unacknowledged ${scheduleFailureCount === 1 ? "failure" : "failures"}`
+                          : "Schedules"
+                      }
+                      className="relative"
+                      onClick={handleSchedulesClick}
+                      size="icon"
+                    >
+                      <CalendarClockIcon />
+                      {scheduleFailureCount > 0 ? (
+                        <span className="absolute -right-0.5 -top-0.5 flex min-h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[9px] font-semibold leading-none text-white">
+                          {scheduleFailureCount > 99 ? "99+" : scheduleFailureCount}
+                        </span>
+                      ) : null}
+                    </SidebarMenuButton>
+                  }
+                />
+                <TooltipPopup side="top">Schedules</TooltipPopup>
+              </Tooltip>
+            </SidebarMenuItem>
             <SidebarMenuItem className="shrink-0">
               <Tooltip>
                 <TooltipTrigger

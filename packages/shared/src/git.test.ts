@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   applyGitStatusStreamEvent,
   buildTemporaryWorktreeBranchName,
+  buildScheduledWorktreeBranchName,
   isTemporaryWorktreeBranch,
   normalizeGitRemoteUrl,
   parseGitHubRepositoryNameWithOwnerFromRemoteUrl,
@@ -63,6 +64,16 @@ describe("parseGitHubRepositoryNameWithOwnerFromRemoteUrl", () => {
 });
 
 describe("isTemporaryWorktreeBranch", () => {
+  it("recognizes ownership-safe Scheduled worktree refs", () => {
+    const branch = buildScheduledWorktreeBranchName(
+      "project-1",
+      "schedule-1",
+      "018fd1b2-6610-7e39-8f09-468fa24c8c01",
+    );
+    expect(branch).toBe("phoenix/schedule/project-1/schedule-1/018fd1b266107e398f09468fa24c8c01");
+    expect(isTemporaryWorktreeBranch(branch)).toBe(true);
+  });
+
   it("matches the generated temporary worktree refName format", () => {
     expect(
       isTemporaryWorktreeBranch(

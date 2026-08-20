@@ -60,7 +60,10 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The suite runs ~9m30s, so a 10m cap left no room for runner variance and
+    # cancelled healthy runs mid-cleanup. Raise with the suite, not to hide a
+    # regression in it: a job that needs more than this wants investigating.
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@v6

@@ -24,7 +24,7 @@ export function formatServiceStatus(
   cliBuild: string = formatCliVersion(cliVersion),
 ): string {
   if (!status.supported) {
-    return "Phoenix service\n  Status: unavailable on this machine\n  Supported on: Linux with systemd";
+    return "Phoenix service\n  Status: unavailable on this machine\n  Supported on: Linux with systemd, macOS with launchd";
   }
   if (!status.installed) {
     return "Phoenix service\n  Status: not installed\n  Automatic installation is unavailable in this source distribution.";

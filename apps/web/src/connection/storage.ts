@@ -21,6 +21,9 @@ import {
   EnvironmentId,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
+  ScheduleDetail,
+  ScheduleId,
+  ScheduleListSnapshot,
   ServerConfig,
   ThreadId,
   VcsListRefsResult,
@@ -34,12 +37,14 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 const DATABASE_NAME = "t3code:connection-runtime";
-const DATABASE_VERSION = 4;
+const DATABASE_VERSION = 5;
 const CATALOG_STORE_NAME = "catalog";
 const SHELL_STORE_NAME = "shell";
 const THREAD_STORE_NAME = "thread";
 const SERVER_CONFIG_STORE_NAME = "server-config";
 const VCS_REFS_STORE_NAME = "vcs-refs";
+const SCHEDULE_SNAPSHOT_STORE_NAME = "schedule-snapshot";
+const SCHEDULE_DETAIL_STORE_NAME = "schedule-detail";
 const CATALOG_KEY = "document";
 const SHELL_SNAPSHOT_CACHE_SCHEMA_VERSION = 1;
 
@@ -75,6 +80,19 @@ const StoredVcsRefs = Schema.Struct({
   refs: VcsListRefsResult,
 });
 const StoredVcsRefsJson = Schema.fromJsonString(StoredVcsRefs);
+const StoredScheduleSnapshot = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  environmentId: EnvironmentId,
+  snapshot: ScheduleListSnapshot,
+});
+const StoredScheduleSnapshotJson = Schema.fromJsonString(StoredScheduleSnapshot);
+const StoredScheduleDetail = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  environmentId: EnvironmentId,
+  scheduleId: ScheduleId,
+  detail: ScheduleDetail,
+});
+const StoredScheduleDetailJson = Schema.fromJsonString(StoredScheduleDetail);
 const ConnectionCatalogDocumentJson = Schema.fromJsonString(ConnectionCatalogDocument);
 const decodeConnectionCatalogDocument = Schema.decodeUnknownEffect(ConnectionCatalogDocumentJson);
 const encodeConnectionCatalogDocument = Schema.encodeEffect(ConnectionCatalogDocumentJson);
@@ -86,6 +104,10 @@ const decodeStoredServerConfig = Schema.decodeUnknownEffect(StoredServerConfigJs
 const encodeStoredServerConfig = Schema.encodeEffect(StoredServerConfigJson);
 const decodeStoredVcsRefs = Schema.decodeUnknownEffect(StoredVcsRefsJson);
 const encodeStoredVcsRefs = Schema.encodeEffect(StoredVcsRefsJson);
+const decodeStoredScheduleSnapshot = Schema.decodeUnknownEffect(StoredScheduleSnapshotJson);
+const encodeStoredScheduleSnapshot = Schema.encodeEffect(StoredScheduleSnapshotJson);
+const decodeStoredScheduleDetail = Schema.decodeUnknownEffect(StoredScheduleDetailJson);
+const encodeStoredScheduleDetail = Schema.encodeEffect(StoredScheduleDetailJson);
 
 function catalogError(operation: string, cause: unknown) {
   return new ConnectionTransientError({
@@ -110,6 +132,11 @@ function persistenceError(
     | "save-vcs-refs"
     | "remove-vcs-refs"
     | "clear-vcs-refs"
+    | "load-schedule-snapshot"
+    | "save-schedule-snapshot"
+    | "load-schedule-detail"
+    | "save-schedule-detail"
+    | "remove-schedule-detail"
     | "clear-environment",
   cause: unknown,
 ) {
@@ -143,6 +170,12 @@ const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(function* (
       }
       if (!request.result.objectStoreNames.contains(VCS_REFS_STORE_NAME)) {
         request.result.createObjectStore(VCS_REFS_STORE_NAME);
+      }
+      if (!request.result.objectStoreNames.contains(SCHEDULE_SNAPSHOT_STORE_NAME)) {
+        request.result.createObjectStore(SCHEDULE_SNAPSHOT_STORE_NAME);
+      }
+      if (!request.result.objectStoreNames.contains(SCHEDULE_DETAIL_STORE_NAME)) {
+        request.result.createObjectStore(SCHEDULE_DETAIL_STORE_NAME);
       }
     });
     request.addEventListener("error", () => {
@@ -235,6 +268,10 @@ function threadCacheKey(environmentId: EnvironmentId, threadId: ThreadId) {
 
 function vcsRefsCacheKey(environmentId: EnvironmentId, cwd: string) {
   return `${environmentId}:${cwd}`;
+}
+
+function scheduleDetailCacheKey(environmentId: EnvironmentId, scheduleId: ScheduleId) {
+  return `${environmentId}:${scheduleId}`;
 }
 
 const decodeCatalog = Effect.fn("web.connectionStorage.decodeCatalog")(function* (raw: string) {
@@ -636,6 +673,90 @@ export const connectionStorageLayer = Layer.effectContext(
           VCS_REFS_STORE_NAME,
           IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
         ).pipe(Effect.mapError((cause) => persistenceError("clear-vcs-refs", cause))),
+      loadScheduleSnapshot: (environmentId) =>
+        readDatabaseValue(database, SCHEDULE_SNAPSHOT_STORE_NAME, environmentId).pipe(
+          Effect.flatMap((raw) => {
+            if (typeof raw !== "string") return Effect.succeed(Option.none());
+            return decodeStoredScheduleSnapshot(raw).pipe(
+              Effect.mapError((cause) => persistenceError("load-schedule-snapshot", cause)),
+              Effect.map((stored) =>
+                stored.environmentId === environmentId
+                  ? Option.some(stored.snapshot)
+                  : Option.none(),
+              ),
+            );
+          }),
+          Effect.mapError((cause) =>
+            cause._tag === "ConnectionPersistenceError"
+              ? cause
+              : persistenceError("load-schedule-snapshot", cause),
+          ),
+        ),
+      saveScheduleSnapshot: (environmentId, snapshot) =>
+        Effect.gen(function* () {
+          const encoded = yield* encodeStoredScheduleSnapshot({
+            schemaVersion: 1,
+            environmentId,
+            snapshot,
+          }).pipe(Effect.mapError((cause) => persistenceError("save-schedule-snapshot", cause)));
+          yield* writeDatabaseValue(database, SCHEDULE_SNAPSHOT_STORE_NAME, environmentId, encoded);
+        }).pipe(
+          Effect.mapError((cause) =>
+            cause._tag === "ConnectionPersistenceError"
+              ? cause
+              : persistenceError("save-schedule-snapshot", cause),
+          ),
+        ),
+      loadScheduleDetail: (environmentId, scheduleId) =>
+        readDatabaseValue(
+          database,
+          SCHEDULE_DETAIL_STORE_NAME,
+          scheduleDetailCacheKey(environmentId, scheduleId),
+        ).pipe(
+          Effect.flatMap((raw) => {
+            if (typeof raw !== "string") return Effect.succeed(Option.none());
+            return decodeStoredScheduleDetail(raw).pipe(
+              Effect.mapError((cause) => persistenceError("load-schedule-detail", cause)),
+              Effect.map((stored) =>
+                stored.environmentId === environmentId && stored.scheduleId === scheduleId
+                  ? Option.some(stored.detail)
+                  : Option.none(),
+              ),
+            );
+          }),
+          Effect.mapError((cause) =>
+            cause._tag === "ConnectionPersistenceError"
+              ? cause
+              : persistenceError("load-schedule-detail", cause),
+          ),
+        ),
+      saveScheduleDetail: (environmentId, detail) =>
+        Effect.gen(function* () {
+          const encoded = yield* encodeStoredScheduleDetail({
+            schemaVersion: 1,
+            environmentId,
+            scheduleId: detail.id,
+            detail,
+          }).pipe(Effect.mapError((cause) => persistenceError("save-schedule-detail", cause)));
+          yield* writeDatabaseValue(
+            database,
+            SCHEDULE_DETAIL_STORE_NAME,
+            scheduleDetailCacheKey(environmentId, detail.id),
+            encoded,
+          );
+        }).pipe(
+          Effect.mapError((cause) =>
+            cause._tag === "ConnectionPersistenceError"
+              ? cause
+              : persistenceError("save-schedule-detail", cause),
+          ),
+        ),
+      removeScheduleDetail: (environmentId, scheduleId) =>
+        removeDatabaseValue(
+          database,
+          SCHEDULE_DETAIL_STORE_NAME,
+          scheduleDetailCacheKey(environmentId, scheduleId),
+        ).pipe(Effect.mapError((cause) => persistenceError("remove-schedule-detail", cause))),
       removeThread: (environmentId, threadId) =>
         removeDatabaseValue(
           database,
@@ -655,6 +776,12 @@ export const connectionStorageLayer = Layer.effectContext(
             removeDatabaseValuesInRange(
               database,
               VCS_REFS_STORE_NAME,
+              IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
+            ),
+            removeDatabaseValue(database, SCHEDULE_SNAPSHOT_STORE_NAME, environmentId),
+            removeDatabaseValuesInRange(
+              database,
+              SCHEDULE_DETAIL_STORE_NAME,
               IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
             ),
           ],

@@ -29,6 +29,7 @@ import {
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
+  SCHEDULE_WS_METHODS,
   type ProjectId,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
@@ -112,6 +113,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
+import * as ScheduleService from "./schedule/ScheduleService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
@@ -423,6 +425,7 @@ const makeWsRpcLayer = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
+      const schedules = yield* ScheduleService.ScheduleService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -787,6 +790,28 @@ const makeWsRpcLayer = (
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       return WsRpcGroup.of({
+        [SCHEDULE_WS_METHODS.dispatchCommand]: (command) =>
+          observeRpcEffect(SCHEDULE_WS_METHODS.dispatchCommand, schedules.dispatch(command), {
+            "rpc.aggregate": "schedule",
+          }),
+        [SCHEDULE_WS_METHODS.getSnapshot]: () =>
+          observeRpcEffect(SCHEDULE_WS_METHODS.getSnapshot, schedules.getSnapshot(), {
+            "rpc.aggregate": "schedule",
+          }),
+        [SCHEDULE_WS_METHODS.getDetail]: (input) =>
+          observeRpcEffect(SCHEDULE_WS_METHODS.getDetail, schedules.getDetail(input.scheduleId), {
+            "rpc.aggregate": "schedule",
+            "schedule.id": input.scheduleId,
+          }),
+        [SCHEDULE_WS_METHODS.getHistory]: (input) =>
+          observeRpcEffect(SCHEDULE_WS_METHODS.getHistory, schedules.getHistory(input), {
+            "rpc.aggregate": "schedule",
+            "schedule.id": input.scheduleId,
+          }),
+        [SCHEDULE_WS_METHODS.subscribe]: () =>
+          observeRpcStreamEffect(SCHEDULE_WS_METHODS.subscribe, schedules.subscribe, {
+            "rpc.aggregate": "schedule",
+          }),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,

@@ -11,6 +11,7 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 import { EnvironmentNotRegisteredError, EnvironmentRegistry } from "../connection/registry.ts";
 import {
   type EnvironmentRpcInput,
+  type EnvironmentRpcSuccess,
   type EnvironmentRpcStreamFailure,
   type EnvironmentRpcStreamValue,
   type EnvironmentStreamCommandRpcTag,
@@ -659,6 +660,7 @@ export function createEnvironmentRpcCommand<R, ER, TTag extends EnvironmentUnary
         readonly input: EnvironmentRpcInput<TTag>;
       },
       registry: AtomRegistry.AtomRegistry,
+      result: EnvironmentRpcSuccess<TTag>,
     ) => Effect.Effect<void, never, R>;
     readonly onSettled?: (
       target: {
@@ -679,7 +681,7 @@ export function createEnvironmentRpcCommand<R, ER, TTag extends EnvironmentUnary
         input,
       };
       return request(options.tag, input).pipe(
-        Effect.tap(() => options.onSuccess?.(target, registry) ?? Effect.void),
+        Effect.tap((result) => options.onSuccess?.(target, registry, result) ?? Effect.void),
         Effect.ensuring(options.onSettled?.(target, registry) ?? Effect.void),
       );
     },

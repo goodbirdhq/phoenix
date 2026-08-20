@@ -58,6 +58,7 @@ export const UsageLimitMigrationPopup = memo(function UsageLimitMigrationPopup(p
   readonly onSwitchAndRetry: () => void;
   readonly onSwitchOnly: () => void;
   readonly onSwitchAll: () => void;
+  readonly onDismiss: () => void;
 }) {
   const iconColor = String(useThemeColor("--color-icon"));
   return (
@@ -79,6 +80,15 @@ export const UsageLimitMigrationPopup = memo(function UsageLimitMigrationPopup(p
               {props.resetLabel ? ` ${props.resetLabel}.` : ""}
             </Text>
           </View>
+          <Pressable
+            accessibilityLabel={`Dismiss ${props.originName} usage limit notice`}
+            accessibilityRole="button"
+            className="-my-1 -mr-1 h-8 w-8 shrink-0 items-center justify-center rounded-full active:bg-subtle"
+            hitSlop={8}
+            onPress={props.onDismiss}
+          >
+            <SymbolView name="xmark" size={13} tintColor={iconColor} type="monochrome" />
+          </Pressable>
         </View>
 
         {props.selectedTarget ? (

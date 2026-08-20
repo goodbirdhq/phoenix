@@ -1,5 +1,5 @@
 import {
-  isProviderUsageLimited,
+  isProviderUsageLimitedForModel,
   resolveThreadBoundInstanceId,
 } from "@t3tools/client-runtime/usage/thread-migration";
 import {
@@ -13,7 +13,7 @@ import type { ProviderInstanceId } from "@t3tools/contracts";
 
 export type MobileUsageWarningThread = {
   readonly id: string;
-  readonly modelSelection: { readonly instanceId: ProviderInstanceId };
+  readonly modelSelection: { readonly instanceId: ProviderInstanceId; readonly model: string };
   readonly session: { readonly providerInstanceId?: ProviderInstanceId | undefined } | null;
 };
 
@@ -36,7 +36,10 @@ export function deriveMobileThreadUsageWarning(input: {
   const source = input.environments
     .find((environment) => environment.environmentId === input.environmentId)
     ?.providers.find((provider) => provider.instanceId === instanceId);
-  if (isProviderUsageLimited(source?.availability)) {
+  // Yield only to the popup that actually replaces this warning: a pool that
+  // does not constrain this thread's model leaves the warning as the honest
+  // thing to say.
+  if (isProviderUsageLimitedForModel(source?.availability, input.thread.modelSelection.model)) {
     return null;
   }
   return deriveThreadUsageWarning({

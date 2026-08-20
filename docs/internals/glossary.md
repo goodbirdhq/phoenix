@@ -9,6 +9,7 @@ This is a living glossary for Phoenix. It explains what common terms mean in thi
 - [Project and workspace](#project-and-workspace)
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
+- [Scheduling](#scheduling)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
 - [Birdhouse workflows](#birdhouse-workflows)
@@ -89,6 +90,49 @@ A typed signal emitted when an async milestone completes, such as `checkpoint.ba
 
 "Quiesced" means a turn has gone quiet and stable: follow-up work such as [CheckpointReactor.ts][6] has settled. It appears in [the receipt schema][13], so in practice it is something tests wait on rather than a production signal.
 
+### Scheduling
+
+#### Schedule
+
+A named, saved agent prompt owned by one Environment and assigned to one of its Projects, together
+with a one-time or recurring timing rule in an explicitly saved time zone. Each Occurrence creates a
+new Thread. Avoid “scheduled task” and “cron job.” See [Schedule architecture][27].
+
+#### Occurrence
+
+A time at which a Schedule becomes due to Trigger, including an immediate Occurrence created by Run
+now. Avoid “cron tick” and “invocation.”
+
+#### Trigger
+
+The durable creation of a new Thread and acceptance of its first Turn for an Occurrence. Failures
+after this boundary belong to the Scheduled Thread rather than the Schedule.
+
+#### Scheduled Run
+
+The agent work started by a successful Trigger. Scheduled Runs may overlap because serialization
+applies only to Triggering, not to provider execution.
+
+#### Scheduled Thread
+
+The ordinary Thread created by a Trigger. It remains after its Schedule is deleted and follows the
+same settle, resume, archive, delete, and worktree lifecycle as a manually created Thread.
+
+#### Schedule history
+
+The compact record of Triggered, Failed, and skipped Occurrences, including links to Scheduled
+Threads. It records only work before the Trigger boundary.
+
+#### Missed Occurrence
+
+An Occurrence that became due while its Environment could not Trigger it. Only the newest Missed
+Occurrence for each Schedule remains eligible; older times are summarized as skipped.
+
+#### Runnable environment
+
+An Environment whose server is online and capable of accepting new work. This is distinct from
+provider availability, which describes account or quota state.
+
 ### Provider runtime
 
 The live backend agent implementation and its event stream. The main service is [ProviderService.ts][14], the adapter contract is [ProviderAdapter.ts][15], and the overview is in [providers.md][16].
@@ -163,7 +207,9 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 
 ### Birdhouse workflows
 
-Terms belonging to [birdhouse][27], the separate service that runs business workflows as Phoenix agent threads. Everything here lives outside the app — nothing in `apps/` or `packages/` uses these words — but they collide with product terms often enough to be worth pinning down. See [birdhouse.md][28].
+Terms belonging to [birdhouse][28], the separate service that runs business workflows as Phoenix agent threads. Everything here lives outside the app — nothing in `apps/` or `packages/` uses these words — but they collide with product terms often enough to be worth pinning down. See [birdhouse.md][29].
+
+The collision that matters most is with [Scheduling](#scheduling) above. Both systems turn a cron occurrence into an agent turn, and they are genuinely separate implementations: a **Schedule** is environment-owned and lives in the server, while a birdhouse **workflow schedule** lives in birdhouse's own Postgres and reaches Phoenix over HTTP like any other client. When either word appears without qualification, it means the product's. Consolidating the two is open work — see [birdhouse.md][29].
 
 #### Workflow
 
@@ -197,7 +243,8 @@ A row in birdhouse's own Postgres-backed durable queue — leased with `for upda
 - [Provider architecture][16]
 - [Permission modes][18]
 - [Workspace layout][2]
-- [Birdhouse][28]
+- [Schedule architecture][27]
+- [Birdhouse][29]
 
 [1]: ../../packages/contracts/src/orchestration.ts
 [2]: ./workspace-layout.md
@@ -225,5 +272,6 @@ A row in birdhouse's own Postgres-backed durable queue — leased with `for upda
 [24]: ./overview.md
 [25]: ../../packages/contracts/src/providerInstance.ts
 [26]: ../../apps/server/src/provider/conversationSeed.ts
-[27]: ../../infra/birdhouse/README.md
-[28]: ./birdhouse.md
+[27]: ./schedules.md
+[28]: ../../infra/birdhouse/README.md
+[29]: ./birdhouse.md

@@ -1,5 +1,6 @@
 import type {
   ProviderAvailability,
+  ProviderAvailabilityWindow,
   ProviderDriverKind,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -43,6 +44,55 @@ export function isProviderUsageLimited(
     (availability.status === "limited" ||
       availability.windows.some((window) => window.usedPercent >= 100)),
   );
+}
+
+const slugTokens = (value: string): string =>
+  `-${value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")}-`;
+
+/**
+ * Whether an exhausted window actually blocks `model`.
+ *
+ * Claude reports one weekly pool per model family alongside the session and
+ * all-models windows. A spent Fable pool says nothing about a thread running
+ * Opus, so only windows the model draws from count against it. A pool that
+ * cannot be tied to the model — no model known, or a name that does not match —
+ * is left out: a turn that really is blocked still fails with a typed
+ * usage-limit error, which surfaces the popup on its own.
+ */
+export function windowConstrainsModel(
+  window: ProviderAvailabilityWindow,
+  model: string | null | undefined,
+): boolean {
+  if (window.kind !== "model-weekly" || !window.scope) return true;
+  return model ? slugTokens(model).includes(slugTokens(window.scope)) : false;
+}
+
+/** Exhausted windows that constrain `model`, most spent first. */
+export function modelUsageLimitWindows(
+  availability: ProviderAvailability | null | undefined,
+  model: string | null | undefined,
+): readonly ProviderAvailabilityWindow[] {
+  return (availability?.windows ?? [])
+    .filter((window) => window.usedPercent >= 100 && windowConstrainsModel(window, model))
+    .toSorted((left, right) => right.usedPercent - left.usedPercent);
+}
+
+/**
+ * The model-aware reading of {@link isProviderUsageLimited}. Falls back to the
+ * coarse status only when no window explains it, so providers that report a
+ * limit without windows still read as limited.
+ */
+export function isProviderUsageLimitedForModel(
+  availability: ProviderAvailability | null | undefined,
+  model: string | null | undefined,
+): boolean {
+  if (!availability) return false;
+  return availability.windows.some((window) => window.usedPercent >= 100)
+    ? modelUsageLimitWindows(availability, model).length > 0
+    : availability.status === "limited";
 }
 
 export function providerRemainingQuotaPercent(
@@ -98,16 +148,38 @@ export function rankMigrationTargets(input: {
 export function shouldShowUsageLimitMigrationPopup(input: {
   readonly boundInstanceId: ProviderInstanceId | null;
   readonly boundInstanceAvailability: ProviderAvailability | null | undefined;
+  /** The thread's model, so another model's spent pool never asks it to move. */
+  readonly boundModel: string | null | undefined;
   readonly sessionProviderInstanceId: ProviderInstanceId | null;
   readonly sessionErrorKind: string | null | undefined;
 }): boolean {
   if (input.boundInstanceId === null) return false;
-  if (isProviderUsageLimited(input.boundInstanceAvailability)) return true;
+  if (isProviderUsageLimitedForModel(input.boundInstanceAvailability, input.boundModel)) {
+    return true;
+  }
   return (
     input.sessionErrorKind === "usage-limit" &&
     (input.sessionProviderInstanceId === null ||
       input.sessionProviderInstanceId === input.boundInstanceId)
   );
+}
+
+/**
+ * Identifies one usage-limit episode for a thread so a dismissal can be
+ * remembered against it. A different thread, a different limited instance, or
+ * a fresh reset window produces a new key and surfaces the popup again.
+ */
+export function usageLimitMigrationEpisodeKey(input: {
+  readonly threadId: string;
+  readonly boundInstanceId: ProviderInstanceId | null;
+  readonly boundInstanceAvailability: ProviderAvailability | null | undefined;
+  readonly boundModel: string | null | undefined;
+}): string | null {
+  if (input.boundInstanceId === null) return null;
+  const resetsAt = modelUsageLimitWindows(input.boundInstanceAvailability, input.boundModel)
+    .flatMap((window) => (window.resetsAt ? [window.resetsAt] : []))
+    .toSorted()[0];
+  return [input.threadId, input.boundInstanceId, resetsAt ?? "unknown"].join("\u0000");
 }
 
 export function deriveMigrationModeAvailability(input: {

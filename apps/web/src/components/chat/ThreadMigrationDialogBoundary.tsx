@@ -9,8 +9,8 @@ import { memo, useMemo } from "react";
 
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
-import { useThreadSession } from "../../state/entities";
-import { isProviderUsageLimited } from "./threadMigration.logic";
+import { useThreadSession, useThreadShell } from "../../state/entities";
+import { isProviderUsageLimitedForModel } from "./threadMigration.logic";
 import { ThreadMigrationDialog } from "./ThreadMigrationDialog";
 
 /**
@@ -38,6 +38,7 @@ export const ThreadMigrationDialogBoundary = memo(function ThreadMigrationDialog
     [props.environmentId, props.threadId],
   );
   const session = useThreadSession(threadRef);
+  const boundModel = useThreadShell(threadRef)?.modelSelection.model ?? null;
   const availabilityQuery = useEnvironmentQuery(
     serverEnvironment.providerAvailability({
       environmentId: props.environmentId,
@@ -47,8 +48,10 @@ export const ThreadMigrationDialogBoundary = memo(function ThreadMigrationDialog
   const availability = availabilityQuery.data?.providers.find(
     (entry) => entry.instanceId === props.instanceId,
   )?.availability;
+  // Model-aware: another model's spent weekly pool must not disable the brief
+  // handoff on a thread that can still spend the origin account.
   const isOriginLimited =
-    isProviderUsageLimited(availability) ||
+    isProviderUsageLimitedForModel(availability, boundModel) ||
     (session?.providerInstanceId === props.instanceId && session.lastErrorKind === "usage-limit");
 
   return (

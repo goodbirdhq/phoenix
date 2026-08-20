@@ -162,6 +162,7 @@ describe("shouldShowUsageLimitMigrationPopup", () => {
       shouldShowUsageLimitMigrationPopup({
         boundInstanceId: originId,
         boundInstanceAvailability: availability(null, "limited"),
+        boundModel: "claude-opus-5",
         sessionProviderInstanceId: originId,
         sessionErrorKind: null,
       }),
@@ -170,6 +171,7 @@ describe("shouldShowUsageLimitMigrationPopup", () => {
       shouldShowUsageLimitMigrationPopup({
         boundInstanceId: originId,
         boundInstanceAvailability: availability(100),
+        boundModel: "claude-opus-5",
         sessionProviderInstanceId: originId,
         sessionErrorKind: null,
       }),
@@ -181,6 +183,7 @@ describe("shouldShowUsageLimitMigrationPopup", () => {
       shouldShowUsageLimitMigrationPopup({
         boundInstanceId: originId,
         boundInstanceAvailability: null,
+        boundModel: "claude-opus-5",
         sessionProviderInstanceId: originId,
         sessionErrorKind: "usage-limit",
       }),
@@ -189,6 +192,7 @@ describe("shouldShowUsageLimitMigrationPopup", () => {
       shouldShowUsageLimitMigrationPopup({
         boundInstanceId: ProviderInstanceId.make("claude_personal"),
         boundInstanceAvailability: null,
+        boundModel: "claude-opus-5",
         sessionProviderInstanceId: originId,
         sessionErrorKind: "usage-limit",
       }),
@@ -200,6 +204,7 @@ describe("shouldShowUsageLimitMigrationPopup", () => {
       shouldShowUsageLimitMigrationPopup({
         boundInstanceId: originId,
         boundInstanceAvailability: availability(61),
+        boundModel: "claude-opus-5",
         sessionProviderInstanceId: originId,
         sessionErrorKind: null,
       }),

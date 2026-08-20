@@ -60,10 +60,16 @@ orchestration error bodies, update that client in the same PR.
 they hold a real provider session, and they count against the same provider
 quota. A thread titled `<workflow> — run <uuid>` belongs to birdhouse.
 
-**Scheduling overlaps with environment-owned agent schedules** (`apps/server/src/schedule/`),
-which landed after birdhouse was written. Both turn a cron occurrence into an
-agent turn; they use different cron implementations and disagree on DST edge
-cases. Consolidating them is open work — see design.md's non-features.
+**Scheduling overlaps with environment-owned agent schedules**
+(`apps/server/src/schedule/`, [schedules.md](./schedules.md)), which landed on
+main after this service was written. Both turn a cron occurrence into an agent
+turn; they use different cron implementations and disagree on DST edge cases,
+and the glossary now carries a term for each. Consolidating them is open work —
+see design.md's non-features.
+
+The two do agree on the behaviour that matters after downtime: a schedule that
+went missed fires once and resumes from the present rather than replaying every
+occurrence it slept through.
 
 **Nothing in the app should import from `infra/birdhouse`.** It is a consumer
 of Phoenix, not a part of it.

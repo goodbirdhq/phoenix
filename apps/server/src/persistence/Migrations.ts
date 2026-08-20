@@ -11,6 +11,8 @@
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -64,6 +66,8 @@ import Migration0048 from "./Migrations/048_ProjectionThreadReportSupersedes.ts"
 import Migration0049 from "./Migrations/049_QueuedDeliveryRecovery.ts";
 import Migration0050 from "./Migrations/050_ProjectionThreadsReportDelivery.ts";
 import Migration0051 from "./Migrations/051_ProjectionThreadSessionErrorKind.ts";
+import Migration0052 from "./Migrations/052_Schedules.ts";
+import Migration0053 from "./Migrations/053_NormalizeScheduleHistory.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -127,6 +131,8 @@ export const migrationEntries = [
   [49, "QueuedDeliveryRecovery", Migration0049],
   [50, "ProjectionThreadsReportDelivery", Migration0050],
   [51, "ProjectionThreadSessionErrorKind", Migration0051],
+  [52, "Schedules", Migration0052],
+  [53, "NormalizeScheduleHistory", Migration0053],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -146,6 +152,70 @@ export const makeMigrationLoader = (throughId?: number) =>
  */
 const run = Migrator.make({});
 
+export class MigrationLedgerMismatchError extends Schema.TaggedErrorClass<MigrationLedgerMismatchError>()(
+  "MigrationLedgerMismatchError",
+  {
+    divergences: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    return [
+      "Recorded migrations do not match this build's manifest:",
+      ...this.divergences.map((divergence) => `  - ${divergence}`),
+      "This database was migrated by a build that numbered migrations differently,",
+      "usually a branch build whose migrations were renumbered before merging.",
+      "Reconcile effect_sql_migrations with migrationEntries before starting.",
+    ].join("\n");
+  }
+}
+
+/**
+ * Compares the recorded ledger against the manifest and refuses to start on a
+ * divergence.
+ *
+ * The migrator only runs ids above the recorded high-water mark, so it never
+ * revisits a lower id to check that the name still matches. If a migration is
+ * renumbered after a database has already recorded it, every migration below
+ * the mark is silently assumed applied - including ones that never ran. Without
+ * this guard that surfaces either as a confusing re-run failure or, when the
+ * re-run happens to be idempotent, as a server that boots on a wrong schema.
+ */
+const verifyMigrationLedger = Effect.fn("verifyMigrationLedger")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  // Probe sqlite_master rather than selecting straight from the ledger: on a
+  // fresh database that select fails, and the client caches failed prepares by
+  // SQL text, so the stale "no such table" would outlive the table's creation.
+  const [ledgerTable] = yield* sql<{ present: number }>`
+    SELECT count(*) AS present FROM sqlite_master
+    WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `.withoutTransform;
+  if (ledgerTable === undefined || ledgerTable.present === 0) return;
+
+  const recorded = yield* sql<{ migration_id: number; name: string }>`
+    SELECT migration_id, name FROM effect_sql_migrations
+  `.withoutTransform;
+  if (recorded.length === 0) return;
+
+  const recordedNames = new Map(recorded.map((row) => [row.migration_id, row.name]));
+  const highWaterMark = Math.max(...recordedNames.keys());
+  const divergences = migrationManifest
+    .filter(([id]) => id <= highWaterMark)
+    .flatMap(([id, name]) => {
+      const recordedName = recordedNames.get(id);
+      if (recordedName === undefined) {
+        return [`${id}_${name} is missing from the ledger, so it would never run`];
+      }
+      return recordedName === name
+        ? []
+        : [`${id} is recorded as "${recordedName}" but this build calls it "${name}"`];
+    });
+
+  if (divergences.length > 0) {
+    return yield* new MigrationLedgerMismatchError({ divergences });
+  }
+});
+
 export interface RunMigrationsOptions {
   readonly toMigrationInclusive?: number | undefined;
 }
@@ -156,6 +226,9 @@ export interface RunMigrationsOptions {
  * Creates the migrations tracking table (effect_sql_migrations) if it doesn't exist,
  * then runs any migrations with ID greater than the latest recorded migration.
  *
+ * Fails with `MigrationLedgerMismatchError` when the recorded ledger disagrees
+ * with the manifest, rather than skipping past the disagreement.
+ *
  * Returns array of [id, name] tuples for migrations that were run.
  *
  * @returns Effect containing array of executed migrations
@@ -163,6 +236,7 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
+  yield* verifyMigrationLedger();
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
