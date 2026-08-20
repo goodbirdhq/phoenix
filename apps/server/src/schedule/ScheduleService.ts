@@ -1,12 +1,10 @@
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
@@ -14,10 +12,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
   CommandId,
-  MessageId,
   OccurrenceId,
-  evolveScheduleDefinition,
-  isProviderAvailable,
   ScheduleCommand as ScheduleCommandSchema,
   type ScheduleCommand,
   type ScheduleDetail,
@@ -28,7 +23,6 @@ import {
   type ScheduleGetHistoryInput,
   ScheduleHistoryCursor,
   ScheduleHistoryEntry as ScheduleHistoryEntrySchema,
-  type ScheduleHistoryEntry,
   type ScheduleHistoryPage,
   type ScheduleId,
   type ScheduleListSnapshot,
@@ -38,15 +32,29 @@ import {
   ScheduleStoredDefinition as StoredScheduleDetailSchema,
   type ScheduleStoredDefinition as StoredScheduleDetail,
   type ScheduleSummary,
-  ThreadId,
+  type ThreadId,
 } from "@t3tools/contracts";
-import { buildScheduledWorktreeBranchName } from "@t3tools/shared/git";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ThreadTurnBootstrap from "../orchestration/ThreadTurnBootstrap.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
-import { latestScheduleOccurrenceAtOrBefore, previewScheduleTiming } from "./timing.ts";
+import {
+  decideInvalidTimingFailure,
+  decideOccurrenceOutcome,
+  decideSchedule,
+  decideScheduledOccurrenceReservation,
+  evolveScheduleDefinition,
+  keepsOneTimeOccurrence,
+  type ScheduleHistoryWrite,
+  type ScheduleLifecycleDecision,
+} from "./ScheduleDomain.ts";
+import {
+  makeScheduleReactor,
+  type ScheduleOccurrenceRecord,
+  type ScheduleReactorPort,
+} from "./ScheduleReactor.ts";
+import { previewScheduleTiming } from "./timing.ts";
 
 interface ScheduleRow {
   readonly scheduleId: string;
@@ -63,16 +71,6 @@ interface ScheduleCommandRow {
 interface ScheduleHistoryRow {
   readonly historySequence: number;
   readonly recordJson: string;
-}
-
-interface ScheduleOccurrenceRow {
-  readonly occurrenceId: string;
-  readonly scheduleId: string;
-  readonly scheduledFor: string;
-  readonly source: "scheduled" | "manual";
-  readonly status: "pending" | "triggering" | "triggered" | "failed";
-  readonly threadId: string | null;
-  readonly definitionJson: string;
 }
 
 const operationError = (
@@ -117,22 +115,6 @@ function summaryOf(
   };
 }
 
-function localTriggerTitle(name: string, scheduledFor: string, timeZone: string): string {
-  const formatter = new Intl.DateTimeFormat("sv-SE", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  });
-  const local = DateTime.makeZonedUnsafe(scheduledFor, { timeZone }).pipe(
-    DateTime.formatIntl(formatter),
-  );
-  return `${name} — ${local}`;
-}
-
 function validateExecution(execution: ScheduleExecution, scheduleId?: ScheduleId): void {
   if (execution.workspaceMode === "worktree") {
     if (execution.baseBranch === null) {
@@ -156,12 +138,13 @@ const encodeScheduleHistoryEntryJson = Schema.encodeEffect(ScheduleHistoryEntryJ
 const encodeScheduleDomainEventJson = Schema.encodeEffect(ScheduleDomainEventJson);
 const encodeScheduleCommandJson = Schema.encodeEffect(ScheduleCommandJson);
 const DETAIL_HISTORY_LIMIT = 50;
-const DUE_RESERVATION_BATCH_SIZE = 100;
 
-const decodeStoredScheduleDetail = (recordJson: string, scheduleId?: ScheduleId) =>
-  decodeStoredScheduleDetailJson(recordJson).pipe(
-    Effect.mapError(persistenceError("decode", scheduleId)),
-  );
+const decodeStoredScheduleDetail = Effect.fn("ScheduleService.decodeStoredDetail")(
+  (recordJson: string, scheduleId?: ScheduleId) =>
+    decodeStoredScheduleDetailJson(recordJson).pipe(
+      Effect.mapError(persistenceError("decode", scheduleId)),
+    ),
+);
 
 export interface ScheduleServiceShape {
   readonly dispatch: (
@@ -195,30 +178,29 @@ export const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const mutationMutex = yield* Semaphore.make(1);
-  const drainPermit = yield* Semaphore.make(1);
-  const triggerPermit = yield* Semaphore.make(1);
   const changes = yield* Effect.acquireRelease(
     PubSub.unbounded<ScheduleListStreamEvent>(),
     PubSub.shutdown,
   );
-  const wakes = yield* Effect.acquireRelease(PubSub.unbounded<void>(), PubSub.shutdown);
 
-  const findCommand = (commandId: CommandId) =>
+  const findCommand = Effect.fn("ScheduleService.findCommand")((commandId: CommandId) =>
     sql<ScheduleCommandRow>`
-      SELECT schedule_id AS "scheduleId", result_sequence AS "resultSequence",
-        command_json AS "commandJson"
-      FROM schedule_commands
-      WHERE command_id = ${commandId}
-      LIMIT 1
-    `.pipe(Effect.mapError(persistenceError("read command receipt")));
+        SELECT schedule_id AS "scheduleId", result_sequence AS "resultSequence",
+          command_json AS "commandJson"
+        FROM schedule_commands
+        WHERE command_id = ${commandId}
+        LIMIT 1
+      `.pipe(Effect.mapError(persistenceError("read command receipt"))),
+  );
 
-  const findRow = (scheduleId: ScheduleId) =>
+  const findRow = Effect.fn("ScheduleService.findRow")((scheduleId: ScheduleId) =>
     sql<ScheduleRow>`
-      SELECT schedule_id AS "scheduleId", record_json AS "recordJson", sequence
-      FROM schedule_definitions
-      WHERE schedule_id = ${scheduleId}
-      LIMIT 1
-    `.pipe(Effect.mapError(persistenceError("read", scheduleId)));
+        SELECT schedule_id AS "scheduleId", record_json AS "recordJson", sequence
+        FROM schedule_definitions
+        WHERE schedule_id = ${scheduleId}
+        LIMIT 1
+      `.pipe(Effect.mapError(persistenceError("read", scheduleId))),
+  );
 
   const loadStoredDetail = Effect.fn("ScheduleService.loadStoredDetail")(function* (
     scheduleId: ScheduleId,
@@ -323,14 +305,15 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const appendEvent = (input: {
-    readonly scheduleId: ScheduleId;
-    readonly event: ScheduleDomainEvent;
-    readonly createdAt: string;
-  }) =>
-    encodeScheduleDomainEventJson(input.event).pipe(
-      Effect.flatMap(
-        (payloadJson) => sql<{ readonly sequence: number }>`
+  const appendEvent = Effect.fn("ScheduleService.appendEvent")(
+    (input: {
+      readonly scheduleId: ScheduleId;
+      readonly event: ScheduleDomainEvent;
+      readonly createdAt: string;
+    }) =>
+      encodeScheduleDomainEventJson(input.event).pipe(
+        Effect.flatMap(
+          (payloadJson) => sql<{ readonly sequence: number }>`
         INSERT INTO schedule_events (
           schedule_id, event_type, payload_json, payload_version, created_at
         ) VALUES (
@@ -338,29 +321,31 @@ export const make = Effect.gen(function* () {
         )
         RETURNING sequence
       `,
+        ),
+        Effect.flatMap((rows) =>
+          rows[0] === undefined
+            ? Effect.fail(
+                operationError(
+                  "persistence_failed",
+                  "Schedule event did not receive a durable sequence.",
+                  input.scheduleId,
+                ),
+              )
+            : Effect.succeed(rows[0].sequence),
+        ),
+        Effect.mapError((error) =>
+          isScheduleOperationError(error)
+            ? error
+            : persistenceError("append event", input.scheduleId)(error),
+        ),
       ),
-      Effect.flatMap((rows) =>
-        rows[0] === undefined
-          ? Effect.fail(
-              operationError(
-                "persistence_failed",
-                "Schedule event did not receive a durable sequence.",
-                input.scheduleId,
-              ),
-            )
-          : Effect.succeed(rows[0].sequence),
-      ),
-      Effect.mapError((error) =>
-        isScheduleOperationError(error)
-          ? error
-          : persistenceError("append event", input.scheduleId)(error),
-      ),
-    );
+  );
 
-  const writeDetail = (detail: StoredScheduleDetail, sequence: number) =>
-    encodeStoredScheduleDetailJson(detail).pipe(
-      Effect.flatMap(
-        (recordJson) => sql`
+  const writeDetail = Effect.fn("ScheduleService.writeDetail")(
+    (detail: StoredScheduleDetail, sequence: number) =>
+      encodeStoredScheduleDetailJson(detail).pipe(
+        Effect.flatMap(
+          (recordJson) => sql`
         INSERT INTO schedule_definitions (
           schedule_id, project_id, record_json, state, next_occurrence_at,
           created_at, updated_at, sequence
@@ -376,14 +361,16 @@ export const make = Effect.gen(function* () {
           updated_at = excluded.updated_at,
           sequence = excluded.sequence
       `,
+        ),
+        Effect.mapError(persistenceError("write", detail.id)),
       ),
-      Effect.mapError(persistenceError("write", detail.id)),
-    );
+  );
 
-  const writeReceipt = (command: ScheduleCommand, sequence: number, acceptedAt: string) =>
-    encodeScheduleCommandJson(command).pipe(
-      Effect.flatMap(
-        (commandJson) => sql`
+  const writeReceipt = Effect.fn("ScheduleService.writeReceipt")(
+    (command: ScheduleCommand, sequence: number, acceptedAt: string) =>
+      encodeScheduleCommandJson(command).pipe(
+        Effect.flatMap(
+          (commandJson) => sql`
           INSERT INTO schedule_commands (
             command_id, schedule_id, result_sequence, accepted_at, command_json
           ) VALUES (
@@ -391,55 +378,24 @@ export const make = Effect.gen(function* () {
           )
           ON CONFLICT (command_id) DO NOTHING
         `,
+        ),
+        Effect.mapError(persistenceError("write command receipt", command.scheduleId)),
       ),
-      Effect.mapError(persistenceError("write command receipt", command.scheduleId)),
-    );
+  );
 
-  const publishUpsert = (detail: StoredScheduleDetail | ScheduleDetail, sequence: number) =>
-    PubSub.publish(changes, {
-      type: "schedule-upserted",
-      sequence,
-      schedule: summaryOf(detail, sequence),
-    }).pipe(Effect.asVoid);
-
-  const wakeScheduler = PubSub.publish(wakes, undefined).pipe(Effect.asVoid);
-
-  const mutationEvent = (
-    command: Exclude<ScheduleCommand, { type: "schedule.delete" | "schedule.run-now" }>,
-    detail: StoredScheduleDetail,
-  ): ScheduleDomainEvent => {
-    switch (command.type) {
-      case "schedule.create":
-        return { type: "schedule.created", command, definition: detail };
-      case "schedule.update":
-        return {
-          type: "schedule.updated",
-          command,
-          state: detail.state,
-          nextOccurrenceAt: detail.nextOccurrenceAt,
-          updatedAt: detail.updatedAt,
-        };
-      case "schedule.pause":
-        return { type: "schedule.paused", command, updatedAt: detail.updatedAt };
-      case "schedule.resume":
-        return {
-          type: "schedule.resumed",
-          command,
-          nextOccurrenceAt: detail.nextOccurrenceAt,
-          updatedAt: detail.updatedAt,
-        };
-      case "schedule.acknowledge-failures":
-        return {
-          type: "schedule.failures-acknowledged",
-          command,
-          updatedAt: detail.updatedAt,
-        };
-    }
-  };
+  const publishUpsert = Effect.fn("ScheduleService.publishUpsert")(
+    (detail: StoredScheduleDetail | ScheduleDetail, sequence: number) =>
+      PubSub.publish(changes, {
+        type: "schedule-upserted",
+        sequence,
+        schedule: summaryOf(detail, sequence),
+      }).pipe(Effect.asVoid),
+  );
 
   const validateDefinition = Effect.fn("ScheduleService.validateDefinition")(function* (
     definition: Pick<ScheduleDetail, "id" | "projectId" | "timing" | "timeZone" | "execution">,
     at: string,
+    options?: { readonly allowPastOneTime?: boolean },
   ) {
     const project = yield* projection
       .getProjectShellById(definition.projectId)
@@ -488,7 +444,7 @@ export const make = Effect.gen(function* () {
       }
     }
     return yield* Effect.try({
-      try: () => previewScheduleTiming(definition.timing, definition.timeZone, at),
+      try: () => previewScheduleTiming(definition.timing, definition.timeZone, at, options),
       catch: (cause) =>
         operationError(
           cause instanceof Error && /time zone/i.test(cause.message)
@@ -501,53 +457,53 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  const persistMutation = (input: {
-    readonly command: ScheduleCommand;
-    readonly previous: StoredScheduleDetail | null;
-    readonly detail: StoredScheduleDetail;
-    readonly at: string;
-  }) =>
-    sql.withTransaction(
-      Effect.gen(function* () {
-        if (input.command.type === "schedule.update" || input.command.type === "schedule.pause") {
-          yield* sql`
+  const persistMutation = Effect.fn("ScheduleService.persistMutation")(
+    (input: {
+      readonly command: ScheduleCommand;
+      readonly previous: StoredScheduleDetail | null;
+      readonly detail: StoredScheduleDetail;
+      readonly event: ScheduleDomainEvent;
+      readonly at: string;
+    }) =>
+      sql.withTransaction(
+        Effect.gen(function* () {
+          if (input.command.type === "schedule.update" || input.command.type === "schedule.pause") {
+            yield* sql`
             DELETE FROM schedule_occurrences
             WHERE schedule_id = ${input.detail.id} AND source = 'scheduled' AND status = 'pending'
           `;
-        }
-        if (input.command.type === "schedule.delete" || input.command.type === "schedule.run-now") {
-          return yield* Effect.die("Delete and Run now use dedicated persistence paths.");
-        }
-        const event = mutationEvent(input.command, input.detail);
-        const sequence = yield* appendEvent({
-          scheduleId: input.detail.id,
-          event,
-          createdAt: input.at,
-        });
-        const projected = evolveScheduleDefinition(input.previous, event);
-        if (projected === null) {
-          return yield* Effect.die("A Schedule mutation unexpectedly deleted its projection.");
-        }
-        yield* writeDetail(projected, sequence);
-        yield* writeReceipt(input.command, sequence, input.at);
-        return { sequence, detail: projected };
-      }),
-    );
+          }
+          if (
+            input.command.type === "schedule.delete" ||
+            input.command.type === "schedule.run-now"
+          ) {
+            return yield* Effect.die("Delete and Run now use dedicated persistence paths.");
+          }
+          const sequence = yield* appendEvent({
+            scheduleId: input.detail.id,
+            event: input.event,
+            createdAt: input.at,
+          });
+          const projected = evolveScheduleDefinition(input.previous, input.event);
+          if (projected === null) {
+            return yield* Effect.die("A Schedule mutation unexpectedly deleted its projection.");
+          }
+          yield* writeDetail(projected, sequence);
+          yield* writeReceipt(input.command, sequence, input.at);
+          return { sequence, detail: projected };
+        }),
+      ),
+  );
 
   const reserveRunNow = Effect.fn("ScheduleService.reserveRunNow")(function* (
     command: Extract<ScheduleCommand, { type: "schedule.run-now" }>,
+    detail: StoredScheduleDetail,
+    event: Extract<ScheduleDomainEvent, { type: "schedule.occurrence-reserved"; source: "manual" }>,
     at: string,
   ) {
-    const detail = yield* loadStoredDetail(command.scheduleId);
     return yield* sql
       .withTransaction(
         Effect.gen(function* () {
-          const event = {
-            type: "schedule.occurrence-reserved" as const,
-            occurrenceId: command.occurrenceId,
-            scheduledFor: at,
-            source: "manual" as const,
-          };
           const sequence = yield* appendEvent({
             scheduleId: detail.id,
             event,
@@ -605,33 +561,46 @@ export const make = Effect.gen(function* () {
 
     const at = yield* nowIso;
     if (command.type === "schedule.create") {
-      if ((yield* findRow(command.scheduleId))[0] !== undefined) {
+      const existingRows = yield* findRow(command.scheduleId);
+      const current =
+        existingRows[0] === undefined
+          ? null
+          : yield* decodeStoredScheduleDetail(existingRows[0].recordJson, command.scheduleId);
+      if (current !== null) {
+        const decision = decideSchedule({ current, command, facts: { at } });
+        if (!decision.ok && decision.error.failure !== "missing_validated_timing") {
+          return yield* operationError(
+            decision.error.failure,
+            decision.error.message,
+            command.scheduleId,
+          );
+        }
+        return yield* Effect.die("Create unexpectedly accepted an existing Schedule.");
+      }
+      const preview = yield* validateDefinition({ id: command.scheduleId, ...command }, at);
+      const decision = decideSchedule({
+        current: null,
+        command,
+        facts: { at, nextOccurrenceAt: preview[0] ?? null },
+      });
+      if (!decision.ok) {
+        if (decision.error.failure === "missing_validated_timing") {
+          return yield* Effect.die(decision.error.message);
+        }
         return yield* operationError(
-          "already_exists",
-          "A Schedule with this identity already exists.",
+          decision.error.failure,
+          decision.error.message,
           command.scheduleId,
         );
       }
-      const preview = yield* validateDefinition({ id: command.scheduleId, ...command }, at);
-      const detail: StoredScheduleDetail = {
-        id: command.scheduleId,
-        projectId: command.projectId,
-        name: command.name,
-        prompt: command.prompt,
-        timing: command.timing,
-        timeZone: command.timeZone,
-        execution: command.execution,
-        state: command.state,
-        nextOccurrenceAt: command.state === "enabled" ? (preview[0] ?? null) : null,
-        latestHistory: null,
-        unacknowledgedFailure: false,
-        createdAt: at,
-        updatedAt: at,
-      };
+      if (decision.detail === null) {
+        return yield* Effect.die("Create unexpectedly deleted its Schedule projection.");
+      }
       const persisted = yield* persistMutation({
         command,
         previous: null,
-        detail,
+        detail: decision.detail,
+        event: decision.event,
         at,
       });
       return { ...persisted, prior: false as const };
@@ -639,44 +608,61 @@ export const make = Effect.gen(function* () {
 
     const current = yield* loadStoredDetail(command.scheduleId);
     if (command.type === "schedule.update") {
-      const preview = yield* validateDefinition({ id: current.id, ...command }, at);
-      const state =
-        current.state === "completed" || current.state === "failed" ? "enabled" : current.state;
-      const detail: StoredScheduleDetail = {
-        ...current,
-        projectId: command.projectId,
-        name: command.name,
-        prompt: command.prompt,
-        timing: command.timing,
-        timeZone: command.timeZone,
-        execution: command.execution,
-        state,
-        nextOccurrenceAt: state === "enabled" ? (preview[0] ?? null) : null,
-        updatedAt: at,
-      };
+      const keepsOccurrence = keepsOneTimeOccurrence(current, command);
+      const preview = yield* validateDefinition({ id: current.id, ...command }, at, {
+        allowPastOneTime: current.state !== "enabled" && keepsOccurrence,
+      });
+      const decision = decideSchedule({
+        current,
+        command,
+        facts: { at, nextOccurrenceAt: preview[0] ?? null },
+      });
+      if (!decision.ok) {
+        if (decision.error.failure === "missing_validated_timing") {
+          return yield* Effect.die(decision.error.message);
+        }
+        return yield* operationError(
+          decision.error.failure,
+          decision.error.message,
+          command.scheduleId,
+        );
+      }
+      if (decision.detail === null) {
+        return yield* Effect.die("Update unexpectedly deleted its Schedule projection.");
+      }
       const persisted = yield* persistMutation({
         command,
         previous: current,
-        detail,
+        detail: decision.detail,
+        event: decision.event,
         at,
       });
       return { ...persisted, prior: false as const };
     }
 
     if (command.type === "schedule.delete") {
+      const decision = decideSchedule({ current, command, facts: { at } });
+      if (!decision.ok) {
+        if (decision.error.failure === "missing_validated_timing") {
+          return yield* Effect.die(decision.error.message);
+        }
+        return yield* operationError(
+          decision.error.failure,
+          decision.error.message,
+          command.scheduleId,
+        );
+      }
       const persisted = yield* sql.withTransaction(
         Effect.gen(function* () {
-          const event = { type: "schedule.deleted" as const, command };
           const sequence = yield* appendEvent({
             scheduleId: current.id,
-            event,
+            event: decision.event,
             createdAt: at,
           });
-          const projected = evolveScheduleDefinition(current, event);
-          if (projected === null) {
+          if (decision.detail === null) {
             yield* sql`DELETE FROM schedule_definitions WHERE schedule_id = ${current.id}`;
           } else {
-            yield* writeDetail(projected, sequence);
+            yield* writeDetail(decision.detail, sequence);
           }
           yield* writeReceipt(command, sequence, at);
           return { sequence, detail: null };
@@ -686,105 +672,131 @@ export const make = Effect.gen(function* () {
     }
 
     if (command.type === "schedule.run-now") {
-      const persisted = yield* reserveRunNow(command, at);
+      const decision = decideSchedule({ current, command, facts: { at } });
+      if (
+        !decision.ok ||
+        decision.detail === null ||
+        decision.event.type !== "schedule.occurrence-reserved" ||
+        decision.event.source !== "manual"
+      ) {
+        return yield* Effect.die("Run now produced an invalid Schedule decision.");
+      }
+      const persisted = yield* reserveRunNow(command, decision.detail, decision.event, at);
       return { ...persisted, prior: false as const };
     }
 
-    let detail: StoredScheduleDetail;
-    if (command.type === "schedule.pause") {
-      detail = { ...current, state: "paused", nextOccurrenceAt: null, updatedAt: at };
-    } else if (command.type === "schedule.resume") {
-      const preview = yield* validateDefinition(current, at);
-      detail = {
-        ...current,
-        state: "enabled",
-        nextOccurrenceAt: preview[0] ?? null,
-        updatedAt: at,
-      };
-    } else {
-      detail = { ...current, unacknowledgedFailure: false, updatedAt: at };
+    const nextOccurrenceAt =
+      command.type === "schedule.resume"
+        ? ((yield* validateDefinition(current, at))[0] ?? null)
+        : undefined;
+    const decision = decideSchedule({
+      current,
+      command,
+      facts: { at, ...(nextOccurrenceAt === undefined ? {} : { nextOccurrenceAt }) },
+    });
+    if (!decision.ok) {
+      if (decision.error.failure === "missing_validated_timing") {
+        return yield* Effect.die(decision.error.message);
+      }
+      return yield* operationError(
+        decision.error.failure,
+        decision.error.message,
+        command.scheduleId,
+      );
     }
-    const persisted = yield* persistMutation({ command, previous: current, detail, at });
+    if (decision.detail === null) {
+      return yield* Effect.die("Schedule mutation unexpectedly deleted its projection.");
+    }
+    const persisted = yield* persistMutation({
+      command,
+      previous: current,
+      detail: decision.detail,
+      event: decision.event,
+      at,
+    });
     return { ...persisted, prior: false as const };
   });
 
-  const loadOccurrence = (occurrenceId: OccurrenceId) =>
-    sql<ScheduleOccurrenceRow>`
-      SELECT occurrence_id AS "occurrenceId", schedule_id AS "scheduleId",
-        scheduled_for AS "scheduledFor", source, status, thread_id AS "threadId",
-        definition_json AS "definitionJson"
-      FROM schedule_occurrences
-      WHERE occurrence_id = ${occurrenceId}
-      LIMIT 1
-    `.pipe(Effect.mapError(persistenceError("read Occurrence")));
+  const loadOccurrence = Effect.fn("ScheduleService.loadOccurrence")((occurrenceId: OccurrenceId) =>
+    sql<ScheduleOccurrenceRecord>`
+        SELECT occurrence_id AS "occurrenceId", schedule_id AS "scheduleId",
+          scheduled_for AS "scheduledFor", source, status, thread_id AS "threadId",
+          definition_json AS "definitionJson"
+        FROM schedule_occurrences
+        WHERE occurrence_id = ${occurrenceId}
+        LIMIT 1
+      `.pipe(
+      Effect.map((rows) => rows[0] ?? null),
+      Effect.mapError(persistenceError("read Occurrence")),
+    ),
+  );
 
-  const appendHistoryEntry = Effect.fn("ScheduleService.appendHistoryEntry")(function* (
+  const persistHistoryWrite = Effect.fn("ScheduleService.persistHistoryWrite")(function* (
     scheduleId: ScheduleId,
-    entry: ScheduleHistoryEntry,
+    write: ScheduleHistoryWrite,
     at: string,
   ) {
-    const latestRows = yield* sql<ScheduleHistoryRow>`
-      SELECT history_sequence AS "historySequence", record_json AS "recordJson"
-      FROM schedule_history
-      WHERE schedule_id = ${scheduleId}
-      ORDER BY history_sequence DESC
-      LIMIT 1
-    `.pipe(Effect.mapError(persistenceError("read latest history", scheduleId)));
-    const latestRow = latestRows[0];
-    const latest =
-      latestRow === undefined
-        ? undefined
-        : yield* decodeScheduleHistoryEntryJson(latestRow.recordJson).pipe(
-            Effect.mapError(persistenceError("decode latest history", scheduleId)),
-          );
-    const persistedEntry: ScheduleHistoryEntry =
-      entry.type === "failed" &&
-      latest?.type === "failed" &&
-      latest.code === entry.code &&
-      latest.message === entry.message
-        ? {
-            ...entry,
-            count: latest.count + 1,
-            firstFailedAt: latest.firstFailedAt,
-          }
-        : entry;
-    const recordJson = yield* encodeScheduleHistoryEntryJson(persistedEntry).pipe(
+    const recordJson = yield* encodeScheduleHistoryEntryJson(write.entry).pipe(
       Effect.mapError(persistenceError("encode history", scheduleId)),
     );
-    if (
-      persistedEntry.type === "failed" &&
-      latest?.type === "failed" &&
-      latestRow !== undefined &&
-      latest.code === persistedEntry.code &&
-      latest.message === persistedEntry.message
-    ) {
-      yield* sql`
+    if (write.type === "replace-latest") {
+      const replaced = yield* sql<{ readonly historySequence: number }>`
         UPDATE schedule_history
-        SET record_json = ${recordJson}, created_at = ${at}
-        WHERE history_sequence = ${latestRow.historySequence}
+        SET failure_code = ${write.entry.code}, failure_message = ${write.entry.message},
+          record_json = ${recordJson}, created_at = ${at}
+        WHERE history_sequence = (
+          SELECT history_sequence
+          FROM schedule_history
+          WHERE schedule_id = ${scheduleId}
+          ORDER BY history_sequence DESC
+          LIMIT 1
+        )
+        RETURNING history_sequence AS "historySequence"
       `.pipe(Effect.mapError(persistenceError("compact history", scheduleId)));
+      if (replaced[0] === undefined) {
+        return yield* operationError(
+          "persistence_failed",
+          "The latest Schedule failure history was not available to compact.",
+          scheduleId,
+        );
+      }
     } else {
       yield* sql`
         INSERT INTO schedule_history (
           schedule_id, kind, failure_code, failure_message, record_json, created_at
         ) VALUES (
-          ${scheduleId}, ${persistedEntry.type},
-          ${persistedEntry.type === "failed" ? persistedEntry.code : null},
-          ${persistedEntry.type === "failed" ? persistedEntry.message : null},
+          ${scheduleId}, ${write.entry.type},
+          ${write.entry.type === "failed" ? write.entry.code : null},
+          ${write.entry.type === "failed" ? write.entry.message : null},
           ${recordJson}, ${at}
         )
-      `.pipe(Effect.mapError(persistenceError("append history", scheduleId)));
+      `.pipe(Effect.mapError(persistenceError("persist history", scheduleId)));
     }
-    return persistedEntry;
   });
 
-  const recordOutcome = Effect.fn("ScheduleService.recordOutcome")(function* (input: {
-    readonly occurrence: ScheduleOccurrenceRow;
-    readonly type: "triggered" | "failed";
-    readonly threadId: ThreadId | null;
-    readonly code?: string;
-    readonly message?: string;
-  }) {
+  const persistLifecycleDecision = Effect.fn("ScheduleService.persistLifecycleDecision")(function* (
+    scheduleId: ScheduleId,
+    current: StoredScheduleDetail,
+    decision: ScheduleLifecycleDecision,
+    at: string,
+  ) {
+    yield* Effect.forEach(decision.history, (write) => persistHistoryWrite(scheduleId, write, at));
+    let projected: StoredScheduleDetail | null = current;
+    let sequence: number | null = null;
+    for (const event of decision.events) {
+      sequence = yield* appendEvent({ scheduleId, event, createdAt: at });
+      projected = evolveScheduleDefinition(projected, event);
+    }
+    if (projected === null || sequence === null) {
+      return yield* Effect.die("A Schedule lifecycle decision deleted its projection.");
+    }
+    yield* writeDetail(projected, sequence);
+    return { sequence, detail: projected };
+  });
+
+  const recordOutcome = Effect.fn("ScheduleService.recordOutcome")(function* (
+    input: Parameters<ScheduleReactorPort["recordOutcome"]>[0],
+  ) {
     const at = yield* nowIso;
     const scheduleId = input.occurrence.scheduleId as ScheduleId;
     const currentRows = yield* findRow(scheduleId);
@@ -795,86 +807,28 @@ export const make = Effect.gen(function* () {
       scheduleId,
     );
     const occurrenceId = input.occurrence.occurrenceId as OccurrenceId;
-    let proposedHistoryEntry: ScheduleHistoryEntry;
-    if (input.type === "triggered" && input.threadId !== null) {
-      proposedHistoryEntry = {
-        type: "triggered",
-        occurrenceId,
-        scheduledFor: input.occurrence.scheduledFor,
-        triggeredAt: at,
-        threadId: input.threadId,
-      };
-    } else {
-      const code = input.code ?? "trigger_failed";
-      const message = input.message ?? "The Occurrence could not Trigger.";
-      proposedHistoryEntry = {
-        type: "failed",
-        occurrenceId,
-        scheduledFor: input.occurrence.scheduledFor,
-        failedAt: at,
-        code,
-        message,
-        count: 1,
-        firstFailedAt: at,
-        lastFailedAt: at,
-      };
-    }
-    const state =
-      input.occurrence.source === "manual"
-        ? current.state
-        : sourceDetail.timing.type === "one-time"
-          ? input.type === "triggered"
-            ? "completed"
-            : "failed"
-          : current.state;
+    const decision = decideOccurrenceOutcome({
+      current,
+      sourceDefinition: sourceDetail,
+      occurrenceId,
+      scheduledFor: input.occurrence.scheduledFor,
+      source: input.occurrence.source,
+      outcome: input,
+      at,
+    });
     const result = yield* mutationMutex
       .withPermits(1)(
         sql.withTransaction(
           Effect.gen(function* () {
-            const historyEntry = yield* appendHistoryEntry(scheduleId, proposedHistoryEntry, at);
-            const detail: StoredScheduleDetail = {
-              ...current,
-              state,
-              latestHistory: historyEntry,
-              unacknowledgedFailure: input.type === "failed" ? true : current.unacknowledgedFailure,
-              updatedAt: at,
-            };
-            if (historyEntry.type === "skipped") {
-              return yield* Effect.die("An Occurrence outcome cannot produce skipped history.");
-            }
-            const event =
-              historyEntry.type === "triggered"
-                ? {
-                    type: "schedule.occurrence-triggered" as const,
-                    entry: historyEntry,
-                    state: detail.state,
-                    unacknowledgedFailure: detail.unacknowledgedFailure,
-                    updatedAt: detail.updatedAt,
-                  }
-                : {
-                    type: "schedule.occurrence-failed" as const,
-                    entry: historyEntry,
-                    state: detail.state,
-                    unacknowledgedFailure: detail.unacknowledgedFailure,
-                    updatedAt: detail.updatedAt,
-                  };
-            const eventSequence = yield* appendEvent({
-              scheduleId,
-              event,
-              createdAt: at,
-            });
             yield* sql`
             UPDATE schedule_occurrences
-            SET status = ${input.type}, thread_id = ${input.threadId},
-              error_code = ${input.code ?? null}, error_message = ${input.message ?? null}, updated_at = ${at}
+            SET status = ${decision.occurrence.status},
+              thread_id = ${decision.occurrence.threadId},
+              error_code = ${decision.occurrence.errorCode},
+              error_message = ${decision.occurrence.errorMessage}, updated_at = ${at}
             WHERE occurrence_id = ${occurrenceId}
             `;
-            const projected = evolveScheduleDefinition(current, event);
-            if (projected === null) {
-              return yield* Effect.die("An Occurrence outcome deleted its Schedule projection.");
-            }
-            yield* writeDetail(projected, eventSequence);
-            return { sequence: eventSequence, detail: projected };
+            return yield* persistLifecycleDecision(scheduleId, current, decision, at);
           }),
         ),
       )
@@ -882,438 +836,176 @@ export const make = Effect.gen(function* () {
     yield* publishUpsert(result.detail, result.sequence);
   });
 
-  const triggerOccurrence = Effect.fn("ScheduleService.triggerOccurrence")(function* (
-    occurrenceId: OccurrenceId,
-  ) {
-    const occurrenceRows = yield* loadOccurrence(occurrenceId);
-    const occurrence = occurrenceRows[0];
-    if (
-      occurrence === undefined ||
-      occurrence.status === "triggered" ||
-      occurrence.status === "failed"
-    ) {
-      return;
-    }
-    const definition = yield* decodeStoredScheduleDetail(
-      occurrence.definitionJson,
-      occurrence.scheduleId as ScheduleId,
-    );
-    const threadId = ThreadId.make(`schedule:${occurrence.occurrenceId}`);
-    const existingThread = yield* projection
-      .getThreadShellById(threadId)
-      .pipe(Effect.mapError(persistenceError("read recovered Thread", definition.id)));
-    if (Option.isSome(existingThread) && existingThread.value.latestTurn !== null) {
-      yield* recordOutcome({
-        occurrence,
-        type: "triggered",
-        threadId,
-      });
-      return;
-    }
-    const cleanupRecoveredThread = Option.isSome(existingThread)
-      ? threadBootstrap
-          .cleanupRecoveredThread(threadId)
-          .pipe(Effect.mapError(persistenceError("clean up recovered Thread", definition.id)))
-      : Effect.void;
-    const project = yield* projection
-      .getProjectShellById(definition.projectId)
-      .pipe(Effect.mapError(persistenceError("read target Project", definition.id)));
-    if (Option.isNone(project)) {
-      yield* cleanupRecoveredThread;
-      yield* recordOutcome({
-        occurrence,
-        type: "failed",
-        threadId: null,
-        code: "project_not_found",
-        message: "The target Project no longer exists.",
-      });
-      return;
-    }
-    const providers = yield* providerRegistry.getProviders;
-    const selectedProvider = providers.find(
-      ({ instanceId }) => instanceId === definition.execution.modelSelection.instanceId,
-    );
-    if (
-      selectedProvider === undefined ||
-      !selectedProvider.enabled ||
-      !selectedProvider.installed ||
-      !isProviderAvailable(selectedProvider) ||
-      selectedProvider.status === "disabled" ||
-      selectedProvider.status === "error" ||
-      selectedProvider.auth.status === "unauthenticated"
-    ) {
-      yield* cleanupRecoveredThread;
-      yield* recordOutcome({
-        occurrence,
-        type: "failed",
-        threadId: null,
-        code: "provider_unavailable",
-        message: "The configured provider is unavailable or disabled.",
-      });
-      return;
-    }
-    if (
-      !selectedProvider.models.some(
-        ({ slug }) => slug === definition.execution.modelSelection.model,
-      )
-    ) {
-      yield* cleanupRecoveredThread;
-      yield* recordOutcome({
-        occurrence,
-        type: "failed",
-        threadId: null,
-        code: "model_unavailable",
-        message: "The configured model is no longer available from this provider.",
-      });
-      return;
-    }
-    const at = yield* nowIso;
-    yield* sql`
-      UPDATE schedule_occurrences
-      SET status = 'triggering', thread_id = ${threadId}, updated_at = ${at}
-      WHERE occurrence_id = ${occurrenceId} AND status IN ('pending', 'triggering')
-    `.pipe(Effect.mapError(persistenceError("claim Occurrence", definition.id)));
-    const execution = definition.execution;
-    const prepareWorktree =
-      execution.workspaceMode === "worktree" &&
-      execution.baseBranch !== null &&
-      (Option.isNone(existingThread) || existingThread.value.worktreePath === null)
-        ? {
-            projectCwd: project.value.workspaceRoot,
-            baseBranch: execution.baseBranch,
-            branch: buildScheduledWorktreeBranchName(
-              definition.projectId,
-              definition.id,
-              occurrence.occurrenceId,
-            ),
-            startFromOrigin: true,
-            reuseExistingBranchWorktree: true,
-          }
-        : undefined;
-    const command = {
-      type: "thread.turn.start" as const,
-      commandId: CommandId.make(`schedule:${occurrence.occurrenceId}:trigger`),
-      threadId,
-      message: {
-        messageId: MessageId.make(`schedule:${occurrence.occurrenceId}:message`),
-        role: "user" as const,
-        text: definition.prompt,
-        attachments: [],
-      },
-      modelSelection: execution.modelSelection,
-      runtimeMode: execution.runtimeMode,
-      interactionMode: execution.interactionMode,
-      titleSeed: definition.name,
-      bootstrap: {
-        ...(Option.isNone(existingThread)
-          ? {
-              createThread: {
-                projectId: definition.projectId,
-                title: localTriggerTitle(
-                  definition.name,
-                  occurrence.scheduledFor,
-                  definition.timeZone,
-                ),
-                modelSelection: execution.modelSelection,
-                runtimeMode: execution.runtimeMode,
-                interactionMode: execution.interactionMode,
-                branch: null,
-                worktreePath: null,
-                spawnedByThreadId: null,
-                reportDelivery: null,
-                createdAt: at,
-              },
-            }
-          : {
-              recoverExistingThread: {
-                projectId: definition.projectId,
-                projectCwd: project.value.workspaceRoot,
-                worktreePath: existingThread.value.worktreePath,
-              },
-            }),
-        ...(prepareWorktree === undefined ? {} : { prepareWorktree }),
-        runSetupScript: true,
-        setupScriptIdempotencyKey: `schedule:${occurrence.occurrenceId}:setup`,
-      },
-      createdAt: at,
-    };
-    yield* threadBootstrap.bootstrapTurnStart(command).pipe(
-      Effect.matchEffect({
-        onFailure: (error) =>
-          recordOutcome({
-            occurrence: { ...occurrence, threadId },
-            type: "failed",
-            threadId: null,
-            code: "thread_bootstrap_rejected",
-            message: error.message,
-          }),
-        onSuccess: () =>
-          recordOutcome({
-            occurrence: { ...occurrence, threadId },
-            type: "triggered",
-            threadId,
-          }),
-      }),
-    );
-  });
-
-  const failInvalidDueSchedule = Effect.fn("ScheduleService.failInvalidDueSchedule")(function* (
-    detail: StoredScheduleDetail,
-    at: string,
-    cause: unknown,
-  ) {
-    const occurrenceId = OccurrenceId.make(
-      yield* crypto.randomUUIDv4.pipe(
-        Effect.mapError(persistenceError("reserve invalid Occurrence identity", detail.id)),
-      ),
-    );
-    const scheduledFor = detail.nextOccurrenceAt ?? at;
-    const message =
-      cause instanceof Error ? cause.message : "The saved Schedule timing is invalid.";
-    const historyEntry = {
-      type: "failed" as const,
-      occurrenceId,
-      scheduledFor,
-      failedAt: at,
-      code: "invalid_timing",
-      message,
-      count: 1,
-      firstFailedAt: at,
-      lastFailedAt: at,
-    };
-    const nextDetail: StoredScheduleDetail = {
-      ...detail,
-      state: "failed",
-      nextOccurrenceAt: null,
-      latestHistory: historyEntry,
-      unacknowledgedFailure: true,
-      updatedAt: at,
-    };
-    const event = {
-      type: "schedule.occurrence-failed" as const,
-      entry: historyEntry,
-      state: nextDetail.state,
-      nextOccurrenceAt: nextDetail.nextOccurrenceAt,
-      unacknowledgedFailure: true,
-      updatedAt: at,
-    };
-    const result = yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          yield* appendHistoryEntry(detail.id, historyEntry, at);
-          const sequence = yield* appendEvent({ scheduleId: detail.id, event, createdAt: at });
-          const definitionJson = yield* encodeStoredScheduleDetailJson(detail).pipe(
-            Effect.mapError(persistenceError("encode invalid due Occurrence", detail.id)),
-          );
-          yield* sql`
+  const failInvalidDueSchedule = Effect.fn("ScheduleService.failInvalidDueSchedule")(
+    function* (input: {
+      readonly detail: StoredScheduleDetail;
+      readonly occurrenceId: OccurrenceId;
+      readonly at: string;
+      readonly cause: unknown;
+    }) {
+      const { at, cause, detail, occurrenceId } = input;
+      const decision = decideInvalidTimingFailure({ current: detail, occurrenceId, at, cause });
+      const result = yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const definitionJson = yield* encodeStoredScheduleDetailJson(detail).pipe(
+              Effect.mapError(persistenceError("encode invalid due Occurrence", detail.id)),
+            );
+            yield* sql`
           INSERT INTO schedule_occurrences (
             occurrence_id, schedule_id, scheduled_for, source, status, thread_id,
             definition_json, error_code, error_message, created_at, updated_at
           ) VALUES (
-            ${occurrenceId}, ${detail.id}, ${scheduledFor}, 'scheduled', 'failed', NULL,
-            ${definitionJson}, 'invalid_timing', ${message}, ${at}, ${at}
+            ${occurrenceId}, ${detail.id}, ${decision.occurrence.scheduledFor}, 'scheduled',
+            ${decision.occurrence.status}, ${decision.occurrence.threadId}, ${definitionJson},
+            ${decision.occurrence.errorCode}, ${decision.occurrence.errorMessage}, ${at}, ${at}
           )
         `;
-          const projected = evolveScheduleDefinition(detail, event);
-          if (projected === null) {
-            return yield* Effect.die("Invalid timing failure deleted its Schedule projection.");
-          }
-          yield* writeDetail(projected, sequence);
-          return { sequence, detail: projected };
-        }),
-      )
-      .pipe(Effect.mapError(persistenceError("fail invalid due Schedule", detail.id)));
-    yield* publishUpsert(result.detail, result.sequence);
-  });
+            return yield* persistLifecycleDecision(detail.id, detail, decision, at);
+          }),
+        )
+        .pipe(Effect.mapError(persistenceError("fail invalid due Schedule", detail.id)));
+      yield* publishUpsert(result.detail, result.sequence);
+    },
+  );
 
-  const reserveDueBatch = Effect.fn("ScheduleService.reserveDueBatch")(function* () {
-    const at = yield* nowIso;
+  const readDueSchedules = Effect.fn("ScheduleService.readDueSchedules")(function* (
+    at: string,
+    limit: number,
+  ) {
     const rows = yield* sql<ScheduleRow>`
       SELECT schedule_id AS "scheduleId", record_json AS "recordJson", sequence
       FROM schedule_definitions
       WHERE state = 'enabled' AND next_occurrence_at IS NOT NULL AND next_occurrence_at <= ${at}
       ORDER BY next_occurrence_at ASC, created_at ASC, schedule_id ASC
-      LIMIT ${DUE_RESERVATION_BATCH_SIZE}
+      LIMIT ${limit}
     `.pipe(Effect.mapError(persistenceError("read due Schedules")));
-    const dueSchedules = yield* Effect.forEach(rows, (row) =>
-      Effect.gen(function* () {
-        const detail = yield* decodeStoredScheduleDetail(
-          row.recordJson,
-          row.scheduleId as ScheduleId,
-        );
-        if (detail.nextOccurrenceAt === null) return Option.none();
-        const due = yield* Effect.result(
-          Effect.try({
-            try: () =>
-              latestScheduleOccurrenceAtOrBefore(
-                detail.timing,
-                detail.timeZone,
-                detail.nextOccurrenceAt as string,
-                at,
-              ),
-            catch: (cause) =>
-              operationError(
-                "invalid_timing",
-                "The saved Schedule timing is invalid.",
-                detail.id,
-                cause,
-              ),
-          }),
-        );
-        if (Result.isFailure(due)) {
-          yield* failInvalidDueSchedule(detail, at, due.failure);
-          return Option.none();
-        }
-        return Option.some({ detail, due: due.success });
-      }),
+    return yield* Effect.forEach(rows, (row) =>
+      decodeStoredScheduleDetail(row.recordJson, row.scheduleId as ScheduleId),
     );
-    const selected = dueSchedules
-      .flatMap((candidate) => (Option.isSome(candidate) ? [candidate.value] : []))
-      .sort(
-        (left, right) =>
-          left.due.scheduledFor.localeCompare(right.due.scheduledFor) ||
-          left.detail.createdAt.localeCompare(right.detail.createdAt) ||
-          left.detail.id.localeCompare(right.detail.id),
-      );
-    yield* Effect.forEach(selected, ({ detail, due }) =>
-      Effect.gen(function* () {
-        const occurrenceId = OccurrenceId.make(
-          yield* crypto.randomUUIDv4.pipe(
-            Effect.mapError(persistenceError("reserve Occurrence identity", detail.id)),
-          ),
-        );
-        const skippedHistory: ScheduleHistoryEntry | null =
-          due.skipped === null
-            ? null
-            : {
-                type: "skipped",
-                count: due.skipped.count,
-                countIsLowerBound: due.skipped.countIsLowerBound,
-                firstScheduledFor: due.skipped.firstScheduledFor,
-                lastScheduledFor: due.skipped.lastScheduledFor,
-                recordedAt: at,
-              };
-        const nextDetail: StoredScheduleDetail = {
-          ...detail,
-          nextOccurrenceAt: due.nextOccurrenceAt,
-          latestHistory: skippedHistory ?? detail.latestHistory,
-          updatedAt: at,
-        };
-        const reservation = yield* sql
-          .withTransaction(
-            Effect.gen(function* () {
-              let projected: StoredScheduleDetail = detail;
-              if (skippedHistory !== null) {
-                yield* appendHistoryEntry(detail.id, skippedHistory, at);
-                const skippedEvent = {
-                  type: "schedule.occurrences-skipped" as const,
-                  entry: skippedHistory,
-                  updatedAt: at,
-                };
-                yield* appendEvent({
-                  scheduleId: detail.id,
-                  event: skippedEvent,
-                  createdAt: at,
-                });
-                const afterSkipped = evolveScheduleDefinition(projected, skippedEvent);
-                if (afterSkipped === null) {
-                  return yield* Effect.die("Skipped history deleted its Schedule projection.");
-                }
-                projected = afterSkipped;
-              }
-              const event = {
-                type: "schedule.occurrence-reserved" as const,
-                occurrenceId,
-                scheduledFor: due.scheduledFor,
-                source: "scheduled" as const,
-                nextOccurrenceAt: nextDetail.nextOccurrenceAt,
-                updatedAt: nextDetail.updatedAt,
-              };
-              const eventSequence = yield* appendEvent({
-                scheduleId: detail.id,
-                event,
-                createdAt: at,
-              });
-              const definitionJson = yield* encodeStoredScheduleDetailJson(detail).pipe(
-                Effect.mapError(persistenceError("encode due Occurrence", detail.id)),
-              );
-              yield* sql`
-          INSERT INTO schedule_occurrences (
-            occurrence_id, schedule_id, scheduled_for, source, status, thread_id,
-            definition_json, created_at, updated_at
-          ) VALUES (
-            ${occurrenceId}, ${detail.id}, ${due.scheduledFor}, 'scheduled', 'pending', NULL,
-            ${definitionJson}, ${at}, ${at}
-          )
-        `;
-              const afterReservation = evolveScheduleDefinition(projected, event);
-              if (afterReservation === null) {
-                return yield* Effect.die("A reservation deleted its Schedule projection.");
-              }
-              yield* writeDetail(afterReservation, eventSequence);
-              return { sequence: eventSequence, detail: afterReservation };
-            }),
-          )
-          .pipe(Effect.mapError(persistenceError("reserve due Occurrence", detail.id)));
-        yield* publishUpsert(reservation.detail, reservation.sequence);
-        return occurrenceId;
-      }),
-    );
-    return rows.length;
   });
 
-  const nextPendingOccurrence = () =>
-    sql<{ readonly occurrenceId: string; readonly scheduledFor: string }>`
-      SELECT occurrence_id AS "occurrenceId", scheduled_for AS "scheduledFor"
-      FROM schedule_occurrences
-      WHERE status IN ('pending', 'triggering')
-      ORDER BY scheduled_for ASC, created_at ASC, occurrence_id ASC
-      LIMIT 1
-    `.pipe(Effect.mapError(persistenceError("read pending Occurrences")));
+  const reserveScheduledOccurrence = Effect.fn("ScheduleService.reserveScheduledOccurrence")(
+    function* (input: Parameters<ScheduleReactorPort["reserveScheduledOccurrence"]>[0]) {
+      const { at, detail, due, occurrenceId } = input;
+      const decision = decideScheduledOccurrenceReservation({
+        occurrenceId,
+        scheduledFor: due.scheduledFor,
+        nextOccurrenceAt: due.nextOccurrenceAt,
+        skipped: due.skipped,
+        at,
+      });
+      const reservation = yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const definitionJson = yield* encodeStoredScheduleDetailJson(detail).pipe(
+              Effect.mapError(persistenceError("encode due Occurrence", detail.id)),
+            );
+            yield* sql`
+            INSERT INTO schedule_occurrences (
+              occurrence_id, schedule_id, scheduled_for, source, status, thread_id,
+              definition_json, created_at, updated_at
+            ) VALUES (
+              ${occurrenceId}, ${detail.id}, ${decision.occurrence.scheduledFor}, 'scheduled',
+              ${decision.occurrence.status}, NULL, ${definitionJson}, ${at}, ${at}
+            )
+          `;
+            return yield* persistLifecycleDecision(detail.id, detail, decision, at);
+          }),
+        )
+        .pipe(Effect.mapError(persistenceError("reserve due Occurrence", detail.id)));
+      yield* publishUpsert(reservation.detail, reservation.sequence);
+    },
+  );
 
-  const nextDueAt = () =>
+  const nextPendingOccurrence = Effect.fn("ScheduleService.nextPendingOccurrence")(() =>
+    sql<{ readonly occurrenceId: string; readonly scheduledFor: string }>`
+        SELECT occurrence_id AS "occurrenceId", scheduled_for AS "scheduledFor"
+        FROM schedule_occurrences
+        WHERE status IN ('pending', 'triggering')
+        ORDER BY scheduled_for ASC, created_at ASC, occurrence_id ASC
+        LIMIT 1
+      `.pipe(
+      Effect.map((rows) => {
+        const row = rows[0];
+        return row === undefined
+          ? null
+          : { occurrenceId: row.occurrenceId as OccurrenceId, scheduledFor: row.scheduledFor };
+      }),
+      Effect.mapError(persistenceError("read pending Occurrences")),
+    ),
+  );
+
+  const nextDueAt = Effect.fn("ScheduleService.nextDueAt")(() =>
     sql<{ readonly nextOccurrenceAt: string | null }>`
-      SELECT next_occurrence_at AS "nextOccurrenceAt"
-      FROM schedule_definitions
-      WHERE state = 'enabled' AND next_occurrence_at IS NOT NULL
-      ORDER BY next_occurrence_at ASC, created_at ASC, schedule_id ASC
-      LIMIT 1
-    `.pipe(
+        SELECT next_occurrence_at AS "nextOccurrenceAt"
+        FROM schedule_definitions
+        WHERE state = 'enabled' AND next_occurrence_at IS NOT NULL
+        ORDER BY next_occurrence_at ASC, created_at ASC, schedule_id ASC
+        LIMIT 1
+      `.pipe(
       Effect.map((rows) => rows[0]?.nextOccurrenceAt ?? null),
       Effect.mapError(persistenceError("read next due Schedule")),
-    );
-
-  const drainDue: ScheduleServiceShape["drainDue"] = drainPermit.withPermits(1)(
-    Effect.gen(function* () {
-      while (true) {
-        const processed = yield* mutationMutex.withPermits(1)(reserveDueBatch());
-        const unseenDueAt = yield* nextDueAt();
-        let triggered = 0;
-        while (triggered < DUE_RESERVATION_BATCH_SIZE) {
-          const pending = (yield* nextPendingOccurrence())[0];
-          // An unreserved Schedule cannot retain an Occurrence older than its
-          // current next_occurrence_at. Pending work strictly before that
-          // frontier is therefore globally safe to Trigger without scanning
-          // the rest of the backlog first.
-          if (
-            pending === undefined ||
-            (unseenDueAt !== null && pending.scheduledFor >= unseenDueAt)
-          ) {
-            break;
-          }
-          yield* triggerPermit.withPermits(1)(
-            triggerOccurrence(pending.occurrenceId as OccurrenceId),
-          );
-          triggered += 1;
-        }
-        if (processed === 0 && triggered === 0) return;
-        // Reservation holds the mutation mutex for one bounded page and each
-        // Trigger holds its permit independently. Yield so queued commands can
-        // acquire those permits before the next page.
-        yield* Effect.yieldNow;
-      }
-    }).pipe(Effect.withSpan("ScheduleService.drainDue")),
+    ),
   );
+
+  const randomOccurrenceId = Effect.fn("ScheduleService.randomOccurrenceId")(
+    (scheduleId: ScheduleId, operation: string) =>
+      crypto.randomUUIDv4.pipe(
+        Effect.map(OccurrenceId.make),
+        Effect.mapError(persistenceError(operation, scheduleId)),
+      ),
+  );
+  const readScheduleThread = Effect.fn("ScheduleService.readScheduleThread")(
+    (threadId: ThreadId, scheduleId: ScheduleId) =>
+      projection
+        .getThreadShellById(threadId)
+        .pipe(Effect.mapError(persistenceError("read recovered Thread", scheduleId))),
+  );
+  const cleanupRecoveredThread = Effect.fn("ScheduleService.cleanupRecoveredThread")(
+    (threadId: ThreadId, scheduleId: ScheduleId) =>
+      threadBootstrap
+        .cleanupRecoveredThread(threadId)
+        .pipe(Effect.mapError(persistenceError("clean up recovered Thread", scheduleId))),
+  );
+  const readScheduleProject = Effect.fn("ScheduleService.readScheduleProject")(
+    (definition: StoredScheduleDetail) =>
+      projection
+        .getProjectShellById(definition.projectId)
+        .pipe(Effect.mapError(persistenceError("read target Project", definition.id))),
+  );
+  const claimOccurrence = Effect.fn("ScheduleService.claimOccurrence")(
+    (occurrenceId: OccurrenceId, threadId: ThreadId, at: string, scheduleId: ScheduleId) =>
+      sql`
+        UPDATE schedule_occurrences
+        SET status = 'triggering', thread_id = ${threadId}, updated_at = ${at}
+        WHERE occurrence_id = ${occurrenceId} AND status IN ('pending', 'triggering')
+      `.pipe(Effect.asVoid, Effect.mapError(persistenceError("claim Occurrence", scheduleId))),
+  );
+  const bootstrapTurn = Effect.fn("ScheduleService.bootstrapScheduledTurn")(
+    (command: ThreadTurnBootstrap.ThreadTurnStartCommand) =>
+      threadBootstrap.bootstrapTurnStart(command).pipe(Effect.asVoid),
+  );
+  const reactor = yield* makeScheduleReactor({
+    now: nowIso,
+    randomOccurrenceId,
+    loadOccurrence,
+    decodeDefinition: decodeStoredScheduleDetail,
+    readThread: readScheduleThread,
+    cleanupRecoveredThread,
+    readProject: readScheduleProject,
+    readProviders: providerRegistry.getProviders,
+    claimOccurrence,
+    bootstrapTurn,
+    recordOutcome,
+    readDueSchedules,
+    failInvalidTiming: failInvalidDueSchedule,
+    reserveScheduledOccurrence,
+    nextPendingOccurrence,
+    nextDueAt,
+    withMutationPermit: mutationMutex.withPermits(1),
+  });
+  const drainDue: ScheduleServiceShape["drainDue"] = reactor.drainDue;
 
   const dispatchUnlocked = Effect.fn("ScheduleService.dispatch")(function* (
     command: ScheduleCommand,
@@ -1337,18 +1029,19 @@ export const make = Effect.gen(function* () {
       } else if (mutation.detail !== null) {
         yield* publishUpsert(mutation.detail, mutation.sequence);
       }
-      yield* wakeScheduler;
+      yield* reactor.wake;
     }
     if (command.type === "schedule.run-now") {
-      yield* triggerOccurrence(command.occurrenceId);
+      yield* reactor.triggerOccurrence(command.occurrenceId);
     }
     return {
       sequence: mutation.sequence,
       scheduleId: mutation.prior ? mutation.scheduleId : command.scheduleId,
     };
   });
-  const dispatch: ScheduleServiceShape["dispatch"] = (command) =>
-    triggerPermit.withPermits(1)(dispatchUnlocked(command));
+  const dispatch: ScheduleServiceShape["dispatch"] = Effect.fn(
+    "ScheduleService.dispatchSerialized",
+  )((command) => reactor.withTriggerPermit(dispatchUnlocked(command)));
 
   const subscribe: ScheduleServiceShape["subscribe"] = mutationMutex.withPermits(1)(
     Effect.gen(function* () {
@@ -1361,42 +1054,7 @@ export const make = Effect.gen(function* () {
     }),
   );
 
-  const runScheduler = Effect.scoped(
-    Effect.gen(function* () {
-      const wakeSubscription = yield* PubSub.subscribe(wakes);
-      while (true) {
-        const drainFailed = yield* drainDue.pipe(
-          Effect.as(false),
-          Effect.catch((error) =>
-            Effect.logError("Schedule reactor drain failed", { error: error.message }).pipe(
-              Effect.as(true),
-            ),
-          ),
-        );
-        if (drainFailed) {
-          yield* Effect.race(Effect.sleep(Duration.seconds(5)), PubSub.take(wakeSubscription));
-          continue;
-        }
-        const next = yield* nextDueAt().pipe(
-          Effect.catch((error) =>
-            Effect.logError("Schedule reactor next-due query failed", { error }).pipe(
-              Effect.as(null),
-            ),
-          ),
-        );
-        if (next === null) {
-          yield* PubSub.take(wakeSubscription);
-          continue;
-        }
-        const delayMs = Math.max(
-          0,
-          DateTime.toEpochMillis(DateTime.makeUnsafe(next)) -
-            DateTime.toEpochMillis(yield* DateTime.now),
-        );
-        yield* Effect.race(Effect.sleep(Duration.millis(delayMs)), PubSub.take(wakeSubscription));
-      }
-    }),
-  );
+  const runScheduler: ScheduleServiceShape["runScheduler"] = reactor.run;
 
   return ScheduleService.of({
     dispatch,

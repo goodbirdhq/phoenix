@@ -1,8 +1,4 @@
-import {
-  ScheduleDomainEvent,
-  ScheduleStoredDefinition,
-  evolveScheduleDefinition,
-} from "@t3tools/contracts";
+import { ScheduleDomainEvent, ScheduleStoredDefinition } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -10,6 +6,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import { evolveScheduleDefinition } from "../../schedule/ScheduleDomain.ts";
 
 const historyLayer = it.layer(NodeSqliteClient.layerMemory());
 const replayLayer = it.layer(NodeSqliteClient.layerMemory());

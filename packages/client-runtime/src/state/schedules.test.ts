@@ -25,7 +25,12 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import type { RpcSession } from "../rpc/session.ts";
-import { applyScheduleListEvent, createScheduleEnvironmentAtoms } from "./schedules.ts";
+import {
+  applyScheduleListEvent,
+  createScheduleEnvironmentAtoms,
+  persistScheduleDetailIfNewer,
+  removePersistedScheduleDetail,
+} from "./schedules.ts";
 
 const scheduleId = ScheduleId.make("schedule-1");
 const schedule = {
@@ -129,6 +134,60 @@ describe("applyScheduleListEvent", () => {
       reset,
     );
   });
+});
+
+describe("persistScheduleDetailIfNewer", () => {
+  it.effect("does not let a stale live response overwrite a newer cached revision", () =>
+    Effect.gen(function* () {
+      let stored = Option.none<ScheduleDetail>();
+      const cache = {
+        loadScheduleDetail: () => Effect.succeed(stored),
+        saveScheduleDetail: (_environmentId: EnvironmentId, value: ScheduleDetail) =>
+          Effect.sync(() => {
+            stored = Option.some(value);
+          }),
+      };
+      const newer = { ...detail, name: "Newest", revision: 3 };
+      const stale = { ...detail, name: "Stale", revision: 2 };
+
+      yield* persistScheduleDetailIfNewer(cache, environmentId, newer);
+      yield* persistScheduleDetailIfNewer(cache, environmentId, stale);
+
+      expect(Option.getOrThrow(stored)).toEqual(newer);
+    }),
+  );
+
+  it.effect("does not let an in-flight stale response resurrect deleted cached detail", () =>
+    Effect.gen(function* () {
+      let stored = Option.some<ScheduleDetail>({ ...detail, revision: 2 });
+      const cache = {
+        loadScheduleDetail: () => Effect.succeed(stored),
+        saveScheduleDetail: (_environmentId: EnvironmentId, value: ScheduleDetail) =>
+          Effect.sync(() => {
+            stored = Option.some(value);
+          }),
+        removeScheduleDetail: () =>
+          Effect.sync(() => {
+            stored = Option.none();
+          }),
+      };
+
+      yield* removePersistedScheduleDetail(cache, environmentId, scheduleId, 3);
+      yield* persistScheduleDetailIfNewer(cache, environmentId, {
+        ...detail,
+        name: "Stale response",
+        revision: 2,
+      });
+      expect(Option.isNone(stored)).toBe(true);
+
+      const recreated = { ...detail, name: "Recreated", revision: 4 };
+      yield* persistScheduleDetailIfNewer(cache, environmentId, recreated);
+      expect(Option.getOrThrow(stored)).toEqual(recreated);
+
+      yield* removePersistedScheduleDetail(cache, environmentId, scheduleId, 3);
+      expect(Option.getOrThrow(stored)).toEqual(recreated);
+    }),
+  );
 });
 
 describe("createScheduleEnvironmentAtoms", () => {

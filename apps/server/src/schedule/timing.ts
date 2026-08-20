@@ -2,6 +2,7 @@ import * as Cron from "effect/Cron";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import type { ScheduleTiming } from "@t3tools/contracts";
 
 const MINIMUM_RECURRENCE_MS = 5 * 60 * 1_000;
@@ -9,18 +10,32 @@ const PREVIEW_COUNT = 3;
 const VALIDATION_OCCURRENCE_COUNT = 512;
 const MAX_EXACT_SKIPPED_OCCURRENCE_COUNT = 10_000;
 
+const ScheduleTimeZone = Schema.String.check(
+  Schema.makeFilter(
+    (timeZone) =>
+      Option.isSome(DateTime.zoneFromString(timeZone)) || `Invalid IANA time zone: ${timeZone}`,
+  ),
+);
+const FiveFieldCronExpression = Schema.String.check(
+  Schema.makeFilter(
+    (expression) =>
+      expression.trim().split(/\s+/).length === 5 ||
+      "Recurring Schedules require a standard five-field cron expression.",
+  ),
+);
+const ScheduleInstant = Schema.String.check(
+  Schema.makeFilter((value) => Option.isSome(DateTime.make(value)) || "Invalid Schedule instant."),
+);
+const decodeTimeZone = Schema.decodeUnknownSync(ScheduleTimeZone);
+const decodeCronExpression = Schema.decodeUnknownSync(FiveFieldCronExpression);
+const decodeScheduleInstant = Schema.decodeUnknownSync(ScheduleInstant);
+
 function assertTimeZone(timeZone: string): void {
-  if (Option.isNone(DateTime.zoneFromString(timeZone))) {
-    throw new Error(`Invalid IANA time zone: ${timeZone}`);
-  }
+  decodeTimeZone(timeZone);
 }
 
 function parseCron(expression: string, timeZone: string): Cron.Cron {
-  const segments = expression.trim().split(/\s+/);
-  if (segments.length !== 5) {
-    throw new Error("Recurring Schedules require a standard five-field cron expression.");
-  }
-  const parsed = Cron.parse(expression, timeZone);
+  const parsed = Cron.parse(decodeCronExpression(expression), timeZone);
   if (Result.isFailure(parsed)) {
     throw new Error(parsed.failure.message);
   }
@@ -72,19 +87,17 @@ export function previewScheduleTiming(
   timing: ScheduleTiming,
   timeZone: string,
   after: string,
+  options?: { readonly allowPastOneTime?: boolean },
 ): ReadonlyArray<string> {
   assertTimeZone(timeZone);
-  const afterDate = Option.getOrUndefined(DateTime.make(after));
-  if (afterDate === undefined) {
-    throw new Error("The Schedule comparison time is invalid.");
-  }
+  const afterDate = DateTime.makeUnsafe(decodeScheduleInstant(after));
 
   if (timing.type === "one-time") {
-    const runAt = Option.getOrUndefined(DateTime.make(timing.runAt));
-    if (runAt === undefined) {
-      throw new Error("The one-time Schedule value is invalid.");
-    }
-    if (DateTime.toEpochMillis(runAt) <= DateTime.toEpochMillis(afterDate)) {
+    const runAt = DateTime.makeUnsafe(decodeScheduleInstant(timing.runAt));
+    if (
+      !options?.allowPastOneTime &&
+      DateTime.toEpochMillis(runAt) <= DateTime.toEpochMillis(afterDate)
+    ) {
       throw new Error("A one-time Schedule must use a future time.");
     }
     return [DateTime.formatIso(runAt)];

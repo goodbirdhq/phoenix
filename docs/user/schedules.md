@@ -38,7 +38,7 @@ overlap, and scheduled work does not block manually started work.
 
 If an environment was offline, it catches up after restarting. For each recurring Schedule, only
 its newest missed Occurrence is retained; older missed times are summarized instead of launching a
-backlog. Retained work from different Schedules starts oldest-first.
+set of overdue Occurrences. Retained work from different Schedules starts oldest-first.
 
 ## Manage a Schedule
 

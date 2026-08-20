@@ -49,14 +49,6 @@ function cycle<T>(items: readonly T[], current: T): T {
   return items[(index + 1) % items.length]!;
 }
 
-function nextOccurrenceLabel(value: string | null): string {
-  if (value === null) return "No upcoming occurrence";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
-}
-
 export function SchedulesRouteScreen() {
   const navigation = useNavigation();
   const { environments, isLoading, refresh } = useMobileScheduleOverview();
@@ -327,8 +319,13 @@ function ScheduleListRow(props: { readonly row: ScheduleRow; readonly onPress: (
             {props.row.timingLabel}
           </Text>
           <Text className="text-sm text-foreground-muted" numberOfLines={1}>
-            {nextOccurrenceLabel(props.row.nextOccurrenceAt)}
+            {props.row.nextOccurrenceLabel}
           </Text>
+          {props.row.latestHistoryLabel ? (
+            <Text className="text-xs text-foreground-tertiary" numberOfLines={1}>
+              {props.row.latestHistoryLabel}
+            </Text>
+          ) : null}
           {props.row.offline ? (
             <Text className="text-xs text-foreground-tertiary">
               Unavailable · read-only cached data

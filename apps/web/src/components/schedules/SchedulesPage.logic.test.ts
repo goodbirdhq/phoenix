@@ -16,6 +16,7 @@ import {
   resolveScheduleWorkspaceModeDefault,
   schedulePauseFieldLabel,
   scheduleFailureAttentionVersion,
+  shouldOpenScheduleCreateRequest,
   scheduleWorktreeCapability,
 } from "./SchedulesPage.logic";
 
@@ -165,6 +166,12 @@ describe("Schedule editor logic", () => {
   it("uses mode-appropriate pause copy", () => {
     expect(schedulePauseFieldLabel(false)).toBe("Create Paused");
     expect(schedulePauseFieldLabel(true)).toBeNull();
+  });
+
+  it("opens Create again when a new command-palette request arrives on the same route", () => {
+    expect(shouldOpenScheduleCreateRequest(null, "first-request")).toBe(true);
+    expect(shouldOpenScheduleCreateRequest("first-request", "first-request")).toBe(false);
+    expect(shouldOpenScheduleCreateRequest("first-request", "second-request")).toBe(true);
   });
 });
 

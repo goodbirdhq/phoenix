@@ -3,6 +3,7 @@ import type * as DateTime from "effect/DateTime";
 import * as DateTimeRuntime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
+import type { ScheduleTiming } from "@t3tools/contracts";
 
 export interface CronTimingInspection {
   readonly valid: boolean;
@@ -161,4 +162,69 @@ export function zonedWallTimeToInstant(wallTime: string, timeZone: string): Zone
     instant: DateTimeRuntime.formatIso(zoned.value),
     error: null,
   };
+}
+
+export function currentScheduleTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+export function scheduleTimeZoneIsValid(timeZone: string): boolean {
+  try {
+    Intl.DateTimeFormat("en", { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function scheduleWallTimeInputForInstant(instant: string, timeZone: string): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(DateTimeRuntime.toDate(DateTimeRuntime.makeUnsafe(instant)));
+    const read = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value ?? "";
+    const input = `${read("year")}-${read("month")}-${read("day")}T${read("hour")}:${read("minute")}`;
+    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/u.test(input) ? input : null;
+  } catch {
+    return null;
+  }
+}
+
+export function defaultScheduleOneTimeInput(
+  currentInstant: DateTime.DateTime.Input,
+  timeZone = currentScheduleTimeZone(),
+): string {
+  const runAt = DateTimeRuntime.makeUnsafe(currentInstant).pipe(
+    DateTimeRuntime.addDuration("1 hour"),
+    DateTimeRuntime.formatIso,
+  );
+  const input = scheduleWallTimeInputForInstant(runAt, timeZone);
+  if (input === null) throw new RangeError(`Could not format a Schedule time in ${timeZone}.`);
+  return input;
+}
+
+export function formatScheduleTimestamp(value: string | null, timeZone?: string): string {
+  if (value === null) return "—";
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      ...(timeZone ? { timeZone } : {}),
+    }).format(DateTimeRuntime.toDate(DateTimeRuntime.makeUnsafe(value)));
+  } catch {
+    return value;
+  }
+}
+
+export function formatScheduleTiming(timing: ScheduleTiming, timeZone: string): string {
+  return timing.type === "cron"
+    ? `${timing.expression} · ${timeZone}`
+    : `Once · ${formatScheduleTimestamp(timing.runAt, timeZone)} · ${timeZone}`;
 }

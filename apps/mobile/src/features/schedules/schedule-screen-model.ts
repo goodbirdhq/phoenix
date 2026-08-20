@@ -1,11 +1,27 @@
-import { inspectCronTiming } from "@t3tools/client-runtime/schedules";
-import type {
-  ScheduleExecution,
-  ScheduleHistoryEntry,
-  ScheduleState,
-  ScheduleSummary,
-  ScheduleTiming,
-  VcsRef,
+import {
+  aggregateSchedules,
+  canSelectScheduleWorkspaceMode,
+  filterScheduleRows,
+  formatScheduleTimestamp,
+  formatScheduleTiming,
+  inspectCronTiming,
+  latestScheduleHistoryListText,
+  mergeOlderScheduleHistory,
+  preferredScheduleBaseBranch,
+  resolveScheduleWorkspaceModeDefault,
+  scheduleBaseBranch,
+  scheduleHistoryEntryKey,
+  scheduleTimeZoneIsValid,
+  scheduleWallTimeInputForInstant,
+} from "@t3tools/client-runtime/schedules";
+import {
+  EnvironmentId,
+  ProjectId,
+  type ScheduleExecution,
+  type ScheduleHistoryEntry,
+  type ScheduleState,
+  type ScheduleSummary,
+  type ScheduleTiming,
 } from "@t3tools/contracts";
 
 export interface MobileSchedule extends ScheduleSummary {
@@ -42,6 +58,8 @@ export interface ScheduleRow {
   readonly state: ScheduleState;
   readonly timingLabel: string;
   readonly nextOccurrenceAt: string | null;
+  readonly nextOccurrenceLabel: string;
+  readonly latestHistoryLabel: string | null;
   readonly offline: boolean;
   readonly readOnly: boolean;
   readonly hasFailureAttention: boolean;
@@ -69,45 +87,19 @@ export interface ScheduleDraftErrors {
 }
 
 export function defaultScheduleWorkspaceMode(isGit: boolean | null): "local" | "worktree" | null {
-  return isGit === null ? null : isGit ? "worktree" : "local";
+  return isGit === null ? null : resolveScheduleWorkspaceModeDefault(isGit);
 }
 
-export function canSelectScheduleWorkspaceMode(
-  isGit: boolean | null,
-  workspaceMode: "local" | "worktree",
-): boolean {
-  return workspaceMode === "local" || isGit === true;
+export { canSelectScheduleWorkspaceMode, preferredScheduleBaseBranch, scheduleBaseBranch };
+
+function timestampLabel(value: string, timeZone: string): string {
+  return `${formatScheduleTimestamp(value, timeZone)} · ${timeZone}`;
 }
 
-export function scheduleBaseBranch(
-  workspaceMode: "local" | "worktree",
-  baseBranch: string,
-): string | null {
-  return workspaceMode === "worktree" ? baseBranch.trim() || null : null;
-}
-
-export function preferredScheduleBaseBranch(
-  refs: readonly Pick<VcsRef, "name" | "current" | "isDefault" | "isRemote">[],
-): string | null {
-  return (
-    refs.find((ref) => ref.isDefault && ref.isRemote === true)?.name ??
-    refs.find((ref) => ref.isDefault)?.name ??
-    refs.find((ref) => ref.current)?.name ??
-    null
-  );
-}
-
-function timingLabel(timing: ScheduleTiming, timeZone: string): string {
-  if (timing.type === "cron") return `${timing.expression} · ${timeZone}`;
-  try {
-    return `Once · ${new Intl.DateTimeFormat(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-      timeZone,
-    }).format(new Date(timing.runAt))} · ${timeZone}`;
-  } catch {
-    return `Once · ${timing.runAt} · ${timeZone}`;
-  }
+function latestHistoryLabel(entry: ScheduleHistoryEntry | null, timeZone: string): string | null {
+  return entry === null
+    ? null
+    : latestScheduleHistoryListText(entry, (value) => timestampLabel(value, timeZone));
 }
 
 export function buildScheduleRows(input: {
@@ -115,41 +107,61 @@ export function buildScheduleRows(input: {
   readonly schedules: readonly MobileSchedule[];
   readonly filters: ScheduleFilters;
 }): readonly ScheduleRow[] {
-  const environments = new Map(
-    input.environments.map((environment) => [environment.environmentId, environment]),
+  const environmentsById = new Map(
+    input.environments.map((environment) => [
+      EnvironmentId.make(environment.environmentId),
+      environment,
+    ]),
   );
+  const rows = aggregateSchedules(
+    input.environments.map((environment) => ({
+      environmentId: EnvironmentId.make(environment.environmentId),
+      environmentLabel: environment.label,
+      source: environment.online ? ("live" as const) : ("cache" as const),
+      online: environment.online,
+      supportsSchedules: true,
+      snapshotSequence: 0,
+      schedules: input.schedules.filter(
+        (schedule) => schedule.environmentId === environment.environmentId,
+      ),
+    })),
+  );
+  const filtered = filterScheduleRows(rows, {
+    environmentIds: new Set(
+      input.filters.environmentId === null ? [] : [EnvironmentId.make(input.filters.environmentId)],
+    ),
+    projectIds: new Set(
+      input.filters.projectId === null ? [] : [ProjectId.make(input.filters.projectId)],
+    ),
+    states: new Set(input.filters.state === null ? [] : [input.filters.state]),
+    failures: input.filters.failuresOnly ? "only" : "all",
+  });
 
-  return input.schedules
-    .flatMap((schedule): readonly ScheduleRow[] => {
-      const environment = environments.get(schedule.environmentId);
-      if (!environment) return [];
+  return filtered
+    .map((schedule): ScheduleRow => {
+      const environment = environmentsById.get(schedule.environmentId)!;
       const project = environment.projects.find(
         (candidate) => candidate.projectId === schedule.projectId,
       );
-      const filters = input.filters;
-      if (filters.environmentId !== null && schedule.environmentId !== filters.environmentId)
-        return [];
-      if (filters.projectId !== null && schedule.projectId !== filters.projectId) return [];
-      if (filters.state !== null && schedule.state !== filters.state) return [];
-      if (filters.failuresOnly && schedule.state !== "failed" && !schedule.unacknowledgedFailure)
-        return [];
-
-      return [
-        {
-          scheduleId: schedule.id,
-          environmentId: schedule.environmentId,
-          environmentLabel: environment.label,
-          projectId: schedule.projectId,
-          projectLabel: project?.title ?? "Unknown project",
-          name: schedule.name,
-          state: schedule.state,
-          timingLabel: timingLabel(schedule.timing, schedule.timeZone),
-          nextOccurrenceAt: schedule.nextOccurrenceAt,
-          offline: !environment.online,
-          readOnly: !environment.online,
-          hasFailureAttention: schedule.unacknowledgedFailure,
-        },
-      ];
+      return {
+        scheduleId: schedule.id,
+        environmentId: schedule.environmentId,
+        environmentLabel: environment.label,
+        projectId: schedule.projectId,
+        projectLabel: project?.title ?? "Unknown project",
+        name: schedule.name,
+        state: schedule.state,
+        timingLabel: formatScheduleTiming(schedule.timing, schedule.timeZone),
+        nextOccurrenceAt: schedule.nextOccurrenceAt,
+        nextOccurrenceLabel:
+          schedule.nextOccurrenceAt === null
+            ? "No upcoming occurrence"
+            : `Next · ${timestampLabel(schedule.nextOccurrenceAt, schedule.timeZone)}`,
+        latestHistoryLabel: latestHistoryLabel(schedule.latestHistory, schedule.timeZone),
+        offline: !environment.online,
+        readOnly: !environment.online,
+        hasFailureAttention: schedule.unacknowledgedFailure,
+      };
     })
     .sort((left, right) => {
       const leftTime = left.nextOccurrenceAt ?? "9999";
@@ -158,19 +170,11 @@ export function buildScheduleRows(input: {
     });
 }
 
-function timeZoneIsValid(timeZone: string): boolean {
-  try {
-    Intl.DateTimeFormat("en", { timeZone });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function validateScheduleDraft(
   draft: ScheduleDraft,
   environments: readonly ScheduleEnvironment[],
   now: Date = new Date(),
+  editSource?: Pick<ScheduleSummary, "state" | "timing">,
 ): { readonly valid: boolean; readonly errors: ScheduleDraftErrors } {
   const errors: Record<string, string> = {};
   const environment = environments.find(
@@ -184,7 +188,7 @@ export function validateScheduleDraft(
   if (!environment) errors.environment = "Choose an environment.";
   else if (!environment.online) errors.environment = "Connect this environment to make changes.";
   if (!project) errors.project = "Choose a project.";
-  const timeZoneValid = timeZoneIsValid(draft.timeZone);
+  const timeZoneValid = scheduleTimeZoneIsValid(draft.timeZone);
   const cronInspection =
     draft.timing.type === "cron"
       ? inspectCronTiming({
@@ -199,7 +203,15 @@ export function validateScheduleDraft(
 
   if (draft.timing.type === "one-time") {
     const runAt = new Date(draft.timing.runAt);
-    if (!Number.isFinite(runAt.getTime()) || runAt.getTime() <= now.getTime()) {
+    const keepsInactiveOneTimeOccurrence =
+      editSource !== undefined &&
+      editSource.state !== "enabled" &&
+      editSource.timing.type === "one-time" &&
+      editSource.timing.runAt === draft.timing.runAt;
+    if (
+      !Number.isFinite(runAt.getTime()) ||
+      (runAt.getTime() <= now.getTime() && !keepsInactiveOneTimeOccurrence)
+    ) {
       errors.timing = "Choose a future time.";
     }
   } else if (cronInspection !== null && !cronInspection.valid && errors.timeZone === undefined) {
@@ -236,51 +248,8 @@ export function previewCronOccurrences(
   return inspectCronTiming({ expression, timeZone, after }).occurrences;
 }
 
-export function wallTimeInputForInstant(instant: string, timeZone: string): string | null {
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date(instant));
-    const read = (type: Intl.DateTimeFormatPartTypes) =>
-      parts.find((part) => part.type === type)?.value ?? "";
-    const input = `${read("year")}-${read("month")}-${read("day")}T${read("hour")}:${read("minute")}`;
-    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/u.test(input) ? input : null;
-  } catch {
-    return null;
-  }
-}
+export const wallTimeInputForInstant = scheduleWallTimeInputForInstant;
 
 export const MAX_VISIBLE_SCHEDULE_HISTORY = 150;
 
-export function scheduleHistoryEntryKey(entry: ScheduleHistoryEntry): string {
-  return entry.type === "skipped"
-    ? `skipped:${entry.recordedAt}`
-    : `${entry.type}:${entry.occurrenceId}`;
-}
-
-export function mergeOlderScheduleHistory(input: {
-  readonly currentOlder: readonly ScheduleHistoryEntry[];
-  readonly page: readonly ScheduleHistoryEntry[];
-  readonly recent: readonly ScheduleHistoryEntry[];
-  readonly maximum?: number;
-}): readonly ScheduleHistoryEntry[] {
-  const available = Math.max(
-    0,
-    (input.maximum ?? MAX_VISIBLE_SCHEDULE_HISTORY) - input.recent.length,
-  );
-  const recentKeys = new Set(input.recent.map(scheduleHistoryEntryKey));
-  const seen = new Set<string>();
-  const older = [...input.page, ...input.currentOlder].filter((entry) => {
-    const key = scheduleHistoryEntryKey(entry);
-    if (recentKeys.has(key) || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  return available === 0 ? [] : older.slice(-available);
-}
+export { mergeOlderScheduleHistory, scheduleHistoryEntryKey };

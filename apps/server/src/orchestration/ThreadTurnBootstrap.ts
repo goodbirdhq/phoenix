@@ -24,6 +24,7 @@ import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts"
 export type ThreadTurnStartCommand = Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
 
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const isSetupScriptActivityPayload = Schema.is(Schema.Struct({ idempotencyKey: Schema.String }));
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -165,9 +166,7 @@ export function setupScriptRecoveryState(
   const matching = activities.filter(
     ({ kind, payload }) =>
       kind.startsWith("setup-script.") &&
-      typeof payload === "object" &&
-      payload !== null &&
-      "idempotencyKey" in payload &&
+      isSetupScriptActivityPayload(payload) &&
       payload.idempotencyKey === idempotencyKey,
   );
   if (

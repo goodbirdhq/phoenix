@@ -318,65 +318,6 @@ export const ScheduleDomainEvent = Schema.Union([
 ]);
 export type ScheduleDomainEvent = typeof ScheduleDomainEvent.Type;
 
-export function evolveScheduleDefinition(
-  current: ScheduleStoredDefinition | null,
-  event: ScheduleDomainEvent,
-): ScheduleStoredDefinition | null {
-  if (event.type === "schedule.created" || event.type === "schedule.rebased") {
-    return event.definition;
-  }
-  if (event.type === "schedule.deleted") return null;
-  if (current === null) throw new Error(`Cannot apply ${event.type} before schedule.created`);
-  switch (event.type) {
-    case "schedule.updated":
-      return {
-        ...current,
-        projectId: event.command.projectId,
-        name: event.command.name,
-        prompt: event.command.prompt,
-        timing: event.command.timing,
-        timeZone: event.command.timeZone,
-        execution: event.command.execution,
-        state: event.state,
-        nextOccurrenceAt: event.nextOccurrenceAt,
-        updatedAt: event.updatedAt,
-      };
-    case "schedule.paused":
-      return { ...current, state: "paused", nextOccurrenceAt: null, updatedAt: event.updatedAt };
-    case "schedule.resumed":
-      return {
-        ...current,
-        state: "enabled",
-        nextOccurrenceAt: event.nextOccurrenceAt,
-        updatedAt: event.updatedAt,
-      };
-    case "schedule.failures-acknowledged":
-      return { ...current, unacknowledgedFailure: false, updatedAt: event.updatedAt };
-    case "schedule.occurrence-reserved":
-      return event.source === "manual"
-        ? current
-        : {
-            ...current,
-            nextOccurrenceAt: event.nextOccurrenceAt,
-            updatedAt: event.updatedAt,
-          };
-    case "schedule.occurrence-triggered":
-    case "schedule.occurrence-failed":
-      return {
-        ...current,
-        state: event.state,
-        ...(event.type === "schedule.occurrence-failed" && event.nextOccurrenceAt !== undefined
-          ? { nextOccurrenceAt: event.nextOccurrenceAt }
-          : {}),
-        latestHistory: event.entry,
-        unacknowledgedFailure: event.unacknowledgedFailure,
-        updatedAt: event.updatedAt,
-      };
-    case "schedule.occurrences-skipped":
-      return { ...current, latestHistory: event.entry, updatedAt: event.updatedAt };
-  }
-}
-
 export const ScheduleDispatchResult = Schema.Struct({
   sequence: NonNegativeInt,
   scheduleId: ScheduleId,
@@ -401,6 +342,7 @@ export const ScheduleOperationFailure = Schema.Literals([
   "command_conflict",
   "invalid_timing",
   "invalid_time_zone",
+  "invalid_state",
   "invalid_workspace",
   "project_not_found",
   "provider_unavailable",

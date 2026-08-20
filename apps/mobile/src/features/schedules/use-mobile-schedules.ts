@@ -115,18 +115,6 @@ export function useScheduleDispatch() {
   return useCallback(
     async (environmentId: EnvironmentId, command: ScheduleCommand) => {
       const result = await dispatch({ environmentId, input: command });
-      if (result._tag === "Success" && command.type === "schedule.delete") {
-        void runtime
-          .runPromise(
-            EnvironmentCacheStore.pipe(
-              Effect.flatMap(
-                (cache) =>
-                  cache.removeScheduleDetail?.(environmentId, command.scheduleId) ?? Effect.void,
-              ),
-            ),
-          )
-          .catch(() => undefined);
-      }
       return result._tag === "Success"
         ? { ok: true as const }
         : { ok: false as const, error: errorMessage(result.cause) };
@@ -189,15 +177,6 @@ export function useMobileScheduleDetail(
   useEffect(() => {
     if (liveDetail === null || environmentId === null) return;
     setCachedDetail(liveDetail);
-    void runtime
-      .runPromise(
-        EnvironmentCacheStore.pipe(
-          Effect.flatMap(
-            (cache) => cache.saveScheduleDetail?.(environmentId, liveDetail) ?? Effect.void,
-          ),
-        ),
-      )
-      .catch(() => undefined);
   }, [environmentId, liveDetail]);
 
   const refresh = useCallback(() => {

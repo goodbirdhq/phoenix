@@ -1,9 +1,14 @@
 import {
   aggregateSchedules,
   cronBuilderExpression,
+  currentScheduleTimeZone,
+  defaultScheduleOneTimeInput,
   filterScheduleRows,
+  formatScheduleTimestamp,
+  formatScheduleTiming,
   inspectCronTiming,
   scheduleMutationCapability,
+  scheduleWallTimeInputForInstant,
   zonedWallTimeToInstant,
   type AggregatedScheduleRow,
   type ScheduleFilters,
@@ -72,6 +77,7 @@ import {
   scheduleFailureAttentionVersion,
   scheduleHistoryEntryKey,
   schedulePauseFieldLabel,
+  shouldOpenScheduleCreateRequest,
   scheduleWorktreeCapability,
 } from "./SchedulesPage.logic";
 
@@ -98,32 +104,6 @@ interface ScheduleEditorDraft {
   readonly createPaused: boolean;
 }
 
-function browserTimeZone(): string {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-}
-
-function defaultRunAtInput(): string {
-  const next = new Date(Date.now() + 60 * 60 * 1_000);
-  next.setSeconds(0, 0);
-  const offset = next.getTimezoneOffset() * 60_000;
-  return new Date(next.getTime() - offset).toISOString().slice(0, 16);
-}
-
-function wallTimeInputForInstant(instant: string, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(instant));
-  const read = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value ?? "";
-  return `${read("year")}-${read("month")}-${read("day")}T${read("hour")}:${read("minute")}`;
-}
-
 function emptyDraft(environmentId = ""): ScheduleEditorDraft {
   return {
     name: "",
@@ -131,9 +111,9 @@ function emptyDraft(environmentId = ""): ScheduleEditorDraft {
     environmentId,
     projectId: "",
     timingType: "one-time",
-    runAt: defaultRunAtInput(),
+    runAt: defaultScheduleOneTimeInput(Date.now()),
     cron: "0 9 * * 1-5",
-    timeZone: browserTimeZone(),
+    timeZone: currentScheduleTimeZone(),
     modelSelection: null,
     runtimeMode: "full-access",
     interactionMode: "default",
@@ -142,26 +122,6 @@ function emptyDraft(environmentId = ""): ScheduleEditorDraft {
     baseBranch: "origin/HEAD",
     createPaused: false,
   };
-}
-
-function formatTiming(row: AggregatedScheduleRow): string {
-  if (row.timing.type === "one-time") {
-    return new Intl.DateTimeFormat(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-      timeZone: row.timeZone,
-    }).format(new Date(row.timing.runAt));
-  }
-  return `${row.timing.expression} · ${row.timeZone}`;
-}
-
-function formatTimestamp(value: string | null, timeZone?: string): string {
-  if (value === null) return "—";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-    ...(timeZone ? { timeZone } : {}),
-  }).format(new Date(value));
 }
 
 function commandFailure(result: { readonly _tag: string }): boolean {
@@ -178,12 +138,13 @@ function notifyCommandFailure(title: string): void {
   );
 }
 
-export function SchedulesPage({ openCreateInitially = false }: { openCreateInitially?: boolean }) {
+export function SchedulesPage({ openCreateRequest = null }: { openCreateRequest?: string | null }) {
   const { environments } = useWebEnvironmentSchedules();
   const projects = useProjects();
   const dispatch = useAtomCommand(scheduleEnvironment.dispatch);
   const navigate = useNavigate();
-  const [showCreate, setShowCreate] = useState(openCreateInitially);
+  const [showCreate, setShowCreate] = useState(openCreateRequest !== null);
+  const previousCreateRequest = useRef(openCreateRequest);
   const [editingTarget, setEditingTarget] = useState<{
     readonly environmentId: EnvironmentId;
     readonly scheduleId: ScheduleId;
@@ -195,6 +156,14 @@ export function SchedulesPage({ openCreateInitially = false }: { openCreateIniti
   const [stateFilter, setStateFilter] = useState<ScheduleState | "">("");
   const [failureFilter, setFailureFilter] = useState<ScheduleFilters["failures"]>("all");
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    if (!shouldOpenScheduleCreateRequest(previousCreateRequest.current, openCreateRequest)) return;
+    previousCreateRequest.current = openCreateRequest;
+    setEditingTarget(null);
+    setDraft(emptyDraft());
+    setShowCreate(true);
+  }, [openCreateRequest]);
 
   const projections = useMemo(
     () =>
@@ -388,8 +357,8 @@ export function SchedulesPage({ openCreateInitially = false }: { openCreateIniti
       timingType: row.timing.type,
       runAt:
         row.timing.type === "one-time"
-          ? wallTimeInputForInstant(row.timing.runAt, row.timeZone)
-          : defaultRunAtInput(),
+          ? (scheduleWallTimeInputForInstant(row.timing.runAt, row.timeZone) ?? row.timing.runAt)
+          : defaultScheduleOneTimeInput(Date.now()),
       cron: row.timing.type === "cron" ? row.timing.expression : "0 9 * * 1-5",
       timeZone: row.timeZone,
       modelSelection: row.execution.modelSelection,
@@ -413,8 +382,8 @@ export function SchedulesPage({ openCreateInitially = false }: { openCreateIniti
       timingType: row.timing.type,
       runAt:
         row.timing.type === "one-time"
-          ? wallTimeInputForInstant(row.timing.runAt, row.timeZone)
-          : defaultRunAtInput(),
+          ? (scheduleWallTimeInputForInstant(row.timing.runAt, row.timeZone) ?? row.timing.runAt)
+          : defaultScheduleOneTimeInput(Date.now()),
       cron: row.timing.type === "cron" ? row.timing.expression : "0 9 * * 1-5",
       timeZone: row.timeZone,
       modelSelection: row.execution.modelSelection,
@@ -501,7 +470,7 @@ export function SchedulesPage({ openCreateInitially = false }: { openCreateIniti
                   label="Failures"
                 >
                   <option value="all">All</option>
-                  <option value="only">Has unacknowledged failure</option>
+                  <option value="only">Has failure</option>
                   <option value="without">Without failure</option>
                 </FilterSelect>
               </div>
@@ -540,7 +509,7 @@ export function SchedulesPage({ openCreateInitially = false }: { openCreateIniti
                     const project = projectByKey.get(`${row.environmentId}:${row.projectId}`);
                     const latest = row.latestHistory
                       ? latestScheduleHistoryListText(row.latestHistory, (value) =>
-                          formatTimestamp(value, row.timeZone),
+                          formatScheduleTimestamp(value, row.timeZone),
                         )
                       : null;
                     return (
@@ -566,7 +535,7 @@ export function SchedulesPage({ openCreateInitially = false }: { openCreateIniti
                           </span>
                           <span className="mt-1 block truncate text-xs text-muted-foreground">
                             {row.environmentLabel} · {project?.title ?? "Missing Project"} ·{" "}
-                            {formatTiming(row)}
+                            {formatScheduleTiming(row.timing, row.timeZone)}
                           </span>
                           <span className="mt-1 block truncate text-xs text-muted-foreground">
                             {latest ? `Latest: ${latest}` : "Latest: No Occurrences yet"}
@@ -575,7 +544,7 @@ export function SchedulesPage({ openCreateInitially = false }: { openCreateIniti
                         <span className="text-xs text-muted-foreground sm:text-right">
                           <span className="block">Next</span>
                           <span className="block text-foreground">
-                            {formatTimestamp(row.nextOccurrenceAt, row.timeZone)}
+                            {formatScheduleTimestamp(row.nextOccurrenceAt, row.timeZone)}
                           </span>
                         </span>
                       </button>
@@ -901,7 +870,7 @@ function ScheduleEditor(props: {
               <p className="mt-1 text-xs text-muted-foreground">
                 Next:{" "}
                 {cronInspection.occurrences
-                  .map((value) => formatTimestamp(value, props.draft.timeZone))
+                  .map((value) => formatScheduleTimestamp(value, props.draft.timeZone))
                   .join(" · ")}
               </p>
             ) : null}
@@ -1084,7 +1053,7 @@ function ScheduleDetailCard(props: {
           <dt className="text-muted-foreground">State</dt>
           <dd>{props.row.state}</dd>
           <dt className="text-muted-foreground">Timing</dt>
-          <dd>{formatTiming(props.row)}</dd>
+          <dd>{formatScheduleTiming(props.row.timing, props.row.timeZone)}</dd>
           <dt className="text-muted-foreground">Model</dt>
           <dd>{props.row.execution.modelSelection.model}</dd>
           <dt className="text-muted-foreground">Workspace</dt>
@@ -1232,9 +1201,9 @@ function ScheduleHistoryList(props: {
                     {entry.count > 1 ? ` (${entry.count} times)` : ""}
                   </p>
                   <p className="text-muted-foreground">
-                    {formatTimestamp(entry.firstFailedAt, props.timeZone)}
+                    {formatScheduleTimestamp(entry.firstFailedAt, props.timeZone)}
                     {entry.count > 1
-                      ? ` – ${formatTimestamp(entry.lastFailedAt, props.timeZone)}`
+                      ? ` – ${formatScheduleTimestamp(entry.lastFailedAt, props.timeZone)}`
                       : ""}
                   </p>
                 </div>
@@ -1243,14 +1212,14 @@ function ScheduleHistoryList(props: {
                 <p className="mt-1 text-muted-foreground">
                   {entry.countIsLowerBound ? "At least " : ""}
                   {entry.count.toLocaleString("en-US")} Occurrences ·{" "}
-                  {formatTimestamp(entry.firstScheduledFor, props.timeZone)} –{" "}
-                  {formatTimestamp(entry.lastScheduledFor, props.timeZone)}
+                  {formatScheduleTimestamp(entry.firstScheduledFor, props.timeZone)} –{" "}
+                  {formatScheduleTimestamp(entry.lastScheduledFor, props.timeZone)}
                 </p>
               ) : null}
               {entry.type === "triggered" ? (
                 <div className="mt-1 space-y-1">
                   <p className="text-muted-foreground">
-                    {formatTimestamp(entry.triggeredAt, props.timeZone)}
+                    {formatScheduleTimestamp(entry.triggeredAt, props.timeZone)}
                   </p>
                   <Button
                     size="xs"

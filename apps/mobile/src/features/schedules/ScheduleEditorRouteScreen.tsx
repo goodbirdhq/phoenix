@@ -1,5 +1,9 @@
 import { type StaticScreenProps, useNavigation } from "@react-navigation/native";
-import { zonedWallTimeToInstant } from "@t3tools/client-runtime/schedules";
+import {
+  currentScheduleTimeZone,
+  defaultScheduleOneTimeInput,
+  zonedWallTimeToInstant,
+} from "@t3tools/client-runtime/schedules";
 import {
   CommandId,
   EnvironmentId,
@@ -64,17 +68,6 @@ const CRON_PRESETS = [
   { label: "Daily", expression: "0 9 * * *" },
   { label: "Weekly", expression: "0 9 * * 1" },
 ] as const;
-
-function defaultOneTimeInput(): string {
-  const value = new Date(Date.now() + 60 * 60_000);
-  value.setSeconds(0, 0);
-  const offset = value.getTimezoneOffset() * 60_000;
-  return new Date(value.getTime() - offset).toISOString().slice(0, 16);
-}
-
-function browserTimeZone(): string {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-}
 
 function ChoiceRow<T extends string>(props: {
   readonly choices: readonly { readonly value: T; readonly label: string }[];
@@ -196,10 +189,10 @@ function ScheduleEditor(props: {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [timingType, setTimingType] = useState<"one-time" | "cron">("one-time");
-  const [runAtInput, setRunAtInput] = useState(defaultOneTimeInput);
+  const [runAtInput, setRunAtInput] = useState(() => defaultScheduleOneTimeInput(Date.now()));
   const [cron, setCron] = useState("0 9 * * *");
   const [manualCron, setManualCron] = useState(false);
-  const [timeZone, setTimeZone] = useState(browserTimeZone);
+  const [timeZone, setTimeZone] = useState(currentScheduleTimeZone);
   const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null);
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>("full-access");
   const [interactionMode, setInteractionMode] = useState<ProviderInteractionMode>("default");
@@ -332,6 +325,10 @@ function ScheduleEditor(props: {
                 : null,
           })),
         })),
+        new Date(),
+        props.mode === "edit" && sourceDetail !== null
+          ? { state: sourceDetail.state, timing: sourceDetail.timing }
+          : undefined,
       )
     : { valid: false, errors: {} };
   const previews = timingType === "cron" ? previewCronOccurrences(cron, timeZone) : [];

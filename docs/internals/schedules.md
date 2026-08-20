@@ -38,7 +38,7 @@ Schedule. Older ticks become a compact skipped count and time range. Retained Oc
 Schedules are claimed oldest-first with stable Schedule creation order as the tie-breaker.
 
 Catch-up classifies due definitions and Triggers durable Occurrences in bounded pages, releasing
-mutation and Trigger permits between pages so commands can proceed. For a large recurring backlog,
+mutation and Trigger permits between pages so commands can proceed. For many overdue recurring Occurrences,
 exact retained-oldest ordering can require classifying every due Schedule before the first Trigger:
 the stored next-due instant is the first missed tick, while the retained candidate is the newest
 missed tick. Do not replace that safety frontier with page-local ordering, which can Trigger a newer

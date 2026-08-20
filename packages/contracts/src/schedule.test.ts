@@ -10,7 +10,6 @@ import {
   ScheduleHistoryPage,
   ScheduleId,
   ScheduleListStreamEvent,
-  evolveScheduleDefinition,
 } from "./schedule.ts";
 
 const execution = {
@@ -128,7 +127,7 @@ describe("Schedule contracts", () => {
     });
   });
 
-  it("rebuilds the stored definition by replaying typed domain events", () => {
+  it("decodes typed Schedule definition events", () => {
     const createdAt = "2026-08-19T08:00:00.000Z";
     const definition = {
       id: ScheduleId.make("schedule-replay"),
@@ -171,9 +170,7 @@ describe("Schedule contracts", () => {
       updatedAt: "2026-08-19T08:01:00.000Z",
     });
 
-    const rebuilt = [created, paused].reduce(evolveScheduleDefinition, null);
-    expect(rebuilt?.state).toBe("paused");
-    expect(rebuilt?.nextOccurrenceAt).toBeNull();
-    expect(rebuilt?.prompt).toBe("Check replay behavior.");
+    expect(created.type).toBe("schedule.created");
+    expect(paused.type).toBe("schedule.paused");
   });
 });

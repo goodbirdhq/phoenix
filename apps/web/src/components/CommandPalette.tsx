@@ -94,7 +94,7 @@ import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { getLatestThreadForProject, sortThreads } from "../lib/threadSort";
-import { cn, isMacPlatform, isWindowsPlatform, newProjectId } from "../lib/utils";
+import { cn, isMacPlatform, isWindowsPlatform, newProjectId, randomUUID } from "../lib/utils";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 import {
@@ -1644,7 +1644,7 @@ function OpenCommandPaletteDialog(props: {
     title: "Create Schedule",
     icon: <CalendarClockIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
-      await navigate({ to: "/schedules", search: { create: true } });
+      await navigate({ to: "/schedules", search: { create: randomUUID() } });
     },
   });
 

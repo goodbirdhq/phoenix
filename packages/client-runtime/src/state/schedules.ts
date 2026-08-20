@@ -7,6 +7,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as PartitionedSemaphore from "effect/PartitionedSemaphore";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -40,6 +41,64 @@ export interface ScheduleDetailQueryInput {
   /** Busts the detail atom when a newer environment Schedule projection is observed. */
   readonly revision?: number;
 }
+
+type ScheduleDetailCache = Pick<
+  EnvironmentCacheStore["Service"],
+  "loadScheduleDetail" | "saveScheduleDetail"
+>;
+
+const scheduleDetailPersistenceLock = PartitionedSemaphore.makeUnsafe<string>({ permits: 1 });
+const deletedScheduleRevision = new Map<string, number>();
+
+function scheduleDetailPersistenceKey(environmentId: EnvironmentId, scheduleId: string): string {
+  return `${environmentId}:${scheduleId}`;
+}
+
+export const persistScheduleDetailIfNewer = Effect.fn(
+  "EnvironmentScheduleState.persistDetailIfNewer",
+)(function* (
+  cache: ScheduleDetailCache,
+  environmentId: EnvironmentId,
+  detail: import("@t3tools/contracts").ScheduleDetail,
+) {
+  if (!cache.loadScheduleDetail || !cache.saveScheduleDetail) return;
+  const key = scheduleDetailPersistenceKey(environmentId, detail.id);
+  yield* scheduleDetailPersistenceLock.withPermit(key)(
+    Effect.gen(function* () {
+      const deletedAtRevision = deletedScheduleRevision.get(key);
+      if (deletedAtRevision !== undefined && deletedAtRevision >= detail.revision) return;
+      const persisted = yield* cache.loadScheduleDetail!(environmentId, detail.id);
+      if (Option.isSome(persisted) && persisted.value.revision > detail.revision) return;
+      yield* cache.saveScheduleDetail!(environmentId, detail);
+      if (deletedAtRevision !== undefined) deletedScheduleRevision.delete(key);
+    }),
+  );
+});
+
+export const removePersistedScheduleDetail = Effect.fn(
+  "EnvironmentScheduleState.removePersistedDetail",
+)(function* (
+  cache: Pick<EnvironmentCacheStore["Service"], "loadScheduleDetail" | "removeScheduleDetail">,
+  environmentId: EnvironmentId,
+  scheduleId: import("@t3tools/contracts").ScheduleId,
+  revision: number,
+) {
+  const key = scheduleDetailPersistenceKey(environmentId, scheduleId);
+  yield* scheduleDetailPersistenceLock.withPermit(key)(
+    Effect.gen(function* () {
+      const deletionRevision = Math.max(deletedScheduleRevision.get(key) ?? 0, revision);
+      const persisted = cache.loadScheduleDetail
+        ? yield* cache.loadScheduleDetail(environmentId, scheduleId)
+        : Option.none();
+      if (Option.isSome(persisted) && persisted.value.revision > deletionRevision) {
+        deletedScheduleRevision.delete(key);
+        return;
+      }
+      deletedScheduleRevision.set(key, deletionRevision);
+      if (cache.removeScheduleDetail) yield* cache.removeScheduleDetail(environmentId, scheduleId);
+    }),
+  );
+});
 
 const EMPTY_SCHEDULE_STATE: EnvironmentScheduleState = Object.freeze({
   snapshot: Option.none(),
@@ -120,6 +179,7 @@ const makeEnvironmentScheduleState = Effect.fn("EnvironmentScheduleState.make")(
     event: ScheduleListStreamEvent,
   ) {
     const current = yield* SubscriptionRef.get(state);
+    const previousSnapshot = Option.getOrNull(current.snapshot);
     const nextSnapshot =
       event.type === "schedule-list-reset"
         ? event.snapshot
@@ -128,6 +188,25 @@ const makeEnvironmentScheduleState = Effect.fn("EnvironmentScheduleState.make")(
             onSome: (snapshot) => applyScheduleListEvent(snapshot, event),
           });
     if (nextSnapshot === null) return;
+    const removedScheduleIds =
+      event.type === "schedule-list-reset"
+        ? (previousSnapshot?.schedules ?? [])
+            .filter(
+              (previous) =>
+                !event.snapshot.schedules.some((schedule) => schedule.id === previous.id),
+            )
+            .map((schedule) => schedule.id)
+        : event.type === "schedule-removed" && nextSnapshot !== previousSnapshot
+          ? [event.scheduleId]
+          : [];
+    yield* Effect.forEach(
+      removedScheduleIds,
+      (scheduleId) =>
+        removePersistedScheduleDetail(cache, environmentId, scheduleId, nextSnapshot.sequence).pipe(
+          Effect.ignore,
+        ),
+      { discard: true },
+    );
     yield* SubscriptionRef.set(state, {
       snapshot: Option.some(nextSnapshot),
       status: "live",
@@ -258,11 +337,9 @@ export function createScheduleEnvironmentAtoms<R, E>(
               scheduleId: input.scheduleId,
             }).pipe(
               Effect.tap((value) =>
-                cache.saveScheduleDetail
-                  ? cache
-                      .saveScheduleDetail(supervisor.target.environmentId, value)
-                      .pipe(Effect.ignore)
-                  : Effect.void,
+                persistScheduleDetailIfNewer(cache, supervisor.target.environmentId, value).pipe(
+                  Effect.ignore,
+                ),
               ),
               Effect.catch((error) =>
                 Option.isSome(cached) ? Effect.succeed(cached.value) : Effect.fail(error),
@@ -303,13 +380,16 @@ export function createScheduleEnvironmentAtoms<R, E>(
       tag: SCHEDULE_WS_METHODS.dispatchCommand,
       scheduler,
       concurrency: serialPerSchedule,
-      onSuccess: ({ environmentId, input }) =>
+      onSuccess: ({ environmentId, input }, _registry, result) =>
         input.type === "schedule.delete"
           ? EnvironmentCacheStore.pipe(
               Effect.flatMap((cache) =>
-                cache.removeScheduleDetail
-                  ? cache.removeScheduleDetail(environmentId, input.scheduleId)
-                  : Effect.void,
+                removePersistedScheduleDetail(
+                  cache,
+                  environmentId,
+                  input.scheduleId,
+                  result.sequence,
+                ),
               ),
               Effect.ignore,
             )

@@ -10,7 +10,6 @@ import {
   ScheduleId,
   ThreadId,
   TurnId,
-  evolveScheduleDefinition,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
@@ -42,6 +41,7 @@ import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolv
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import { ScheduleService } from "./ScheduleService.ts";
 import * as Schedules from "./ScheduleService.ts";
+import { evolveScheduleDefinition } from "./ScheduleDomain.ts";
 
 type ThreadTurnStartCommand = ThreadTurnBootstrap.ThreadTurnStartCommand;
 
@@ -299,6 +299,136 @@ layer("ScheduleService", (it) => {
     }),
   );
 
+  it.effect("edits a completed one-time Schedule without re-enabling its past Occurrence", () =>
+    Effect.gen(function* () {
+      const schedules = yield* ScheduleService;
+      yield* seedProject;
+
+      yield* schedules.dispatch({
+        type: "schedule.create",
+        commandId: CommandId.make("create-completed-edit"),
+        scheduleId: ScheduleId.make("completed-edit"),
+        projectId,
+        name: "Before completion",
+        prompt: "run once",
+        timing: { type: "one-time", runAt: "1970-01-01T00:05:00.000Z" },
+        timeZone: "UTC",
+        execution,
+        state: "enabled",
+      });
+      yield* TestClock.adjust(Duration.minutes(5));
+      yield* schedules.drainDue;
+
+      yield* schedules.dispatch({
+        type: "schedule.update",
+        commandId: CommandId.make("edit-completed-definition"),
+        scheduleId: ScheduleId.make("completed-edit"),
+        projectId,
+        name: "After completion",
+        prompt: "retain the completed run",
+        timing: { type: "one-time", runAt: "1970-01-01T00:05:00.000Z" },
+        timeZone: "UTC",
+        execution,
+      });
+
+      const detail = yield* schedules.getDetail(ScheduleId.make("completed-edit"));
+      assert.strictEqual(detail.name, "After completion");
+      assert.strictEqual(detail.prompt, "retain the completed run");
+      assert.strictEqual(detail.state, "completed");
+      assert.isNull(detail.nextOccurrenceAt);
+    }),
+  );
+
+  it.effect("edits passed paused and failed one-time Schedules without changing their state", () =>
+    Effect.gen(function* () {
+      const schedules = yield* ScheduleService;
+      yield* seedProject;
+
+      yield* schedules.dispatch({
+        type: "schedule.create",
+        commandId: CommandId.make("create-passed-paused-edit"),
+        scheduleId: ScheduleId.make("passed-paused-edit"),
+        projectId,
+        name: "Passed paused",
+        prompt: "do not run",
+        timing: { type: "one-time", runAt: "1970-01-01T00:05:00.000Z" },
+        timeZone: "UTC",
+        execution,
+        state: "paused",
+      });
+      yield* schedules.dispatch({
+        type: "schedule.create",
+        commandId: CommandId.make("create-failed-edit"),
+        scheduleId: ScheduleId.make("failed-edit"),
+        projectId,
+        name: "Failed once",
+        prompt: "fail once",
+        timing: { type: "one-time", runAt: "1970-01-01T00:05:00.000Z" },
+        timeZone: "UTC",
+        execution: { ...execution, workspaceMode: "worktree", baseBranch: "missing" },
+        state: "enabled",
+      });
+      yield* TestClock.adjust(Duration.minutes(10));
+      yield* schedules.drainDue;
+
+      for (const [id, expectedState] of [
+        ["passed-paused-edit", "paused"],
+        ["failed-edit", "failed"],
+      ] as const) {
+        const current = yield* schedules.getDetail(ScheduleId.make(id));
+        yield* schedules.dispatch({
+          type: "schedule.update",
+          commandId: CommandId.make(`edit-${id}`),
+          scheduleId: ScheduleId.make(id),
+          projectId,
+          name: `${current.name} edited`,
+          prompt: current.prompt,
+          timing: current.timing,
+          timeZone: current.timeZone,
+          execution: current.execution,
+        });
+        const edited = yield* schedules.getDetail(ScheduleId.make(id));
+        assert.strictEqual(edited.state, expectedState);
+        assert.isNull(edited.nextOccurrenceAt);
+      }
+    }),
+  );
+
+  it.effect("rejects a stale pause after a one-time Schedule reaches a terminal state", () =>
+    Effect.gen(function* () {
+      const schedules = yield* ScheduleService;
+      yield* seedProject;
+
+      yield* schedules.dispatch({
+        type: "schedule.create",
+        commandId: CommandId.make("create-terminal-pause"),
+        scheduleId: ScheduleId.make("terminal-pause"),
+        projectId,
+        name: "Terminal pause",
+        prompt: "complete first",
+        timing: { type: "one-time", runAt: "1970-01-01T00:05:00.000Z" },
+        timeZone: "UTC",
+        execution,
+        state: "enabled",
+      });
+      yield* TestClock.adjust(Duration.minutes(5));
+      yield* schedules.drainDue;
+
+      const error = yield* schedules
+        .dispatch({
+          type: "schedule.pause",
+          commandId: CommandId.make("stale-terminal-pause"),
+          scheduleId: ScheduleId.make("terminal-pause"),
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(error.failure, "invalid_state");
+      assert.strictEqual(
+        (yield* schedules.getDetail(ScheduleId.make("terminal-pause"))).state,
+        "completed",
+      );
+    }),
+  );
+
   it.effect("runScheduler recovers a durable due time and wakes on TestClock", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -437,7 +567,7 @@ layer("ScheduleService", (it) => {
       }),
   );
 
-  it.effect("triggers a bounded due page before reserving the full ordered backlog", () =>
+  it.effect("triggers a bounded due page before reserving every overdue Occurrence", () =>
     Effect.gen(function* () {
       const schedules = yield* ScheduleService;
       const launches = yield* RecordedLaunches;

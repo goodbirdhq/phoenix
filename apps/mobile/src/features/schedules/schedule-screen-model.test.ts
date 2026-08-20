@@ -1,4 +1,5 @@
 import {
+  OccurrenceId,
   ProjectId,
   ProviderInstanceId,
   ScheduleId,
@@ -100,6 +101,44 @@ describe("mobile Schedule presentation", () => {
     ]);
   });
 
+  it("keeps acknowledged recurring failures in the failure filter", () => {
+    const rows = buildScheduleRows({
+      environments,
+      schedules: [
+        schedule({
+          id: ScheduleId.make("acknowledged-failure"),
+          name: "Acknowledged failure",
+          latestHistory: {
+            type: "failed",
+            occurrenceId: OccurrenceId.make("018fd1b2-6610-7e39-8f09-468fa24c8c99"),
+            scheduledFor: "2026-08-20T07:00:00.000Z",
+            failedAt: "2026-08-20T07:00:01.000Z",
+            code: "trigger_failed",
+            message: "The trigger failed",
+            count: 1,
+            firstFailedAt: "2026-08-20T07:00:01.000Z",
+            lastFailedAt: "2026-08-20T07:00:01.000Z",
+          },
+          unacknowledgedFailure: false,
+        }),
+      ],
+      filters: {
+        environmentId: null,
+        projectId: null,
+        state: null,
+        failuresOnly: true,
+      },
+    });
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        scheduleId: "acknowledged-failure",
+        nextOccurrenceLabel: expect.stringContaining("Europe/Berlin"),
+        latestHistoryLabel: expect.stringContaining("Failed"),
+      }),
+    ]);
+  });
+
   it("rejects missing fields, past one-time dates, and worktrees for non-Git projects", () => {
     const now = new Date("2026-08-19T12:00:00.000Z");
     expect(
@@ -132,6 +171,41 @@ describe("mobile Schedule presentation", () => {
         workspace: "Worktrees require a Git repository.",
       },
     });
+  });
+
+  it("allows an unchanged past one-time Occurrence when editing an inactive Schedule", () => {
+    const now = new Date("2026-08-20T12:00:00.000Z");
+    const draft = {
+      name: "Completed check",
+      prompt: "Update the saved prompt",
+      environmentId: "environment-online",
+      projectId: "project-phoenix",
+      timing: { type: "one-time" as const, runAt: "2026-08-20T07:00:00.000Z" },
+      timeZone: "Europe/Berlin",
+      execution: {
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6" },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        workspaceMode: "local" as const,
+        baseBranch: null,
+      },
+      createPaused: false,
+    };
+
+    expect(
+      validateScheduleDraft(draft, environments, now, {
+        state: "completed",
+        timing: draft.timing,
+      }).valid,
+    ).toBe(true);
+    expect(
+      validateScheduleDraft(
+        { ...draft, timing: { type: "one-time", runAt: "2026-08-20T08:00:00.000Z" } },
+        environments,
+        now,
+        { state: "completed", timing: draft.timing },
+      ).errors.timing,
+    ).toBe("Choose a future time.");
   });
 
   it("defaults from confirmed Git capability and keeps local available while it is unknown", () => {

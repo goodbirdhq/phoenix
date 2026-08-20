@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { cronBuilderExpression, inspectCronTiming, zonedWallTimeToInstant } from "./timing.ts";
+import {
+  cronBuilderExpression,
+  defaultScheduleOneTimeInput,
+  inspectCronTiming,
+  zonedWallTimeToInstant,
+} from "./timing.ts";
 
 describe("inspectCronTiming", () => {
   it("validates a five-field expression and previews three zoned occurrences", () => {
@@ -108,5 +113,20 @@ describe("zonedWallTimeToInstant", () => {
       instant: null,
       error: "That local time does not exist in Europe/Berlin.",
     });
+  });
+});
+
+describe("defaultScheduleOneTimeInput", () => {
+  it("formats one hour after the supplied instant in the selected local time zone", () => {
+    expect(defaultScheduleOneTimeInput("2026-08-20T12:34:56.789Z", "UTC")).toBe("2026-08-20T13:34");
+    expect(defaultScheduleOneTimeInput("2026-08-20T12:34:56.789Z", "Europe/Berlin")).toBe(
+      "2026-08-20T15:34",
+    );
+  });
+
+  it("adds an elapsed hour before projecting through a daylight-saving transition", () => {
+    expect(defaultScheduleOneTimeInput("2026-03-29T00:30:45.000Z", "Europe/Berlin")).toBe(
+      "2026-03-29T03:30",
+    );
   });
 });

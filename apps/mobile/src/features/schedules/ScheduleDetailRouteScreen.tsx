@@ -116,6 +116,7 @@ export function ScheduleDetailRouteScreen(props: Props) {
           currentOlder: base.older,
           page: page.entries,
           recent: detail.history,
+          maximum: MAX_VISIBLE_SCHEDULE_HISTORY,
         }),
         nextCursor: page.nextCursor,
         requestedCursor: null,
