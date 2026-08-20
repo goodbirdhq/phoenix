@@ -559,6 +559,27 @@ describe("update_schedule", () => {
     }),
   );
 
+  it.effect("still warns about an aggressive cadence on a paused Schedule", () =>
+    // The warning is a property of the cadence, not of the current state. A
+    // user who resumes this from the Schedules page never sees the projection
+    // again, so suppressing it here is how a Schedule quietly becomes a flood.
+    Effect.gen(function* () {
+      const details: Array<ScheduleDetail> = [scheduleDetail({ state: "paused" })];
+      const recorder = recordingDispatch(details);
+      const result = yield* runHandler(
+        (handlers) =>
+          handlers.update_schedule({
+            scheduleId: ScheduleId.make("schedule-1"),
+            timing: { type: "cron", expression: "*/5 * * * *" },
+          }),
+        { details, dispatch: recorder.dispatch },
+      );
+
+      expect(result.state).toBe("paused");
+      expect(result.frequencyWarning).toContain("288");
+    }),
+  );
+
   it.effect("refuses to change a Schedule in another project", () =>
     Effect.gen(function* () {
       const error = yield* runHandler(
@@ -609,8 +630,6 @@ describe("set_schedule_state", () => {
 
       expect(recorder.commands.map((command) => command.type)).toEqual(["schedule.pause"]);
       expect(result.state).toBe("paused");
-      // A paused Schedule cannot flood anyone, so no warning rides along.
-      expect(result.frequencyWarning).toBeNull();
     }),
   );
 
@@ -663,6 +682,10 @@ describe("run_schedule_now", () => {
       if (command?.type === "schedule.run-now") {
         expect(result.occurrenceId).toBe(command.occurrenceId);
       }
+      // A manual run is a write, so its result carries what every other write
+      // carries — otherwise its chat row renders as a bare heading.
+      expect(result.cadence).toBe("Weekdays at 06:00");
+      expect(result.timeZone).toBe("Europe/London");
     }),
   );
 

@@ -101,8 +101,6 @@ const MODEL_DESCRIPTION =
   "Model slug for the Schedule's runs, from list_session_providers. Defaults to the calling session's own model, which is known to work in this environment.";
 const WORKSPACE_MODE_DESCRIPTION =
   'Where a run works: "worktree" gives each run its own git worktree, "local" runs in the project directory. Defaults to the calling session\'s own mode; a recurring Schedule usually wants "worktree" so its runs cannot collide with live work.';
-const BASE_BRANCH_DESCRIPTION =
-  "Branch each worktree run starts from. Defaults to the project's usual base branch.";
 const TIME_ZONE_DESCRIPTION =
   'IANA time zone deciding what the timing means, e.g. "Europe/London". Defaults to the server environment\'s own zone; the resolved zone is always echoed back in the result.';
 const TIMING_DESCRIPTION =
@@ -119,9 +117,6 @@ const ScheduleExecutionOverrides = {
   workspaceMode: Schema.optional(
     ThreadEnvMode.annotate({ description: WORKSPACE_MODE_DESCRIPTION }),
   ).annotate({ description: WORKSPACE_MODE_DESCRIPTION }),
-  baseBranch: Schema.optional(
-    TrimmedNonEmptyString.annotate({ description: BASE_BRANCH_DESCRIPTION }),
-  ).annotate({ description: BASE_BRANCH_DESCRIPTION }),
 };
 
 export const CreateScheduleInput = Schema.Struct({
@@ -189,13 +184,11 @@ export const RunScheduleNowInput = Schema.Struct({
 export type RunScheduleNowInput = typeof RunScheduleNowInput.Type;
 
 export const RunScheduleNowResult = Schema.Struct({
-  scheduleId: ScheduleId,
-  name: TrimmedNonEmptyString,
+  ...ScheduleSummaryView.fields,
   occurrenceId: OccurrenceId,
   // Null when the run was reserved but its thread was not readable back in
   // time; the run is still underway and will appear in the Schedule's history.
   threadId: Schema.NullOr(ThreadId),
-  state: ScheduleState,
 });
 export type RunScheduleNowResult = typeof RunScheduleNowResult.Type;
 

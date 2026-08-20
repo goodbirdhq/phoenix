@@ -10,6 +10,7 @@ import type {
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import {
   deriveScheduleToolActivity,
+  SCHEDULE_ACTION_LABELS,
   type ScheduleToolActivity,
 } from "@t3tools/shared/scheduleToolActivity";
 import {
@@ -759,20 +760,12 @@ function workEntryFailed(workEntry: WorkLogEntry): boolean {
   );
 }
 
-const SCHEDULE_ACTION_HEADINGS = {
-  created: "Created schedule",
-  updated: "Updated schedule",
-  paused: "Paused schedule",
-  enabled: "Resumed schedule",
-  ran: "Ran schedule now",
-} as const;
-
 function workEntryHeading(workEntry: WorkLogEntry): string {
   // Mobile has no bespoke chat cards; a Schedule write earns a rewritten
   // heading, its own icon, and a cadence preview instead — the same treatment
   // spawn_session gets, and the same information web's card carries.
   if (workEntry.scheduleActivity && !workEntryFailed(workEntry)) {
-    return SCHEDULE_ACTION_HEADINGS[workEntry.scheduleActivity.action];
+    return SCHEDULE_ACTION_LABELS[workEntry.scheduleActivity.action];
   }
   if (workEntry.spawnedSession) {
     if (workEntryFailed(workEntry)) {

@@ -27,7 +27,6 @@ import {
   type ScheduleWriteResult,
   type SetScheduleStateInput,
   type ThreadEnvMode,
-  type ThreadId,
   type UpdateScheduleInput,
 } from "@t3tools/contracts";
 import { describeScheduleCadence } from "@t3tools/shared/scheduleCadence";
@@ -230,7 +229,7 @@ export const make = Effect.gen(function* () {
       Effect.map((occurrences) => ({
         ...summaryView(detail),
         upcomingOccurrences: occurrences,
-        frequencyWarning: detail.state === "enabled" ? frequencyWarning(occurrences) : null,
+        frequencyWarning: frequencyWarning(occurrences),
       })),
     );
 
@@ -240,7 +239,6 @@ export const make = Effect.gen(function* () {
     overrides: {
       readonly model?: string | undefined;
       readonly workspaceMode?: ThreadEnvMode | undefined;
-      readonly baseBranch?: string | undefined;
     },
   ) => {
     const base = current?.execution ?? {
@@ -257,7 +255,6 @@ export const make = Effect.gen(function* () {
           ? base.modelSelection
           : { ...base.modelSelection, model: overrides.model },
       workspaceMode: overrides.workspaceMode ?? base.workspaceMode,
-      baseBranch: overrides.baseBranch ?? base.baseBranch,
     };
   };
 
@@ -334,8 +331,7 @@ export const make = Effect.gen(function* () {
       input.timing === undefined &&
       input.timeZone === undefined &&
       input.model === undefined &&
-      input.workspaceMode === undefined &&
-      input.baseBranch === undefined
+      input.workspaceMode === undefined
     ) {
       return yield* new ScheduleOrchestrationInvalidInputError({
         message: "Pass at least one field to change.",
@@ -406,11 +402,9 @@ export const make = Effect.gen(function* () {
       (entry) => entry.type === "triggered" && entry.occurrenceId === occurrenceId,
     );
     return {
-      scheduleId: after.id,
-      name: after.name,
+      ...summaryView(after),
       occurrenceId,
-      threadId: triggered?.type === "triggered" ? (triggered.threadId as ThreadId) : null,
-      state: after.state,
+      threadId: triggered?.type === "triggered" ? triggered.threadId : null,
     } satisfies RunScheduleNowResult;
   });
 

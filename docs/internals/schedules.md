@@ -84,7 +84,9 @@ Three properties shape the surface:
 project it is not working in. There is no `projectId` parameter to get wrong. Execution settings
 default from the same shell, which makes them provably runnable in this environment; `model` and
 `workspaceMode` are the only overrides. Reads may widen to every project with `allProjects: true`,
-because "what have I got scheduled" should not depend on which project a session is in.
+because "what have I got scheduled" should not depend on which project a session is in. For the same
+reason `get_schedule` is not project-scoped at all: an id that came back from a widened list has to
+stay readable. Reads are gated by the capability and the settings toggle, not by project.
 
 **Updates are patches over a whole-definition command.** `schedule.update` carries a complete
 definition. The handler reads the stored detail, merges the fields the caller sent, and dispatches
@@ -110,7 +112,7 @@ stays in the domain rather than being duplicated here.
 
 ### Chat rows
 
-`packages/shared/src/scheduleToolActivity.ts` reduces a write result to the eight fields a chat row
+`packages/shared/src/scheduleToolActivity.ts` reduces a write result to the six fields a chat row
 renders, and `ActivityPayloadProjection` carries it as `data.scheduleActivity`. This is necessary,
 not decorative: the projection drops `result` from MCP items and summarizes tool output to 84
 characters, which would cut the Schedule's id and cadence out entirely. The five upcoming

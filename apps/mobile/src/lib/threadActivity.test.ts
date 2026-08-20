@@ -868,7 +868,6 @@ describe("buildThreadFeed schedule writes", () => {
 
   const activityOf = (tool: string) => {
     for (const entry of buildThreadFeed(threadWith(tool))) {
-      if (entry.type === "activity") return entry.activity;
       if (entry.type === "activity-group") return entry.activities[0] ?? null;
     }
     return null;

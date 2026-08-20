@@ -68,6 +68,7 @@ import {
   ZapIcon,
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
+import { SCHEDULE_ACTION_LABELS } from "@t3tools/shared/scheduleToolActivity";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -2313,13 +2314,23 @@ const SessionSpawnCtaRow = memo(function SessionSpawnCtaRow(props: {
   );
 });
 
-const SCHEDULE_ACTION_LABELS = {
-  created: "Created schedule",
-  updated: "Updated schedule",
-  paused: "Paused schedule",
-  enabled: "Resumed schedule",
-  ran: "Ran schedule now",
-} as const;
+/** Next run in the Schedule's own zone — the answer to "when does this fire?". */
+function formatScheduleNextRun(instant: string | null, timeZone: string): string | null {
+  if (!instant) return null;
+  const epochMillis = Date.parse(instant);
+  if (Number.isNaN(epochMillis)) return null;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: timeZone || undefined,
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(epochMillis);
+  } catch {
+    return null;
+  }
+}
 
 function isFailedWorkEntry(workEntry: TimelineWorkEntry): boolean {
   return (
@@ -2349,6 +2360,9 @@ const ScheduleWriteRow = memo(function ScheduleWriteRow(props: { workEntry: Time
   const lead = SCHEDULE_ACTION_LABELS[schedule.action];
   const cadence = [schedule.cadence, schedule.timeZone].filter(Boolean).join(" · ");
   const paused = schedule.state === "paused";
+  const nextRun = paused
+    ? null
+    : formatScheduleNextRun(schedule.nextOccurrenceAt, schedule.timeZone);
 
   return (
     <button
@@ -2372,6 +2386,7 @@ const ScheduleWriteRow = memo(function ScheduleWriteRow(props: { workEntry: Time
       </span>
       <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
         {paused ? <span>paused</span> : null}
+        {nextRun ? <span className="hidden sm:inline">next {nextRun}</span> : null}
         <span className="text-info-foreground">Open ▸</span>
       </span>
     </button>

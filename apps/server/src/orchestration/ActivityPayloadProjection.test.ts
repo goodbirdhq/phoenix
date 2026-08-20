@@ -288,13 +288,11 @@ describe("Schedule write carrier survival", () => {
     expect((data.item as Record<string, unknown>).result).not.toEqual(writeResult);
     expect(data.scheduleActivity).toEqual({
       action: "created",
-      scheduleId: "schedule-1",
       name: "Nightly audit",
       state: "enabled",
       timeZone: "Europe/London",
       cadence: "Weekdays at 06:00",
       nextOccurrenceAt: "2026-08-21T05:00:00.000Z",
-      projectId: "project-1",
     });
   });
 
@@ -304,7 +302,7 @@ describe("Schedule write carrier survival", () => {
     const carrier = data.scheduleActivity as Record<string, unknown>;
 
     expect(carrier.upcomingOccurrences).toBeUndefined();
-    expect(Object.keys(carrier)).toHaveLength(8);
+    expect(Object.keys(carrier)).toHaveLength(6);
   });
 
   it("adds no carrier for a read, or for a write that failed", () => {
