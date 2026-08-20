@@ -39,6 +39,25 @@ update; if it's absent, you're creating one from scratch.
 
 ## Steps
 
+### 0. Resolve the entity
+
+Before researching anything, confirm you have the right company. Same-named
+companies are common and getting this wrong poisons the whole run.
+
+- Check the CRM first: search Accounts for the name AND the domain. If a row
+  exists, its Domain, Source, and Sponsorship evidence are the anchor — they
+  say why this prospect made the list at all.
+- If more than one company plausibly matches the name, score each against
+  the reason we're calling: which one actually does creator/influencer
+  marketing? A prospect sourced from sponsorship data that shows zero
+  sponsorship evidence is a red flag that you're looking at the wrong
+  company, not proof the prospect is unusual.
+- If the evidence contradicts the run input (input says one domain, but the
+  ICP signals all point to a namesake), research the company the evidence
+  points to and say so explicitly at the top of your result: what the input
+  said, what you concluded, and why. Never silently obey an input that the
+  evidence contradicts — and never silently override it either.
+
 ### 1. Research the company
 
 Web search. You're looking for:
@@ -50,19 +69,40 @@ Web search. You're looking for:
   launch, a rebrand, a marketing hire.
 
 If they're clearly not doing any creator marketing, that's a finding too —
-it's a reason they might want Goodbird, or a reason this isn't a fit yet.
+it's a reason they might want Goodbird, or a reason this isn't a fit yet
+(but see step 0: for a sponsor-sourced prospect it more likely means you
+have the wrong company).
+
+When you find a podcast appearance or conference talk by anyone relevant,
+don't stop at the episode title — pull the transcript (YouTube transcripts,
+the podcast's own page, or a transcript search) and mine it. A 40-minute
+interview about how they run marketing is worth more than ten search
+snippets, and it's where the specific, quotable material lives.
 
 ### 2. Research the person
 
-Web search first — LinkedIn profile and posts, podcast appearances,
-articles, conference talks. If the Clay MCP is available, use it to enrich
-what you already have (role history, verified contact details) rather than
-as your primary source — it's better at confirming facts than finding a
-narrative.
+Run these sweeps in order — each one has caught hooks the others miss:
+
+1. **First-party content.** The company's own blog, filtered by the
+   person's name: fetch the blog index or sitemap (`/blog`, `/post`,
+   `sitemap.xml`) and search `site:<domain> "<name>"`. People increasingly
+   publish their best material on their employer's site, where generic
+   search under-ranks it because it's fresh and the page has little
+   authority.
+2. **Recent activity.** `site:linkedin.com/posts "<name>"` plus a
+   recency-bounded search (last ~60 days) for the name. A post they wrote
+   last month beats a bio from two years ago — it's what they're thinking
+   about right now.
+3. **Long-form appearances.** Podcasts, talks, interviews — and per step 1,
+   read transcripts, don't cite titles.
+4. **Background fill.** LinkedIn profile, articles, previous roles. Clay is
+   for enriching what you already have (role history, verified contact
+   details) rather than finding a narrative — it confirms facts better than
+   it discovers stories.
 
 You're looking for something specific enough to reference, not just "they
-work in marketing." A talk they gave, a post they wrote, a campaign they ran
-elsewhere.
+work in marketing." A post they wrote beats a talk they gave beats a bio
+fact; something from the last two months beats all three from last year.
 
 ### 3. Write the dossier
 
@@ -130,9 +170,10 @@ duplicate that protocol here, just follow it. Include in the result:
   what you would have created (the dossier text, the email text) in the
   result's `shadowedEffects`, as instructed by the shadow-mode instructions
   in your prompt.
-- **Budget: ~15 tool calls.** This is a research task, not an investigation.
-  If you're at call 12 and still don't have enough for a hook, write down
-  what you have and move on — a thin dossier beats a burned budget.
+- **Budget: ~30 tool calls.** Spend them on the sweeps in steps 0–2 rather
+  than re-searching the same angle. If you're at call 25 and still don't
+  have enough for a hook, write down what you have and move on — a thin
+  dossier beats a burned budget.
 - **UK English** in everything you write (dossier, email, result).
 
 ## Tuning notes for Gabriel
