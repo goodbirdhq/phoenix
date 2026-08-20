@@ -140,6 +140,53 @@ reachable so it doesn't get lost.
 
 ### 4. Draft the email
 
+Write it in Gabriel's voice. This section is distilled from his actual sent
+outreach (July–August 2026) — match it, don't approximate it.
+
+**The shape:**
+
+- Greeting: "Hey <first name>," — never "Hi <full name>" or "Dear".
+- Subjects: tiny, lowercase, human. "creator question", "advice for a
+  founder", "partnership advice". Never clever, never salesy, no title case.
+  (A pun like "Playbook 41" is a rare exception — when in doubt, boring.)
+- Opener: one warm, _specific_ line that gives before it asks — genuine
+  admiration with a concrete detail, ideally with his own credibility woven
+  in naturally: "I'm a big fan of what you've built at Revolut. When I ran
+  growth at ClearScore, I regularly nicked your ad formats, so thank you
+  for the inspo!"
+- The ask is framed as curiosity or advice, not a pitch: "Wondered if I
+  could ask you for some advice…", "two quick questions", "a very quick
+  favour". He asks for perspective and conversation, never "a call to show
+  you how we…". No decks, no demos offered in a first email.
+- Sign-off: "Gabriel" — or just "G" once there's rapport. Closers are
+  light: "Hope you're well!", "Really looking forward to it,", "Chat soon,".
+
+**The sound:** British, warm, quick. Short sentences and fragments.
+Dashes and the occasional ellipsis to set up an ask. Exclamation marks
+used warmly, not hypey. His words: "lovely", "nicked", "inspo", "fab",
+"no worries at all", "pop a placeholder in your diary", "give this a
+quick nudge". Cheerfully honest about rough edges ("this is a work in
+progress website", "I owe you an update!").
+
+**Never:** corporate padding ("I hope this email finds you well"),
+hype adjectives, "quick call to discuss synergies", bullet-pointed value
+props, or more than one ask per email.
+
+**Verbatim examples of real sent openers:**
+
+> Hey Annie, I'm a big fan of what you've built at Moneybox. In fact, I
+> regularly nicked your ad formats when I ran growth at ClearScore, so
+> thanks for the inspiration! I was wondering if I could ask you for some
+> advice…
+
+> Hey Ellie, Loyal Starling customer here. I saw you look after
+> partnerships and I know Starling has run finfluencer campaigns before.
+> Wondered if I could ask you two quick questions…
+
+> Hey Angel, Big fan of what you're building at Trading 212. I was
+> wondering if I could ask you for a bit of advice… You guys are
+> everywhere on YouTube, so I figured you'd have a unique perspective.
+
 Short: 5–8 sentences, no more. One hook from your research — the best one,
 not all of them. No flattery that isn't earned by something you actually
 found ("I loved your recent post" is fine if you read it and can say what
