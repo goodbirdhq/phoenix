@@ -83,22 +83,36 @@ snippets, and it's where the specific, quotable material lives.
 
 Run these sweeps in order — each one has caught hooks the others miss:
 
-1. **First-party content.** The company's own blog, filtered by the
-   person's name: fetch the blog index or sitemap (`/blog`, `/post`,
-   `sitemap.xml`) and search `site:<domain> "<name>"`. People increasingly
-   publish their best material on their employer's site, where generic
-   search under-ranks it because it's fresh and the page has little
-   authority.
+1. **First-party content — always run this one, and enumerate rather than
+   search.** Fetch the company's blog index or sitemap (`/blog`, `/post`,
+   `sitemap.xml`), list *every* post carrying the person's name, sort by
+   date, and read the most recent. Only then fall back to
+   `site:<domain> "<name>"`. This is the sweep that has produced the best
+   hook most often, and enumeration is why: people publish their best
+   material on their employer's site, where generic search under-ranks it
+   because it's fresh and the page has little authority. A search ranking
+   will hand you a popular old post; the index hands you last month's.
 2. **Recent activity.** `site:linkedin.com/posts "<name>"` plus a
    recency-bounded search (last ~60 days) for the name. A post they wrote
    last month beats a bio from two years ago — it's what they're thinking
-   about right now.
+   about right now. Expect this to work perhaps half the time: LinkedIn
+   blocks direct profile fetches (`HTTP 999`) and indexes posts only
+   sporadically. Treat a miss here as "not visible", never as "they don't
+   publish" — see `docs/research-sourcing-limits.md`.
 3. **Long-form appearances.** Podcasts, talks, interviews — and per step 1,
    read transcripts, don't cite titles.
-4. **Background fill.** LinkedIn profile, articles, previous roles. Clay is
-   for enriching what you already have (role history, verified contact
-   details) rather than finding a narrative — it confirms facts better than
-   it discovers stories.
+4. **Background fill.** Clay, for identity resolution, role history and
+   verified contact details — it is fast and reliable for all three, and
+   worth calling whenever the email is missing. It is *not* a LinkedIn
+   reader: it cannot retrieve posts, and its content search returns a
+   sampled handful rather than a recency-ranked list, so treat anything it
+   returns as a lead to verify, not a finding. Check dates and topical
+   relevance before using anything from it, and never carry personal or
+   sensitive material into a hook.
+
+If sweeps 1–3 all come back empty, say so plainly in the dossier and fall
+back to company-level hooks. A thin person section that admits it is thin is
+worth more than one padded with generic bio facts.
 
 You're looking for something specific enough to reference, not just "they
 work in marketing." A post they wrote beats a talk they gave beats a bio
@@ -128,8 +142,12 @@ Write this into the **Goodbird CRM** in Notion (parent page
 - **Contacts** (data source `402355f7-31d6-4e17-8611-3c8a4d05d125`): upsert
   the person, relate them to the Account, and write the dossier as the
   contact page's **body** (update `notionPageUrl`'s page if you were given
-  one). Set Status to "Researched", then "Draft ready" once the Gmail draft
-  exists, and put the draft link in "Gmail draft".
+  one). Walk Status through the three states as you actually reach them:
+  "Contact found" once you've identified the person, "Dossier written" once
+  the page body is in place, and "Draft ready" once the Gmail draft exists —
+  then put the draft link in "Gmail draft". Don't skip ahead: the states are
+  what the CRM's views filter on, and a contact sitting at "Contact found"
+  with no dossier is a signal the run died, not a tidiness problem.
 - **Activity** (data source `01eb2982-56b2-440e-8ae4-4f71b3e2235a`): do NOT
   log research here — Activity rows are real touches (emails actually sent,
   replies, meetings), created when they happen, "Logged by" = Agent.
@@ -236,9 +254,13 @@ The knobs you'll most likely want to turn:
 TOUCH]` markers) but not a voice. If drafts read wrong, the fix is
   probably a short example email pasted straight into this file, not more
   rules.
-- **Source priority** — right now web search leads and Clay confirms. If
-  Clay turns out to have better narrative data than search for your ICP,
-  swap the order in step 2.
+- **Source priority** — first-party enumeration leads, search follows, Clay
+  confirms facts. This was tested on 2026-08-21 rather than assumed: Clay
+  was measured against a known-good hook and missed it, so don't promote it
+  to a narrative source without re-testing. The open question is LinkedIn
+  activity, which none of the current tools can see; the proposed fix is an
+  agent-browser link harvester, designed but not built, in
+  `docs/research-sourcing-limits.md`.
 - **Which Notion database** — the Goodbird CRM (Accounts / Contacts /
   Activity) created 2026-08-20; ids are in step 3. If you restructure the
   CRM, update the ids and conventions there.
