@@ -1108,6 +1108,363 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     { sequential: true },
   );
 
+  it.effect(
+    "never auto-continues after a user interruption",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-truncated-interrupted");
+        const sessionTitle = "Truncated interrupted";
+        const firstEvent = makeSubscribedEventGate({
+          type: "message.updated",
+          properties: {
+            sessionID: openCodeSessionId,
+            info: { id: "msg-int-1", role: "assistant" },
+          },
+        });
+        const idleGate = makeSubscribedEventGate({
+          type: "session.status",
+          properties: { sessionID: openCodeSessionId, status: { type: "idle" } },
+        });
+        runtimeMock.state.subscribedEvents = [
+          firstEvent.value,
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-step-finish-int",
+                sessionID: openCodeSessionId,
+                messageID: "msg-int-1",
+                type: "step-finish",
+                reason: "unknown",
+              },
+            },
+          },
+          idleGate.value,
+        ];
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId),
+          Stream.take(5),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          title: sessionTitle,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "finish the task",
+          modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5"),
+        });
+        firstEvent.release();
+        // Let the pump reach the gated idle before stopping the turn.
+        yield* Effect.yieldNow;
+        yield* adapter.interruptTurn(threadId);
+        idleGate.release();
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        // Only the original prompt — the post-abort idle must not restart work.
+        NodeAssert.equal(runtimeMock.state.promptCallsBySessionTitle.get(sessionTitle)?.length, 1);
+        NodeAssert.ok(runtimeMock.state.abortCalls.includes(openCodeSessionId));
+        NodeAssert.equal(
+          events.some((event) => event.type === "turn.aborted"),
+          true,
+        );
+        NodeAssert.equal(
+          events.some((event) => event.type === "runtime.warning"),
+          false,
+        );
+        NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      }),
+    { sequential: true },
+  );
+
+  it.effect(
+    "does not fire a second continuation when a duplicate idle follows busy",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-truncated-duplicate-idle");
+        const sessionTitle = "Truncated duplicate idle";
+        const firstEvent = makeSubscribedEventGate({
+          type: "message.updated",
+          properties: {
+            sessionID: openCodeSessionId,
+            info: { id: "msg-dup-1", role: "assistant" },
+          },
+        });
+        runtimeMock.state.subscribedEvents = [
+          firstEvent.value,
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-step-finish-dup",
+                sessionID: openCodeSessionId,
+                messageID: "msg-dup-1",
+                type: "step-finish",
+                reason: "unknown",
+              },
+            },
+          },
+          {
+            type: "session.status",
+            properties: { sessionID: openCodeSessionId, status: { type: "idle" } },
+          },
+          {
+            type: "session.status",
+            properties: { sessionID: openCodeSessionId, status: { type: "busy" } },
+          },
+          // Duplicate/stale idle with no new assistant message in between.
+          {
+            type: "session.status",
+            properties: { sessionID: openCodeSessionId, status: { type: "idle" } },
+          },
+        ];
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId),
+          Stream.take(6),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          title: sessionTitle,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "finish the task",
+          modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5"),
+        });
+        firstEvent.release();
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        NodeAssert.equal(runtimeMock.state.promptCallsBySessionTitle.get(sessionTitle)?.length, 2);
+        const warnings = events.filter((event) => event.type === "runtime.warning");
+        NodeAssert.equal(warnings.length, 2);
+        NodeAssert.match(warnings[0]?.payload.message ?? "", /attempt 1\/2/);
+        NodeAssert.match(warnings[1]?.payload.message ?? "", /continuation ended without output/);
+        NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      }),
+    { sequential: true },
+  );
+
+  it.effect(
+    "delayed updates for an older assistant message do not rewind truncation evidence",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-truncated-stale-message");
+        const sessionTitle = "Truncated stale message";
+        const firstEvent = makeSubscribedEventGate({
+          type: "message.updated",
+          properties: {
+            sessionID: openCodeSessionId,
+            info: { id: "msg-stale-a", role: "assistant" },
+          },
+        });
+        runtimeMock.state.subscribedEvents = [
+          firstEvent.value,
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-stale-a-text",
+                sessionID: openCodeSessionId,
+                messageID: "msg-stale-a",
+                type: "text",
+                text: "Partial answer.",
+                time: { start: 1 },
+              },
+            },
+          },
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-step-finish-stale-a",
+                sessionID: openCodeSessionId,
+                messageID: "msg-stale-a",
+                type: "step-finish",
+                reason: "unknown",
+              },
+            },
+          },
+          {
+            type: "message.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              info: { id: "msg-stale-b", role: "assistant" },
+            },
+          },
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-stale-b-text",
+                sessionID: openCodeSessionId,
+                messageID: "msg-stale-b",
+                type: "text",
+                text: "More output.",
+                time: { start: 2 },
+              },
+            },
+          },
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-step-finish-stale-b",
+                sessionID: openCodeSessionId,
+                messageID: "msg-stale-b",
+                type: "step-finish",
+                reason: "unknown",
+              },
+            },
+          },
+          // Delayed update for the OLDER message must not rewind the active
+          // pointer or reset its already-emitted-text evidence.
+          {
+            type: "message.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              info: { id: "msg-stale-a", role: "assistant" },
+            },
+          },
+          {
+            type: "session.status",
+            properties: { sessionID: openCodeSessionId, status: { type: "idle" } },
+          },
+        ];
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId),
+          Stream.take(6),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          title: sessionTitle,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "finish the task",
+          modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5"),
+        });
+        firstEvent.release();
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        NodeAssert.equal(runtimeMock.state.promptCallsBySessionTitle.get(sessionTitle)?.length, 1);
+        NodeAssert.equal(
+          events.some((event) => event.type === "runtime.warning"),
+          false,
+        );
+        NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      }),
+    { sequential: true },
+  );
+
+  it.effect(
+    "treats a running-only tool observation as output when deciding to continue",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-truncated-running-tool");
+        const sessionTitle = "Truncated running tool";
+        const firstEvent = makeSubscribedEventGate({
+          type: "message.updated",
+          properties: {
+            sessionID: openCodeSessionId,
+            info: { id: "msg-tool-1", role: "assistant" },
+          },
+        });
+        runtimeMock.state.subscribedEvents = [
+          firstEvent.value,
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-tool-running",
+                sessionID: openCodeSessionId,
+                messageID: "msg-tool-1",
+                callID: "call-running-1",
+                type: "tool",
+                tool: "bash",
+                state: {
+                  status: "running",
+                  input: {},
+                  time: { start: 1 },
+                  title: "bash",
+                },
+              },
+            },
+          },
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-step-finish-tool",
+                sessionID: openCodeSessionId,
+                messageID: "msg-tool-1",
+                type: "step-finish",
+                reason: "unknown",
+              },
+            },
+          },
+          {
+            type: "session.status",
+            properties: { sessionID: openCodeSessionId, status: { type: "idle" } },
+          },
+        ];
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId),
+          Stream.take(5),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          title: sessionTitle,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "finish the task",
+          modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5"),
+        });
+        firstEvent.release();
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        NodeAssert.equal(runtimeMock.state.promptCallsBySessionTitle.get(sessionTitle)?.length, 1);
+        NodeAssert.equal(
+          events.some((event) => event.type === "runtime.warning"),
+          false,
+        );
+        NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      }),
+    { sequential: true },
+  );
+
   it.effect("keeps the running turn when a steer prompt fails", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
