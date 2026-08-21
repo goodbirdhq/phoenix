@@ -478,6 +478,28 @@ describe("create_schedule", () => {
     }),
   );
 
+  it.effect("does not inflate the run count for an office-hours cadence", () =>
+    // Ten minutes apart, but only between 09:00 and 17:59: 54 runs a day, well
+    // under the warning threshold. Reading the rate off the first few gaps
+    // instead reports 144/day and puts that number in front of the user.
+    Effect.gen(function* () {
+      const details: Array<ScheduleDetail> = [];
+      const recorder = recordingDispatch(details);
+      const result = yield* runHandler(
+        (handlers) =>
+          handlers.create_schedule({
+            name: "Office hours sweep",
+            prompt: "Sweep the inbox.",
+            timing: { type: "cron", expression: "*/10 9-17 * * *" },
+            timeZone: "Europe/London",
+          }),
+        { details, dispatch: recorder.dispatch },
+      );
+
+      expect(result.frequencyWarning).toBeNull();
+    }),
+  );
+
   it.effect("refuses a name already used by a live Schedule in the same project", () =>
     Effect.gen(function* () {
       const error = yield* runHandler((handlers) =>
@@ -577,6 +599,48 @@ describe("update_schedule", () => {
 
       expect(result.state).toBe("paused");
       expect(result.frequencyWarning).toContain("288");
+    }),
+  );
+
+  it.effect("refuses a rename onto another live Schedule's name", () =>
+    // create_schedule refuses this duplicate, so update must too — otherwise
+    // the invariant is one rename away from broken, and there is no delete tool
+    // to clean up after it.
+    Effect.gen(function* () {
+      const error = yield* runHandler(
+        (handlers) =>
+          handlers.update_schedule({
+            scheduleId: ScheduleId.make("schedule-2"),
+            name: "nightly AUDIT",
+          }),
+        {
+          details: [
+            scheduleDetail(),
+            scheduleDetail({ id: ScheduleId.make("schedule-2"), name: "Weekly sweep" }),
+          ],
+        },
+      ).pipe(Effect.flip);
+
+      expect(error._tag).toBe("ScheduleOrchestrationNameConflictError");
+      expect(error).toMatchObject({ scheduleId: "schedule-1" });
+    }),
+  );
+
+  it.effect("allows a Schedule to keep its own name through an unrelated edit", () =>
+    Effect.gen(function* () {
+      const details: Array<ScheduleDetail> = [scheduleDetail()];
+      const recorder = recordingDispatch(details);
+      const result = yield* runHandler(
+        (handlers) =>
+          handlers.update_schedule({
+            scheduleId: ScheduleId.make("schedule-1"),
+            name: "Nightly audit",
+            timing: { type: "cron", expression: "0 7 * * 1" },
+          }),
+        { details, dispatch: recorder.dispatch },
+      );
+
+      expect(result.name).toBe("Nightly audit");
     }),
   );
 

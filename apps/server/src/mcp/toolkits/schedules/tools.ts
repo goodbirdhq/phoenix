@@ -58,7 +58,7 @@ export const CreateScheduleTool = Tool.make("create_schedule", {
 
 export const UpdateScheduleTool = Tool.make("update_schedule", {
   description:
-    "Change an existing Schedule in the calling session's project, named by scheduleId. Pass any of name, prompt, timing, timeZone, model, workspaceMode, or baseBranch; only the fields you pass are changed; everything else is kept as-is, so you can move a Schedule to a new time without resending its prompt. Use set_schedule_state to pause or resume — this tool does not change state. As with create_schedule, read the returned cadence and upcomingOccurrences back to the user to confirm the new timing means what they asked for.",
+    "Change an existing Schedule in the calling session's project, named by scheduleId. Pass any of name, prompt, timing, timeZone, model, workspaceMode, or baseBranch; only the fields you pass are changed; everything else is kept as-is, so you can move a Schedule to a new time without resending its prompt. Use set_schedule_state to pause or resume; this tool does not otherwise change state, with one exception: giving a completed or failed one-time Schedule a new future time re-arms it as enabled, so say so when you do that. As with create_schedule, read the returned cadence and upcomingOccurrences back to the user to confirm the new timing means what they asked for.",
   parameters: UpdateScheduleInput,
   success: ScheduleWriteResult,
   failure: ScheduleOrchestrationError,

@@ -43,6 +43,34 @@ describe("describeScheduleCadence", () => {
     );
   });
 
+  it("refuses to claim a uniform interval when the step does not divide 60", () => {
+    // The minute field restarts every hour, so */16 fires at :00 :16 :32 :48
+    // and then wraps to :00 — a 12-minute gap. "Every 16 minutes" is a
+    // confidently wrong sentence, which is worse than showing raw cron, and
+    // these all clear the five-minute floor so an agent can really create them.
+    expect(describeScheduleCadence(cron("*/16 * * * *"), "Europe/London")).toBe("*/16 * * * *");
+    expect(describeScheduleCadence(cron("*/25 * * * *"), "Europe/London")).toBe("*/25 * * * *");
+    expect(describeScheduleCadence(cron("*/45 * * * *"), "Europe/London")).toBe("*/45 * * * *");
+    expect(describeScheduleCadence(cron("*/55 * * * *"), "Europe/London")).toBe("*/55 * * * *");
+  });
+
+  it("still names the steps that do divide 60", () => {
+    for (const [step, label] of [
+      [5, "Every 5 minutes"],
+      [10, "Every 10 minutes"],
+      [15, "Every 15 minutes"],
+      [20, "Every 20 minutes"],
+      [30, "Every 30 minutes"],
+    ] as const) {
+      expect(describeScheduleCadence(cron(`*/${step} * * * *`), "Europe/London")).toBe(label);
+    }
+  });
+
+  it("rejects an out-of-range step rather than describing it", () => {
+    expect(describeScheduleCadence(cron("*/0 * * * *"), "Europe/London")).toBe("*/0 * * * *");
+    expect(describeScheduleCadence(cron("*/61 * * * *"), "Europe/London")).toBe("*/61 * * * *");
+  });
+
   it("falls back to the raw expression when the shape is not a common one", () => {
     // Better an honest cron string than a confident wrong sentence.
     expect(describeScheduleCadence(cron("0 6 1-7 */2 3"), "Europe/London")).toBe("0 6 1-7 */2 3");

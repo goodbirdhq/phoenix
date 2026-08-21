@@ -37,7 +37,7 @@ import * as Option from "effect/Option";
 
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ScheduleService from "../../../schedule/ScheduleService.ts";
-import { previewScheduleTiming } from "../../../schedule/timing.ts";
+import { countScheduleOccurrencesWithin, previewScheduleTiming } from "../../../schedule/timing.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { SchedulesToolkit } from "./tools.ts";
@@ -91,22 +91,19 @@ const truncatePrompt = (prompt: string) => {
   };
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /**
  * Warning text when a cadence produces enough runs to be worth saying out loud.
  * Every firing is a fresh thread that nothing deletes, so the count is the fact
  * the user needs before it becomes a housekeeping problem.
+ *
+ * Counted over a real 24 hours rather than extrapolated from the first few
+ * gaps: a cadence that only runs during office hours looks continuous when you
+ * sample it at 09:02, and the tool description tells the agent to relay this
+ * number to the user, so an inflated one is a lie with their name on it.
  */
-const frequencyWarning = (occurrences: ReadonlyArray<string>): string | null => {
-  if (occurrences.length < 2) return null;
-  const times = occurrences.map((occurrence) => Date.parse(occurrence));
-  if (times.some((time) => Number.isNaN(time))) return null;
-  let total = 0;
-  for (let index = 1; index < times.length; index += 1) {
-    total += (times[index] as number) - (times[index - 1] as number);
-  }
-  const averageGapMs = total / (times.length - 1);
-  if (averageGapMs <= 0) return null;
-  const runsPerDay = Math.round(86_400_000 / averageGapMs);
+const frequencyWarning = (runsPerDay: number): string | null => {
   if (runsPerDay < SCHEDULE_FREQUENCY_WARNING_RUNS_PER_DAY) return null;
   return `This cadence starts about ${runsPerDay.toLocaleString()} threads per day (~${(runsPerDay * 365).toLocaleString()} per year). Phoenix never deletes them automatically — tell the user the count before leaving this Schedule enabled.`;
 };
@@ -189,6 +186,34 @@ export const make = Effect.gen(function* () {
   const getDetail = (scheduleId: ScheduleId) =>
     schedules.getDetail(scheduleId).pipe(Effect.mapError(domainError));
 
+  /**
+   * Live Schedule names are unique per project. Enforced on renames as well as
+   * creates: a rename could otherwise produce exactly the duplicate the create
+   * path refuses, and with no delete tool the agent cannot undo it.
+   */
+  const requireNameIsFree = Effect.fn("schedules.requireNameIsFree")(function* (
+    projectId: ProjectId,
+    name: string,
+    exceptScheduleId: ScheduleId | null,
+  ) {
+    const snapshot = yield* schedules.getSnapshot().pipe(Effect.mapError(domainError));
+    const wanted = normalizeName(name);
+    const clash = snapshot.schedules.find(
+      (schedule) =>
+        schedule.id !== exceptScheduleId &&
+        schedule.projectId === projectId &&
+        LIVE_STATES.has(schedule.state) &&
+        normalizeName(schedule.name) === wanted,
+    );
+    if (clash !== undefined) {
+      return yield* new ScheduleOrchestrationNameConflictError({
+        scheduleId: clash.id,
+        name: clash.name,
+        message: `This project already has a Schedule named "${clash.name}". Update it with update_schedule (scheduleId ${clash.id}) or choose a different name.`,
+      });
+    }
+  });
+
   /** Writes stay in the calling session's project; reads may look wider. */
   const requireWritableSchedule = Effect.fn("schedules.requireWritable")(function* (
     scheduleId: ScheduleId,
@@ -204,32 +229,48 @@ export const make = Effect.gen(function* () {
     return { shell, detail };
   });
 
+  const previewOccurrences = (
+    detail: {
+      readonly timing: ScheduleTiming;
+      readonly timeZone: string;
+      readonly nextOccurrenceAt: string | null;
+    },
+    now: string,
+  ): ReadonlyArray<string> => {
+    try {
+      return previewScheduleTiming(detail.timing, detail.timeZone, now, {
+        previewCount: SCHEDULE_UPCOMING_OCCURRENCE_COUNT,
+        allowPastOneTime: true,
+      });
+    } catch {
+      // A stored Schedule whose timing no longer previews (a one-time run
+      // already in the past, say) still has a definite answer.
+      return detail.nextOccurrenceAt === null ? [] : [detail.nextOccurrenceAt];
+    }
+  };
+
   const upcomingOccurrences = (detail: {
     readonly timing: ScheduleTiming;
     readonly timeZone: string;
     readonly nextOccurrenceAt: string | null;
-  }) =>
-    nowIso.pipe(
-      Effect.map((now) => {
-        try {
-          return previewScheduleTiming(detail.timing, detail.timeZone, now, {
-            previewCount: SCHEDULE_UPCOMING_OCCURRENCE_COUNT,
-            allowPastOneTime: true,
-          });
-        } catch {
-          // A stored Schedule whose timing no longer previews (a one-time run
-          // already in the past, say) still has a definite answer.
-          return detail.nextOccurrenceAt === null ? [] : [detail.nextOccurrenceAt];
-        }
-      }),
-    );
+  }) => nowIso.pipe(Effect.map((now) => previewOccurrences(detail, now)));
+
+  const runsPerDay = (detail: ScheduleDetail, now: string) => {
+    try {
+      return countScheduleOccurrencesWithin(detail.timing, detail.timeZone, now, DAY_MS);
+    } catch {
+      // A stored Schedule whose timing no longer evaluates cannot be counted;
+      // saying nothing beats guessing a rate.
+      return 0;
+    }
+  };
 
   const writeResult = (detail: ScheduleDetail): Effect.Effect<ScheduleWriteResult> =>
-    upcomingOccurrences(detail).pipe(
-      Effect.map((occurrences) => ({
+    nowIso.pipe(
+      Effect.map((now) => ({
         ...summaryView(detail),
-        upcomingOccurrences: occurrences,
-        frequencyWarning: frequencyWarning(occurrences),
+        upcomingOccurrences: previewOccurrences(detail, now),
+        frequencyWarning: frequencyWarning(runsPerDay(detail, now)),
       })),
     );
 
@@ -286,23 +327,7 @@ export const make = Effect.gen(function* () {
 
   const createSchedule = Effect.fn("schedules.create")(function* (input: CreateScheduleInput) {
     const shell = yield* callingThread;
-    const snapshot = yield* schedules.getSnapshot().pipe(Effect.mapError(domainError));
-    const wanted = normalizeName(input.name);
-    const clash = snapshot.schedules.find(
-      (schedule) =>
-        schedule.projectId === shell.projectId &&
-        LIVE_STATES.has(schedule.state) &&
-        normalizeName(schedule.name) === wanted,
-    );
-    if (clash !== undefined) {
-      // No delete on this surface, so a duplicate is one the agent cannot take
-      // back — refuse and point at the Schedule it should edit instead.
-      return yield* new ScheduleOrchestrationNameConflictError({
-        scheduleId: clash.id,
-        name: clash.name,
-        message: `This project already has a Schedule named "${clash.name}". Update it with update_schedule (scheduleId ${clash.id}) or choose a different name.`,
-      });
-    }
+    yield* requireNameIsFree(shell.projectId, input.name, null);
 
     const scheduleId = ScheduleId.make(yield* randomUUID);
     yield* schedules
@@ -336,6 +361,10 @@ export const make = Effect.gen(function* () {
       return yield* new ScheduleOrchestrationInvalidInputError({
         message: "Pass at least one field to change.",
       });
+    }
+
+    if (input.name !== undefined && normalizeName(input.name) !== normalizeName(detail.name)) {
+      yield* requireNameIsFree(detail.projectId, input.name, detail.id);
     }
 
     // Patch semantics over a command that only accepts a whole definition: the

@@ -40,6 +40,7 @@ import { ProviderInstanceRegistryHydrationLive } from "./ProviderInstanceRegistr
 import {
   haveProvidersChanged,
   mergeProviderSnapshot,
+  OPENCODE_EMPTY_INVENTORY_CONFIRMATIONS,
   ProviderRegistryLive,
 } from "./ProviderRegistry.ts";
 import * as ServerConfig from "../../config.ts";
@@ -739,6 +740,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           models: [],
           message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
         } satisfies ServerProvider;
+        const disabledProvider = {
+          ...previousProvider,
+          enabled: false,
+          status: "warning",
+          installed: false,
+          auth: { status: "unknown" },
+          checkedAt: "2026-07-17T00:06:00.000Z",
+          version: null,
+          models: [],
+          message: "OpenCode is disabled in Phoenix settings.",
+        } satisfies ServerProvider;
         const authoritativeProvider = {
           ...previousProvider,
           checkedAt: "2026-07-17T00:04:00.000Z",
@@ -756,16 +768,94 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, pendingProvider).models, [
           ...previousProvider.models,
         ]);
+        // A single successful-but-empty inventory is not yet authoritative.
+        assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, loggedOutProvider).models, [
+          ...previousProvider.models,
+        ]);
         assert.deepStrictEqual(
-          mergeProviderSnapshot(previousProvider, loggedOutProvider).models,
+          mergeProviderSnapshot(
+            previousProvider,
+            loggedOutProvider,
+            OPENCODE_EMPTY_INVENTORY_CONFIRMATIONS,
+          ).models,
           [],
         );
+        // Disabled and missing-CLI snapshots remain immediate removals.
         assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, missingProvider).models, []);
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(previousProvider, disabledProvider).models,
+          [],
+        );
 
         const afterRemoval = mergeProviderSnapshot(previousProvider, authoritativeProvider);
         const afterFailure = mergeProviderSnapshot(afterRemoval, failedProvider);
 
         assert.deepStrictEqual(afterFailure.models, [authoritativeProvider.models[0]!]);
+      });
+
+      it("wipes OpenCode models only after consecutive empty inventories", () => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make("opencode"),
+          driver: ProviderDriverKind.make("opencode"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-07-17T00:00:00.000Z",
+          version: "1.0.0",
+          models: [
+            {
+              slug: "github/gpt-5",
+              name: "GPT-5",
+              subProvider: "GitHub",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+        } as const satisfies ServerProvider;
+        const firstEmptyInventory = {
+          ...previousProvider,
+          status: "warning",
+          auth: { status: "unknown" },
+          checkedAt: "2026-07-17T00:01:00.000Z",
+          models: [],
+          message: "OpenCode is available, but it did not report any connected upstream providers.",
+        } satisfies ServerProvider;
+        const secondEmptyInventory = {
+          ...firstEmptyInventory,
+          checkedAt: "2026-07-17T00:02:00.000Z",
+        } satisfies ServerProvider;
+        const recoveredInventory = {
+          ...previousProvider,
+          checkedAt: "2026-07-17T00:03:00.000Z",
+        } satisfies ServerProvider;
+
+        // First empty probe: flaky — keep the discovered models.
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(previousProvider, firstEmptyInventory).models,
+          [...previousProvider.models],
+        );
+        // Second consecutive empty probe: confirmed removal.
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(
+            previousProvider,
+            secondEmptyInventory,
+            OPENCODE_EMPTY_INVENTORY_CONFIRMATIONS,
+          ).models,
+          [],
+        );
+
+        // A non-empty inventory rearms the confirmation counter.
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(previousProvider, recoveredInventory, 1).models,
+          [...previousProvider.models],
+        );
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(previousProvider, secondEmptyInventory, 0).models,
+          [...previousProvider.models],
+        );
       });
 
       it("fills missing capabilities from the previous provider snapshot", () => {
@@ -1142,6 +1232,134 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               assert.deepStrictEqual((yield* registry.getProviders)[0]?.models, [
                 authoritativeProvider.models[0]!,
               ]);
+            }).pipe(Effect.provide(runtimeServices));
+          }),
+      );
+
+      it.effect(
+        "keeps OpenCode models through one empty live refresh and wipes them on the next",
+        () =>
+          Effect.gen(function* () {
+            const openCodeDriver = ProviderDriverKind.make("opencode");
+            const openCodeInstanceId = ProviderInstanceId.make("opencode");
+            const initialProvider = {
+              instanceId: openCodeInstanceId,
+              driver: openCodeDriver,
+              status: "ready",
+              enabled: true,
+              installed: true,
+              auth: { status: "authenticated" },
+              checkedAt: "2026-07-17T00:00:00.000Z",
+              version: "1.0.0",
+              models: [
+                {
+                  slug: "github/gpt-5",
+                  name: "GPT-5",
+                  subProvider: "GitHub",
+                  isCustom: false,
+                  capabilities: null,
+                },
+              ],
+              slashCommands: [],
+              skills: [],
+            } as const satisfies ServerProvider;
+            const firstEmptyInventory = {
+              ...initialProvider,
+              status: "warning",
+              auth: { status: "unknown" },
+              checkedAt: "2026-07-17T00:01:00.000Z",
+              models: [],
+              message:
+                "OpenCode is available, but it did not report any connected upstream providers.",
+            } satisfies ServerProvider;
+            const secondEmptyInventory = {
+              ...firstEmptyInventory,
+              checkedAt: "2026-07-17T00:02:00.000Z",
+            } satisfies ServerProvider;
+            const changes = yield* PubSub.unbounded<ServerProvider>();
+            const instance = {
+              instanceId: openCodeInstanceId,
+              driverKind: openCodeDriver,
+              continuationIdentity: {
+                driverKind: openCodeDriver,
+                continuationKey: "opencode:instance:opencode",
+              },
+              displayName: undefined,
+              enabled: true,
+              snapshot: {
+                maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: openCodeDriver,
+                  packageName: null,
+                }),
+                getSnapshot: Effect.succeed(initialProvider),
+                refresh: Effect.succeed(firstEmptyInventory),
+                streamChanges: Stream.fromPubSub(changes),
+              },
+              adapter: {} as ProviderInstance["adapter"],
+              textGeneration: {} as ProviderInstance["textGeneration"],
+            } satisfies ProviderInstance;
+            const instanceRegistryLayer = Layer.succeed(
+              ProviderInstanceRegistry.ProviderInstanceRegistry,
+              {
+                getInstance: (instanceId) =>
+                  Effect.succeed(instanceId === openCodeInstanceId ? instance : undefined),
+                listInstances: Effect.succeed([instance]),
+                listUnavailable: Effect.succeed([]),
+                streamChanges: Stream.empty,
+                subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
+                  PubSub.subscribe(pubsub),
+                ),
+              },
+            );
+            const scope = yield* Scope.make();
+            yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+            const runtimeServices = yield* Layer.build(
+              ProviderRegistryLive.pipe(
+                Layer.provideMerge(instanceRegistryLayer),
+                Layer.provideMerge(
+                  ServerConfig.layerTest(process.cwd(), {
+                    prefix: "t3-provider-registry-opencode-empty-confirmations-",
+                  }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ).pipe(Scope.provide(scope));
+
+            yield* Effect.gen(function* () {
+              const config = yield* ServerConfig.ServerConfig;
+              const filePath = yield* resolveProviderStatusCachePath({
+                cacheDir: config.providerStatusCacheDir,
+                instanceId: openCodeInstanceId,
+              });
+
+              const waitForCachedCheckedAt = (checkedAt: string) => {
+                let cachedProvider: ServerProvider | undefined;
+                return Effect.gen(function* () {
+                  cachedProvider = yield* readProviderStatusCache(filePath);
+                  for (
+                    let attempt = 0;
+                    attempt < 50 && cachedProvider?.checkedAt !== checkedAt;
+                    attempt += 1
+                  ) {
+                    yield* TestClock.adjust("10 millis");
+                    yield* Effect.yieldNow;
+                    cachedProvider = yield* readProviderStatusCache(filePath);
+                  }
+                  return cachedProvider;
+                });
+              };
+
+              // First flaky empty inventory: models survive in memory + cache.
+              yield* PubSub.publish(changes, firstEmptyInventory);
+              const afterFirstEmpty = yield* waitForCachedCheckedAt(firstEmptyInventory.checkedAt);
+              assert.deepStrictEqual(afterFirstEmpty?.models, [...initialProvider.models]);
+
+              // Second consecutive empty inventory: confirmed removal.
+              yield* PubSub.publish(changes, secondEmptyInventory);
+              const afterSecondEmpty = yield* waitForCachedCheckedAt(
+                secondEmptyInventory.checkedAt,
+              );
+              assert.deepStrictEqual(afterSecondEmpty?.models, []);
             }).pipe(Effect.provide(runtimeServices));
           }),
       );

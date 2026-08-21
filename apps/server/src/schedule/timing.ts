@@ -125,6 +125,37 @@ export function previewScheduleTiming(
   return preview;
 }
 
+/**
+ * Occurrences in the window starting at `after`, capped so a dense cadence
+ * cannot spin. Counting a real window is the only honest way to state a run
+ * rate: extrapolating from the first few gaps reads a burst — every ten
+ * minutes between 09:00 and 17:59, sampled at 09:02 — as if it ran all day.
+ */
+export function countScheduleOccurrencesWithin(
+  timing: ScheduleTiming,
+  timeZone: string,
+  after: string,
+  windowMs: number,
+): number {
+  assertTimeZone(timeZone);
+  const start = DateTime.toEpochMillis(DateTime.makeUnsafe(decodeScheduleInstant(after)));
+  const end = start + windowMs;
+
+  if (timing.type === "one-time") {
+    const runAt = DateTime.toEpochMillis(DateTime.makeUnsafe(decodeScheduleInstant(timing.runAt)));
+    return runAt > start && runAt <= end ? 1 : 0;
+  }
+
+  const cron = parseCron(timing.expression, timeZone);
+  let count = 0;
+  for (const occurrence of validCronOccurrences(cron, timeZone, DateTime.makeUnsafe(start))) {
+    if (occurrence.getTime() > end) break;
+    count += 1;
+    if (count >= VALIDATION_OCCURRENCE_COUNT) break;
+  }
+  return count;
+}
+
 export function nextScheduleOccurrence(
   timing: ScheduleTiming,
   timeZone: string,

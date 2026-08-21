@@ -127,6 +127,16 @@ Schedule's state today next to the moment it was created. The row links to the S
 is the live view. Failed writes fall through to the generic tool row, where the error is visible on
 expand.
 
+Provider coverage for the row is currently **Claude and Codex only**, and this is a known gap
+rather than a decision. `deriveScheduleToolActivity` recognizes two payload shapes: Codex's
+`item.server`/`item.tool` pair, and Claude's flattened `mcp__phoenix__*` tool name. OpenCode
+classifies tool items by substring on the tool name (`toToolLifecycleItemType`), and Cursor and Grok
+arrive over ACP, where anything that is not execute/edit/search maps to `dynamic_tool_call` — so the
+MCP projection path never runs for them at all. The tools themselves work on every provider; only
+the row is missing, and those threads fall back to the generic expandable tool row, which still
+shows the call and its arguments. Closing this needs the real tool-name strings each adapter emits,
+confirmed against a live session per provider rather than inferred from adapter source.
+
 The cadence humanizer is `packages/shared/src/scheduleCadence.ts`. It names common shapes and falls
 back to the raw expression rather than guessing, on the grounds that a confident wrong sentence is
 worse than cron.

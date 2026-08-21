@@ -40,7 +40,7 @@ function parseField(raw: string, min: number, max: number): FieldSpec | null {
   const step = /^\*\/(\d+)$/u.exec(field);
   if (step) {
     const value = Number(step[1]);
-    return Number.isInteger(value) && value > 0 ? { kind: "step", step: value } : null;
+    return inBounds(value, 1, max) ? { kind: "step", step: value } : null;
   }
 
   const values = new Set<number>();
@@ -89,7 +89,10 @@ function describeCronExpression(expression: string): string | null {
 
   const everyDay = dayOfMonth.kind === "all" && dayOfWeek.kind === "all";
 
-  if (minute.kind === "step" && hour.kind === "all" && everyDay) {
+  // A cron minute field restarts every hour, so `*/N` only produces a uniform
+  // interval when N divides 60. `*/16` fires at :00 :16 :32 :48 and then wraps
+  // to :00 — a 12-minute gap that "Every 16 minutes" flatly contradicts.
+  if (minute.kind === "step" && hour.kind === "all" && everyDay && 60 % minute.step === 0) {
     return `Every ${minute.step} minutes`;
   }
 

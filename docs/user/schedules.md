@@ -89,6 +89,10 @@ showing what changed, the cadence in plain language, and its time zone. The row 
 Schedules page. It is a record of what happened at that moment, not a live view — a Schedule you
 later pause still shows as created in the older chat row.
 
+The chat row currently appears for Claude and Codex sessions. On other providers the change still
+happens and still shows in the transcript, as an ordinary expandable tool row rather than a
+summarised one.
+
 Turn this off under **Settings → General → Schedule management**. The switch covers reading as well
 as changing, applies to the whole environment, and takes effect immediately, including for sessions
 that are already running.
