@@ -35,7 +35,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
-import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
+import {
+  ProviderAdapterRequestError,
+  ProviderAdapterSessionNotFoundError,
+} from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -52,9 +55,9 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
+  makeProviderCommandReactorLive,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
-  ProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { LimitFailoverReactor } from "../Services/LimitFailoverReactor.ts";
@@ -398,7 +401,12 @@ describe("ProviderCommandReactor", () => {
         } satisfies OrchestrationEngineService["Service"];
       }),
     ).pipe(Layer.provide(orchestrationLayer));
-    const layer = Layer.mergeAll(ProviderCommandReactorLive, LimitFailoverReactorLive).pipe(
+    // A short interrupt timeout keeps the hung-transport test fast; the
+    // production layer defaults to 10 seconds.
+    const layer = Layer.mergeAll(
+      makeProviderCommandReactorLive({ interruptTimeoutSeconds: 1 }),
+      LimitFailoverReactorLive,
+    ).pipe(
       Layer.provideMerge(reactorOrchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
@@ -3189,6 +3197,167 @@ describe("ProviderCommandReactor", () => {
         detail: expect.stringContaining("did not acknowledge the interrupt"),
       },
     });
+    // A definite failure means the provider may still be working: the session
+    // must stay running so the next message cannot interleave with live work.
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(asTurnId("turn-1"));
+  });
+
+  it("a stop settles the running turn even when the adapter reports nothing", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-stop-settles"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    // The adapter resolved without emitting any lifecycle event — the shape a
+    // recovered context produces after a server restart, where it cannot know
+    // the provider turn id.
+    harness.interruptTurn.mockImplementation(() => Effect.void);
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-turn-interrupt-stop-settles"),
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return thread?.session?.status === "ready" && thread.session.activeTurnId === null;
+    });
+  });
+
+  it("a stop settles the running turn when the provider transport hangs", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-hung"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    // The wedged-transport case that produced the original incident: the
+    // abort call never returns. The user asked to stop; the turn must not
+    // stay "running" forever, and the reactor worker must not jam behind it.
+    harness.interruptTurn.mockImplementation(() => Effect.never);
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-turn-interrupt-hung"),
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return (
+        thread?.session?.status === "ready" &&
+        thread.session.activeTurnId === null &&
+        (thread.activities.some(
+          (activity) =>
+            activity.kind === "provider.turn.interrupt.failed" &&
+            typeof activity.payload === "object" &&
+            activity.payload !== null &&
+            String((activity.payload as Record<string, unknown>).detail).includes(
+              "did not acknowledge the interrupt within 1 seconds",
+            ),
+        ) ??
+          false)
+      );
+    });
+  });
+
+  it("a stop clears a phantom running turn the provider can no longer see", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-phantom"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    // No live runtime exists behind this session (server restarted under it).
+    harness.interruptTurn.mockImplementation(() =>
+      Effect.fail(
+        new ProviderAdapterSessionNotFoundError({
+          provider: ProviderDriverKind.make("codex"),
+          threadId: ThreadId.make("thread-1"),
+        }),
+      ),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-turn-interrupt-phantom"),
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return (
+        thread?.session?.status === "error" &&
+        thread.session.activeTurnId === null &&
+        thread.session.stoppedBy === "system" &&
+        thread.session.stopReason === "provider_crashed" &&
+        (thread.activities.some((activity) => activity.kind === "provider.turn.interrupt.failed") ??
+          false)
+      );
+    });
   });
 
   it("starts a fresh session when only projected session state exists", async () => {
@@ -3496,6 +3665,87 @@ describe("ProviderCommandReactor", () => {
         (activity.payload as Record<string, unknown>).requestId === "approval-request-1",
     );
     expect(resolvedActivity).toBeUndefined();
+  });
+
+  it("reports approvals on stopped sessions in stale-request terms so zombies resolve", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // The provider callback state died with the session (server restart).
+    // The projection pipeline resolves a pending-approval row when the
+    // failure detail carries stale-request wording; without it the prompt
+    // stays actionable forever and blocks settling the thread.
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-stopped-zombie"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-approval-requested-zombie"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("activity-approval-requested-zombie"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Command approval requested",
+          payload: {
+            requestId: "approval-request-zombie",
+            requestKind: "command",
+          },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.approval.respond",
+        commandId: CommandId.make("cmd-approval-respond-zombie"),
+        threadId: ThreadId.make("thread-1"),
+        requestId: asApprovalRequestId("approval-request-zombie"),
+        decision: "decline",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return (
+        thread?.activities.some(
+          (activity) => activity.kind === "provider.approval.respond.failed",
+        ) ?? false
+      );
+    });
+    expect(harness.respondToRequest.mock.calls.length).toBe(0);
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.approval.respond.failed"),
+    ).toMatchObject({
+      payload: {
+        requestId: "approval-request-zombie",
+        detail: expect.stringContaining("Stale pending approval request: approval-request-zombie"),
+      },
+    });
   });
 
   effectIt.effect("surfaces non-resumable provider user-input callbacks as stale failures", () =>
