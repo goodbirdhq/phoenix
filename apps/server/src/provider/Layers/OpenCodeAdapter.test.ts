@@ -1185,39 +1185,6 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
   );
 
   it.effect(
-    "emits turn.aborted for a stop even when no provider turn id is known",
-    () =>
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const threadId = asThreadId("thread-stop-without-turn-id");
-        const sessionTitle = "Stop without turn id";
-        runtimeMock.state.subscribedEvents = [];
-        const eventsFiber = yield* adapter.streamEvents.pipe(
-          Stream.filter((event) => event.threadId === threadId && event.type === "turn.aborted"),
-          Stream.take(1),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
-
-        // A session whose context survived but carries no active provider
-        // turn — the shape a recovered session has after a server restart.
-        // The stop must still announce itself instead of silently no-oping.
-        yield* adapter.startSession({
-          provider: ProviderDriverKind.make("opencode"),
-          threadId,
-          runtimeMode: "full-access",
-          title: sessionTitle,
-        });
-        yield* adapter.interruptTurn(threadId);
-
-        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
-        NodeAssert.ok(runtimeMock.state.abortCalls.includes(openCodeSessionId));
-        NodeAssert.equal(events.length, 1);
-      }),
-    { sequential: true },
-  );
-
-  it.effect(
     "does not fire a second continuation when a duplicate idle follows busy",
     () =>
       Effect.gen(function* () {

@@ -568,12 +568,9 @@ describe("ProviderSessionReaper", () => {
   it("clears a phantom active turn from before this process booted immediately", async () => {
     const threadId = ThreadId.make("thread-reaper-preboot-phantom");
     const turnId = TurnId.make("turn-reaper-preboot-phantom");
-    // Captured before the harness builds its layer, nudged back a few
-    // milliseconds to stay strictly behind the reaper's boot-time capture:
-    // the binding's last-seen therefore predates boot even though it sits far
-    // inside the inactivity threshold.
-    const nowMillis = await Effect.runPromise(Clock.currentTimeMillis);
-    const justBeforeBoot = DateTime.formatIso(DateTime.fromEpochSeconds((nowMillis - 50) / 1000));
+    // Binding AND session both predate boot: no live runtime could still be
+    // feeding either timestamp, so the watchdog skips the inactivity
+    // threshold entirely and the first sweep clears the turn.
     const harness = await createHarness({
       readModel: makeReadModel([
         {
@@ -585,7 +582,7 @@ describe("ProviderSessionReaper", () => {
             runtimeMode: "full-access",
             activeTurnId: turnId,
             lastError: null,
-            updatedAt: justBeforeBoot,
+            updatedAt: "2026-01-01T00:00:00.000Z",
           },
         },
       ]),
@@ -602,7 +599,7 @@ describe("ProviderSessionReaper", () => {
         adapterKey: "opencode",
         runtimeMode: "full-access",
         status: "running",
-        lastSeenAt: justBeforeBoot,
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
         resumeCursor: { opaque: "resume-preboot-phantom" },
         runtimePayload: null,
       }),
@@ -625,6 +622,106 @@ describe("ProviderSessionReaper", () => {
     });
   });
 
+  it("does not accelerate ordinary reaping of pre-boot ready sessions", async () => {
+    const threadId = ThreadId.make("thread-reaper-preboot-ready");
+    // Captured before the harness builds its layer, nudged back a few
+    // milliseconds so the binding strictly predates boot while staying far
+    // inside the inactivity threshold.
+    const nowMillis = await Effect.runPromise(Clock.currentTimeMillis);
+    const justBeforeBoot = DateTime.formatIso(DateTime.fromEpochSeconds((nowMillis - 50) / 1000));
+    // Ready session, no active turn: the preboot exemption belongs to the
+    // active-turn watchdog only. Without an adapter context there is nothing
+    // to abort and no projection to fix, so ordinary reaping keeps its
+    // threshold even though the binding predates boot.
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "opencode",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "opencode",
+        providerInstanceId: null,
+        adapterKey: "opencode",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: justBeforeBoot,
+        resumeCursor: { opaque: "resume-preboot-ready" },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await Effect.runPromise(drainFibers);
+
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
+    expect(Option.isSome(remaining)).toBe(true);
+  });
+
+  it("still skips a pre-boot active turn whose recovered context reports unknown liveness", async () => {
+    const threadId = ThreadId.make("thread-reaper-preboot-unknown");
+    const turnId = TurnId.make("turn-reaper-preboot-unknown");
+    // Known gap, pinned deliberately: a stop press that resurrected a context
+    // makes liveness "unknown", and the watchdog still defers to it. The
+    // reactor-side interrupt settle is what clears these threads.
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "opencode",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      ]),
+      runtimeLiveness: "unknown",
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "opencode",
+        providerInstanceId: null,
+        adapterKey: "opencode",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-preboot-unknown" },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await Effect.runPromise(drainFibers);
+
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    expect(harness.stopSession).not.toHaveBeenCalled();
+  });
+
   it("does not crash a freshly updated active turn without a live provider session", async () => {
     const threadId = ThreadId.make("thread-reaper-active-fresh");
     const turnId = TurnId.make("turn-reaper-active-fresh");
@@ -643,6 +740,11 @@ describe("ProviderSessionReaper", () => {
     const harness = await createHarness({
       readModel: makeReadModel([{ id: threadId, session }]),
     });
+    // ManagedRuntime builds layers lazily on the first run call. Touch it
+    // once so the reaper's boot-time capture is fixed before we stamp the
+    // session as freshly-updated — otherwise slow layer init could land boot
+    // after the mutation and misread this thread as restart-orphaned.
+    await runtime!.runPromise(Effect.void);
     session.updatedAt = DateTime.formatIso(
       DateTime.fromEpochSeconds(((await Effect.runPromise(Clock.currentTimeMillis)) + 50) / 1000),
     );

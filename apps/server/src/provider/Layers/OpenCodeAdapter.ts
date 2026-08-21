@@ -1790,21 +1790,18 @@ export function makeOpenCodeAdapter(
         yield* runOpenCodeSdk("session.abort", () =>
           context.client.session.abort({ sessionID: context.openCodeSessionId }),
         ).pipe(Effect.mapError(toRequestError));
-        // Always announce the abort. Gating on knowing the provider turn id
-        // used to silence stops entirely: after a server restart no in-memory
-        // context survives, so `turnId ?? context.activeTurnId` was falsy, no
-        // lifecycle event reached orchestration, and the session stayed
-        // "running" forever while every further stop press did nothing.
-        yield* emit({
-          ...(yield* buildEventBase({
-            threadId,
-            turnId: turnId ?? context.activeTurnId,
-          })),
-          type: "turn.aborted",
-          payload: {
-            reason: "Interrupted by user.",
-          },
-        });
+        if (turnId ?? context.activeTurnId) {
+          yield* emit({
+            ...(yield* buildEventBase({
+              threadId,
+              turnId: turnId ?? context.activeTurnId,
+            })),
+            type: "turn.aborted",
+            payload: {
+              reason: "Interrupted by user.",
+            },
+          });
+        }
       },
     );
 

@@ -44,7 +44,6 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     // turn; waiting out the inactivity threshold strands queued messages and
     // turns every stop press into a silent no-op for half an hour.
     const bootMs = yield* Clock.currentTimeMillis;
-
     const sweep = Effect.gen(function* () {
       const bindings = yield* directory.listBindings();
       const now = yield* Clock.currentTimeMillis;
@@ -66,10 +65,9 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         }
 
         // Keep ordinary ready/stopped reaping cheap and exactly keyed to the
-        // persisted binding timestamp. Only the active-turn watchdog needs a
-        // shell read and the more conservative session timestamp. Pre-boot
-        // bindings skip the threshold: their runtime died with the previous
-        // process, so no amount of waiting makes clearing them unsafe.
+        // persisted binding timestamp. Pre-boot bindings skip ahead because
+        // only the active-turn watchdog below can fix them; ordinary reaping
+        // re-checks the threshold inside the non-active-turn branch.
         const idleDurationMs = now - lastSeenMs;
         const isPreboot = lastSeenMs < bootMs;
         if (!isPreboot && idleDurationMs < inactivityThresholdMs) {
@@ -108,7 +106,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           const watchdogIdleDurationMs =
             now -
             Math.max(lastSeenMs, Number.isNaN(sessionUpdatedMs) ? lastSeenMs : sessionUpdatedMs);
-          const orphanedByRestart = isPreboot && sessionUpdatedMs < bootMs;
+          const orphanedByRestart = lastSeenMs < bootMs && sessionUpdatedMs < bootMs;
           if (!orphanedByRestart && watchdogIdleDurationMs < inactivityThresholdMs) {
             continue;
           }
@@ -163,6 +161,14 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
                 }),
               ),
             );
+          continue;
+        }
+
+        // Ordinary reaping keeps its threshold even for pre-boot bindings:
+        // with no adapter context there is nothing to abort and no
+        // orchestration projection to fix, so accelerating it would only
+        // churn binding rows ahead of schedule.
+        if (idleDurationMs < inactivityThresholdMs) {
           continue;
         }
 
