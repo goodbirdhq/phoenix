@@ -47,6 +47,9 @@ describe("buildRunPrompt", () => {
     expect(prompt).toContain("Shadow mode");
     expect(prompt).toContain("do not perform any external side effect");
     expect(prompt).toContain("shadowedEffects");
+    // A shadow run still has to report: a smaller model once read the
+    // no-side-effects rule as covering the callback and never posted.
+    expect(prompt).toContain("The completion callback below is not a side effect.");
   });
 
   it("renders null input as `null`, not an empty block", () => {

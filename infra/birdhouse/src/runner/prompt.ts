@@ -38,6 +38,15 @@ export function buildRunPrompt(input: BuildRunPromptInput): string {
         "record it in your result payload under a `shadowedEffects` array — one",
         "entry per action, with enough detail to reconstruct what would have",
         "happened.",
+        "",
+        // A smaller model read "no third-party API calls that change state"
+        // as covering the callback itself, finished its work, wrote the
+        // payload into its own transcript, and never posted — leaving the run
+        // open until its deadline. Shadow mode is about the workflow's
+        // effects on the outside world, never about reporting back.
+        "**The completion callback below is not a side effect.** Posting your",
+        "result is how this run finishes, in every mode. Always post it, and",
+        "never record it as a `shadowedEffects` entry.",
       ].join("\n"),
     );
   }
