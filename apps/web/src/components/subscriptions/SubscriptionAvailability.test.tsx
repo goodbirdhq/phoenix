@@ -1,6 +1,13 @@
 import type { ProviderAvailability } from "@t3tools/contracts";
+import type { AnchorHTMLAttributes } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ to, ...props }: { readonly to: string } & AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={to} {...props} />
+  ),
+}));
 
 import {
   SubscriptionAvailabilitySection,
@@ -194,5 +201,39 @@ describe("SubscriptionAvailabilitySection", () => {
     expect(markup).toContain("never switch automatically");
     expect(markup).toContain("Limits not reported");
     expect(markup).toContain("Manage Provider");
+    expect(markup).not.toContain("Cursor 0 of 1 ready");
+  });
+
+  it("keeps partial Environment errors visible beside retained Capacity data", () => {
+    const markup = renderToStaticMarkup(
+      <SubscriptionAvailabilitySection sources={[source]} hasError />,
+    );
+
+    expect(markup).toContain("Capacity could not be checked for every connected Environment");
+    expect(markup).toContain("Claude Work");
+  });
+
+  it("describes shared subscriptions with Provider labels rather than internal ids", () => {
+    const account = {
+      id: "shared-account",
+      verification: "native_verified" as const,
+      displayName: "Team account",
+    };
+    const markup = renderToStaticMarkup(
+      <SubscriptionAvailabilitySection
+        sources={[
+          { ...source, displayName: "Claude Work", availability: { ...availability, account } },
+          {
+            ...source,
+            instanceId: "claude-backup-internal-id",
+            displayName: "Claude Backup",
+            availability: { ...availability, account },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Shares a subscription with Claude Backup, Claude Work");
+    expect(markup).not.toContain("claude-backup-internal-id");
   });
 });

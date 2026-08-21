@@ -292,6 +292,26 @@ describe("cacheProviderAvailability", () => {
       receivedAtMs: 5_000,
     });
   });
+
+  it("keeps the cached entry when a passive reading is semantically unchanged", () => {
+    const cached = {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      availability: claudeCliSnapshot,
+      receivedAtMs: 1_000,
+    };
+
+    expect(
+      cacheProviderAvailability(
+        cached,
+        {
+          ...claudeCliSnapshot,
+          windows: claudeCliSnapshot.windows.map((window) => ({ ...window })),
+        },
+        5_000,
+        ProviderDriverKind.make("claudeAgent"),
+      ),
+    ).toBe(cached);
+  });
 });
 
 describe("unknownRefreshAvailability", () => {

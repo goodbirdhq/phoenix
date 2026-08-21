@@ -1806,6 +1806,36 @@ it.effect("ProviderServiceLive streams the cached availability after passive upd
   }),
 );
 
+it.effect("ProviderServiceLive does not rebroadcast an unchanged passive reading", () =>
+  Effect.gen(function* () {
+    const adapter = makeFakeCodexAdapter();
+
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const subscription = yield* provider.subscribeAvailability!;
+      const changeCount = yield* Ref.make(0);
+      const changes = yield* subscription.changes.pipe(
+        Stream.runForEach(() => Ref.update(changeCount, (count) => count + 1)),
+        Effect.forkChild,
+      );
+      const processed = yield* provider.streamEvents.pipe(
+        Stream.take(2),
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+
+      adapter.emit(rateLimitEvent("unchanged-passive-1", 71));
+      adapter.emit(rateLimitEvent("unchanged-passive-2", 71));
+      yield* Fiber.join(processed);
+      yield* Effect.yieldNow;
+
+      assert.equal(yield* Ref.get(changeCount), 1);
+      yield* Fiber.interrupt(changes);
+    }).pipe(Effect.provide(makeAvailabilityProviderLayer(adapter.adapter, serverConfigTestLayer)));
+  }),
+);
+
 it.effect("ProviderServiceLive ignores a malformed availability cache", () =>
   Effect.acquireUseRelease(
     Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-availability-bad-"))),
@@ -1877,6 +1907,47 @@ it.effect("ProviderServiceLive shares one in-flight availability refresh", () =>
       assert.deepEqual(yield* Fiber.join(first), snapshot);
       assert.deepEqual(yield* Fiber.join(second), snapshot);
       assert.equal(refreshCalls, 1);
+    }).pipe(Effect.provide(makeAvailabilityProviderLayer(adapter, serverConfigTestLayer)));
+  }),
+);
+
+it.effect("ProviderServiceLive does not interrupt a shared refresh follower with its leader", () =>
+  Effect.gen(function* () {
+    const base = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+    const started = yield* Deferred.make<void>();
+    const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+      ...base.adapter,
+      refreshAvailability: () =>
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      get streamEvents() {
+        return base.adapter.streamEvents;
+      },
+    };
+
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const leader = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      const follower = yield* provider.refreshAvailability!(
+        claudeAgentInstanceId,
+        CLAUDE_AGENT_DRIVER,
+      ).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+
+      yield* Fiber.interrupt(leader);
+      const followerExit = yield* Fiber.await(follower);
+
+      assert.equal(Exit.isSuccess(followerExit), true);
+      if (Exit.isSuccess(followerExit)) {
+        assert.deepEqual(followerExit.value, {
+          status: "unknown",
+          source: "claude_agent_sdk",
+          windows: [],
+        });
+      }
     }).pipe(Effect.provide(makeAvailabilityProviderLayer(adapter, serverConfigTestLayer)));
   }),
 );

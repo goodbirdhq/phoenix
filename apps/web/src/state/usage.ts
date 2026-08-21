@@ -8,7 +8,6 @@
  */
 import { useAtomValue } from "@effect/atom-react";
 import {
-  canRefreshProviderAvailability,
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
   type ProviderAvailabilityEntry,
@@ -27,7 +26,18 @@ import { subscriptionAvailabilityPresentationState } from "@t3tools/client-runti
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
-import { selectHistoricalUsageEnvironments } from "./usage.logic";
+import {
+  capacityRefreshKey,
+  hasUnsettledCapacityRefresh,
+  parseCapacityRefreshKey,
+  refreshHistoricalUsage,
+  refreshProviderCapacity,
+  resolveAvailabilityEntries,
+  selectHistoricalUsageEnvironments,
+  staleCapacityTargets,
+  type CapacityRefreshTarget,
+  type UsageRefreshPorts,
+} from "./usage.logic";
 
 export interface EnvironmentUsageStatus {
   readonly environmentId: EnvironmentId;
@@ -46,6 +56,8 @@ export interface EnvironmentProviderAvailabilityStatus {
   readonly hasError: boolean;
   /** A fresh native reading is being collected while the last known value stays visible. */
   readonly isRefreshing: boolean;
+  /** A targeted query has not produced either a success or failure yet. */
+  readonly hasUnsettledRefresh: boolean;
   readonly refreshingInstanceIds: readonly ProviderInstanceId[];
   readonly providers: readonly ProviderAvailabilityEntry[];
   /** Provider snapshots carry enabled/auth facts used for account presentation. */
@@ -54,41 +66,10 @@ export interface EnvironmentProviderAvailabilityStatus {
   readonly providerInstances: ProviderInstanceConfigMap;
 }
 
-interface CapacityRefreshTarget {
-  readonly environmentId: EnvironmentId;
-  readonly instanceId: ProviderInstanceId;
-}
-
-const capacityRefreshKey = (targets: readonly CapacityRefreshTarget[]): string =>
-  JSON.stringify(
-    [
-      ...new Map(
-        targets.map((target) => [
-          JSON.stringify([target.environmentId, target.instanceId]),
-          {
-            environmentId: target.environmentId,
-            instanceId: target.instanceId,
-          },
-        ]),
-      ).values(),
-    ].toSorted(
-      (left, right) =>
-        left.environmentId.localeCompare(right.environmentId) ||
-        left.instanceId.localeCompare(right.instanceId),
-    ),
-  );
-
-const parseCapacityRefreshKey = (key: string): readonly CapacityRefreshTarget[] =>
-  JSON.parse(key) as readonly CapacityRefreshTarget[];
-
-const replaceAvailabilityEntries = (
-  cached: readonly ProviderAvailabilityEntry[],
-  refreshed: readonly ProviderAvailabilityEntry[],
-): readonly ProviderAvailabilityEntry[] => {
-  if (refreshed.length === 0) return cached;
-  const byInstance = new Map(cached.map((entry) => [entry.instanceId, entry]));
-  for (const entry of refreshed) byInstance.set(entry.instanceId, entry);
-  return [...byInstance.values()];
+const usageRefreshPorts: UsageRefreshPorts = {
+  refreshUsageSummary: (target) => appAtomRegistry.refresh(serverEnvironment.usageSummary(target)),
+  refreshProviderAvailability: (target) =>
+    appAtomRegistry.refresh(serverEnvironment.providerAvailability(target)),
 };
 
 const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
@@ -125,12 +106,13 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
           }),
         ),
       );
-      const providers = refreshResults.reduce(
-        (entries, result) => {
+      const providers = resolveAvailabilityEntries(
+        cachedValue?.providers ?? [],
+        liveValue?.providers ?? null,
+        refreshResults.flatMap((result) => {
           const value = Option.getOrNull(AsyncResult.value(result));
-          return value === null ? entries : replaceAvailabilityEntries(entries, value.providers);
-        },
-        liveValue?.providers ?? cachedValue?.providers ?? [],
+          return value === null ? [] : [value.providers];
+        }),
       );
       const serverProviders = get(serverEnvironment.providersValueAtom(environmentId));
       const providerInstances =
@@ -154,6 +136,7 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
         // flashing the final empty state while it is still loading.
         ...presentationState,
         isRefreshing: refreshResults.some((result) => result.waiting),
+        hasUnsettledRefresh: hasUnsettledCapacityRefresh(refreshResults),
         refreshingInstanceIds: environmentRefreshTargets.flatMap((target, index) =>
           refreshResults[index]?.waiting ? [target.instanceId] : [],
         ),
@@ -233,34 +216,6 @@ export interface UsageView {
   readonly hasProviderAvailabilityError: boolean;
 }
 
-function staleCapacityTargets(
-  environments: readonly EnvironmentProviderAvailabilityStatus[],
-): readonly CapacityRefreshTarget[] {
-  const targets: CapacityRefreshTarget[] = [];
-  for (const environment of environments) {
-    if (environment.isPending || environment.serverProviders === null) continue;
-    const availabilityByInstance = new Map(
-      environment.providers.map((entry) => [entry.instanceId, entry.availability]),
-    );
-    for (const provider of environment.serverProviders) {
-      if (!canRefreshProviderAvailability(provider)) continue;
-      const availability = availabilityByInstance.get(provider.instanceId);
-      if (
-        availability === undefined ||
-        availability.observedAt === undefined ||
-        availability.status === "unknown" ||
-        availability.stale !== undefined
-      ) {
-        targets.push({
-          environmentId: environment.environmentId,
-          instanceId: provider.instanceId,
-        });
-      }
-    }
-  }
-  return targets;
-}
-
 export function useUsage(
   input: UsageSummaryInput,
   historicalEnvironmentId: EnvironmentId | null = null,
@@ -297,14 +252,7 @@ export function useUsage(
 
   const beginCapacityRefresh = useCallback((targets: readonly CapacityRefreshTarget[]) => {
     if (targets.length === 0) return;
-    for (const target of targets) {
-      appAtomRegistry.refresh(
-        serverEnvironment.providerAvailability({
-          environmentId: target.environmentId,
-          input: { refresh: true, instanceId: target.instanceId },
-        }),
-      );
-    }
+    refreshProviderCapacity(usageRefreshPorts, targets);
     setRefreshKey((current) =>
       capacityRefreshKey([...parseCapacityRefreshKey(current), ...targets]),
     );
@@ -316,7 +264,7 @@ export function useUsage(
   useEffect(() => {
     if (
       refreshKey !== NO_CAPACITY_REFRESH_KEY &&
-      !providerAvailability.some((environment) => environment.isRefreshing)
+      !providerAvailability.some((environment) => environment.hasUnsettledRefresh)
     ) {
       const environmentIds = new Set(
         parseCapacityRefreshKey(refreshKey).map((target) => target.environmentId),
@@ -359,14 +307,7 @@ export function useUsage(
   // environment's query so the button always rescans.
   const refreshUsage = useCallback(
     (refreshInput: UsageSummaryInput = input) => {
-      for (const environment of environments) {
-        appAtomRegistry.refresh(
-          serverEnvironment.usageSummary({
-            environmentId: environment.environmentId,
-            input: refreshInput,
-          }),
-        );
-      }
+      refreshHistoricalUsage(usageRefreshPorts, environments, refreshInput);
     },
     [environments, input],
   );

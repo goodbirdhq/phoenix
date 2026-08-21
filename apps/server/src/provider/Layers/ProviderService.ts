@@ -19,11 +19,11 @@ import {
   ProviderSendTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  ProviderAvailability,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
-  type ProviderAvailability,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { causeErrorTag } from "@t3tools/shared/observability";
@@ -31,6 +31,7 @@ import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -73,6 +74,7 @@ import {
   type DurableProviderAvailability,
 } from "../providerAvailabilityCache.ts";
 const isModelSelection = Schema.is(ModelSelection);
+const providerAvailabilityEquals = Schema.toEquivalence(ProviderAvailability);
 
 /**
  * Hook for tests that want to override the canonical event logger pulled
@@ -398,6 +400,13 @@ export const cacheProviderAvailability = (
   if (cached === undefined) {
     return { ...(driver ? { driver } : {}), availability, receivedAtMs: nowMs };
   }
+  const nextDriver = driver ?? cached.driver;
+  if (
+    nextDriver === cached.driver &&
+    providerAvailabilityEquals(cached.availability, availability)
+  ) {
+    return cached;
+  }
   // A retained reading keeps the age it already had, whether or not it picked
   // up a stale marker on the way through. Restamping it would let a run of
   // failed refreshes keep a single old panel alive forever.
@@ -699,25 +708,35 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     availability: ProviderAvailability,
     nowMs: number,
   ) =>
-    Ref.modify(availabilityByInstance, (entries) => {
-      const entry = cacheProviderAvailability(
-        entries.get(instanceId),
-        availability,
-        nowMs,
-        provider,
-      );
-      const next = new Map(entries);
-      next.set(instanceId, entry);
-      return [entry, next] as const;
-    }).pipe(
-      Effect.tap(() => persistAvailability),
-      Effect.tap((entry) =>
-        PubSub.publish(availabilityChangesPubSub, {
-          instanceId,
-          provider,
-          availability: availabilityAt(entry, provider, nowMs),
-        }),
+    Ref.modify(
+      availabilityByInstance,
+      (
+        entries,
+      ): readonly [
+        { readonly entry: CachedProviderAvailability; readonly changed: boolean },
+        ReadonlyMap<ProviderInstanceId, CachedProviderAvailability>,
+      ] => {
+        const previous = entries.get(instanceId);
+        const entry = cacheProviderAvailability(previous, availability, nowMs, provider);
+        if (entry === previous) {
+          return [{ entry, changed: false }, entries] as const;
+        }
+        const next = new Map(entries);
+        next.set(instanceId, entry);
+        return [{ entry, changed: true }, next] as const;
+      },
+    ).pipe(
+      Effect.tap(({ changed }) => (changed ? persistAvailability : Effect.void)),
+      Effect.tap(({ changed, entry }) =>
+        changed
+          ? PubSub.publish(availabilityChangesPubSub, {
+              instanceId,
+              provider,
+              availability: availabilityAt(entry, provider, nowMs),
+            })
+          : Effect.void,
       ),
+      Effect.map(({ entry }) => entry),
     );
   /**
    * Attach the `phoenix` MCP server to the session that is about to start.
@@ -919,12 +938,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         return availabilityAt(entry, provider, receivedAtMs);
       }).pipe(
         Effect.onExit((exit) =>
-          Ref.update(availabilityRefreshes, (entries) => {
-            if (entries.get(instanceId) !== deferred) return entries;
-            const next = new Map(entries);
-            next.delete(instanceId);
-            return next;
-          }).pipe(Effect.andThen(Deferred.done(deferred, exit))),
+          Effect.gen(function* () {
+            yield* Ref.update(availabilityRefreshes, (entries) => {
+              if (entries.get(instanceId) !== deferred) return entries;
+              const next = new Map(entries);
+              next.delete(instanceId);
+              return next;
+            });
+            yield* Exit.isSuccess(exit)
+              ? Deferred.succeed(deferred, exit.value)
+              : Deferred.succeed(deferred, yield* cachedAt());
+          }),
         ),
       );
     });

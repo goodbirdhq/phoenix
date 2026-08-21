@@ -50,6 +50,9 @@ import { followStreamInEnvironment } from "./runtime.ts";
 
 export type ServerUpdateStage = "downloading" | "installing" | "resuming";
 
+export const supportsProviderAvailabilityChanges = (config: ServerConfig): boolean =>
+  config.environment.capabilities.providerAvailabilityChanges === true;
+
 export type ServerUpdateState =
   | { readonly status: "idle" }
   | {
@@ -767,10 +770,16 @@ export function createServerEnvironmentAtoms<R, E>(
     providerAvailabilityChanges: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:provider-availability-changes",
       subscribe: (input: ProviderAvailabilitySubscriptionInput) =>
-        subscribe(WS_METHODS.subscribeProviderAvailability, {
-          ...input,
-          contractVersion: PROVIDER_AVAILABILITY_CONTRACT_VERSION,
-        }).pipe(
+        subscribe(
+          WS_METHODS.subscribeProviderAvailability,
+          {
+            ...input,
+            contractVersion: PROVIDER_AVAILABILITY_CONTRACT_VERSION,
+          },
+          {
+            supports: supportsProviderAvailabilityChanges,
+          },
+        ).pipe(
           Stream.mapAccum(
             () => null as ProviderAvailabilityResult | null,
             projectProviderAvailabilityStream,

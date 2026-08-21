@@ -339,7 +339,7 @@ describe("deriveSubscriptionCapacity", () => {
     const members = presentation.groups[0]!.members;
     expect(members).toHaveLength(2);
     expect(members.every((member) => member.sharedSubscription)).toBe(true);
-    expect(members[0]?.sharedInstanceIds).toEqual(["claude-a", "claude-b"]);
+    expect(members[0]?.instanceLabels).toEqual(["Claude"]);
   });
 
   it("keeps readiness subscription-based while the Instances lens expands routing rows", () => {
@@ -402,6 +402,19 @@ describe("deriveSubscriptionCapacity", () => {
       ["Claude", false],
       ["Claude", false],
     ]);
+  });
+
+  it("omits unsupported-only Providers from readiness summaries", () => {
+    const presentation = deriveSubscriptionCapacity([
+      capacitySource({
+        instanceId: "unsupported",
+        driver: "cursor",
+        availability: { status: "unknown", source: "unsupported", windows: [] },
+      }),
+    ]);
+
+    expect(presentation.providers).toEqual([]);
+    expect(presentation.groups).toHaveLength(1);
   });
 
   it("keeps revalidation state on the affected subscription or instance row", () => {

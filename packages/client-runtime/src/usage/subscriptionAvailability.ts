@@ -120,8 +120,6 @@ export type SubscriptionCapacityMember = {
   readonly status: SubscriptionCapacityReadiness;
   /** True when this row represents one of multiple routing targets for an account. */
   readonly sharedSubscription: boolean;
-  /** All instances sharing this member's verified account, including itself. */
-  readonly sharedInstanceIds: readonly string[];
   /** Other Environment-local contexts in which this verified account appears. */
   readonly crossContextMemberships: readonly SubscriptionCapacityMembership[];
   /** Whether this configured instance/account can service a targeted quota probe. */
@@ -481,7 +479,6 @@ export function deriveSubscriptionCapacity(
             readiness,
             status: readiness,
             sharedSubscription: instanceIds.length > 1,
-            sharedInstanceIds: instanceIds.length > 1 ? instanceIds : [],
             crossContextMemberships,
             canRefresh: refreshSource !== undefined,
             refreshInstanceId: refreshSource?.instanceId,
@@ -506,7 +503,6 @@ export function deriveSubscriptionCapacity(
                   key: `${context.key}:instance:${source.instanceId}`,
                   subscriptionKey: subscription.subscriptionKey,
                   name: source.displayName,
-                  instanceLabels: [source.displayName],
                   instanceIds: [source.instanceId],
                   accentColor: source.accentColor,
                   availability: source.availability,
@@ -516,8 +512,6 @@ export function deriveSubscriptionCapacity(
                   readiness,
                   status: readiness,
                   sharedSubscription: subscription.instanceIds.length > 1,
-                  sharedInstanceIds:
-                    subscription.instanceIds.length > 1 ? subscription.instanceIds : [],
                   canRefresh:
                     source.enabled === true &&
                     source.authenticated === true &&
@@ -567,15 +561,21 @@ export function deriveSubscriptionCapacity(
   for (const readiness of rootSubscriptions.values()) readinessCounts[readiness] += 1;
 
   const providerRows = new Map<string, Map<string, SubscriptionCapacityReadiness>>();
+  const reportableSubscriptions = new Set(
+    sources
+      .filter((source) => source.availability.source !== "unsupported")
+      .map(capacitySubscriptionKey),
+  );
   for (const group of groupModels) {
     const rows = providerRows.get(group.driver) ?? new Map();
     for (const member of group.members) {
+      if (!reportableSubscriptions.has(member.subscriptionKey)) continue;
       rows.set(
         member.subscriptionKey,
         combineCapacityReadiness(rows.get(member.subscriptionKey), member.readiness),
       );
     }
-    providerRows.set(group.driver, rows);
+    if (rows.size > 0) providerRows.set(group.driver, rows);
   }
   const providers = [...providerRows]
     .map(([driver, rows]): SubscriptionCapacityProviderSummary => {

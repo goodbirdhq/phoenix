@@ -18,6 +18,7 @@ import {
   type ProviderInstanceId as ProviderInstanceIdValue,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
@@ -186,6 +187,13 @@ export function SubscriptionAvailabilitySection({
         </div>
       </div>
 
+      {hasError && !isEmpty ? (
+        <p role="status" className="text-xs leading-relaxed text-muted-foreground">
+          Capacity could not be checked for every connected Environment. Showing the readings that
+          are available; refresh capacity to try again.
+        </p>
+      ) : null}
+
       <section className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
         <div className="flex flex-col gap-5">
           <div className="flex flex-col gap-1">
@@ -212,12 +220,12 @@ export function SubscriptionAvailabilitySection({
                   ? "Capacity could not be checked for every connected Environment. Refresh capacity to try again."
                   : "No Provider instances are configured for Capacity."}
               </p>
-              <a
+              <Link
                 className="mt-2 inline-block text-foreground underline underline-offset-4"
-                href="/settings/providers"
+                to="/settings/providers"
               >
                 Manage Providers
-              </a>
+              </Link>
             </div>
           ) : (
             <div className="flex flex-col gap-3">
@@ -468,12 +476,12 @@ function CapacityQuotaRow({
             Retry this Provider
           </button>
         ) : member.readiness === "unknown" && !member.canRefresh ? (
-          <a
+          <Link
             className="mt-2 inline-block text-xs text-foreground underline underline-offset-4"
-            href="/settings/providers"
+            to="/settings/providers"
           >
             Manage Provider
-          </a>
+          </Link>
         ) : null}
       </div>
     </article>
@@ -514,12 +522,12 @@ function UnsupportedLimitsSummary({
               {environment.providers.toSorted().join(", ")} · Environment: {environment.label}
             </p>
           ))}
-          <a
+          <Link
             className="mt-1 inline-block text-foreground underline underline-offset-4"
-            href="/settings/providers"
+            to="/settings/providers"
           >
             Manage Providers
-          </a>
+          </Link>
         </div>
       </div>
     </section>
@@ -569,7 +577,7 @@ function CapacityBreakdownRow({
         <span className="font-medium text-foreground">{member.name}</span>
         {member.sharedSubscription ? (
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Shares a subscription with {member.sharedInstanceIds.join(", ")}.
+            Shares a subscription with {member.instanceLabels.join(", ")}.
           </p>
         ) : null}
         {member.crossContextMemberships.length > 0 ? (

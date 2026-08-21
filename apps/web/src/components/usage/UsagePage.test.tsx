@@ -1,7 +1,7 @@
 import { EnvironmentId, USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
 import type { SubscriptionAvailabilitySource } from "@t3tools/client-runtime/usage/subscription-availability";
 import { mergeUsage } from "@t3tools/shared/usageMerge";
-import { isValidElement } from "react";
+import { isValidElement, type AnchorHTMLAttributes } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -34,6 +34,12 @@ vi.mock("react/compiler-runtime", async () => {
   const { reactHookHarness } = await import("../../test/reactHookHarness");
   return { c: reactHookHarness.useMemoCache };
 });
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ to, ...props }: { readonly to: string } & AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={to} {...props} />
+  ),
+}));
 
 vi.mock("../../state/usage", () => ({ useUsage: usage.useUsage }));
 vi.mock("@t3tools/client-runtime/usage/usage-warning", () => ({

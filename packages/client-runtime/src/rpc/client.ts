@@ -1,4 +1,9 @@
-import { ORCHESTRATION_WS_METHODS, SCHEDULE_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
+import {
+  ORCHESTRATION_WS_METHODS,
+  SCHEDULE_WS_METHODS,
+  type ServerConfig,
+  WS_METHODS,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
@@ -175,6 +180,7 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
   ) => Effect.Effect<void, never, never>;
   readonly retryExpectedFailureAfter?: Duration.Input;
   readonly resubscribe?: Stream.Stream<unknown, never, never>;
+  readonly supports?: (config: ServerConfig) => boolean;
 }
 
 export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
@@ -269,7 +275,17 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                     }),
                   ),
                 );
-              return subscribeToSession();
+              if (options?.supports === undefined) {
+                return subscribeToSession();
+              }
+              return Stream.unwrap(
+                session.initialConfig.pipe(
+                  Effect.map((config) =>
+                    options.supports?.(config) === true ? subscribeToSession() : Stream.empty,
+                  ),
+                  Effect.orElseSucceed(() => Stream.empty),
+                ),
+              );
             },
           }),
         ),
