@@ -76,14 +76,15 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("http server", () => {
     expect(await response.json()).toMatchObject({ created: true });
   });
 
-  it("rejects an unknown workflow as a client error", async () => {
+  it("rejects an unknown workflow as not found via /run", async () => {
     const response = await fetch(`${baseUrl}/api/workflows/does-not-exist/run`, {
       method: "POST",
     });
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "unknown_workflow" });
   });
 
-  it("rejects a disabled workflow as a client error", async () => {
+  it("rejects a disabled workflow as a client error via /run", async () => {
     const key = `test-http-disabled-${NodeCrypto.randomUUID()}`;
     await db.insert(workflow).values({
       key,
@@ -96,6 +97,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("http server", () => {
 
     const response = await fetch(`${baseUrl}/api/workflows/${key}/run`, { method: "POST" });
     expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "workflow_disabled" });
   });
 
   it("reports an infrastructure failure as a server error, not a bad request", async () => {
@@ -116,6 +118,45 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("http server", () => {
         method: "POST",
       });
       expect(response.status).toBe(500);
+      // The 500 above is answered by the shared `onError` handler, not a
+      // bespoke catch in the route — so it must carry the same JSON {error}
+      // contract every other route promises, not Hono's default plain text.
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(await response.json()).toEqual({ error: "internal_error" });
+    } finally {
+      await broken.close();
+    }
+  });
+
+  // No route has a catch of its own any more, so every one of them depends on
+  // the shared handler to stay inside the JSON {error} contract. Both shapes
+  // are covered: Hono routes an Error there itself, but hands a non-Error
+  // straight past it to the node adapter's empty 500 unless something
+  // upstream normalises it first.
+  it.each([
+    ["an Error", () => new Error("connection terminated unexpectedly")],
+    ["a non-Error value", () => "connection terminated unexpectedly"],
+  ])("keeps the JSON {error} contract when a route throws %s", async (_label, makeThrown) => {
+    const brokenDb = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "select") {
+          return () => {
+            throw makeThrown();
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as typeof db;
+
+    const broken = await startHttpServer({ db: brokenDb, port: 0 });
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${broken.port}/api/runs/${NodeCrypto.randomUUID()}/result`,
+        { method: "POST", headers: { authorization: "Bearer whatever" } },
+      );
+      expect(response.status).toBe(500);
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(await response.json()).toEqual({ error: "internal_error" });
     } finally {
       await broken.close();
     }
@@ -188,7 +229,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("http server", () => {
     expect(manualSecond.status).toBe(201);
   });
 
-  it("rejects an unknown workflow as not found", async () => {
+  it("rejects an unknown workflow as not found via /claim", async () => {
     const response = await fetch(`${baseUrl}/api/workflows/does-not-exist/claim`, {
       method: "POST",
     });
@@ -196,7 +237,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("http server", () => {
     expect(await response.json()).toEqual({ error: "unknown_workflow" });
   });
 
-  it("rejects a disabled workflow as a client error", async () => {
+  it("rejects a disabled workflow as a client error via /claim", async () => {
     const key = await insertClaimableWorkflow({ enabled: false });
 
     const response = await fetch(`${baseUrl}/api/workflows/${key}/claim`, { method: "POST" });

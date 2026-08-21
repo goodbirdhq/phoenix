@@ -54,6 +54,7 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runMaintenanceTick", 
 
     expect(summary.workflowsSynced).toBe(1);
     expect(summary.workflowLoadErrors).toBe(0);
+    expect(summary.jobsPruned).toBe(0);
 
     const [row] = await db.select().from(workflow).where(eq(workflow.key, workflowKey)).limit(1);
     expect(row).toBeDefined();
@@ -134,13 +135,14 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runMaintenanceTick", 
     });
 
     const root = await emptyWorkflowsDir();
-    await runMaintenanceTick({
+    const summary = await runMaintenanceTick({
       db,
       workflowsDir: root,
       jobRetentionDays: 1,
       sweepRuns: async () => ({ timedOut: 0 }),
     });
 
+    expect(summary.jobsPruned).toBeGreaterThanOrEqual(1);
     const [row] = await db
       .select()
       .from(opsJob)
@@ -159,13 +161,14 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runMaintenanceTick", 
     });
 
     const root = await emptyWorkflowsDir();
-    await runMaintenanceTick({
+    const summary = await runMaintenanceTick({
       db,
       workflowsDir: root,
       jobRetentionDays: 0,
       sweepRuns: async () => ({ timedOut: 0 }),
     });
 
+    expect(summary.jobsPruned).toBe(0);
     const [row] = await db
       .select()
       .from(opsJob)

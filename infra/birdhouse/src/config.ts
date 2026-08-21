@@ -34,7 +34,7 @@ const envSchema = z.object({
     .default("auto"),
   BIRDHOUSE_RUN_TIMEOUT_MS: z.coerce.number().int().positive().default(3_600_000),
   BIRDHOUSE_RUN_WATCH_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
-  /** How long finished jobs are kept before the scheduler prunes them. */
+  /** How long finished jobs are kept before the maintenance loop prunes them. */
   BIRDHOUSE_JOB_RETENTION_DAYS: z.coerce.number().int().positive().default(14),
 });
 

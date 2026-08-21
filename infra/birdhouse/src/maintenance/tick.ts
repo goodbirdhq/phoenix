@@ -17,6 +17,8 @@ export type MaintenanceTickSummary = Readonly<{
   workflowLoadErrors: number;
   /** Open runs past their deadline that this tick retired. */
   runsTimedOut: number;
+  /** Terminal jobs past retention that this tick deleted. */
+  jobsPruned: number;
 }>;
 
 export type RunMaintenanceTickInput = Readonly<{
@@ -74,10 +76,11 @@ export async function runMaintenanceTick(
     );
   }
 
+  let jobsPruned = 0;
   if (retentionDays > 0) {
     try {
       const { pruneTerminalJobs } = await import("../jobs/queue.ts");
-      await pruneTerminalJobs({ db, retentionDays });
+      jobsPruned = await pruneTerminalJobs({ db, retentionDays });
     } catch (error) {
       console.error(
         JSON.stringify({
@@ -92,6 +95,7 @@ export async function runMaintenanceTick(
     workflowsSynced: syncSummary.workflowsUpserted,
     workflowLoadErrors: loadErrors.length,
     runsTimedOut,
+    jobsPruned,
   };
   console.log(JSON.stringify({ event: "maintenance.tick", ...summary }));
   return summary;

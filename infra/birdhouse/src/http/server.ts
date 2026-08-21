@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
 
 import { config } from "../config.ts";
@@ -9,7 +9,12 @@ import { OPEN_RUN_STATUSES, workflowRun } from "../db/schema.ts";
 import { writeAuditEvent } from "../runner/audit.ts";
 import { verifyCallbackToken } from "../runner/callbackToken.ts";
 import { buildRunPrompt } from "../runner/prompt.ts";
-import { claimWorkflowRun, createWorkflowRun } from "../runner/runs.ts";
+import {
+  claimWorkflowRun,
+  createWorkflowRun,
+  isWorkflowLookupError,
+  type WorkflowLookupErrorReason,
+} from "../runner/runs.ts";
 import { loadSkillMarkdown } from "../workflows/skill.ts";
 
 export interface OpsHttpServer {
@@ -41,6 +46,31 @@ function bearerToken(authorizationHeader: string | undefined): string | undefine
   return match?.[1];
 }
 
+/** `/run` and `/claim` both classify `WorkflowLookupError` this way; kept in one place so they can't drift apart again. */
+function workflowLookupErrorStatus(reason: WorkflowLookupErrorReason): 404 | 400 {
+  return reason === "unknown_workflow" ? 404 : 400;
+}
+
+/**
+ * Parses and validates a JSON body, returning either the typed data or the
+ * 400 response to send as-is. An absent or unparseable body is treated as
+ * `{}`: the all-optional bodies then validate, so a caller may POST nothing
+ * at all, and the result callback still rejects it for want of `status`.
+ */
+async function parseJsonBody<T>(
+  c: Context,
+  schema: z.ZodType<T>,
+): Promise<{ ok: true; data: T } | { ok: false; response: Response }> {
+  const parsed = schema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) {
+    return {
+      ok: false,
+      response: c.json({ error: "invalid_body", issues: parsed.error.issues }, 400),
+    };
+  }
+  return { ok: true, data: parsed.data };
+}
+
 /**
  * Start the birdhouse HTTP surface (run-result callback, health, manual
  * trigger). Binds loopback-only per `BIRDHOUSE_HTTP_PORT` — see the comment on the
@@ -54,7 +84,16 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
   // grepped as text, so every log emitter in this package uses this shape.
   app.use("*", async (c, next) => {
     const start = Date.now();
-    await next();
+    try {
+      await next();
+    } catch (thrown) {
+      // Hono hands `onError` only what is `instanceof Error` and rethrows
+      // anything else past it, where the node adapter answers an empty 500
+      // with no body and nothing logged. Deleting the routes' own catch
+      // blocks removed the blanket net that used to cover that, so restore
+      // it once, here, rather than per route.
+      throw thrown instanceof Error ? thrown : new Error(String(thrown));
+    }
     console.log(
       JSON.stringify({
         event: "http.request",
@@ -64,6 +103,31 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
         ms: Date.now() - start,
       }),
     );
+  });
+
+  // Registered before every route: the shared landing spot for anything a
+  // route didn't classify itself (a Postgres blip, a bug), so this is the
+  // one place, not every handler, that has to keep `/api/runs/:id/result` —
+  // the busiest route in the service, with no try/catch of its own — inside
+  // the JSON {error} contract every other route promises. Hono's own default
+  // handler answers plain text, which would silently break that contract.
+  // Both entry points can be handed a workflow key that does not resolve and
+  // answer that identically, so they let it propagate here rather than
+  // repeating the mapping. Anything unclassified stays a 500: calling infra
+  // trouble a 4xx tells a client its request was malformed, so it gives up
+  // instead of retrying something that would have worked a moment later.
+  app.onError((err, c) => {
+    if (isWorkflowLookupError(err)) {
+      return c.json({ error: err.reason }, workflowLookupErrorStatus(err.reason));
+    }
+    console.error(
+      JSON.stringify({
+        event: "http.unhandled_error",
+        path: c.req.path,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+    return c.json({ error: "internal_error" }, 500);
   });
 
   app.get("/health", async (c) => {
@@ -97,10 +161,8 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
       return c.json({ alreadyComplete: true });
     }
 
-    const parsed = ResultBodySchema.safeParse(await c.req.json().catch(() => undefined));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_body", issues: parsed.error.issues }, 400);
-    }
+    const parsed = await parseJsonBody(c, ResultBodySchema);
+    if (!parsed.ok) return parsed.response;
     const { status, result, error } = parsed.data;
 
     const [updated] = await db
@@ -135,30 +197,20 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
   // v1, meant to be called from the CLI/a local script, not the network.
   // Exposing BIRDHOUSE_HTTP_PORT beyond 127.0.0.1 requires adding real auth to
   // this route first — see README before changing the bind address.
+  // An unresolvable workflow key throws from the run helpers and becomes a
+  // 404/400 in `app.onError` above; this handler only writes success.
   app.post("/api/workflows/:key/run", async (c) => {
     const key = c.req.param("key");
-    const parsed = ManualRunBodySchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_body", issues: parsed.error.issues }, 400);
-    }
-    try {
-      const result = await createWorkflowRun({
-        db,
-        workflowKey: key,
-        trigger: "api",
-        ...(parsed.data.input !== undefined ? { input: parsed.data.input } : {}),
-        ...(parsed.data.dedupeKey !== undefined ? { dedupeKey: parsed.data.dedupeKey } : {}),
-      });
-      return c.json(result, result.created ? 201 : 200);
-    } catch (error) {
-      // Only "unknown workflow" and "disabled workflow" are the caller's
-      // fault. Reporting a Postgres outage as 400 tells a client its request
-      // was malformed, so it gives up instead of retrying something that
-      // would have worked a moment later.
-      const message = error instanceof Error ? error.message : "unknown_error";
-      const isClientError = /unknown workflow|is disabled/.test(message);
-      return c.json({ error: message }, isClientError ? 400 : 500);
-    }
+    const parsed = await parseJsonBody(c, ManualRunBodySchema);
+    if (!parsed.ok) return parsed.response;
+    const result = await createWorkflowRun({
+      db,
+      workflowKey: key,
+      trigger: "api",
+      ...(parsed.data.input !== undefined ? { input: parsed.data.input } : {}),
+      ...(parsed.data.dedupeKey !== undefined ? { dedupeKey: parsed.data.dedupeKey } : {}),
+    });
+    return c.json(result, result.created ? 201 : 200);
   });
 
   // Same loopback trust model as /run above, and no auth beyond it: this is
@@ -167,30 +219,18 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
   // whoever asks for a given workflow key, which is only safe because
   // nothing but this box can reach it — see the comment on /run before
   // changing the bind address.
+  // An unresolvable workflow key throws from the run helpers and becomes a
+  // 404/400 in `app.onError` above; this handler only writes success.
   app.post("/api/workflows/:key/claim", async (c) => {
     const key = c.req.param("key");
-    const parsed = ClaimBodySchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_body", issues: parsed.error.issues }, 400);
-    }
+    const parsed = await parseJsonBody(c, ClaimBodySchema);
+    if (!parsed.ok) return parsed.response;
 
-    let claim: Awaited<ReturnType<typeof claimWorkflowRun>>;
-    try {
-      claim = await claimWorkflowRun({
-        db,
-        workflowKey: key,
-        ...(parsed.data.input !== undefined ? { input: parsed.data.input } : {}),
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown_error";
-      if (/unknown workflow/.test(message)) {
-        return c.json({ error: "unknown_workflow" }, 404);
-      }
-      if (/is disabled/.test(message)) {
-        return c.json({ error: "workflow_disabled" }, 400);
-      }
-      return c.json({ error: message }, 500);
-    }
+    const claim = await claimWorkflowRun({
+      db,
+      workflowKey: key,
+      ...(parsed.data.input !== undefined ? { input: parsed.data.input } : {}),
+    });
 
     if (claim.status === "busy") {
       return c.json({ error: "run_in_progress", runId: claim.runId }, 409);

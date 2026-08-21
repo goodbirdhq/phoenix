@@ -18,10 +18,7 @@ import {
 // way cli.ts already lazily imports db/client.ts and jobs/queue.ts.
 const phoenixClient = createPhoenixClient(config);
 
-/**
- * All job handlers the worker drains. The runner module (wave 2) registers
- * its launch/watch handlers here; the scheduler and CLI import only this.
- */
+/** All job handlers the worker drains; imported by cli.ts's worker command. */
 export const jobHandlerRegistry: JobHandlerRegistry = createJobHandlerRegistry([
   createWorkflowLaunchHandler({ db, phoenixClient }),
   createWorkflowWatchHandler({ db, phoenixClient }),
