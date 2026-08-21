@@ -62,6 +62,9 @@ const PROVIDER = ProviderDriverKind.make("opencode");
  * rather than misread (mirrors GROK_RESUME_VERSION / CURSOR_RESUME_VERSION).
  */
 const OPENCODE_RESUME_VERSION = 1 as const;
+const OPENCODE_AUTO_CONTINUE_LIMIT = 2;
+const OPENCODE_CONTINUATION_INSTRUCTION =
+  "Your previous response was cut off before any output or tool call. Continue exactly where you left off.";
 
 /**
  * Decode a persisted resume cursor into the upstream `ses_…` id. Anything
@@ -238,6 +241,12 @@ interface OpenCodeSessionContext {
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
   activeVariant: string | undefined;
+  activeAssistantMessageId: string | undefined;
+  emittedAssistantText: boolean;
+  emittedToolActivity: boolean;
+  lastStepFinishReason: Extract<Part, { readonly type: "step-finish" }>["reason"] | undefined;
+  autoContinueCount: number;
+  autoContinueInFlight: boolean;
   /**
    * Prior conversation carried into a migrated thread. OpenCode has no
    * start-from-history entry point, so it rides along on the first prompt and
@@ -762,6 +771,7 @@ export function makeOpenCodeAdapter(
         );
       }
       if (deltaToEmit.length > 0) {
+        context.emittedAssistantText = true;
         yield* emit({
           ...(yield* buildEventBase({
             threadId: context.session.threadId,
@@ -852,9 +862,27 @@ export function makeOpenCodeAdapter(
         case "message.updated": {
           context.messageRoleById.set(event.properties.info.id, event.properties.info.role);
           if (event.properties.info.role === "assistant") {
+            if (context.activeAssistantMessageId !== event.properties.info.id) {
+              context.activeAssistantMessageId = event.properties.info.id;
+              context.emittedAssistantText = false;
+              context.emittedToolActivity = false;
+              context.lastStepFinishReason = undefined;
+              context.autoContinueInFlight = false;
+            }
             for (const part of context.partById.values()) {
               if (part.messageID !== event.properties.info.id) {
                 continue;
+              }
+              if (part.type === "step-finish") {
+                context.lastStepFinishReason = part.reason;
+              }
+              if (
+                part.type === "tool" &&
+                (part.state.status === "pending" ||
+                  part.state.status === "completed" ||
+                  part.state.status === "error")
+              ) {
+                context.emittedToolActivity = true;
               }
               yield* emitAssistantTextDelta(context, part, turnId, event);
             }
@@ -889,6 +917,7 @@ export function makeOpenCodeAdapter(
           if (deltaToEmit.length === 0) {
             break;
           }
+          context.emittedAssistantText = true;
           context.emittedTextByPartId.set(event.properties.partID, nextText);
           if (existingPart.type === "text" || existingPart.type === "reasoning") {
             context.partById.set(event.properties.partID, {
@@ -956,8 +985,14 @@ export function makeOpenCodeAdapter(
                     : "item.updated",
               payload,
             };
+            if (runtimeEvent.type === "item.started" || runtimeEvent.type === "item.completed") {
+              context.emittedToolActivity = true;
+            }
             appendTurnItem(context, turnId, part);
             yield* emit(runtimeEvent);
+          }
+          if (part.type === "step-finish") {
+            context.lastStepFinishReason = part.reason;
           }
           break;
         }
@@ -1058,6 +1093,7 @@ export function makeOpenCodeAdapter(
 
         case "session.status": {
           if (event.properties.status.type === "busy") {
+            context.autoContinueInFlight = false;
             yield* updateProviderSession(context, {
               status: "running",
               activeTurnId: turnId,
@@ -1081,6 +1117,83 @@ export function makeOpenCodeAdapter(
           }
 
           if (event.properties.status.type === "idle" && turnId) {
+            const isTruncated =
+              !context.emittedAssistantText &&
+              !context.emittedToolActivity &&
+              context.lastStepFinishReason === "unknown" &&
+              context.pendingPermissions.size === 0 &&
+              context.pendingQuestions.size === 0;
+            if (isTruncated && context.autoContinueInFlight) {
+              break;
+            }
+            if (isTruncated && context.autoContinueCount < OPENCODE_AUTO_CONTINUE_LIMIT) {
+              const attempt = context.autoContinueCount + 1;
+              yield* emit({
+                ...(yield* buildEventBase({
+                  threadId: context.session.threadId,
+                  turnId,
+                  raw: event,
+                })),
+                type: "runtime.warning",
+                payload: {
+                  message: `OpenCode's stream ended without output — automatically continuing (attempt ${attempt}/${OPENCODE_AUTO_CONTINUE_LIMIT}).`,
+                  detail: { stepFinishReason: context.lastStepFinishReason },
+                },
+              });
+
+              const parsedModel = parseOpenCodeModelSlug(context.session.model);
+              context.autoContinueCount = attempt;
+              context.autoContinueInFlight = true;
+              const continuationExit = parsedModel
+                ? yield* runOpenCodeSdk("session.promptAsync", () =>
+                    context.client.session.promptAsync({
+                      sessionID: context.openCodeSessionId,
+                      model: parsedModel,
+                      ...(context.activeAgent ? { agent: context.activeAgent } : {}),
+                      ...(context.activeVariant ? { variant: context.activeVariant } : {}),
+                      parts: [{ type: "text", text: OPENCODE_CONTINUATION_INSTRUCTION }],
+                    }),
+                  ).pipe(Effect.exit)
+                : Exit.fail(
+                    new OpenCodeRuntimeError({
+                      operation: "session.promptAsync",
+                      detail: "OpenCode auto-continue requires an active model selection.",
+                      cause: null,
+                    }),
+                  );
+              if (Exit.isSuccess(continuationExit)) {
+                break;
+              }
+              context.autoContinueInFlight = false;
+              yield* emit({
+                ...(yield* buildEventBase({
+                  threadId: context.session.threadId,
+                  turnId,
+                  raw: event,
+                })),
+                type: "runtime.warning",
+                payload: {
+                  message: "OpenCode could not automatically continue the truncated response.",
+                  detail: {
+                    stepFinishReason: context.lastStepFinishReason,
+                    error: openCodeRuntimeErrorDetail(Cause.squash(continuationExit.cause)),
+                  },
+                },
+              });
+            } else if (isTruncated) {
+              yield* emit({
+                ...(yield* buildEventBase({
+                  threadId: context.session.threadId,
+                  turnId,
+                  raw: event,
+                })),
+                type: "runtime.warning",
+                payload: {
+                  message: `OpenCode's stream ended without output — automatic continuation retries exhausted (${OPENCODE_AUTO_CONTINUE_LIMIT}/${OPENCODE_AUTO_CONTINUE_LIMIT}).`,
+                  detail: { stepFinishReason: context.lastStepFinishReason },
+                },
+              });
+            }
             context.activeTurnId = undefined;
             yield* updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
             yield* emit({
@@ -1414,6 +1527,12 @@ export function makeOpenCodeAdapter(
           activeTurnId: undefined,
           activeAgent: undefined,
           activeVariant: undefined,
+          activeAssistantMessageId: undefined,
+          emittedAssistantText: false,
+          emittedToolActivity: false,
+          lastStepFinishReason: undefined,
+          autoContinueCount: 0,
+          autoContinueInFlight: false,
           pendingSeedPrompt: seed === undefined ? undefined : formatConversationSeedPrompt(seed),
           stopped: yield* Ref.make(false),
           sessionScope: started.sessionScope,
@@ -1498,6 +1617,14 @@ export function makeOpenCodeAdapter(
       context.activeTurnId = turnId;
       context.activeAgent = agent ?? (input.interactionMode === "plan" ? "plan" : undefined);
       context.activeVariant = variant;
+      if (steeringTurnId === undefined) {
+        context.activeAssistantMessageId = undefined;
+        context.emittedAssistantText = false;
+        context.emittedToolActivity = false;
+        context.lastStepFinishReason = undefined;
+        context.autoContinueCount = 0;
+        context.autoContinueInFlight = false;
+      }
       yield* updateProviderSession(
         context,
         {
