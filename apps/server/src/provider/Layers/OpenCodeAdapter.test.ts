@@ -1171,8 +1171,14 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         // Only the original prompt — the post-abort idle must not restart work.
         NodeAssert.equal(runtimeMock.state.promptCallsBySessionTitle.get(sessionTitle)?.length, 1);
         NodeAssert.ok(runtimeMock.state.abortCalls.includes(openCodeSessionId));
-        NodeAssert.equal(events.some((event) => event.type === "turn.aborted"), true);
-        NodeAssert.equal(events.some((event) => event.type === "runtime.warning"), false);
+        NodeAssert.equal(
+          events.some((event) => event.type === "turn.aborted"),
+          true,
+        );
+        NodeAssert.equal(
+          events.some((event) => event.type === "runtime.warning"),
+          false,
+        );
         NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
       }),
     { sequential: true },
@@ -1459,10 +1465,8 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     { sequential: true },
   );
 
-  it.effect(
-    "keeps the running turn when a steer prompt fails",
-    () =>
-      Effect.gen(function* () {
+  it.effect("keeps the running turn when a steer prompt fails", () =>
+    Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
       const threadId = asThreadId("thread-steer-failure");
       yield* adapter.startSession({
