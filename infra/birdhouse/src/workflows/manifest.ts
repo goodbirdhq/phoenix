@@ -15,8 +15,10 @@ const workflowManifestSchema = z.object({
   description: z.string().min(1).optional(),
   /** Path to the skill file, relative to the workflow's own directory. */
   skill: z.string().min(1),
-  // An opaque JSON Schema document: validated by whatever consumes it
-  // downstream (the manual-run input parser), not by this schema.
+  // An opaque JSON Schema document: advisory documentation of the shape a
+  // workflow's `input` should take. Nothing parses or enforces it — both
+  // `ManualRunBodySchema` and `ClaimBodySchema` (src/http/server.ts) type
+  // `input` as `z.unknown()`, and no reader looks this field back up.
   input_schema: z.record(z.string(), z.unknown()).optional(),
   timeout_ms: z.number().int().positive().optional(),
   phoenix: z

@@ -3,7 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { config } from "../config.ts";
-import type { Db } from "../db/client.ts";
+import type { Db, DbOrTx } from "../db/client.ts";
 import { OPEN_RUN_STATUSES, workflow, workflowRun } from "../db/schema.ts";
 import { opsJob } from "../db/schema.ts";
 import { enqueueJob, requestJobCancellation } from "../jobs/queue.ts";
@@ -11,7 +11,65 @@ import { writeAuditEvent } from "./audit.ts";
 import { mintCallbackToken } from "./callbackToken.ts";
 import type { RunPromptMode } from "./prompt.ts";
 
-export type WorkflowRunTrigger = "schedule" | "manual" | "api";
+// Scheduled runs are not created here — a Phoenix Schedule fires a thread
+// that calls `claimWorkflowRun`, which writes its own `trigger: "schedule"`
+// row. The database enum still carries that value; this type covers only
+// what `createWorkflowRun` can be asked for.
+export type WorkflowRunTrigger = "manual" | "api";
+
+export type WorkflowLookupErrorReason = "unknown_workflow" | "workflow_disabled";
+
+/**
+ * Thrown by `requireEnabledWorkflow` when a caller-supplied workflow key
+ * doesn't resolve to something runnable. This lives beside `runs.ts` rather
+ * than in `jobs/errors.ts`: those types classify how a *job handler's*
+ * failure should be retried, and this isn't a job failure — it's request
+ * validation shared by `createWorkflowRun` and `claimWorkflowRun`, and it is
+ * `http/server.ts`, not the job runner, that has to act on `reason`.
+ */
+export class WorkflowLookupError extends Error {
+  readonly reason: WorkflowLookupErrorReason;
+  readonly workflowKey: string;
+
+  constructor(reason: WorkflowLookupErrorReason, workflowKey: string) {
+    super(
+      reason === "unknown_workflow"
+        ? `unknown workflow "${workflowKey}"`
+        : `workflow "${workflowKey}" is disabled`,
+    );
+    this.name = "WorkflowLookupError";
+    this.reason = reason;
+    this.workflowKey = workflowKey;
+  }
+}
+
+export function isWorkflowLookupError(error: unknown): error is WorkflowLookupError {
+  return error instanceof WorkflowLookupError;
+}
+
+/**
+ * The single `workflow` lookup both `createWorkflowRun` and `claimWorkflowRun`
+ * need before they can do anything else. Takes `DbOrTx` so `createWorkflowRun`
+ * can call it from inside its transaction while `claimWorkflowRun`, which
+ * isn't transactional, calls it against the pooled `db` directly.
+ */
+async function requireEnabledWorkflow(
+  db: DbOrTx,
+  workflowKey: string,
+): Promise<typeof workflow.$inferSelect> {
+  const [workflowRow] = await db
+    .select()
+    .from(workflow)
+    .where(eq(workflow.key, workflowKey))
+    .limit(1);
+  if (!workflowRow) {
+    throw new WorkflowLookupError("unknown_workflow", workflowKey);
+  }
+  if (!workflowRow.enabled) {
+    throw new WorkflowLookupError("workflow_disabled", workflowKey);
+  }
+  return workflowRow;
+}
 
 export interface CreateWorkflowRunInput {
   db: Db;
@@ -44,10 +102,9 @@ export function resolveWorkflowTimeoutMs(manifest: unknown): number {
 }
 
 function auditActorFor(trigger: WorkflowRunTrigger): string {
-  // The scheduler and the HTTP API are their own actors; a manual run is
-  // always operator-initiated through the CLI today, so it's attributed to
-  // "cli" rather than the generic "manual" trigger label.
-  return trigger === "manual" ? "cli" : trigger;
+  // A manual run is always operator-initiated through the CLI today, so the
+  // audit log names the CLI rather than repeating the generic trigger label.
+  return trigger === "manual" ? "cli" : "api";
 }
 
 /**
@@ -65,17 +122,7 @@ export async function createWorkflowRun(
   const actor = auditActorFor(trigger);
 
   return input.db.transaction(async (tx) => {
-    const [workflowRow] = await tx
-      .select()
-      .from(workflow)
-      .where(eq(workflow.key, workflowKey))
-      .limit(1);
-    if (!workflowRow) {
-      throw new Error(`createWorkflowRun: unknown workflow "${workflowKey}"`);
-    }
-    if (!workflowRow.enabled) {
-      throw new Error(`createWorkflowRun: workflow "${workflowKey}" is disabled`);
-    }
+    const workflowRow = await requireEnabledWorkflow(tx, workflowKey);
 
     const runId = NodeCrypto.randomUUID();
     const { token: callbackToken, hash: callbackTokenHash } = mintCallbackToken();
@@ -194,17 +241,7 @@ export async function claimWorkflowRun(
 ): Promise<ClaimWorkflowRunResult> {
   const { db, workflowKey } = input;
 
-  const [workflowRow] = await db
-    .select()
-    .from(workflow)
-    .where(eq(workflow.key, workflowKey))
-    .limit(1);
-  if (!workflowRow) {
-    throw new Error(`claimWorkflowRun: unknown workflow "${workflowKey}"`);
-  }
-  if (!workflowRow.enabled) {
-    throw new Error(`claimWorkflowRun: workflow "${workflowKey}" is disabled`);
-  }
+  const workflowRow = await requireEnabledWorkflow(db, workflowKey);
 
   const runId = NodeCrypto.randomUUID();
   const { token: callbackToken, hash: callbackTokenHash } = mintCallbackToken();
