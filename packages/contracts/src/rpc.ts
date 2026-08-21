@@ -180,7 +180,12 @@ import {
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
 import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
-import { ProviderAvailabilityInput, ProviderAvailabilityResult } from "./providerAvailability.ts";
+import {
+  ProviderAvailabilityInput,
+  ProviderAvailabilityResult,
+  ProviderAvailabilityStreamEvent,
+  ProviderAvailabilitySubscriptionInput,
+} from "./providerAvailability.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
   SourceControlCloneRepositoryInput,
@@ -327,6 +332,7 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+  subscribeProviderAvailability: "subscribeProviderAvailability",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -455,6 +461,16 @@ export const WsServerGetProviderAvailabilityRpc = Rpc.make(
     payload: ProviderAvailabilityInput,
     success: ProviderAvailabilityResult,
     error: EnvironmentAuthorizationError,
+  },
+);
+
+export const WsSubscribeProviderAvailabilityRpc = Rpc.make(
+  WS_METHODS.subscribeProviderAvailability,
+  {
+    payload: ProviderAvailabilitySubscriptionInput,
+    success: ProviderAvailabilityStreamEvent,
+    error: EnvironmentAuthorizationError,
+    stream: true,
   },
 );
 
@@ -1055,6 +1071,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRetryResourceTelemetryRpc,
   WsServerGetUsageSummaryRpc,
   WsServerGetProviderAvailabilityRpc,
+  WsSubscribeProviderAvailabilityRpc,
   WsServerSignalProcessRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,

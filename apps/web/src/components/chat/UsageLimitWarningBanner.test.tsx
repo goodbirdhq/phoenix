@@ -12,7 +12,6 @@ function warning(overrides: Partial<ThreadUsageWarning> = {}): ThreadUsageWarnin
     windowLabel: "Current session",
     usedPercent: 94,
     resetsAt: "2026-08-19T14:00:00.000Z",
-    isReadingUnconfirmed: false,
     dismissalKey: "thread-1 | claudeAgent | session: | 2026-08-19T14:00:00.000Z",
     ...overrides,
   };
@@ -35,17 +34,6 @@ describe("UsageLimitWarningBanner", () => {
     expect(
       renderToStaticMarkup(<UsageLimitWarningBanner warning={null} onDismiss={() => {}} />),
     ).toBe("");
-  });
-
-  it("marks an unconfirmed reading rather than presenting it as current", () => {
-    const markup = renderToStaticMarkup(
-      <UsageLimitWarningBanner
-        warning={warning({ isReadingUnconfirmed: true })}
-        onDismiss={() => {}}
-      />,
-    );
-
-    expect(markup).toContain("last known reading");
   });
 
   it("carries an action slot for the hand-off control that lands later", () => {

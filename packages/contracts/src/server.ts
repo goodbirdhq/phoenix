@@ -187,6 +187,10 @@ export const ServerProvider = Schema.Struct({
   // Human-readable reason populated when `availability === "unavailable"`.
   // Surfaces in the UI alongside the missing-driver affordance.
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
+  // Runtime-owned capability: only adapters with a native read-only quota
+  // probe may be targeted by refresh controls. Optional keeps older cached
+  // provider snapshots and rolling server/client upgrades decodable.
+  availabilityRefreshSupported: Schema.optional(Schema.Boolean),
   models: Schema.Array(ServerProviderModel),
   slashCommands: Schema.Array(ServerProviderSlashCommand).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
@@ -225,6 +229,7 @@ export const canRefreshProviderAvailability = (snapshot: ServerProvider): boolea
   snapshot.enabled &&
   snapshot.installed &&
   isProviderAvailable(snapshot) &&
+  snapshot.availabilityRefreshSupported === true &&
   snapshot.auth.status === "authenticated";
 
 export const ServerObservability = Schema.Struct({

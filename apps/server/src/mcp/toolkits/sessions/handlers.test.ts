@@ -1751,6 +1751,7 @@ describe("list_session_providers availability refresh (handler)", () => {
     models: [],
     slashCommands: [],
     skills: [],
+    availabilityRefreshSupported: true,
   });
 
   const unknownAvailability = {

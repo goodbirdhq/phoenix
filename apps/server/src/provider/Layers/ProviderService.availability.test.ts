@@ -112,7 +112,7 @@ describe("availabilityFromRuntimeEvent", () => {
     });
   });
 
-  it("keeps cold native providers unknown and expires old percentages", () => {
+  it("keeps cold native providers unknown and retains old observations for revalidation", () => {
     expect(availabilityAt(undefined, ProviderDriverKind.make("codex"), 0)).toEqual({
       status: "unknown",
       source: "codex_app_server",
@@ -125,12 +125,7 @@ describe("availabilityFromRuntimeEvent", () => {
         ProviderDriverKind.make("codex"),
         15 * 60 * 1_000 + 1,
       ),
-    ).toEqual({
-      status: "unknown",
-      source: "codex_app_server",
-      observedAt: snapshot.observedAt,
-      windows: [],
-    });
+    ).toEqual({ ...snapshot, status: "unknown" });
     expect(
       availabilityAt(
         { availability: snapshot, receivedAtMs: 0 },
@@ -161,20 +156,14 @@ describe("availabilityFromRuntimeEvent", () => {
     ).toEqual({ status: "unknown", source: "codex_app_server", windows: [] });
   });
 
-  it("keeps the source, observation time and account when a snapshot ages out", () => {
+  it("keeps the last windows but marks an aged observation unknown", () => {
     expect(
       availabilityAt(
         { availability: claudeCliSnapshot, receivedAtMs: 0 },
         ProviderDriverKind.make("claudeAgent"),
         15 * 60 * 1_000 + 1,
       ),
-    ).toEqual({
-      status: "unknown",
-      source: "claude_cli_usage",
-      observedAt: "2026-08-17T20:45:00.000Z",
-      account: claudeCliSnapshot.account,
-      windows: [],
-    });
+    ).toEqual({ ...claudeCliSnapshot, status: "unknown" });
   });
 
   it("forgets an account snapshot when its configured adapter is rebuilt", () => {
@@ -277,7 +266,7 @@ describe("cacheProviderAvailability", () => {
     expect(next).toBe(cached);
     expect(
       availabilityAt(next, ProviderDriverKind.make("claudeAgent"), 16 * 60 * 1_000).windows,
-    ).toEqual([]);
+    ).toEqual(claudeCliSnapshot.windows);
   });
 
   it("takes an SDK snapshot that actually carries windows", () => {
@@ -302,6 +291,26 @@ describe("cacheProviderAvailability", () => {
       availability: newer,
       receivedAtMs: 5_000,
     });
+  });
+
+  it("keeps the cached entry when a passive reading is semantically unchanged", () => {
+    const cached = {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      availability: claudeCliSnapshot,
+      receivedAtMs: 1_000,
+    };
+
+    expect(
+      cacheProviderAvailability(
+        cached,
+        {
+          ...claudeCliSnapshot,
+          windows: claudeCliSnapshot.windows.map((window) => ({ ...window })),
+        },
+        5_000,
+        ProviderDriverKind.make("claudeAgent"),
+      ),
+    ).toBe(cached);
   });
 });
 
@@ -383,11 +392,11 @@ describe("a refresh that came back with nothing", () => {
     });
   });
 
-  it("lets the kept reading expire on its original clock", () => {
+  it("does not renew freshness when retaining a failed reading", () => {
     const cached = { availability: claudeCliSnapshot, receivedAtMs: 1_000 };
     const afterOneFailure = cacheProviderAvailability(cached, failedRefresh, 10 * 60 * 1_000);
     expect(afterOneFailure.receivedAtMs).toBe(1_000);
-    // A run of failures cannot keep one old panel alive for ever.
+    // A run of failures cannot pass an old panel off as newly received.
     const afterTwo = cacheProviderAvailability(
       afterOneFailure,
       unknownRefreshAvailability(claudeAgent, "2026-08-17T20:56:00.000Z"),
@@ -397,14 +406,11 @@ describe("a refresh that came back with nothing", () => {
     expect(availabilityAt(afterTwo, claudeAgent, 14 * 60 * 1_000).windows).toEqual(
       claudeCliSnapshot.windows,
     );
-    // Fifteen minutes after it was *received*, not after the last attempt.
-    expect(availabilityAt(afterTwo, claudeAgent, 1_000 + 15 * 60 * 1_000 + 1)).toEqual({
-      status: "unknown",
-      source: "claude_cli_usage",
-      observedAt: claudeCliSnapshot.observedAt,
-      account: claudeCliSnapshot.account,
-      windows: [],
-    });
+    // The prior observation stays visible after that freshness boundary so a
+    // revalidation never blanks the row.
+    expect(availabilityAt(afterTwo, claudeAgent, 1_000 + 15 * 60 * 1_000 + 1).windows).toEqual(
+      claudeCliSnapshot.windows,
+    );
   });
 
   it("gives way to a reading that names a different account", () => {

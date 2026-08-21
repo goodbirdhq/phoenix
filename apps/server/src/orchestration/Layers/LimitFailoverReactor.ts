@@ -37,8 +37,14 @@ const isUsageLimitSessionError = (event: OrchestrationEvent): event is UsageLimi
  * beats one that is already limited.
  */
 export const remainingScore = (availability: ProviderAvailability): number => {
+  if (availability.stale !== undefined) {
+    return 0;
+  }
   if (availability.status === "limited") {
     return -1;
+  }
+  if (availability.status === "unknown") {
+    return 0;
   }
   const windows = availability.windows.filter((window) => window.usedPercent !== undefined);
   if (windows.length === 0) {

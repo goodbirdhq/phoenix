@@ -156,7 +156,7 @@ describe("deriveMobileThreadUsageWarning", () => {
 });
 
 describe("mobileUsageWarningLabel", () => {
-  it("renders the account, rounded percentage, local reset, and stale qualification", () => {
+  it("renders the account, rounded percentage, and local reset", () => {
     expect(
       mobileUsageWarningLabel(
         {
@@ -166,12 +166,11 @@ describe("mobileUsageWarningLabel", () => {
           windowLabel: "Current session",
           usedPercent: 93.6,
           resetsAt: RESET,
-          isReadingUnconfirmed: true,
           dismissalKey: "warning-key",
         },
         { nowMs: NOW, timeZone: "UTC" },
       ),
-    ).toBe("bound@example.com · 94% used in current session · resets 2:00 PM · last known reading");
+    ).toBe("bound@example.com · 94% used in current session · resets 2:00 PM");
   });
 });
 
