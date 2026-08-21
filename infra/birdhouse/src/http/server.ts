@@ -53,19 +53,15 @@ function workflowLookupErrorStatus(reason: WorkflowLookupErrorReason): 404 | 400
 
 /**
  * Parses and validates a JSON body, returning either the typed data or the
- * 400 response to send as-is. `emptyBody` is what an unparseable/absent body
- * (no `Content-Type`, no body at all) falls back to before validation — the
- * three routes that need this disagree on it on purpose: the manual-run and
- * claim bodies are all-optional, so `{}` lets a caller POST with no body at
- * all, while the result callback always requires `status`, so there is no
- * meaningful empty body for it to fall back to.
+ * 400 response to send as-is. An absent or unparseable body is treated as
+ * `{}`: the all-optional bodies then validate, so a caller may POST nothing
+ * at all, and the result callback still rejects it for want of `status`.
  */
 async function parseJsonBody<T>(
   c: Context,
   schema: z.ZodType<T>,
-  emptyBody: unknown,
 ): Promise<{ ok: true; data: T } | { ok: false; response: Response }> {
-  const parsed = schema.safeParse(await c.req.json().catch(() => emptyBody));
+  const parsed = schema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) {
     return {
       ok: false,
@@ -88,7 +84,16 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
   // grepped as text, so every log emitter in this package uses this shape.
   app.use("*", async (c, next) => {
     const start = Date.now();
-    await next();
+    try {
+      await next();
+    } catch (thrown) {
+      // Hono hands `onError` only what is `instanceof Error` and rethrows
+      // anything else past it, where the node adapter answers an empty 500
+      // with no body and nothing logged. Deleting the routes' own catch
+      // blocks removed the blanket net that used to cover that, so restore
+      // it once, here, rather than per route.
+      throw thrown instanceof Error ? thrown : new Error(String(thrown));
+    }
     console.log(
       JSON.stringify({
         event: "http.request",
@@ -106,11 +111,11 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
   // the busiest route in the service, with no try/catch of its own — inside
   // the JSON {error} contract every other route promises. Hono's own default
   // handler answers plain text, which would silently break that contract.
-  // Both entry points can be handed a workflow key that does not resolve, and
-  // both answer that identically — so they let it propagate here rather than
-  // repeating the mapping. Anything else is infrastructure trouble: reporting
-  // that as a 4xx would tell a client its request was malformed, so it gives
-  // up instead of retrying something that would have worked a moment later.
+  // Both entry points can be handed a workflow key that does not resolve and
+  // answer that identically, so they let it propagate here rather than
+  // repeating the mapping. Anything unclassified stays a 500: calling infra
+  // trouble a 4xx tells a client its request was malformed, so it gives up
+  // instead of retrying something that would have worked a moment later.
   app.onError((err, c) => {
     if (isWorkflowLookupError(err)) {
       return c.json({ error: err.reason }, workflowLookupErrorStatus(err.reason));
@@ -156,7 +161,7 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
       return c.json({ alreadyComplete: true });
     }
 
-    const parsed = await parseJsonBody(c, ResultBodySchema, undefined);
+    const parsed = await parseJsonBody(c, ResultBodySchema);
     if (!parsed.ok) return parsed.response;
     const { status, result, error } = parsed.data;
 
@@ -192,9 +197,11 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
   // v1, meant to be called from the CLI/a local script, not the network.
   // Exposing BIRDHOUSE_HTTP_PORT beyond 127.0.0.1 requires adding real auth to
   // this route first — see README before changing the bind address.
+  // An unresolvable workflow key throws from the run helpers and becomes a
+  // 404/400 in `app.onError` above; this handler only writes success.
   app.post("/api/workflows/:key/run", async (c) => {
     const key = c.req.param("key");
-    const parsed = await parseJsonBody(c, ManualRunBodySchema, {});
+    const parsed = await parseJsonBody(c, ManualRunBodySchema);
     if (!parsed.ok) return parsed.response;
     const result = await createWorkflowRun({
       db,
@@ -212,9 +219,11 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
   // whoever asks for a given workflow key, which is only safe because
   // nothing but this box can reach it — see the comment on /run before
   // changing the bind address.
+  // An unresolvable workflow key throws from the run helpers and becomes a
+  // 404/400 in `app.onError` above; this handler only writes success.
   app.post("/api/workflows/:key/claim", async (c) => {
     const key = c.req.param("key");
-    const parsed = await parseJsonBody(c, ClaimBodySchema, {});
+    const parsed = await parseJsonBody(c, ClaimBodySchema);
     if (!parsed.ok) return parsed.response;
 
     const claim = await claimWorkflowRun({

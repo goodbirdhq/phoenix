@@ -128,15 +128,20 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("http server", () => {
     }
   });
 
-  it("keeps the JSON {error} contract on an unhandled failure with no route-level catch", async () => {
-    // /api/runs/:id/result has no try/catch of its own; this is the route
-    // change 3 exists for. A broken `select` here must still come back as
-    // JSON, not fall through to Hono's default plain-text error response.
+  // No route has a catch of its own any more, so every one of them depends on
+  // the shared handler to stay inside the JSON {error} contract. Both shapes
+  // are covered: Hono routes an Error there itself, but hands a non-Error
+  // straight past it to the node adapter's empty 500 unless something
+  // upstream normalises it first.
+  it.each([
+    ["an Error", () => new Error("connection terminated unexpectedly")],
+    ["a non-Error value", () => "connection terminated unexpectedly"],
+  ])("keeps the JSON {error} contract when a route throws %s", async (_label, makeThrown) => {
     const brokenDb = new Proxy(db, {
       get(target, prop, receiver) {
         if (prop === "select") {
           return () => {
-            throw new Error("connection terminated unexpectedly");
+            throw makeThrown();
           };
         }
         return Reflect.get(target, prop, receiver);

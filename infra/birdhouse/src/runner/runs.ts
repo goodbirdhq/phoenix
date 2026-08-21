@@ -412,6 +412,9 @@ export type CancelWorkflowRunResult = Readonly<{
 export async function cancelWorkflowRun(db: Db, runId: string): Promise<CancelWorkflowRunResult> {
   const [existing] = await db.select().from(workflowRun).where(eq(workflowRun.id, runId)).limit(1);
   if (!existing) {
+    // Deliberately a plain Error: the CLI is the only caller and it just
+    // prints this. Give it a typed reason like `requireEnabledWorkflow`
+    // if cancellation is ever exposed over HTTP and has to pick a status.
     throw new Error(`cancelWorkflowRun: unknown run "${runId}"`);
   }
 
