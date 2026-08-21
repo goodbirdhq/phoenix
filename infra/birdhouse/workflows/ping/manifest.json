@@ -1,0 +1,7 @@
+{
+  "key": "ping",
+  "title": "Ping",
+  "description": "Smoke-test workflow: confirms the birdhouse can launch an agent thread and receive its callback.",
+  "skill": "SKILL.md",
+  "schedules": []
+}

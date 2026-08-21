@@ -39,6 +39,7 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 - [Resource telemetry](./internals/resource-telemetry.md)
 - [Environment auth](./internals/environment-auth.md)
 - [T3 Connect](./internals/t3-connect.md)
+- [Birdhouse (business workflows)](./internals/birdhouse.md)
 - [CI gates](./internals/ci.md)
 
 ### Runbooks
