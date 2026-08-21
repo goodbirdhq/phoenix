@@ -1195,6 +1195,14 @@ export function makeOpenCodeAdapter(
               const parsedModel = parseOpenCodeModelSlug(context.session.model);
               context.autoContinueCount = attempt;
               context.autoContinueInFlight = true;
+              yield* Effect.logWarning("OpenCode auto-continue triggered", {
+                threadId: context.session.threadId,
+                turnId,
+                attempt,
+                limit: OPENCODE_AUTO_CONTINUE_LIMIT,
+                stepFinishReason: evidence?.lastStepFinishReason ?? null,
+                providerThreadId: context.openCodeSessionId,
+              });
               const continuationExit = parsedModel
                 ? yield* runOpenCodeSdk("session.promptAsync", () =>
                     context.client.session.promptAsync({
@@ -1215,6 +1223,12 @@ export function makeOpenCodeAdapter(
                 break;
               }
               context.autoContinueInFlight = false;
+              yield* Effect.logWarning("OpenCode auto-continue prompt failed", {
+                threadId: context.session.threadId,
+                turnId,
+                attempt: context.autoContinueCount,
+                error: openCodeRuntimeErrorDetail(Cause.squash(continuationExit.cause)),
+              });
               yield* emit({
                 ...(yield* buildEventBase({
                   threadId: context.session.threadId,
@@ -1235,6 +1249,13 @@ export function makeOpenCodeAdapter(
               // and went idle without ever adopting a new assistant message.
               // Complete the turn rather than strand it or re-fire on stale
               // evidence.
+              yield* Effect.logWarning("OpenCode truncated turn completed without recovery", {
+                threadId: context.session.threadId,
+                turnId,
+                attemptsUsed: context.autoContinueCount,
+                continuationStillInFlight: context.autoContinueInFlight,
+                stepFinishReason: evidence?.lastStepFinishReason ?? null,
+              });
               yield* emit({
                 ...(yield* buildEventBase({
                   threadId: context.session.threadId,
