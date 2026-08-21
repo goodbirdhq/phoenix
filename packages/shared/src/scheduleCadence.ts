@@ -12,7 +12,10 @@ import type { ScheduleTiming } from "@t3tools/contracts";
  */
 export function describeScheduleCadence(timing: ScheduleTiming, timeZone: string): string {
   if (timing.type === "one-time") {
-    return `Once on ${formatZonedInstant(timing.runAt, timeZone)}`;
+    const when = formatZonedInstant(timing.runAt, timeZone);
+    // An instant we cannot format is returned bare rather than dressed up as
+    // "Once on <garbage>": the same fallback rule the cron path follows.
+    return when === null ? timing.runAt : `Once on ${when}`;
   }
   return describeCronExpression(timing.expression) ?? timing.expression.trim();
 }
@@ -153,9 +156,9 @@ function pad(value: number): string {
   return value.toString().padStart(2, "0");
 }
 
-function formatZonedInstant(instant: string, timeZone: string): string {
+function formatZonedInstant(instant: string, timeZone: string): string | null {
   const epochMillis = Date.parse(instant);
-  if (Number.isNaN(epochMillis)) return instant;
+  if (Number.isNaN(epochMillis)) return null;
   try {
     const parts = new Intl.DateTimeFormat("en-GB", {
       timeZone,
@@ -171,6 +174,6 @@ function formatZonedInstant(instant: string, timeZone: string): string {
     return `${find("day")} ${find("month")} ${find("year")} at ${find("hour")}:${find("minute")}`;
   } catch {
     // An invalid zone is already rejected server-side; a label must not throw.
-    return instant;
+    return null;
   }
 }
