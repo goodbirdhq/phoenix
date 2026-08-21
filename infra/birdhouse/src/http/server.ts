@@ -8,7 +8,9 @@ import type { Db } from "../db/client.ts";
 import { OPEN_RUN_STATUSES, workflowRun } from "../db/schema.ts";
 import { writeAuditEvent } from "../runner/audit.ts";
 import { verifyCallbackToken } from "../runner/callbackToken.ts";
-import { createWorkflowRun } from "../runner/runs.ts";
+import { buildRunPrompt } from "../runner/prompt.ts";
+import { claimWorkflowRun, createWorkflowRun } from "../runner/runs.ts";
+import { loadSkillMarkdown } from "../workflows/skill.ts";
 
 export interface OpsHttpServer {
   close: () => Promise<void>;
@@ -27,6 +29,10 @@ const ResultBodySchema = z.object({
 const ManualRunBodySchema = z.object({
   input: z.unknown().optional(),
   dedupeKey: z.string().min(1).optional(),
+});
+
+const ClaimBodySchema = z.object({
+  input: z.unknown().optional(),
 });
 
 function bearerToken(authorizationHeader: string | undefined): string | undefined {
@@ -153,6 +159,62 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
       const isClientError = /unknown workflow|is disabled/.test(message);
       return c.json({ error: message }, isClientError ? 400 : 500);
     }
+  });
+
+  // Same loopback trust model as /run above, and no auth beyond it: this is
+  // how a Phoenix Schedule's thread collects its run assignment. It hands
+  // out live instructions (including a per-run callback bearer token) to
+  // whoever asks for a given workflow key, which is only safe because
+  // nothing but this box can reach it — see the comment on /run before
+  // changing the bind address.
+  app.post("/api/workflows/:key/claim", async (c) => {
+    const key = c.req.param("key");
+    const parsed = ClaimBodySchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_body", issues: parsed.error.issues }, 400);
+    }
+
+    let claim: Awaited<ReturnType<typeof claimWorkflowRun>>;
+    try {
+      claim = await claimWorkflowRun({
+        db,
+        workflowKey: key,
+        ...(parsed.data.input !== undefined ? { input: parsed.data.input } : {}),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown_error";
+      if (/unknown workflow/.test(message)) {
+        return c.json({ error: "unknown_workflow" }, 404);
+      }
+      if (/is disabled/.test(message)) {
+        return c.json({ error: "workflow_disabled" }, 400);
+      }
+      return c.json({ error: message }, 500);
+    }
+
+    if (claim.status === "busy") {
+      return c.json({ error: "run_in_progress", runId: claim.runId }, 409);
+    }
+
+    // Built from the snapshot the claim recorded, not a fresh read: the mode
+    // these instructions describe must be the mode the run row was written
+    // under, even if an operator flips the workflow in between.
+    const skillMarkdown = await loadSkillMarkdown(claim.workflow.skillPath);
+    const callbackUrl = `${config.BIRDHOUSE_PUBLIC_URL.replace(/\/+$/, "")}/api/runs/${claim.runId}/result`;
+    const instructions = buildRunPrompt({
+      workflow: { key: claim.workflow.key, title: claim.workflow.title },
+      run: { id: claim.runId, mode: claim.workflow.mode, input: parsed.data.input ?? null },
+      skillMarkdown,
+      callbackUrl,
+      callbackToken: claim.callbackToken,
+    });
+
+    return c.json({
+      runId: claim.runId,
+      instructions,
+      callbackUrl,
+      callbackToken: claim.callbackToken,
+    });
   });
 
   const boundPort = await new Promise<{ server: ReturnType<typeof serve>; port: number }>(

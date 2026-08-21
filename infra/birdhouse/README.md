@@ -1,12 +1,14 @@
 # @phoenix/birdhouse — the birdhouse
 
 The birdhouse is a small, headless service that runs Phoenix's internal business
-workflows: a scheduler enqueues durable jobs on a cron, a runner job launches
-a Claude agent session against Phoenix's HTTP API, and the agent posts its
-result back to an HTTP callback. Postgres is the source of truth for every
-run — what was scheduled, what launched, what happened. It is deliberately
-independent of the rest of the monorepo, the same way `infra/relay` is: plain
-TypeScript, no imports from other workspace packages.
+workflows. Timing is not its job: a Phoenix Schedule fires and starts a thread
+whose prompt claims a run over HTTP (see "Which system owns what" below); for
+CLI/API-triggered runs, a runner job launches a Claude agent session against
+Phoenix's HTTP API instead. Either way the agent posts its result back to an
+HTTP callback. Postgres is the source of truth for every run — what was
+launched or claimed, and what happened. It is deliberately independent of the
+rest of the monorepo, the same way `infra/relay` is: plain TypeScript, no
+imports from other workspace packages.
 
 ## Local setup
 
@@ -36,8 +38,8 @@ src/
   cli.ts              entry point: worker | migrate | run | list | enable |
                        disable | cancel
   db/
-    schema.ts         drizzle schema — ops_job, workflow, workflow_schedule,
-                       workflow_run, audit_event
+    schema.ts         drizzle schema — ops_job, workflow, workflow_run,
+                       audit_event
     client.ts         pg Pool + drizzle instance
     migrate.ts        drizzle-kit migration runner
   jobs/
@@ -45,10 +47,10 @@ src/
     errors.ts         TerminalJobError, JobLeaseLostError
     queue.ts          the durable job queue: enqueue, lease, heartbeat,
                        complete/fail, cancellation, retention, the drain loop
-  scheduler/
-    tick.ts           one pass: sync definitions from disk, sweep runs past
-                       their deadline, prune finished jobs, claim due
-                       schedules and start their runs
+  maintenance/
+    tick.ts           one pass: sync workflow definitions from disk, sweep
+                       runs past their timeout_at, prune finished jobs — no
+                       timing or scheduling; that's Phoenix Schedules' job now
   runner/
     runs.ts           create/cancel a run, and sweepExpiredRuns — the
                        backstop that makes timeout_at mean something even
@@ -57,7 +59,8 @@ src/
     prompt.ts         the turn text sent to the agent
     callbackToken.ts  per-run result-callback bearer tokens
   http/
-    server.ts         loopback-only: result callback, health, manual trigger
+    server.ts         loopback-only: result callback, claim, health, manual
+                       trigger
   phoenix/
     client.ts         PhoenixClient interface + createPhoenixClient
   workflows/
@@ -86,6 +89,42 @@ on `BIRDHOUSE_TEST_DATABASE_URL` and skip without it.
 - **Boring, well-factored code, sized to what exists today.** This is
   infrastructure meant to be extended for years by one person; no
   speculative abstraction for workflows that don't exist yet.
+
+## Which system owns what
+
+Phoenix Schedules own _when_ work happens — one-time or five-field cron, an
+IANA timezone, a five-minute minimum interval, DST-correct, managed from the
+Phoenix web/desktop/mobile UI. Birdhouse owns _what_ the work is and _what
+happened_: workflow definitions, run records, modes, results, the audit
+trail. Neither side reaches into the other's job. See
+`docs/adr/0003-birdhouse-delegates-timing-to-phoenix-schedules.md` for the
+one-line version of why.
+
+### Known gaps in the pull path
+
+Delegating timing to Phoenix Schedules trades birdhouse's own cron for a
+few honest gaps, accepted rather than solved:
+
+- **A lost claim response is a rare silent skip.** If the agent's HTTP call
+  to `/claim` succeeds but the response never arrives, the agent has nothing
+  to retry with — it POSTs again, gets `409 run_in_progress`, and stops. The
+  first run just sits open until `timeout_at`. There's no correlation id to
+  fix this with: a Schedule's prompt is completely static, and nothing
+  tells a session its own thread id.
+- **Birdhouse cannot stop a runaway scheduled run.** The timeout sweep marks
+  it `timed_out` and audits it, but actually stopping the session needs a
+  thread id birdhouse never learns for pull-path runs. The kill switch is
+  the Phoenix UI — stop the thread there — then cancel the run in birdhouse
+  for bookkeeping. Push-path runs, which do have a `phoenix_thread_id`, are
+  unaffected.
+- **Scheduled runs have no `phoenix_thread_id`.** Find the thread in Phoenix
+  by title (`<schedule name> — <local time>`); Phoenix's own schedule
+  history is the authoritative record of which occurrence became which
+  thread, not anything in birdhouse's database.
+- **Config can drift between the two paths.** A manifest's
+  `phoenix.{model, runtime_mode}` block governs push-path runs only. A
+  scheduled run is governed by whatever execution config is saved on the
+  Phoenix Schedule itself — changing one doesn't touch the other.
 
 ## Running on the box
 
@@ -147,8 +186,8 @@ curl -s "$PHOENIX_BASE_URL/api/orchestration/snapshot" \
 Look for the project whose `workspaceRoot` is this box's ops/business repo
 checkout.
 
-Everything else in `.env.example` (`BIRDHOUSE_HTTP_PORT`, `BIRDHOUSE_SCHEDULER_TICK_MS`,
-`BIRDHOUSE_TIMEZONE`, `BIRDHOUSE_WORKFLOWS_DIR`, `BIRDHOUSE_RUN_TIMEOUT_MS`,
+Everything else in `.env.example` (`BIRDHOUSE_HTTP_PORT`, `BIRDHOUSE_MAINTENANCE_TICK_MS`,
+`BIRDHOUSE_WORKFLOWS_DIR`, `BIRDHOUSE_RUN_TIMEOUT_MS`,
 `BIRDHOUSE_RUN_WATCH_INTERVAL_MS`) has a sane default; only override on the box if
 you have a specific reason to.
 
@@ -185,13 +224,52 @@ For anything longer than a foreground test, run it under systemd — see
    `workflows/ping/` or `workflows/prospect-research/` for worked examples.
 2. `skill` in the manifest is a path to the skill file, relative to the
    workflow's own directory (almost always just `"SKILL.md"`).
-3. `schedules` is a list of cron triggers, each `{cron, timezone, enabled}`
-   (`timezone` defaults to `BIRDHOUSE_TIMEZONE`, `enabled` defaults to `true`).
-   Leave it `[]` to register the workflow without any automatic trigger —
-   it can still be run manually. The scheduler resyncs `workflows/` from
-   disk into the `workflow` / `workflow_schedule` tables on every tick
-   (`BIRDHOUSE_SCHEDULER_TICK_MS`, 15s by default) — editing a manifest or adding
-   a schedule takes effect on the next tick, no restart or migration needed.
+3. A manifest no longer carries timing — there's no `schedules` field.
+   Registering the workflow (step 1) is enough for it to be run manually; to
+   put it on a schedule, create a **Phoenix Schedule** instead:
+
+   1. In the Phoenix UI, open `/schedules` (or use the command palette:
+      "create schedule"), pointing it at the **Birdhouse** project.
+   2. Paste the following as the schedule's prompt, filling in `<key>`:
+
+      ```
+      Run the birdhouse workflow `<key>`.
+
+      1. POST http://127.0.0.1:3878/api/workflows/<key>/claim with an empty JSON body.
+      2. On 200 the response gives you `instructions`, `runId`, `callbackUrl` and
+         `callbackToken`. Follow `instructions` exactly — they are the whole task.
+      3. On 409, or any other error, stop immediately and do nothing else.
+         Do not improvise the task.
+      ```
+
+   3. Settings we use for every birdhouse schedule: timing = cron (five
+      fields, at least five minutes apart), timezone `Europe/London`,
+      execution = provider instance `claudeAgent`, model `claude-fable-5`,
+      runtime mode `auto`, interaction `default`, workspace mode **`local`**,
+      base branch null. Workspace mode is `local`, not `worktree`: these
+      workflows write to Notion and Gmail, never to files, so there's
+      nothing to isolate in a worktree, and `worktree` mode would leave one
+      worktree per occurrence that Phoenix never cleans up.
+
+   That's the way to create a schedule today, by hand in the UI. Phoenix
+   PR #70 (not yet merged) adds a `schedules` toolkit to the per-thread
+   `phoenix` MCP server (`list_schedules`, `create_schedule`,
+   `run_schedule_now`, etc.), gated behind an `enableScheduleManagement`
+   setting — once it lands, you'll be able to just ask a Phoenix agent
+   session to create or retime a schedule, and use `run_schedule_now` to
+   fire a workflow immediately for testing instead of waiting for cron.
+   One gotcha to plan for: those MCP writes derive the project from the
+   _calling session's own thread_, never from an argument — so a schedule
+   for Birdhouse must be requested from a thread that is itself in the
+   Birdhouse project, or it gets created in whatever project you asked
+   from, pointing the claim ticket at the wrong workspace. That surface
+   also has no delete tool (pausing is the reversible way out) and refuses
+   duplicate names.
+
+   The manifest's `workflows/<key>/manifest.json` still governs the run
+   itself — mode, `phoenix.{model, runtime_mode}` for push-path runs,
+   `input_schema` — just not when it happens.
+
 4. `input_schema` is an opaque JSON Schema document describing the shape a
    run's `input` should have — it documents the contract but isn't enforced
    by the manifest loader itself.
@@ -204,7 +282,7 @@ without a deploy or a disk change).
 
 - **`fake`** — `workflow.launch` short-circuits: no Phoenix thread is ever
   created, the run is marked `succeeded` immediately with a stub result.
-  Use it to test that scheduling and job wiring work end-to-end without
+  Use it to test that a workflow's job wiring works end-to-end without
   spending an agent turn.
 - **`shadow`** — a real agent thread runs, but the birdhouse tells it (in the
   prompt, automatically) not to perform any external side effect — record
@@ -222,7 +300,7 @@ without a deploy or a disk change).
 
 ### Manual runs
 
-Without waiting for a schedule:
+Without waiting for a Phoenix Schedule to fire:
 
 ```sh
 pnpm --dir infra/birdhouse exec tsx src/cli.ts run <key> --input '{"prospect": {"company": "Acme"}}'
@@ -244,13 +322,15 @@ shows recent runs and their status.
 ### Everyday commands
 
 ```sh
-ops list                     # workflows, their next occurrence, recent runs
+ops list                     # workflows, their mode/enabled state, recent runs
 ops run <workflow-key>       # start one run now, printing its id
 ops cancel <run-id>          # stop a queued or in-flight run and its session
-ops disable <workflow-key>   # stop scheduling it, keep it and its history
+ops disable <workflow-key>   # stop the workflow being runnable, keep its history
 ops enable <workflow-key>    # undo a disable
 ```
 
+`ops list` no longer has a "NEXT RUN" column — timing lives in Phoenix
+Schedules now, not birdhouse; check `/schedules` in the Phoenix UI for that.
 `enable` is also how you recover from an automatic disable: when a workflow
 stops appearing on disk, reconciliation disables it, and the sync never
 re-enables anything on its own.
@@ -296,18 +376,17 @@ later files win.
 Every log line is one JSON object (`console.log`/`console.warn` of
 `JSON.stringify({event, ...})`) — `journalctl -u birdhouse -f | jq` to follow
 it structured. Notable `event` values: `worker.started`, `worker.stopped`,
-`workflows.synced`, `scheduler.tick`, `http.request`,
-`run.stop_session_failed`, `scheduler.run_start_failed`,
-`scheduler.tick_failed`. There's no log aggregation beyond the systemd
-journal yet.
+`workflows.synced`, `maintenance.tick`, `http.request`,
+`run.stop_session_failed`, `maintenance.tick_failed`. There's no log
+aggregation beyond the systemd journal yet.
 
 ## Security notes
 
 - **HTTP bind is loopback-only.** `startHttpServer` binds `127.0.0.1`
   regardless of `BIRDHOUSE_HTTP_PORT` (`src/http/server.ts`) — the callback
-  endpoint, health check, and manual-trigger route are all only reachable
-  from the box itself. Don't change the bind address without adding real
-  auth first (see below).
+  endpoint, health check, the manual-trigger route, and the claim route are
+  all only reachable from the box itself. Don't change the bind address
+  without adding real auth first (see below).
 - **Callback tokens are hashed at rest.** Each run gets a single-purpose
   bearer token for its result callback; only its sha256 hash is stored on
   the `workflow_run` row (`callback_token_hash`). The raw token exists only
@@ -319,6 +398,12 @@ journal yet.
   can reach `127.0.0.1:$BIRDHOUSE_HTTP_PORT` on this box can start any enabled
   workflow. That's an accepted tradeoff for a same-box CLI/script trigger
   in v1 — it is not safe to expose beyond loopback as-is.
+- **The claim route (`POST /api/workflows/:key/claim`) has the same
+  shape of no-auth-of-its-own.** It hands out a run's `instructions`, `runId`,
+  `callbackUrl` and `callbackToken` to whatever hits it, and relies entirely
+  on the loopback bind exactly as `/run` does — anything on this box can
+  claim a run for any enabled workflow. Exposing the port beyond loopback
+  needs real auth first, same as above.
 - **An agent's tools are not scoped per run.** A workflow agent gets
   whatever toolkit the Phoenix harness grants it, and the orchestration
   dispatch contract has no per-thread tool allowlist to narrow it (see

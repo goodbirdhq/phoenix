@@ -3,7 +3,6 @@
   "title": "Prospect research",
   "description": "Research one B2B prospect (company + person), write a dossier to Notion, and leave a skeleton outreach email as a Gmail draft.",
   "skill": "SKILL.md",
-  "schedules": [],
   "timeout_ms": 2700000,
   "input_schema": {
     "type": "object",

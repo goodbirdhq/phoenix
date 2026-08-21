@@ -17,8 +17,8 @@ const envSchema = z.object({
   // Unset until the Phoenix-side integration issues tokens; every call site
   // must treat this as "unauthenticated" rather than assume it is present.
   PHOENIX_BIRDHOUSE_TOKEN: z.string().min(1).optional(),
-  BIRDHOUSE_SCHEDULER_TICK_MS: z.coerce.number().int().positive().default(15_000),
-  BIRDHOUSE_TIMEZONE: z.string().min(1).default("Europe/London"),
+  /** Cadence for the maintenance loop: manifest sync, expired-run sweep, job pruning. */
+  BIRDHOUSE_MAINTENANCE_TICK_MS: z.coerce.number().int().positive().default(15_000),
   // Directory scanned for workflow definitions (one subdirectory per
   // workflow, each holding manifest.json + SKILL.md). Relative paths resolve
   // against the package root, not the process cwd.

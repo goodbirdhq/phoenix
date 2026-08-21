@@ -4,12 +4,12 @@ import { positionalArgs, readFlag } from "./lib/cliArgs.ts";
 const USAGE = `Usage: ops <command>
 
 Commands:
-  worker                       Apply pending migrations, then serve the HTTP surface, scheduler, and job worker until stopped
+  worker                       Apply pending migrations, then serve the HTTP surface, maintenance loop, and job worker until stopped
   migrate                      Apply pending database migrations
   run <workflow-key> [--input '<json>']
                                 Launch one workflow run immediately, printing its run id
-  list [--limit N]             List registered workflows (with next schedule occurrences) and recent runs
-  enable <workflow-key>        Enable a workflow so its schedules and manual runs fire again
+  list [--limit N]             List registered workflows and recent runs
+  enable <workflow-key>        Enable a workflow so its claims and manual runs fire again
   disable <workflow-key>       Disable a workflow without removing it or its history
   cancel <run-id>              Cancel a queued or in-flight run and stop its agent session
 `;
@@ -42,7 +42,7 @@ async function runWorker(): Promise<void> {
   const { runReadyJobs } = await import("./jobs/queue.ts");
   const { jobHandlerRegistry } = await import("./runner/registry.ts");
   const { startHttpServer } = await import("./http/server.ts");
-  const { startSchedulerLoop } = await import("./scheduler/tick.ts");
+  const { startMaintenanceLoop } = await import("./maintenance/tick.ts");
   const { resolveWorkflowsDir } = await import("./workflows/loader.ts");
   const { config } = await import("./config.ts");
 
@@ -64,12 +64,11 @@ async function runWorker(): Promise<void> {
   try {
     await Promise.all([
       runReadyJobs(db, jobHandlerRegistry, workerId, { signal: controller.signal }),
-      startSchedulerLoop({
+      startMaintenanceLoop({
         db,
         signal: controller.signal,
-        tickMs: config.BIRDHOUSE_SCHEDULER_TICK_MS,
+        tickMs: config.BIRDHOUSE_MAINTENANCE_TICK_MS,
         workflowsDir: resolveWorkflowsDir(config.BIRDHOUSE_WORKFLOWS_DIR),
-        defaultTimezone: config.BIRDHOUSE_TIMEZONE,
       }),
     ]);
   } finally {
@@ -134,8 +133,8 @@ async function runListCommand(args: readonly string[]): Promise<void> {
   }
 
   const { closeDb, db } = await import("./db/client.ts");
-  const { workflow, workflowRun, workflowSchedule } = await import("./db/schema.ts");
-  const { desc, eq, min } = await import("drizzle-orm");
+  const { workflow, workflowRun } = await import("./db/schema.ts");
+  const { desc } = await import("drizzle-orm");
   try {
     const workflows = await db
       .select({
@@ -146,16 +145,6 @@ async function runListCommand(args: readonly string[]): Promise<void> {
       })
       .from(workflow)
       .orderBy(workflow.key);
-
-    const nextOccurrences = await db
-      .select({
-        workflowKey: workflowSchedule.workflowKey,
-        nextRunAt: min(workflowSchedule.nextRunAt),
-      })
-      .from(workflowSchedule)
-      .where(eq(workflowSchedule.enabled, true))
-      .groupBy(workflowSchedule.workflowKey);
-    const nextByWorkflow = new Map(nextOccurrences.map((row) => [row.workflowKey, row.nextRunAt]));
 
     const runs = await db
       .select({
@@ -171,14 +160,8 @@ async function runListCommand(args: readonly string[]): Promise<void> {
 
     console.log("Workflows:");
     const workflowRows = [
-      ["KEY", "TITLE", "MODE", "ENABLED", "NEXT RUN"],
-      ...workflows.map((w) => [
-        w.key,
-        w.title,
-        w.mode,
-        String(w.enabled),
-        nextByWorkflow.get(w.key)?.toISOString() ?? "-",
-      ]),
+      ["KEY", "TITLE", "MODE", "ENABLED"],
+      ...workflows.map((w) => [w.key, w.title, w.mode, String(w.enabled)]),
     ];
     for (const line of padColumns(workflowRows)) console.log(`  ${line}`);
     if (workflows.length === 0) console.log("  (none)");
@@ -255,11 +238,15 @@ async function runCancelCommand(args: readonly string[]): Promise<void> {
   const { cancelWorkflowRun } = await import("./runner/runs.ts");
   try {
     const result = await cancelWorkflowRun(db, runId);
-    console.log(
-      result.cancelled
-        ? `${runId} cancelled (${result.jobsCancelled} job(s) retired)`
-        : `${runId} already ${result.status}; nothing to cancel`,
-    );
+    if (!result.cancelled) {
+      console.log(`${runId} already ${result.status}; nothing to cancel`);
+    } else if (result.hadPhoenixThread) {
+      console.log(`${runId} cancelled (${result.jobsCancelled} job(s) retired)`);
+    } else {
+      console.log(
+        `${runId} marked cancelled; this run has no linked Phoenix thread — stop it in Phoenix if it is still running.`,
+      );
+    }
   } catch (error) {
     console.error(`Failed to cancel run: ${describeError(error)}`);
     process.exitCode = 1;
