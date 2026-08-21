@@ -62,10 +62,19 @@ const PROVIDER = ProviderDriverKind.make("opencode");
  * rather than misread (mirrors GROK_RESUME_VERSION / CURSOR_RESUME_VERSION).
  */
 const OPENCODE_RESUME_VERSION = 1 as const;
+/**
+ * How many times a single turn may be auto-continued after a truncated
+ * (unknown-finish, zero-output) step before the turn is completed with an
+ * exhaustion warning instead.
+ */
 const OPENCODE_AUTO_CONTINUE_LIMIT = 2;
+/**
+ * Invisible prompt sent to OpenCode when a truncated step is recovered. It
+ * must stay invisible: the adapter never emits a user-message event for it,
+ * so the nudge never appears in the Phoenix thread.
+ */
 const OPENCODE_CONTINUATION_INSTRUCTION =
   "Your previous response was cut off before any output or tool call. Continue exactly where you left off.";
-
 /**
  * Decode a persisted resume cursor into the upstream `ses_…` id. Anything
  * that isn't a current-version cursor with a non-empty id means "no resume"
@@ -225,6 +234,17 @@ function isOpenCodeDefaultTitle(title: string): boolean {
   return OPENCODE_DEFAULT_TITLE_PATTERN.test(title);
 }
 
+/**
+ * Output evidence for one assistant message, keyed by its OpenCode message
+ * id. Keying keeps delayed or out-of-order events for older messages from
+ * contaminating the evidence evaluated when the active response goes idle.
+ */
+interface AssistantMessageEvidence {
+  emittedText: boolean;
+  toolActivity: boolean;
+  lastStepFinishReason: Extract<Part, { readonly type: "step-finish" }>["reason"] | undefined;
+}
+
 interface OpenCodeSessionContext {
   session: ProviderSession;
   readonly client: OpencodeClient;
@@ -242,11 +262,11 @@ interface OpenCodeSessionContext {
   activeAgent: string | undefined;
   activeVariant: string | undefined;
   activeAssistantMessageId: string | undefined;
-  emittedAssistantText: boolean;
-  emittedToolActivity: boolean;
-  lastStepFinishReason: Extract<Part, { readonly type: "step-finish" }>["reason"] | undefined;
+  readonly seenAssistantMessageIds: Set<string>;
+  readonly assistantEvidenceByMessageId: Map<string, AssistantMessageEvidence>;
   autoContinueCount: number;
   autoContinueInFlight: boolean;
+  turnInterrupted: boolean;
   /**
    * Prior conversation carried into a migrated thread. OpenCode has no
    * start-from-history entry point, so it rides along on the first prompt and
@@ -278,6 +298,37 @@ export interface OpenCodeAdapterLiveOptions {
 }
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+const evidenceForAssistantMessage = (
+  context: OpenCodeSessionContext,
+  messageId: string,
+): AssistantMessageEvidence => {
+  let evidence = context.assistantEvidenceByMessageId.get(messageId);
+  if (!evidence) {
+    evidence = { emittedText: false, toolActivity: false, lastStepFinishReason: undefined };
+    context.assistantEvidenceByMessageId.set(messageId, evidence);
+  }
+  return evidence;
+};
+
+/**
+ * Adopt a never-before-seen assistant message as the active response and
+ * return its evidence. Delayed updates for already-seen messages keep their
+ * own evidence without rewinding the active pointer. Adoption is also the
+ * continuation-response boundary that releases the auto-continue latch —
+ * never a bare `busy` transition, which can precede any new evidence.
+ */
+const adoptAssistantMessage = (
+  context: OpenCodeSessionContext,
+  messageId: string,
+): AssistantMessageEvidence => {
+  if (!context.seenAssistantMessageIds.has(messageId)) {
+    context.seenAssistantMessageIds.add(messageId);
+    context.activeAssistantMessageId = messageId;
+    context.autoContinueInFlight = false;
+  }
+  return evidenceForAssistantMessage(context, messageId);
+};
 
 /**
  * Map a tagged OpenCodeRuntimeError produced by {@link runOpenCodeSdk} into
@@ -771,7 +822,7 @@ export function makeOpenCodeAdapter(
         );
       }
       if (deltaToEmit.length > 0) {
-        context.emittedAssistantText = true;
+        evidenceForAssistantMessage(context, part.messageID).emittedText = true;
         yield* emit({
           ...(yield* buildEventBase({
             threadId: context.session.threadId,
@@ -862,27 +913,16 @@ export function makeOpenCodeAdapter(
         case "message.updated": {
           context.messageRoleById.set(event.properties.info.id, event.properties.info.role);
           if (event.properties.info.role === "assistant") {
-            if (context.activeAssistantMessageId !== event.properties.info.id) {
-              context.activeAssistantMessageId = event.properties.info.id;
-              context.emittedAssistantText = false;
-              context.emittedToolActivity = false;
-              context.lastStepFinishReason = undefined;
-              context.autoContinueInFlight = false;
-            }
+            const evidence = adoptAssistantMessage(context, event.properties.info.id);
             for (const part of context.partById.values()) {
               if (part.messageID !== event.properties.info.id) {
                 continue;
               }
               if (part.type === "step-finish") {
-                context.lastStepFinishReason = part.reason;
+                evidence.lastStepFinishReason = part.reason;
               }
-              if (
-                part.type === "tool" &&
-                (part.state.status === "pending" ||
-                  part.state.status === "completed" ||
-                  part.state.status === "error")
-              ) {
-                context.emittedToolActivity = true;
+              if (part.type === "tool") {
+                evidence.toolActivity = true;
               }
               yield* emitAssistantTextDelta(context, part, turnId, event);
             }
@@ -917,7 +957,7 @@ export function makeOpenCodeAdapter(
           if (deltaToEmit.length === 0) {
             break;
           }
-          context.emittedAssistantText = true;
+          evidenceForAssistantMessage(context, existingPart.messageID).emittedText = true;
           context.emittedTextByPartId.set(event.properties.partID, nextText);
           if (existingPart.type === "text" || existingPart.type === "reasoning") {
             context.partById.set(event.properties.partID, {
@@ -947,6 +987,7 @@ export function makeOpenCodeAdapter(
           const messageRole = messageRoleForPart(context, part);
 
           if (messageRole === "assistant") {
+            adoptAssistantMessage(context, part.messageID);
             yield* emitAssistantTextDelta(context, part, turnId, event);
           }
 
@@ -985,14 +1026,15 @@ export function makeOpenCodeAdapter(
                     : "item.updated",
               payload,
             };
-            if (runtimeEvent.type === "item.started" || runtimeEvent.type === "item.completed") {
-              context.emittedToolActivity = true;
-            }
+            // Any observed tool part is evidence of a real tool call, whatever
+            // its lifecycle state — a `running`-only observation must not be
+            // mistaken for an output-free message.
+            evidenceForAssistantMessage(context, part.messageID).toolActivity = true;
             appendTurnItem(context, turnId, part);
             yield* emit(runtimeEvent);
           }
           if (part.type === "step-finish") {
-            context.lastStepFinishReason = part.reason;
+            evidenceForAssistantMessage(context, part.messageID).lastStepFinishReason = part.reason;
           }
           break;
         }
@@ -1093,7 +1135,11 @@ export function makeOpenCodeAdapter(
 
         case "session.status": {
           if (event.properties.status.type === "busy") {
-            context.autoContinueInFlight = false;
+            // The auto-continue latch is intentionally NOT released here. A
+            // `busy` can precede any new evidence, so releasing on it would
+            // let a stale duplicate idle re-enter recovery with the previous
+            // message's unknown/zero-output signature. The latch is released
+            // when the continuation's new assistant message is adopted.
             yield* updateProviderSession(context, {
               status: "running",
               activeTurnId: turnId,
@@ -1117,16 +1163,21 @@ export function makeOpenCodeAdapter(
           }
 
           if (event.properties.status.type === "idle" && turnId) {
+            const evidence = context.activeAssistantMessageId
+              ? context.assistantEvidenceByMessageId.get(context.activeAssistantMessageId)
+              : undefined;
             const isTruncated =
-              !context.emittedAssistantText &&
-              !context.emittedToolActivity &&
-              context.lastStepFinishReason === "unknown" &&
+              !context.turnInterrupted &&
+              !evidence?.emittedText &&
+              !evidence?.toolActivity &&
+              evidence?.lastStepFinishReason === "unknown" &&
               context.pendingPermissions.size === 0 &&
               context.pendingQuestions.size === 0;
-            if (isTruncated && context.autoContinueInFlight) {
-              break;
-            }
-            if (isTruncated && context.autoContinueCount < OPENCODE_AUTO_CONTINUE_LIMIT) {
+            if (
+              isTruncated &&
+              !context.autoContinueInFlight &&
+              context.autoContinueCount < OPENCODE_AUTO_CONTINUE_LIMIT
+            ) {
               const attempt = context.autoContinueCount + 1;
               yield* emit({
                 ...(yield* buildEventBase({
@@ -1137,7 +1188,7 @@ export function makeOpenCodeAdapter(
                 type: "runtime.warning",
                 payload: {
                   message: `OpenCode's stream ended without output — automatically continuing (attempt ${attempt}/${OPENCODE_AUTO_CONTINUE_LIMIT}).`,
-                  detail: { stepFinishReason: context.lastStepFinishReason },
+                  detail: { stepFinishReason: evidence?.lastStepFinishReason },
                 },
               });
 
@@ -1158,7 +1209,6 @@ export function makeOpenCodeAdapter(
                     new OpenCodeRuntimeError({
                       operation: "session.promptAsync",
                       detail: "OpenCode auto-continue requires an active model selection.",
-                      cause: null,
                     }),
                   );
               if (Exit.isSuccess(continuationExit)) {
@@ -1175,12 +1225,16 @@ export function makeOpenCodeAdapter(
                 payload: {
                   message: "OpenCode could not automatically continue the truncated response.",
                   detail: {
-                    stepFinishReason: context.lastStepFinishReason,
+                    stepFinishReason: evidence?.lastStepFinishReason,
                     error: openCodeRuntimeErrorDetail(Cause.squash(continuationExit.cause)),
                   },
                 },
               });
             } else if (isTruncated) {
+              // Either retries are exhausted, or a continuation was launched
+              // and went idle without ever adopting a new assistant message.
+              // Complete the turn rather than strand it or re-fire on stale
+              // evidence.
               yield* emit({
                 ...(yield* buildEventBase({
                   threadId: context.session.threadId,
@@ -1189,8 +1243,10 @@ export function makeOpenCodeAdapter(
                 })),
                 type: "runtime.warning",
                 payload: {
-                  message: `OpenCode's stream ended without output — automatic continuation retries exhausted (${OPENCODE_AUTO_CONTINUE_LIMIT}/${OPENCODE_AUTO_CONTINUE_LIMIT}).`,
-                  detail: { stepFinishReason: context.lastStepFinishReason },
+                  message: context.autoContinueInFlight
+                    ? "OpenCode's automatic continuation ended without output — completing the turn."
+                    : `OpenCode's stream ended without output — automatic continuation retries exhausted (${OPENCODE_AUTO_CONTINUE_LIMIT}/${OPENCODE_AUTO_CONTINUE_LIMIT}).`,
+                  detail: { stepFinishReason: evidence?.lastStepFinishReason },
                 },
               });
             }
@@ -1528,11 +1584,11 @@ export function makeOpenCodeAdapter(
           activeAgent: undefined,
           activeVariant: undefined,
           activeAssistantMessageId: undefined,
-          emittedAssistantText: false,
-          emittedToolActivity: false,
-          lastStepFinishReason: undefined,
+          seenAssistantMessageIds: new Set<string>(),
+          assistantEvidenceByMessageId: new Map<string, AssistantMessageEvidence>(),
           autoContinueCount: 0,
           autoContinueInFlight: false,
+          turnInterrupted: false,
           pendingSeedPrompt: seed === undefined ? undefined : formatConversationSeedPrompt(seed),
           stopped: yield* Ref.make(false),
           sessionScope: started.sessionScope,
@@ -1618,12 +1674,12 @@ export function makeOpenCodeAdapter(
       context.activeAgent = agent ?? (input.interactionMode === "plan" ? "plan" : undefined);
       context.activeVariant = variant;
       if (steeringTurnId === undefined) {
+        // Evidence maps keep accumulating across turns (keyed by message id);
+        // only the per-turn recovery state resets here.
         context.activeAssistantMessageId = undefined;
-        context.emittedAssistantText = false;
-        context.emittedToolActivity = false;
-        context.lastStepFinishReason = undefined;
         context.autoContinueCount = 0;
         context.autoContinueInFlight = false;
+        context.turnInterrupted = false;
       }
       yield* updateProviderSession(
         context,
@@ -1705,6 +1761,11 @@ export function makeOpenCodeAdapter(
     const interruptTurn: OpenCodeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
       function* (threadId, turnId) {
         const context = yield* ensureSessionContext(sessions, threadId);
+        // A user stop must win over recovery: mark the turn interrupted so
+        // the post-abort idle cannot trigger auto-continuation, and release
+        // the latch so that idle cannot be swallowed and strand the turn.
+        context.turnInterrupted = true;
+        context.autoContinueInFlight = false;
         yield* runOpenCodeSdk("session.abort", () =>
           context.client.session.abort({ sessionID: context.openCodeSessionId }),
         ).pipe(Effect.mapError(toRequestError));
