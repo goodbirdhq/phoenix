@@ -189,8 +189,8 @@ export function SubscriptionAvailabilitySection({
 
       {hasError && !isEmpty ? (
         <p role="status" className="text-xs leading-relaxed text-muted-foreground">
-          Capacity could not be checked for every connected Environment. Showing the readings that
-          are available; refresh capacity to try again.
+          Some capacity readings could not be refreshed. Showing the readings that are available;
+          refresh capacity to try again.
         </p>
       ) : null}
 
@@ -201,7 +201,11 @@ export function SubscriptionAvailabilitySection({
               Available subscriptions
             </span>
             {isPending && !hasObservedReading ? (
-              <div className="my-1.5 h-8 w-24 rounded-sm bg-muted" aria-label="Checking capacity" />
+              <div
+                role="status"
+                className="my-1.5 h-8 w-24 rounded-sm bg-muted"
+                aria-label="Checking capacity"
+              />
             ) : (
               <span className="text-4xl font-semibold text-foreground tabular-nums">
                 {capacity.readinessCounts.available}
@@ -536,7 +540,7 @@ function UnsupportedLimitsSummary({
 
 function CapacityQuotaFieldsSkeleton() {
   return (
-    <div className="mt-2 flex flex-col gap-2" aria-label="Checking provider quota">
+    <div role="status" className="mt-2 flex flex-col gap-2" aria-label="Checking provider quota">
       <div className="h-3 w-24 rounded-sm bg-muted" />
       <div className="h-1.5 w-full rounded-full bg-muted" />
     </div>

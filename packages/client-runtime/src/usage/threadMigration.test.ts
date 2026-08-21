@@ -164,6 +164,50 @@ describe("thread migration derivations", () => {
     ).toBe(true);
   });
 
+  it("never migrates or ranks from an unconfirmed retained quota window", () => {
+    const expired = {
+      ...availability(100),
+      status: "unknown" as const,
+    };
+    const failedRefresh = {
+      ...availability(100),
+      stale: { reason: "refresh_failed" as const, attemptedAt: "2026-08-19T12:01:00.000Z" },
+    };
+
+    for (const unconfirmed of [expired, failedRefresh]) {
+      expect(isProviderUsageLimitedForModel(unconfirmed, "gpt-5.6-sol")).toBe(false);
+      expect(modelUsageLimitWindows(unconfirmed, "gpt-5.6-sol")).toEqual([]);
+      expect(
+        shouldShowUsageLimitMigrationPopup({
+          boundInstanceId: ProviderInstanceId.make("origin"),
+          boundInstanceAvailability: unconfirmed,
+          boundModel: "gpt-5.6-sol",
+          sessionProviderInstanceId: ProviderInstanceId.make("origin"),
+          sessionErrorKind: null,
+        }),
+      ).toBe(false);
+    }
+
+    const target = ProviderInstanceId.make("target");
+    expect(
+      rankMigrationTargets({
+        originInstanceId: ProviderInstanceId.make("origin"),
+        originDriverKind: ProviderDriverKind.make("codex"),
+        availabilityByInstanceId: new Map([[target, expired]]),
+        candidates: [
+          {
+            instanceId: target,
+            driverKind: ProviderDriverKind.make("codex"),
+            displayName: "Target",
+            enabled: true,
+            isAvailable: true,
+            status: "ready",
+          },
+        ],
+      }),
+    ).toMatchObject([{ instanceId: "target", remainingQuotaPercent: null }]);
+  });
+
   it("keys a dismissal to one thread, instance, and reset window", () => {
     const origin = ProviderInstanceId.make("origin");
     const limited = (resetsAt?: string): ProviderAvailability => ({

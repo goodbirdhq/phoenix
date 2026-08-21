@@ -65,4 +65,15 @@ describe("remainingScore", () => {
 
     expect(remainingScore(availability)).toBe(0);
   });
+
+  it("does not rank a retained reading after its refresh failed", () => {
+    const availability = {
+      status: "available",
+      source: "codex_app_server",
+      stale: { reason: "refresh_failed", attemptedAt: "2026-08-19T12:00:00.000Z" },
+      windows: [{ kind: "session", usedPercent: 10 }],
+    } as ProviderAvailability;
+
+    expect(remainingScore(availability)).toBe(0);
+  });
 });

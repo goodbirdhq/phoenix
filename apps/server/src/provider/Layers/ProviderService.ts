@@ -669,6 +669,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const availabilityRefreshes = yield* Ref.make(
     new Map<ProviderInstanceId, Deferred.Deferred<ProviderAvailability>>(),
   );
+  // Every entry point (web, MCP, or another future client) shares this bound.
+  // Per-request fan-out alone cannot prevent several concurrent targeted RPCs
+  // from spawning every provider CLI at once.
+  const availabilityRefreshPermits = yield* Semaphore.make(
+    ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY,
+  );
   const availabilityPersistence = yield* Semaphore.make(1);
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -907,28 +913,30 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         if (!claimed) {
           return yield* cachedAt();
         }
-        const availability = yield* collectAvailability().pipe(
-          // A refresh that failed reports the channel it failed on, not the
-          // driver's passive one. The whole cause is caught, not just the typed
-          // error: an adapter that throws while shelling out to its CLI is a
-          // defect, and a defect escaping here would take down the caller's
-          // whole availability fan-out over one misbehaving instance.
-          // Interruption is the caller going away and stays a cancellation.
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.failCause(cause as Cause.Cause<never>)
-              : Effect.logWarning("provider availability refresh failed", {
-                  instanceId,
-                  provider,
-                  cause,
-                }).pipe(
-                  Effect.andThen(DateTime.now),
-                  Effect.map((failedAt) =>
-                    unknownRefreshAvailability(provider, DateTime.formatIso(failedAt)),
+        const availability = yield* availabilityRefreshPermits
+          .withPermits(1)(collectAvailability())
+          .pipe(
+            // A refresh that failed reports the channel it failed on, not the
+            // driver's passive one. The whole cause is caught, not just the typed
+            // error: an adapter that throws while shelling out to its CLI is a
+            // defect, and a defect escaping here would take down the caller's
+            // whole availability fan-out over one misbehaving instance.
+            // Interruption is the caller going away and stays a cancellation.
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause as Cause.Cause<never>)
+                : Effect.logWarning("provider availability refresh failed", {
+                    instanceId,
+                    provider,
+                    cause,
+                  }).pipe(
+                    Effect.andThen(DateTime.now),
+                    Effect.map((failedAt) =>
+                      unknownRefreshAvailability(provider, DateTime.formatIso(failedAt)),
+                    ),
                   ),
-                ),
-          ),
-        );
+            ),
+          );
         // Stamped when the reading came back rather than when the request
         // started: the CLI call itself can take seconds. Answering through
         // `availabilityAt` keeps one owner of freshness — a refresh reports what

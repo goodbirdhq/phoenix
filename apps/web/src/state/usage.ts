@@ -28,6 +28,7 @@ import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
 import {
   capacityRefreshKey,
+  capacityRefreshSettlementStep,
   hasUnsettledCapacityRefresh,
   parseCapacityRefreshKey,
   refreshHistoricalUsage,
@@ -58,6 +59,8 @@ export interface EnvironmentProviderAvailabilityStatus {
   readonly isRefreshing: boolean;
   /** A targeted query has not produced either a success or failure yet. */
   readonly hasUnsettledRefresh: boolean;
+  /** The ordinary cached query is catching up after a targeted probe. */
+  readonly isBaseQueryRefreshing: boolean;
   readonly refreshingInstanceIds: readonly ProviderInstanceId[];
   readonly providers: readonly ProviderAvailabilityEntry[];
   /** Provider snapshots carry enabled/auth facts used for account presentation. */
@@ -106,6 +109,9 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
           }),
         ),
       );
+      const hasUnsettledTargetRefresh = hasUnsettledCapacityRefresh(refreshResults);
+      const isSynchronizingBaseQuery =
+        environmentRefreshTargets.length > 0 && !hasUnsettledTargetRefresh && cachedResult.waiting;
       const providers = resolveAvailabilityEntries(
         cachedValue?.providers ?? [],
         liveValue?.providers ?? null,
@@ -135,10 +141,11 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
         // enabled or authenticated. Wait for that projection instead of
         // flashing the final empty state while it is still loading.
         ...presentationState,
-        isRefreshing: refreshResults.some((result) => result.waiting),
-        hasUnsettledRefresh: hasUnsettledCapacityRefresh(refreshResults),
+        isRefreshing: refreshResults.some((result) => result.waiting) || isSynchronizingBaseQuery,
+        hasUnsettledRefresh: hasUnsettledTargetRefresh,
+        isBaseQueryRefreshing: cachedResult.waiting,
         refreshingInstanceIds: environmentRefreshTargets.flatMap((target, index) =>
-          refreshResults[index]?.waiting ? [target.instanceId] : [],
+          refreshResults[index]?.waiting || isSynchronizingBaseQuery ? [target.instanceId] : [],
         ),
         providers,
         serverProviders,
@@ -248,6 +255,7 @@ export function useUsage(
   const [refreshKey, setRefreshKey] = useState(NO_CAPACITY_REFRESH_KEY);
   const [focusGeneration, setFocusGeneration] = useState(0);
   const attemptedFocusGeneration = useRef(-1);
+  const baseRefreshStartedForKey = useRef<string | null>(null);
   const providerAvailability = useAtomValue(providerAvailabilityAtom(refreshKey));
 
   const beginCapacityRefresh = useCallback((targets: readonly CapacityRefreshTarget[]) => {
@@ -262,13 +270,27 @@ export function useUsage(
   // cached query and return to it; the last known values stayed visible while
   // the native probes ran.
   useEffect(() => {
-    if (
-      refreshKey !== NO_CAPACITY_REFRESH_KEY &&
-      !providerAvailability.some((environment) => environment.hasUnsettledRefresh)
-    ) {
-      const environmentIds = new Set(
-        parseCapacityRefreshKey(refreshKey).map((target) => target.environmentId),
-      );
+    if (refreshKey === NO_CAPACITY_REFRESH_KEY) {
+      baseRefreshStartedForKey.current = null;
+      return;
+    }
+    const environmentIds = new Set(
+      parseCapacityRefreshKey(refreshKey).map((target) => target.environmentId),
+    );
+    const targetedEnvironments = providerAvailability.filter((environment) =>
+      environmentIds.has(environment.environmentId),
+    );
+    const step = capacityRefreshSettlementStep({
+      hasUnsettledTargetRefresh: targetedEnvironments.some(
+        (environment) => environment.hasUnsettledRefresh,
+      ),
+      baseRefreshStarted: baseRefreshStartedForKey.current === refreshKey,
+      baseQueryWaiting: targetedEnvironments.some(
+        (environment) => environment.isBaseQueryRefreshing,
+      ),
+    });
+    if (step === "refresh-base") {
+      baseRefreshStartedForKey.current = refreshKey;
       for (const environmentId of environmentIds) {
         appAtomRegistry.refresh(
           serverEnvironment.providerAvailability({
@@ -277,6 +299,10 @@ export function useUsage(
           }),
         );
       }
+      return;
+    }
+    if (step === "complete") {
+      baseRefreshStartedForKey.current = null;
       setRefreshKey(NO_CAPACITY_REFRESH_KEY);
     }
   }, [providerAvailability, refreshKey]);

@@ -31,6 +31,7 @@ const source = {
   failoverGroup: "work",
   enabled: true,
   authenticated: true,
+  availabilityRefreshSupported: true,
   availability,
 } satisfies SubscriptionAvailabilitySource;
 
@@ -127,6 +128,7 @@ describe("SubscriptionAvailabilitySection", () => {
     );
 
     expect(markup).toContain("Checking capacity");
+    expect(markup).toContain('role="status"');
     expect(markup).toContain("Claude Work");
     expect(markup).toContain("Environment: Studio");
     expect(markup).toContain("Checking provider quota");
@@ -209,7 +211,7 @@ describe("SubscriptionAvailabilitySection", () => {
       <SubscriptionAvailabilitySection sources={[source]} hasError />,
     );
 
-    expect(markup).toContain("Capacity could not be checked for every connected Environment");
+    expect(markup).toContain("Some capacity readings could not be refreshed");
     expect(markup).toContain("Claude Work");
   });
 

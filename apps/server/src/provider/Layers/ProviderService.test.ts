@@ -71,8 +71,8 @@ const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), {
 const makeAvailabilityProviderLayer = (
   adapter: ProviderAdapterShape<ProviderAdapterError>,
   serverConfigLayer: Layer.Layer<ServerConfig.ServerConfig, PlatformError>,
+  registry = makeAdapterRegistryMock({ [adapter.provider]: adapter }),
 ) => {
-  const registry = makeAdapterRegistryMock({ [adapter.provider]: adapter });
   const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
     Layer.provide(SqlitePersistenceMemory),
   );
@@ -1908,6 +1908,82 @@ it.effect("ProviderServiceLive shares one in-flight availability refresh", () =>
       assert.deepEqual(yield* Fiber.join(second), snapshot);
       assert.equal(refreshCalls, 1);
     }).pipe(Effect.provide(makeAvailabilityProviderLayer(adapter, serverConfigTestLayer)));
+  }),
+);
+
+it.effect("ProviderServiceLive bounds refresh probes across concurrent RPC targets", () =>
+  Effect.gen(function* () {
+    const base = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+    const saturated = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let active = 0;
+    let maximumActive = 0;
+    let refreshCalls = 0;
+    const snapshot = {
+      status: "available",
+      source: "claude_cli_usage",
+      observedAt: "2026-08-20T12:00:00.000Z",
+      windows: [{ kind: "session", usedPercent: 23 }],
+    } as const;
+    const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+      ...base.adapter,
+      refreshAvailability: () =>
+        Effect.acquireUseRelease(
+          Effect.gen(function* () {
+            refreshCalls += 1;
+            active += 1;
+            maximumActive = Math.max(maximumActive, active);
+            if (refreshCalls === ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY) {
+              yield* Deferred.succeed(saturated, undefined);
+            }
+          }),
+          () => Deferred.await(release).pipe(Effect.as(snapshot)),
+          () => Effect.sync(() => void (active -= 1)),
+        ),
+      get streamEvents() {
+        return base.adapter.streamEvents;
+      },
+    };
+    const instanceIds = Array.from(
+      { length: ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY + 2 },
+      (_, index) => ProviderInstanceId.make(`claude-${index}`),
+    );
+    const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
+      getByInstance: () => Effect.succeed(adapter),
+      getInstanceInfo: (instanceId) =>
+        Effect.succeed({
+          instanceId,
+          driverKind: CLAUDE_AGENT_DRIVER,
+          displayName: undefined,
+          enabled: true,
+          continuationIdentity: {
+            driverKind: CLAUDE_AGENT_DRIVER,
+            continuationKey: `claudeAgent:instance:${instanceId}`,
+          },
+        }),
+      listInstances: () => Effect.succeed(instanceIds),
+      listProviders: () => Effect.succeed([CLAUDE_AGENT_DRIVER]),
+      streamChanges: Stream.empty,
+      subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+    };
+
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const refreshes = yield* Effect.forEach(
+        instanceIds,
+        (instanceId) => provider.refreshAvailability!(instanceId, CLAUDE_AGENT_DRIVER),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(saturated);
+      assert.equal(maximumActive, ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY);
+      assert.equal(refreshCalls, ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(refreshes);
+      assert.equal(refreshCalls, instanceIds.length);
+      assert.equal(maximumActive, ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY);
+    }).pipe(
+      Effect.provide(makeAvailabilityProviderLayer(adapter, serverConfigTestLayer, registry)),
+    );
   }),
 );
 

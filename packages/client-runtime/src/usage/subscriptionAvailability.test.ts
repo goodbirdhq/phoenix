@@ -19,6 +19,7 @@ const source = (
   displayName: "Claude",
   enabled: true,
   authenticated: true,
+  availabilityRefreshSupported: true,
   availability: {
     status: "available",
     source: "claude_cli_usage",
@@ -316,6 +317,35 @@ describe("deriveSubscriptionCapacity", () => {
     ]);
   });
 
+  it("does not let a disabled shared-account backup demote a healthy subscription", () => {
+    const account = {
+      id: "shared",
+      verification: "native_verified" as const,
+      displayName: "Neil",
+    };
+    const presentation = deriveSubscriptionCapacity([
+      capacitySource({
+        instanceId: "claude-primary",
+        availability: { ...source().availability, account },
+      }),
+      capacitySource({
+        instanceId: "claude-disabled",
+        enabled: false,
+        authenticated: false,
+        availability: {
+          ...source().availability,
+          account,
+          status: "unknown",
+          observedAt: "2026-08-17T19:00:00.000Z",
+        },
+      }),
+    ]);
+
+    expect(presentation.readinessCounts).toEqual({ available: 1, limited: 0, unknown: 0 });
+    expect(presentation.groups[0]?.members[0]?.readiness).toBe("available");
+    expect(presentation.groups[0]?.members[0]?.availability.status).toBe("available");
+  });
+
   it("preserves every instance and identifies shared subscriptions in the Instances lens", () => {
     const account = {
       id: "shared",
@@ -339,7 +369,37 @@ describe("deriveSubscriptionCapacity", () => {
     const members = presentation.groups[0]!.members;
     expect(members).toHaveLength(2);
     expect(members.every((member) => member.sharedSubscription)).toBe(true);
-    expect(members[0]?.instanceLabels).toEqual(["Claude"]);
+    expect(members.map((member) => member.instanceLabels)).toEqual([["Claude"], ["Claude"]]);
+  });
+
+  it("lists only sibling labels for each shared-subscription instance row", () => {
+    const account = {
+      id: "shared",
+      verification: "native_verified" as const,
+      displayName: "Neil",
+    };
+    const presentation = deriveSubscriptionCapacity(
+      [
+        capacitySource({
+          instanceId: "claude-a",
+          displayName: "Claude Primary",
+          availability: { ...source().availability, account },
+        }),
+        capacitySource({
+          instanceId: "claude-b",
+          displayName: "Claude Backup",
+          availability: { ...source().availability, account },
+        }),
+      ],
+      "instances",
+    );
+
+    expect(
+      presentation.groups[0]?.members.map((member) => [member.name, member.instanceLabels]),
+    ).toEqual([
+      ["Claude Backup", ["Claude Primary"]],
+      ["Claude Primary", ["Claude Backup"]],
+    ]);
   });
 
   it("keeps readiness subscription-based while the Instances lens expands routing rows", () => {
@@ -391,6 +451,10 @@ describe("deriveSubscriptionCapacity", () => {
         driver: "cursor",
         availability: { status: "unknown", source: "unsupported", windows: [] },
       }),
+      capacitySource({
+        instanceId: "passive-only",
+        availabilityRefreshSupported: false,
+      }),
     ]);
 
     expect(
@@ -399,6 +463,7 @@ describe("deriveSubscriptionCapacity", () => {
       ),
     ).toEqual([
       ["Claude", true],
+      ["Claude", false],
       ["Claude", false],
       ["Claude", false],
     ]);

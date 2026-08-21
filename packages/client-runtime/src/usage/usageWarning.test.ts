@@ -52,7 +52,6 @@ describe("deriveThreadUsageWarning", () => {
       windowLabel: "Current session",
       usedPercent: 94,
       resetsAt: IN_TWO_HOURS,
-      isReadingUnconfirmed: false,
     });
   });
 
@@ -145,7 +144,7 @@ describe("deriveThreadUsageWarning", () => {
     ).toMatchObject({ windowLabel: "Current session", usedPercent: 97 });
   });
 
-  it("marks a reading the provider could not confirm as unconfirmed", () => {
+  it("does not warn from a reading the provider could not confirm", () => {
     expect(
       warn({
         sources: [
@@ -157,7 +156,20 @@ describe("deriveThreadUsageWarning", () => {
           }),
         ],
       }),
-    ).toMatchObject({ isReadingUnconfirmed: true });
+    ).toBeNull();
+
+    expect(
+      warn({
+        sources: [
+          source({
+            availability: {
+              ...source().availability,
+              status: "unknown",
+            },
+          }),
+        ],
+      }),
+    ).toBeNull();
   });
 
   it("silences a dismissed window but warns again for the next one", () => {

@@ -26,6 +26,7 @@ export type SubscriptionAvailabilitySource = {
   readonly failoverGroup?: string | undefined;
   readonly enabled?: boolean | undefined;
   readonly authenticated?: boolean | undefined;
+  readonly availabilityRefreshSupported?: boolean | undefined;
   readonly isRefreshing?: boolean | undefined;
   readonly availability: ProviderAvailability;
 };
@@ -343,13 +344,22 @@ const mostRecentCapacitySource = (
       : newest,
   );
 
+const isRoutableCapacitySource = (source: SubscriptionCapacitySource): boolean =>
+  source.enabled === true &&
+  source.authenticated === true &&
+  source.availability.source !== "unsupported";
+
 const capacityStatus = (
   sources: readonly SubscriptionCapacitySource[],
-): SubscriptionCapacityReadiness =>
-  sources
-    .map(capacityReadiness)
-    .reduce<SubscriptionCapacityReadiness | undefined>(combineCapacityReadiness, undefined) ??
-  "unknown";
+): SubscriptionCapacityReadiness => {
+  const routable = sources.filter(isRoutableCapacitySource);
+  return (
+    routable
+      .map(capacityReadiness)
+      .reduce<SubscriptionCapacityReadiness | undefined>(combineCapacityReadiness, undefined) ??
+    "unknown"
+  );
+};
 
 /** A subscription is ready only when every contributing routing target is ready. */
 function combineCapacityReadiness(
@@ -436,7 +446,10 @@ export function deriveSubscriptionCapacity(
 
       const subscriptionRows = [...bySubscription.entries()]
         .map(([subscriptionKey, members]) => {
-          const newest = mostRecentCapacitySource(members);
+          const routableMembers = members.filter(isRoutableCapacitySource);
+          const newest = mostRecentCapacitySource(
+            routableMembers.length === 0 ? members : routableMembers,
+          );
           const account = members
             .map((member) => member.availability.account)
             .find((candidate) => candidate?.verification === "native_verified");
@@ -455,6 +468,7 @@ export function deriveSubscriptionCapacity(
             (member) =>
               member.enabled === true &&
               member.authenticated === true &&
+              member.availabilityRefreshSupported === true &&
               member.availability.source !== "unsupported",
           );
           return {
@@ -498,12 +512,21 @@ export function deriveSubscriptionCapacity(
                   row.instanceIds.includes(source.instanceId),
                 )!;
                 const readiness = capacityReadiness(source);
+                const siblingLabels = sortCapacityStrings(
+                  context.sources.flatMap((candidate) =>
+                    candidate.instanceId !== source.instanceId &&
+                    capacitySubscriptionKey(candidate) === subscription.subscriptionKey
+                      ? [candidate.displayName]
+                      : [],
+                  ),
+                );
                 return {
                   ...subscription,
                   key: `${context.key}:instance:${source.instanceId}`,
                   subscriptionKey: subscription.subscriptionKey,
                   name: source.displayName,
                   instanceIds: [source.instanceId],
+                  instanceLabels: siblingLabels,
                   accentColor: source.accentColor,
                   availability: source.availability,
                   account: source.availability.account,
@@ -515,10 +538,12 @@ export function deriveSubscriptionCapacity(
                   canRefresh:
                     source.enabled === true &&
                     source.authenticated === true &&
+                    source.availabilityRefreshSupported === true &&
                     source.availability.source !== "unsupported",
                   refreshInstanceId:
                     source.enabled === true &&
                     source.authenticated === true &&
+                    source.availabilityRefreshSupported === true &&
                     source.availability.source !== "unsupported"
                       ? source.instanceId
                       : undefined,

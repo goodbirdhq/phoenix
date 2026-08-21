@@ -51,5 +51,6 @@ resets. It is the same reading the Usage page shows, so it costs nothing extra t
 asks a provider for a fresh one on its own.
 
 Dismiss the line and it stays gone for that thread until the window resets; the next window warns
-again. Other threads on the same account keep their own warning, and a reading a provider could not
-confirm is labelled as the last known one rather than presented as current.
+again. Other threads on the same account keep their own warning. A reading the provider could not
+confirm remains visible on the Usage page for context, but it does not drive chat warnings or
+migration suggestions until a current reading arrives.

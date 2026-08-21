@@ -181,7 +181,15 @@ const correlateSnapshotWithSource = (
       ),
     );
   }
-  return Effect.succeed(snapshot);
+  if (source.availabilityRefreshSupported === undefined) {
+    return Effect.succeed(snapshot);
+  }
+  const { availabilityRefreshSupported: _cachedCapability, ...currentSnapshot } = snapshot;
+  return Effect.succeed(
+    source.availabilityRefreshSupported
+      ? { ...currentSnapshot, availabilityRefreshSupported: true }
+      : currentSnapshot,
+  );
 };
 
 /**
@@ -201,6 +209,7 @@ const snapshotInstanceKey = (provider: ServerProvider): ProviderInstanceId => {
 const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource => ({
   instanceId: instance.instanceId,
   driverKind: instance.driverKind,
+  availabilityRefreshSupported: instance.adapter.refreshAvailability !== undefined,
   getSnapshot: instance.snapshot.getSnapshot,
   refresh: instance.snapshot.refresh,
   streamChanges: instance.snapshot.streamChanges,

@@ -78,6 +78,27 @@ export const hasUnsettledCapacityRefresh = (
   results: readonly { readonly _tag: string; readonly waiting: boolean }[],
 ): boolean => results.some((result) => result.waiting || result._tag === "Initial");
 
+export type CapacityRefreshSettlementStep =
+  | "wait-targets"
+  | "refresh-base"
+  | "wait-base"
+  | "complete";
+
+/**
+ * Keep one-shot refresh results mounted until the ordinary cached query has
+ * caught up. Otherwise a server without the passive stream briefly falls back
+ * to the pre-refresh snapshot between those two requests.
+ */
+export function capacityRefreshSettlementStep(input: {
+  readonly hasUnsettledTargetRefresh: boolean;
+  readonly baseRefreshStarted: boolean;
+  readonly baseQueryWaiting: boolean;
+}): CapacityRefreshSettlementStep {
+  if (input.hasUnsettledTargetRefresh) return "wait-targets";
+  if (!input.baseRefreshStarted) return "refresh-base";
+  return input.baseQueryWaiting ? "wait-base" : "complete";
+}
+
 export function staleCapacityTargets(
   environments: readonly CapacityRefreshEnvironment[],
 ): readonly CapacityRefreshTarget[] {

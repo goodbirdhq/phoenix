@@ -9,6 +9,7 @@ import {
 
 import {
   capacityRefreshKey,
+  capacityRefreshSettlementStep,
   hasUnsettledCapacityRefresh,
   parseCapacityRefreshKey,
   refreshHistoricalUsage,
@@ -106,6 +107,37 @@ describe("Usage refresh orchestration", () => {
     expect(hasUnsettledCapacityRefresh([{ _tag: "Success", waiting: false }])).toBe(false);
   });
 
+  it("keeps refreshed values mounted until the base cache has revalidated", () => {
+    expect(
+      capacityRefreshSettlementStep({
+        hasUnsettledTargetRefresh: true,
+        baseRefreshStarted: false,
+        baseQueryWaiting: false,
+      }),
+    ).toBe("wait-targets");
+    expect(
+      capacityRefreshSettlementStep({
+        hasUnsettledTargetRefresh: false,
+        baseRefreshStarted: false,
+        baseQueryWaiting: false,
+      }),
+    ).toBe("refresh-base");
+    expect(
+      capacityRefreshSettlementStep({
+        hasUnsettledTargetRefresh: false,
+        baseRefreshStarted: true,
+        baseQueryWaiting: true,
+      }),
+    ).toBe("wait-base");
+    expect(
+      capacityRefreshSettlementStep({
+        hasUnsettledTargetRefresh: false,
+        baseRefreshStarted: true,
+        baseQueryWaiting: false,
+      }),
+    ).toBe("complete");
+  });
+
   it("layers live updates and targeted refresh results over the cached snapshot", () => {
     const entry = (instanceId: string, usedPercent: number) => ({
       instanceId: ProviderInstanceId.make(instanceId),
@@ -144,6 +176,7 @@ describe("Usage refresh orchestration", () => {
         models: [],
         slashCommands: [],
         skills: [],
+        availabilityRefreshSupported: true,
       }) as ServerProvider;
     const result = staleCapacityTargets([
       {

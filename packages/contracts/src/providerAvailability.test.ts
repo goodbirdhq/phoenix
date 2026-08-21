@@ -85,6 +85,7 @@ const claudeProvider = (overrides?: Partial<ServerProvider>): ServerProvider =>
     models: [],
     slashCommands: [],
     skills: [],
+    availabilityRefreshSupported: true,
     ...overrides,
   }) as ServerProvider;
 
@@ -262,5 +263,13 @@ describe("canRefreshProviderAvailability", () => {
     expect(canRefreshProviderAvailability(claudeProvider({ availability: "unavailable" }))).toBe(
       false,
     );
+    expect(
+      canRefreshProviderAvailability(claudeProvider({ availabilityRefreshSupported: false })),
+    ).toBe(false);
+    expect(
+      canRefreshProviderAvailability(
+        claudeProvider({ availabilityRefreshSupported: undefined }) as ServerProvider,
+      ),
+    ).toBe(false);
   });
 });

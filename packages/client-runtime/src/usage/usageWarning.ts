@@ -45,11 +45,6 @@ export type ThreadUsageWarning = {
   readonly usedPercent: number;
   readonly resetsAt: string | null;
   /**
-   * The provider could not confirm this reading is current, so the numbers are
-   * the last ones seen rather than a fresh observation.
-   */
-  readonly isReadingUnconfirmed: boolean;
-  /**
    * Identity of this warning for dismissal. Carries the thread, the instance,
    * the window, and either its reset or reset-less usage bucket, so dismissing
    * it silences exactly this reading and a later window can warn again.
@@ -124,6 +119,7 @@ export function subscriptionAvailabilitySources(
         ...(instance?.failoverGroup ? { failoverGroup: instance.failoverGroup } : {}),
         enabled: provider?.enabled === true,
         authenticated: provider?.auth.status === "authenticated",
+        availabilityRefreshSupported: provider?.availabilityRefreshSupported === true,
         isRefreshing: environment.refreshingInstanceIds?.includes(entry.instanceId) === true,
         availability: entry.availability,
       } satisfies SubscriptionAvailabilitySource;
@@ -182,6 +178,9 @@ export function deriveThreadUsageWarning(input: {
       candidate.availability.source !== "unsupported",
   );
   if (!source) return null;
+  if (source.availability.status === "unknown" || source.availability.stale !== undefined) {
+    return null;
+  }
 
   const threshold = USAGE_WARNING_THRESHOLD * 100;
   const candidates = source.availability.windows.filter((window) => {
@@ -211,8 +210,6 @@ export function deriveThreadUsageWarning(input: {
     windowLabel: subscriptionLimitWindowLabel(window),
     usedPercent: window.usedPercent,
     resetsAt: window.resetsAt ?? null,
-    isReadingUnconfirmed:
-      source.availability.status === "unknown" || source.availability.stale !== undefined,
     dismissalKey,
   };
 }
