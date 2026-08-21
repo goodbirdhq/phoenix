@@ -1309,19 +1309,27 @@ const make = Effect.gen(function* () {
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
     // A stop that cannot reach its provider has to say so: without this the
-    // press is indistinguishable from one that worked.
-    yield* providerService.interruptTurn({ threadId: event.payload.threadId }).pipe(
-      Effect.catchCause((cause) =>
-        appendProviderFailureActivity({
-          threadId: event.payload.threadId,
-          kind: "provider.turn.interrupt.failed",
-          summary: "Provider turn interrupt failed",
-          detail: Cause.pretty(cause),
-          turnId: event.payload.turnId ?? null,
-          createdAt: event.payload.createdAt,
-        }),
-      ),
-    );
+    // press is indistinguishable from one that worked. The session's active
+    // turn id is provider-side state mirrored into the read model, so passing
+    // it lets an adapter that recovered a session without a bound turn (server
+    // restart) still name and close the orphaned turn.
+    yield* providerService
+      .interruptTurn({
+        threadId: event.payload.threadId,
+        ...(thread.session?.activeTurnId != null ? { turnId: thread.session.activeTurnId } : {}),
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.turn.interrupt.failed",
+            summary: "Provider turn interrupt failed",
+            detail: Cause.pretty(cause),
+            turnId: event.payload.turnId ?? null,
+            createdAt: event.payload.createdAt,
+          }),
+        ),
+      );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (

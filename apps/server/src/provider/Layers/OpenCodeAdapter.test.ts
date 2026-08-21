@@ -20,6 +20,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../../config.ts";
@@ -45,6 +46,8 @@ class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterSh
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
+
+const asTurnId = (value: string): TurnId => TurnId.make(value);
 
 type MessageEntry = {
   info: {
@@ -1180,6 +1183,50 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           false,
         );
         NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      }),
+    { sequential: true },
+  );
+
+  it.effect(
+    "interrupt after recovery adopts the caller turn id and settles the orphaned turn",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-recovered-stop");
+        const sessionTitle = "Recovered stop";
+        runtimeMock.state.subscribedEvents = [];
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId),
+          // session.started + thread.started + turn.completed(interrupted)
+          Stream.take(3),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        // Recovered context: a live session with no bound provider turn,
+        // exactly what startSession(resume) produces after a server restart.
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          title: sessionTitle,
+          resumeCursor: { schemaVersion: 1, sessionId: "ses_persisted" },
+        });
+        yield* adapter.interruptTurn(threadId, asTurnId("opencode-turn-orphaned"));
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        NodeAssert.ok(runtimeMock.state.abortCalls.includes("ses_persisted"));
+        const completed = events.find((event) => event.type === "turn.completed");
+        NodeAssert.ok(completed);
+        if (completed?.type !== "turn.completed") {
+          return NodeAssert.fail("unreachable");
+        }
+        NodeAssert.equal(completed.turnId, "opencode-turn-orphaned");
+        NodeAssert.equal(completed.payload.state, "interrupted");
+        NodeAssert.equal(
+          events.some((event) => event.type === "turn.aborted"),
+          false,
+        );
       }),
     { sequential: true },
   );

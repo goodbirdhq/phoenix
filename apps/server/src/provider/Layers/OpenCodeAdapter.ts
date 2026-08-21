@@ -1787,21 +1787,47 @@ export function makeOpenCodeAdapter(
         // the latch so that idle cannot be swallowed and strand the turn.
         context.turnInterrupted = true;
         context.autoContinueInFlight = false;
+        // A stop that reaches us through session recovery (server restart)
+        // has no bound provider turn. Adopt the caller's hint so the abort
+        // can still name the orphaned turn — a resumed OpenCode session is
+        // already idle, so the trailing session.idle that normally completes
+        // a turn will never arrive and something here must settle it.
+        const hadBoundTurn = context.activeTurnId !== undefined;
+        const effectiveTurnId = context.activeTurnId ?? turnId;
+        if (effectiveTurnId !== undefined && !hadBoundTurn) {
+          context.activeTurnId = effectiveTurnId;
+        }
         yield* runOpenCodeSdk("session.abort", () =>
           context.client.session.abort({ sessionID: context.openCodeSessionId }),
         ).pipe(Effect.mapError(toRequestError));
-        if (turnId ?? context.activeTurnId) {
+        if (effectiveTurnId === undefined) {
+          return;
+        }
+        if (!hadBoundTurn) {
+          context.activeTurnId = undefined;
+          yield* updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
           yield* emit({
             ...(yield* buildEventBase({
               threadId,
-              turnId: turnId ?? context.activeTurnId,
+              turnId: effectiveTurnId,
             })),
-            type: "turn.aborted",
+            type: "turn.completed",
             payload: {
-              reason: "Interrupted by user.",
+              state: "interrupted",
             },
           });
+          return;
         }
+        yield* emit({
+          ...(yield* buildEventBase({
+            threadId,
+            turnId: effectiveTurnId,
+          })),
+          type: "turn.aborted",
+          payload: {
+            reason: "Interrupted by user.",
+          },
+        });
       },
     );
 
