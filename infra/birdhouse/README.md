@@ -300,6 +300,15 @@ For anything longer than a foreground test, run it under systemd — see
    run's `input` should have — it documents the contract but isn't enforced
    by the manifest loader itself.
 
+### What reloads, and what needs a restart
+
+The maintenance loop re-reads `workflows/` from disk every tick, so editing
+a `manifest.json` or a `SKILL.md` takes effect on the next run without
+touching the worker. Birdhouse's own **code** is loaded once at start —
+change `src/`, and the running worker keeps serving what it loaded, which
+is easy to mistake for a fix that did not work. Restart the worker after
+any change under `src/`.
+
 ### The mode ladder
 
 Every workflow has a `mode`: `fake`, `shadow`, or `live`, stored on the
