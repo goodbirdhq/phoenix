@@ -565,10 +565,15 @@ describe("ProviderSessionReaper", () => {
     expect(harness.stopSession).not.toHaveBeenCalled();
   });
 
-  it("does not crash a freshly updated active turn without a live provider session", async () => {
-    const threadId = ThreadId.make("thread-reaper-active-fresh");
-    const turnId = TurnId.make("turn-reaper-active-fresh");
-    const now = DateTime.formatIso(await Effect.runPromise(DateTime.now));
+  it("clears a phantom active turn from before this process booted immediately", async () => {
+    const threadId = ThreadId.make("thread-reaper-preboot-phantom");
+    const turnId = TurnId.make("turn-reaper-preboot-phantom");
+    // Captured before the harness builds its layer, nudged back a few
+    // milliseconds to stay strictly behind the reaper's boot-time capture:
+    // the binding's last-seen therefore predates boot even though it sits far
+    // inside the inactivity threshold.
+    const nowMillis = await Effect.runPromise(Clock.currentTimeMillis);
+    const justBeforeBoot = DateTime.formatIso(DateTime.fromEpochSeconds((nowMillis - 50) / 1000));
     const harness = await createHarness({
       readModel: makeReadModel([
         {
@@ -576,15 +581,71 @@ describe("ProviderSessionReaper", () => {
           session: {
             threadId,
             status: "running",
-            providerName: "claudeAgent",
+            providerName: "opencode",
             runtimeMode: "full-access",
             activeTurnId: turnId,
             lastError: null,
-            updatedAt: now,
+            updatedAt: justBeforeBoot,
           },
         },
       ]),
+      runtimeLiveness: "dead",
     });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "opencode",
+        providerInstanceId: null,
+        adapterKey: "opencode",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: justBeforeBoot,
+        resumeCursor: { opaque: "resume-preboot-phantom" },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await waitFor(() => harness.dispatch.mock.calls.length === 1);
+
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.dispatch.mock.calls[0]?.[0]).toMatchObject({
+      type: "thread.session.set",
+      threadId,
+      onlyIfActiveTurnId: turnId,
+      session: {
+        status: "error",
+        activeTurnId: null,
+        stoppedBy: "system",
+        stopReason: "provider_crashed",
+      },
+    });
+  });
+
+  it("does not crash a freshly updated active turn without a live provider session", async () => {
+    const threadId = ThreadId.make("thread-reaper-active-fresh");
+    const turnId = TurnId.make("turn-reaper-active-fresh");
+    // Mutated to postdate boot after the harness (and therefore the reaper's
+    // boot-time capture) exists: a session touched by THIS process must stay
+    // under the inactivity threshold, restart-awareness notwithstanding.
+    const session = {
+      threadId,
+      status: "running" as const,
+      providerName: "claudeAgent" as const,
+      runtimeMode: "full-access" as const,
+      activeTurnId: turnId,
+      lastError: null,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const harness = await createHarness({
+      readModel: makeReadModel([{ id: threadId, session }]),
+    });
+    session.updatedAt = DateTime.formatIso(
+      DateTime.fromEpochSeconds(((await Effect.runPromise(Clock.currentTimeMillis)) + 50) / 1000),
+    );
     const repository = await runtime!.runPromise(
       Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
     );
@@ -705,7 +766,6 @@ describe("ProviderSessionReaper", () => {
 
   it("does not reap sessions that are still within the inactivity threshold", async () => {
     const threadId = ThreadId.make("thread-reaper-fresh");
-    const now = DateTime.formatIso(await Effect.runPromise(DateTime.now));
     const harness = await createHarness({
       readModel: makeReadModel([
         {
@@ -717,11 +777,21 @@ describe("ProviderSessionReaper", () => {
             runtimeMode: "full-access",
             activeTurnId: null,
             lastError: null,
-            updatedAt: now,
+            updatedAt: DateTime.formatIso(
+              DateTime.fromEpochSeconds(
+                ((await Effect.runPromise(Clock.currentTimeMillis)) + 50) / 1000,
+              ),
+            ),
           },
         },
       ]),
     });
+    // Captured after the harness built its layer, so the binding's last-seen
+    // postdates boot and the inactivity threshold (not the preboot bypass)
+    // governs it.
+    const now = DateTime.formatIso(
+      DateTime.fromEpochSeconds(((await Effect.runPromise(Clock.currentTimeMillis)) + 50) / 1000),
+    );
     const repository = await runtime!.runPromise(
       Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
     );

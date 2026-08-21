@@ -1322,6 +1322,45 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+
+    // A stop must always settle in the orchestrator. The adapter only emits
+    // `turn.aborted` when it still knows the provider turn id — after a server
+    // restart (or any recovered session) it cannot, and with no lifecycle
+    // event the session stays "running" forever, stranding queued messages.
+    // Re-read under `onlyIfActiveTurnId` so a real provider settlement that
+    // beat us is respected and a newer turn is never clobbered.
+    const afterInterrupt = yield* resolveThread(event.payload.threadId);
+    const activeTurnId = afterInterrupt?.session?.activeTurnId ?? null;
+    if (
+      afterInterrupt?.session &&
+      activeTurnId !== null &&
+      (afterInterrupt.session.status === "starting" || afterInterrupt.session.status === "running")
+    ) {
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.session.set",
+          commandId: yield* serverCommandId("provider-interrupt-settle"),
+          threadId: event.payload.threadId,
+          onlyIfActiveTurnId: activeTurnId,
+          session: {
+            ...afterInterrupt.session,
+            status: "ready",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: event.payload.createdAt,
+          },
+          createdAt: event.payload.createdAt,
+        })
+        .pipe(
+          // The guard denies benignly when ingestion settled the turn first.
+          Effect.catchCause((cause) =>
+            Effect.logDebug("provider interrupt settle skipped", {
+              threadId: event.payload.threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+    }
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -1333,11 +1372,15 @@ const make = Effect.gen(function* () {
     }
     const hasSession = thread.session && thread.session.status !== "stopped";
     if (!hasSession) {
+      // The provider callback state is gone with the session, so this request
+      // can never be answered. Say so in stale-request terms: the projection
+      // pipeline resolves the pending-approval row on this detail, which also
+      // unblocks settling the thread.
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.approval.respond.failed",
         summary: "Provider approval response failed",
-        detail: "No active provider session is bound to this thread.",
+        detail: `No active provider session is bound to this thread. ${stalePendingRequestDetail("approval", event.payload.requestId)}`,
         turnId: null,
         createdAt: event.payload.createdAt,
         requestId: event.payload.requestId,
@@ -1377,11 +1420,13 @@ const make = Effect.gen(function* () {
       }
       const hasSession = thread.session && thread.session.status !== "stopped";
       if (!hasSession) {
+        // Same stale-request semantics as approvals above: the projection
+        // resolves the pending user-input row on this detail.
         return yield* appendProviderFailureActivity({
           threadId: event.payload.threadId,
           kind: "provider.user-input.respond.failed",
           summary: "Provider user input response failed",
-          detail: "No active provider session is bound to this thread.",
+          detail: `No active provider session is bound to this thread. ${stalePendingRequestDetail("user-input", event.payload.requestId)}`,
           turnId: null,
           createdAt: event.payload.createdAt,
           requestId: event.payload.requestId,

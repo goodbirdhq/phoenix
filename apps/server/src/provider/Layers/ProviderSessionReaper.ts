@@ -39,6 +39,11 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
+    // A runtime last seen before this process booted cannot be alive in it.
+    // Server restarts orphan session projections left running with an active
+    // turn; waiting out the inactivity threshold strands queued messages and
+    // turns every stop press into a silent no-op for half an hour.
+    const bootMs = yield* Clock.currentTimeMillis;
 
     const sweep = Effect.gen(function* () {
       const bindings = yield* directory.listBindings();
@@ -62,9 +67,12 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
         // Keep ordinary ready/stopped reaping cheap and exactly keyed to the
         // persisted binding timestamp. Only the active-turn watchdog needs a
-        // shell read and the more conservative session timestamp.
+        // shell read and the more conservative session timestamp. Pre-boot
+        // bindings skip the threshold: their runtime died with the previous
+        // process, so no amount of waiting makes clearing them unsafe.
         const idleDurationMs = now - lastSeenMs;
-        if (idleDurationMs < inactivityThresholdMs) {
+        const isPreboot = lastSeenMs < bootMs;
+        if (!isPreboot && idleDurationMs < inactivityThresholdMs) {
           continue;
         }
 
@@ -93,12 +101,15 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           // Directory activity is intentionally not updated for every
           // provider event. The watchdog therefore uses the later session
           // update only for an active turn; ready-session reaping above stays
-          // unchanged.
+          // unchanged. A turn whose binding AND session both predate boot was
+          // orphaned by a restart — no live runtime could still be feeding
+          // either timestamp — so the threshold does not apply to it.
           const sessionUpdatedMs = Date.parse(activeSession.updatedAt);
           const watchdogIdleDurationMs =
             now -
             Math.max(lastSeenMs, Number.isNaN(sessionUpdatedMs) ? lastSeenMs : sessionUpdatedMs);
-          if (watchdogIdleDurationMs < inactivityThresholdMs) {
+          const orphanedByRestart = isPreboot && sessionUpdatedMs < bootMs;
+          if (!orphanedByRestart && watchdogIdleDurationMs < inactivityThresholdMs) {
             continue;
           }
           const runtimeLiveness = yield* providerService.getSessionRuntimeLiveness
