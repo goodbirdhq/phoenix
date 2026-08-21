@@ -538,6 +538,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.enableSessionOrchestration
         ? ["Session orchestration"]
         : []),
+      ...(settings.enableScheduleManagement !== DEFAULT_UNIFIED_SETTINGS.enableScheduleManagement
+        ? ["Schedule management"]
+        : []),
       ...(settings.sidebarSessionHierarchyEnabled !==
       DEFAULT_UNIFIED_SETTINGS.sidebarSessionHierarchyEnabled
         ? ["Sidebar session hierarchy"]
@@ -596,6 +599,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableLegacyTokenStreaming,
       settings.enableProviderUpdateChecks,
       settings.enableSessionOrchestration,
+      settings.enableScheduleManagement,
       settings.sidebarSessionHierarchyEnabled,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
@@ -684,6 +688,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       enableSessionOrchestration: DEFAULT_UNIFIED_SETTINGS.enableSessionOrchestration,
+      enableScheduleManagement: DEFAULT_UNIFIED_SETTINGS.enableScheduleManagement,
       sidebarSessionHierarchyEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarSessionHierarchyEnabled,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
@@ -2078,6 +2083,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ enableSessionOrchestration: Boolean(checked) })
               }
               aria-label="Allow sessions to spawn sessions"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("schedule-management")}
+          description="Let agent sessions read, create, edit, pause and trigger this environment's Schedules through the phoenix tools. Agents cannot delete a Schedule, and can only change Schedules in the project they are working in. Applies to running sessions immediately."
+          resetAction={
+            settings.enableScheduleManagement !==
+            DEFAULT_UNIFIED_SETTINGS.enableScheduleManagement ? (
+              <SettingResetButton
+                label="schedule management"
+                onClick={() =>
+                  updateSettings({
+                    enableScheduleManagement: DEFAULT_UNIFIED_SETTINGS.enableScheduleManagement,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.enableScheduleManagement}
+              onCheckedChange={(checked) =>
+                updateSettings({ enableScheduleManagement: Boolean(checked) })
+              }
+              aria-label="Allow sessions to manage schedules"
             />
           }
         />

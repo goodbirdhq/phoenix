@@ -118,6 +118,13 @@ applies only to Triggering, not to provider execution.
 The ordinary Thread created by a Trigger. It remains after its Schedule is deleted and follows the
 same settle, resume, archive, delete, and worktree lifecycle as a manually created Thread.
 
+#### Schedule write
+
+A Schedule change an agent made through the schedules MCP toolkit: create, update, pause, resume, or
+Run now. Reads are not Schedule writes. A Schedule write is the thing that earns a row in the chat
+transcript, because it changed the user's environment while they were looking elsewhere. Avoid
+"schedule tool call," which does not distinguish reads from changes.
+
 #### Schedule history
 
 The compact record of Triggered, Failed, and skipped Occurrences, including links to Scheduled

@@ -65,6 +65,8 @@ const runtimeMock = {
     revertCalls: [] as Array<{ sessionID: string; messageID?: string }>,
     promptCalls: [] as Array<unknown>,
     promptAsyncError: null as Error | null,
+    promptCallsBySessionTitle: new Map<string, Array<unknown>>(),
+    promptAsyncErrorBySessionTitle: new Map<string, Error>(),
     closeError: null as Error | null,
     messages: [] as MessageEntry[],
     subscribedEvents: [] as unknown[],
@@ -85,6 +87,8 @@ const runtimeMock = {
     this.state.revertCalls.length = 0;
     this.state.promptCalls.length = 0;
     this.state.promptAsyncError = null;
+    this.state.promptCallsBySessionTitle.clear();
+    this.state.promptAsyncErrorBySessionTitle.clear();
     this.state.closeError = null;
     this.state.messages = [];
     this.state.subscribedEvents = [];
@@ -135,10 +139,14 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
       };
     }),
   runOpenCodeCommand: () => Effect.succeed({ stdout: "", stderr: "", code: 0 }),
-  createOpenCodeSdkClient: ({ baseUrl, serverPassword }) =>
-    ({
+  createOpenCodeSdkClient: ({ baseUrl, serverPassword }) => {
+    let sessionTitle = "";
+    const subscribedEvents = runtimeMock.state.subscribedEvents;
+    return {
       session: {
         create: async (input: Record<string, unknown>) => {
+          sessionTitle = typeof input.title === "string" ? input.title : "";
+          runtimeMock.state.promptCallsBySessionTitle.set(sessionTitle, []);
           runtimeMock.state.sessionCreateUrls.push(baseUrl);
           runtimeMock.state.sessionCreateInputs.push(input);
           runtimeMock.state.authHeaders.push(
@@ -179,6 +187,11 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         },
         promptAsync: async (input: unknown) => {
           runtimeMock.state.promptCalls.push(input);
+          runtimeMock.state.promptCallsBySessionTitle.get(sessionTitle)?.push(input);
+          const sessionError = runtimeMock.state.promptAsyncErrorBySessionTitle.get(sessionTitle);
+          if (sessionError) {
+            throw sessionError;
+          }
           if (runtimeMock.state.promptAsyncError) {
             throw runtimeMock.state.promptAsyncError;
           }
@@ -206,13 +219,14 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
       event: {
         subscribe: async () => ({
           stream: (async function* () {
-            for (const event of runtimeMock.state.subscribedEvents) {
+            for (const event of subscribedEvents) {
               yield event;
             }
           })(),
         }),
       },
-    }) as unknown as ReturnType<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>,
+    } as unknown as ReturnType<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>;
+  },
   loadOpenCodeInventory: () =>
     Effect.fail(
       new OpenCodeRuntimeError({
@@ -279,6 +293,16 @@ beforeEach(() => {
 
 const advanceTestClock = (ms: number) =>
   TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
+
+const openCodeSessionId = "http://127.0.0.1:9999/session";
+
+function makeSubscribedEventGate(event: unknown) {
+  let release = () => {};
+  const value = new Promise<unknown>((resolve) => {
+    release = () => resolve(event);
+  });
+  return { value, release };
+}
 
 it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
   it.effect("reuses a configured OpenCode server URL instead of spawning a local server", () =>
@@ -767,6 +791,321 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.equal(String(session?.activeTurnId), String(turn.turnId));
       NodeAssert.equal(runtimeMock.state.promptCalls.length, 2);
     }),
+  );
+
+  it.effect(
+    "automatically continues a truncated idle without completing the turn",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-truncated-auto-continue");
+        const sessionTitle = "Truncated auto-continue";
+        const firstEvent = makeSubscribedEventGate({
+          type: "message.updated",
+          properties: {
+            sessionID: openCodeSessionId,
+            info: { id: "msg-truncated-1", role: "assistant" },
+          },
+        });
+        runtimeMock.state.subscribedEvents = [
+          firstEvent.value,
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-step-finish-1",
+                sessionID: openCodeSessionId,
+                messageID: "msg-truncated-1",
+                type: "step-finish",
+                reason: "unknown",
+              },
+            },
+          },
+          {
+            type: "session.status",
+            properties: { sessionID: openCodeSessionId, status: { type: "idle" } },
+          },
+        ];
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId),
+          Stream.take(4),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          title: sessionTitle,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "finish the task",
+          modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5"),
+        });
+        firstEvent.release();
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        const promptCalls = runtimeMock.state.promptCallsBySessionTitle.get(sessionTitle) ?? [];
+        NodeAssert.equal(promptCalls.length, 2);
+        NodeAssert.deepEqual((promptCalls[1] as { parts: Array<unknown> }).parts, [
+          {
+            type: "text",
+            text: "Your previous response was cut off before any output or tool call. Continue exactly where you left off.",
+          },
+        ]);
+        NodeAssert.equal(events.filter((event) => event.type === "runtime.warning").length, 1);
+        NodeAssert.equal(
+          events.some((event) => event.type === "turn.completed"),
+          false,
+        );
+        const warning = events.find((event) => event.type === "runtime.warning");
+        if (warning?.type === "runtime.warning") {
+          NodeAssert.match(warning.payload.message, /attempt 1\/2/);
+          NodeAssert.deepEqual(warning.payload.detail, { stepFinishReason: "unknown" });
+        }
+      }),
+    { sequential: true },
+  );
+
+  it.effect(
+    "bounds truncated-idle auto-continuation to two attempts",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-truncated-retries-exhausted");
+        const sessionTitle = "Truncated retries exhausted";
+        const firstEvent = makeSubscribedEventGate({
+          type: "message.updated",
+          properties: {
+            sessionID: openCodeSessionId,
+            info: { id: "msg-truncated-1", role: "assistant" },
+          },
+        });
+        const truncatedMessageEvents = (messageNumber: number) => [
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: `part-step-finish-${messageNumber}`,
+                sessionID: openCodeSessionId,
+                messageID: `msg-truncated-${messageNumber}`,
+                type: "step-finish",
+                reason: "unknown",
+              },
+            },
+          },
+          {
+            type: "session.status",
+            properties: { sessionID: openCodeSessionId, status: { type: "idle" } },
+          },
+        ];
+        runtimeMock.state.subscribedEvents = [
+          firstEvent.value,
+          ...truncatedMessageEvents(1),
+          {
+            type: "session.status",
+            properties: { sessionID: openCodeSessionId, status: { type: "busy" } },
+          },
+          {
+            type: "message.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              info: { id: "msg-truncated-2", role: "assistant" },
+            },
+          },
+          ...truncatedMessageEvents(2),
+          {
+            type: "session.status",
+            properties: { sessionID: openCodeSessionId, status: { type: "busy" } },
+          },
+          {
+            type: "message.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              info: { id: "msg-truncated-3", role: "assistant" },
+            },
+          },
+          ...truncatedMessageEvents(3),
+        ];
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId),
+          Stream.take(7),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          title: sessionTitle,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "finish the task",
+          modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5"),
+        });
+        firstEvent.release();
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        NodeAssert.equal(runtimeMock.state.promptCallsBySessionTitle.get(sessionTitle)?.length, 3);
+        const warnings = events.filter((event) => event.type === "runtime.warning");
+        NodeAssert.equal(warnings.length, 3);
+        NodeAssert.match(warnings[0]?.payload.message ?? "", /attempt 1\/2/);
+        NodeAssert.match(warnings[1]?.payload.message ?? "", /attempt 2\/2/);
+        NodeAssert.match(warnings[2]?.payload.message ?? "", /retries exhausted/);
+        NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      }),
+    { sequential: true },
+  );
+
+  it.effect(
+    "does not auto-continue a turn that emitted assistant text",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-truncated-with-output");
+        const sessionTitle = "Truncated signature with output";
+        const firstEvent = makeSubscribedEventGate({
+          type: "message.updated",
+          properties: {
+            sessionID: openCodeSessionId,
+            info: { id: "msg-with-output", role: "assistant" },
+          },
+        });
+        runtimeMock.state.subscribedEvents = [
+          firstEvent.value,
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-with-output",
+                sessionID: openCodeSessionId,
+                messageID: "msg-with-output",
+                type: "text",
+                text: "Finished the task.",
+                time: { start: 1 },
+              },
+            },
+          },
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-step-finish-output",
+                sessionID: openCodeSessionId,
+                messageID: "msg-with-output",
+                type: "step-finish",
+                reason: "unknown",
+              },
+            },
+          },
+          {
+            type: "session.status",
+            properties: { sessionID: openCodeSessionId, status: { type: "idle" } },
+          },
+        ];
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId),
+          Stream.take(5),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          title: sessionTitle,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "finish the task",
+          modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5"),
+        });
+        firstEvent.release();
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        NodeAssert.equal(runtimeMock.state.promptCallsBySessionTitle.get(sessionTitle)?.length, 1);
+        NodeAssert.equal(
+          events.some((event) => event.type === "runtime.warning"),
+          false,
+        );
+        NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      }),
+    { sequential: true },
+  );
+
+  it.effect(
+    "completes a truncated turn when the continuation prompt fails",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-truncated-prompt-failure");
+        const sessionTitle = "Truncated prompt failure";
+        const firstEvent = makeSubscribedEventGate({
+          type: "message.updated",
+          properties: {
+            sessionID: openCodeSessionId,
+            info: { id: "msg-truncated-failure", role: "assistant" },
+          },
+        });
+        runtimeMock.state.subscribedEvents = [
+          firstEvent.value,
+          {
+            type: "message.part.updated",
+            properties: {
+              sessionID: openCodeSessionId,
+              part: {
+                id: "part-step-finish-failure",
+                sessionID: openCodeSessionId,
+                messageID: "msg-truncated-failure",
+                type: "step-finish",
+                reason: "unknown",
+              },
+            },
+          },
+          {
+            type: "session.status",
+            properties: { sessionID: openCodeSessionId, status: { type: "idle" } },
+          },
+        ];
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId),
+          Stream.take(6),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          title: sessionTitle,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "finish the task",
+          modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5"),
+        });
+        runtimeMock.state.promptAsyncErrorBySessionTitle.set(
+          sessionTitle,
+          new Error("continuation failed"),
+        );
+        firstEvent.release();
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        NodeAssert.equal(runtimeMock.state.promptCallsBySessionTitle.get(sessionTitle)?.length, 2);
+        NodeAssert.equal(events.filter((event) => event.type === "runtime.warning").length, 2);
+        NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      }),
+    { sequential: true },
   );
 
   it.effect("keeps the running turn when a steer prompt fails", () =>

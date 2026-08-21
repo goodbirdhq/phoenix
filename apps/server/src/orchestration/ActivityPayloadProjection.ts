@@ -3,6 +3,7 @@ import type {
   OrchestrationThreadActivity,
   OrchestrationThreadDetailSnapshot,
 } from "@t3tools/contracts";
+import { deriveScheduleToolActivity } from "@t3tools/shared/scheduleToolActivity";
 import { deriveSpawnedSessionToolActivity } from "@t3tools/shared/toolActivity";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -252,6 +253,14 @@ function projectMcpToolCallData(data: Record<string, unknown>): Record<string, u
   const spawnedSession = deriveSpawnedSessionToolActivity(data);
   if (spawnedSession?.threadId !== undefined) {
     projectedData.spawnedSession = spawnedSession;
+  }
+
+  // Same problem, same remedy: a Schedule write's card names the Schedule, its
+  // state, and its cadence in plain language, all of which live in the result
+  // that summarizing reduces to 84 characters.
+  const scheduleActivity = deriveScheduleToolActivity(data);
+  if (scheduleActivity !== undefined) {
+    projectedData.scheduleActivity = scheduleActivity;
   }
 
   const changedFiles: string[] = [];

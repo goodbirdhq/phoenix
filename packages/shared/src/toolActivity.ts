@@ -1,60 +1,6 @@
 import type { ToolLifecycleItemType } from "@t3tools/contracts";
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function asTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {
-  const text = asTrimmedString(value);
-  if (!text) {
-    return undefined;
-  }
-  try {
-    return asRecord(JSON.parse(text));
-  } catch {
-    return undefined;
-  }
-}
-
-function spawnedSessionResult(value: unknown): Record<string, unknown> | undefined {
-  const direct = asRecord(value) ?? parseJsonRecord(value);
-  if (!direct) {
-    return undefined;
-  }
-  if (asTrimmedString(direct.threadId)) {
-    return direct;
-  }
-
-  for (const key of ["structuredContent", "structured_content"]) {
-    const structured = asRecord(direct[key]) ?? parseJsonRecord(direct[key]);
-    if (structured && asTrimmedString(structured.threadId)) {
-      return structured;
-    }
-  }
-
-  const content = direct.content;
-  if (Array.isArray(content)) {
-    for (const block of content) {
-      const parsed = parseJsonRecord(asRecord(block)?.text);
-      if (parsed && asTrimmedString(parsed.threadId)) {
-        return parsed;
-      }
-    }
-    return undefined;
-  }
-  const parsedContent = parseJsonRecord(content);
-  return parsedContent && asTrimmedString(parsedContent.threadId) ? parsedContent : undefined;
-}
+import { asRecord, asTrimmedString, findResultRecord } from "./toolActivityPayload.ts";
 
 function isPhoenixSpawnSessionTool(data: Record<string, unknown>, item: Record<string, unknown>) {
   const server = asTrimmedString(item.server)?.toLowerCase();
@@ -96,7 +42,7 @@ export function deriveSpawnedSessionToolActivity(
 
   const input = asRecord(item?.arguments) ?? asRecord(item?.input) ?? asRecord(data.input);
   const projected = asRecord(data.spawnedSession);
-  const result = spawnedSessionResult(item?.result ?? data.result);
+  const result = findResultRecord(item?.result ?? data.result, "threadId");
   const modelSelection = asRecord(result?.modelSelection);
   const title =
     asTrimmedString(projected?.title) ??

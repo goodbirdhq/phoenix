@@ -2,6 +2,10 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
+  deriveScheduleToolActivity,
+  type ScheduleToolActivity,
+} from "@t3tools/shared/scheduleToolActivity";
+import {
   deriveSpawnedSessionToolActivity,
   type SpawnedSessionToolActivity,
 } from "@t3tools/shared/toolActivity";
@@ -84,6 +88,8 @@ export interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   /** Dedicated presentation for Phoenix `spawn_session` MCP calls. */
   spawnedSession?: SpawnedSessionToolActivity;
+  /** Dedicated presentation for Phoenix Schedule write MCP calls. */
+  scheduleActivity?: ScheduleToolActivity;
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
   /** Grouping key for subagent lifecycle rows (one row per agent). */
@@ -883,6 +889,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const spawnedSession = deriveSpawnedSessionToolActivity(data);
     if (spawnedSession) {
       entry.spawnedSession = spawnedSession;
+    }
+    const scheduleActivity = deriveScheduleToolActivity(data);
+    if (scheduleActivity) {
+      entry.scheduleActivity = scheduleActivity;
     }
     if (data?.item !== undefined) {
       entry.toolData = data.item;

@@ -15,8 +15,31 @@ import {
   type OpenCodeRuntimeShape,
 } from "../opencodeRuntime.ts";
 import { checkOpenCodeProviderStatus } from "./OpenCodeProvider.ts";
+import { isOpenCodeCommandMissingCause } from "../opencodeRuntime.ts";
 import type { OpenCodeInventory } from "../opencodeRuntime.ts";
 const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
+
+it("detects missing-binary causes structurally, not by substring", () => {
+  const spawnEnoent = new Error("spawn opencode ENOENT");
+  NodeAssert.equal(isOpenCodeCommandMissingCause(spawnEnoent), true);
+  NodeAssert.equal(
+    isOpenCodeCommandMissingCause(
+      new OpenCodeRuntimeError({
+        operation: "runOpenCodeCommand",
+        detail: "Failed to execute 'opencode --version': spawn opencode ENOENT",
+        cause: spawnEnoent,
+      }),
+    ),
+    true,
+  );
+  // Arbitrary failure text that merely contains "not found" is not evidence
+  // of a missing binary.
+  NodeAssert.equal(
+    isOpenCodeCommandMissingCause(new Error("request failed: status=404 body=not found")),
+    false,
+  );
+  NodeAssert.equal(isOpenCodeCommandMissingCause(new Error("sqlite: database is locked")), false);
+});
 
 const DEFAULT_VERSION_STDOUT = "opencode 1.14.19\n";
 
@@ -227,6 +250,19 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
         snapshot.message,
         "Failed to execute OpenCode CLI health check: opencode models failed",
       );
+    }),
+  );
+
+  it.effect("does not misclassify transient inventory failures as a missing CLI", () =>
+    Effect.gen(function* () {
+      runtimeMock.state.inventoryError = new Error(
+        "request failed: status=404 body=provider notfound",
+      );
+      const snapshot = yield* checkOpenCodeProviderStatus(makeOpenCodeSettings(), process.cwd());
+
+      NodeAssert.equal(snapshot.status, "error");
+      NodeAssert.equal(snapshot.installed, true);
+      NodeAssert.equal(snapshot.models.length, 0);
     }),
   );
 });

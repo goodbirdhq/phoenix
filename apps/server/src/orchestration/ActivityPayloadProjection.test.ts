@@ -250,3 +250,70 @@ describe("projectActivityPayload agent-field survival", () => {
     expect(projected.payload).toEqual(source.payload);
   });
 });
+
+describe("Schedule write carrier survival", () => {
+  const writeResult = {
+    scheduleId: "schedule-1",
+    projectId: "project-1",
+    name: "Nightly audit",
+    state: "enabled",
+    timing: { type: "cron", expression: "0 6 * * 1-5" },
+    timeZone: "Europe/London",
+    cadence: "Weekdays at 06:00",
+    nextOccurrenceAt: "2026-08-21T05:00:00.000Z",
+    unacknowledgedFailure: false,
+    updatedAt: "2026-08-20T09:00:00.000Z",
+    upcomingOccurrences: [
+      "2026-08-21T05:00:00.000Z",
+      "2026-08-24T05:00:00.000Z",
+      "2026-08-25T05:00:00.000Z",
+      "2026-08-26T05:00:00.000Z",
+      "2026-08-27T05:00:00.000Z",
+    ],
+    frequencyWarning: null,
+  };
+
+  const scheduleWrite = (tool: string, result: unknown) =>
+    activity({
+      itemType: "mcp_tool_call",
+      data: { item: { type: "mcp_tool_call", server: "phoenix", tool, result } },
+    });
+
+  it("carries the card's fields past the result summary", () => {
+    const projected = projectActivityPayload(scheduleWrite("create_schedule", writeResult));
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+
+    // The full result does not survive — that is the whole reason the carrier
+    // exists — but everything the card renders does.
+    expect((data.item as Record<string, unknown>).result).not.toEqual(writeResult);
+    expect(data.scheduleActivity).toEqual({
+      action: "created",
+      name: "Nightly audit",
+      state: "enabled",
+      timeZone: "Europe/London",
+      cadence: "Weekdays at 06:00",
+      nextOccurrenceAt: "2026-08-21T05:00:00.000Z",
+    });
+  });
+
+  it("stays small: the five upcoming occurrences are for the agent, not the wire", () => {
+    const projected = projectActivityPayload(scheduleWrite("create_schedule", writeResult));
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    const carrier = data.scheduleActivity as Record<string, unknown>;
+
+    expect(carrier.upcomingOccurrences).toBeUndefined();
+    expect(Object.keys(carrier)).toHaveLength(6);
+  });
+
+  it("adds no carrier for a read, or for a write that failed", () => {
+    const read = projectActivityPayload(scheduleWrite("list_schedules", writeResult));
+    const failed = projectActivityPayload(
+      scheduleWrite("create_schedule", { error: "name_conflict" }),
+    );
+
+    for (const projected of [read, failed]) {
+      const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+      expect(data.scheduleActivity).toBeUndefined();
+    }
+  });
+});
