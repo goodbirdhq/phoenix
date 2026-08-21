@@ -4,6 +4,7 @@
   "description": "Smoke-test workflow: confirms the birdhouse can launch an agent thread and receive its callback.",
   "skill": "SKILL.md",
   "phoenix": {
-    "model": "claude-haiku-4-5"
+    "model": "claude-haiku-4-5",
+    "runtime_mode": "full-access"
   }
 }
