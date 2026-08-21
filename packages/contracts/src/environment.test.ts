@@ -26,4 +26,20 @@ describe("ExecutionEnvironmentDescriptor", () => {
       }).capabilities.pullRequests,
     ).toBe(true);
   });
+
+  it("treats a missing Provider availability stream capability as unsupported", () => {
+    expect(decodeDescriptor(descriptor).capabilities.providerAvailabilityChanges).toBeUndefined();
+  });
+
+  it("preserves an advertised Provider availability stream capability", () => {
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: {
+          ...descriptor.capabilities,
+          providerAvailabilityChanges: true,
+        },
+      }).capabilities.providerAvailabilityChanges,
+    ).toBe(true);
+  });
 });

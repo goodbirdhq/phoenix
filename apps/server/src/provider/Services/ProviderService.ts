@@ -30,11 +30,19 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
+import type * as Scope from "effect/Scope";
 
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 import type { ProviderSessionRuntimeLiveness } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
+
+/** One configured instance's latest native availability observation. */
+export interface ProviderAvailabilityChange {
+  readonly instanceId: ProviderInstanceId;
+  readonly provider: ProviderDriverKind;
+  readonly availability: ProviderAvailability;
+}
 
 /**
  * How many configured instances one availability request may collect from at
@@ -191,6 +199,20 @@ export interface ProviderServiceShape {
     instanceId: ProviderInstanceId,
     provider: ProviderDriverKind,
   ) => Effect.Effect<ProviderAvailability>;
+
+  /**
+   * Subscribe to cached availability changes without starting provider probes.
+   * The subscription acquires its live stream before reading `latest`, so an
+   * event arriving during snapshot construction cannot be lost.
+   */
+  readonly subscribeAvailability?: Effect.Effect<
+    {
+      readonly latest: ReadonlyArray<ProviderAvailabilityChange>;
+      readonly changes: Stream.Stream<ProviderAvailabilityChange>;
+    },
+    never,
+    Scope.Scope
+  >;
 
   /**
    * Roll back provider conversation state by a number of turns.

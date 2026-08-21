@@ -82,6 +82,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
   /** Environment-owned Schedule persistence, triggering, and management RPCs. */
   schedules: Schema.optionalKey(Schema.Boolean),
+  /** Server can stream Provider availability changes. Absent on older servers,
+      so clients keep the query snapshot and never send the unknown subscription RPC. */
+  providerAvailabilityChanges: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

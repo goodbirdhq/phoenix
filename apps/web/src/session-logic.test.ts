@@ -1993,3 +1993,49 @@ describe("rerun workflows", () => {
     expect(spawnRows.map((row) => row.turnId)).toEqual(["turn-1", "turn-2"]);
   });
 });
+
+describe("deriveWorkLogEntries schedule writes", () => {
+  const scheduleCarrier = {
+    action: "created",
+    scheduleId: "schedule-1",
+    name: "Nightly audit",
+    state: "enabled",
+    timeZone: "Europe/London",
+    cadence: "Weekdays at 06:00",
+    nextOccurrenceAt: "2026-08-21T05:00:00.000Z",
+    projectId: "project-1",
+  };
+
+  const scheduleActivity = (tool: string, extra: Record<string, unknown> = {}) =>
+    makeActivity({
+      kind: "tool.completed",
+      summary: `phoenix · ${tool}`,
+      payload: {
+        itemType: "mcp_tool_call",
+        data: {
+          item: { type: "mcp_tool_call", server: "phoenix", tool },
+          ...extra,
+        },
+      },
+    });
+
+  it("carries the projected schedule payload onto the work entry", () => {
+    const entries = deriveWorkLogEntries([
+      scheduleActivity("create_schedule", { scheduleActivity: scheduleCarrier }),
+    ]);
+
+    expect(entries[0]?.scheduleActivity).toMatchObject({
+      action: "created",
+      name: "Nightly audit",
+      cadence: "Weekdays at 06:00",
+    });
+  });
+
+  it("leaves read-only schedule tools as ordinary MCP rows", () => {
+    const entries = deriveWorkLogEntries([
+      scheduleActivity("list_schedules", { scheduleActivity: scheduleCarrier }),
+    ]);
+
+    expect(entries[0]?.scheduleActivity).toBeUndefined();
+  });
+});

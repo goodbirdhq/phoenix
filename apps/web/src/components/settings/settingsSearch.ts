@@ -141,6 +141,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "schedule-management",
+    title: "Schedule management",
+    to: "/settings/general",
+  },
+  {
     id: "sidebar-session-hierarchy",
     title: "Sidebar session hierarchy",
     to: "/settings/general",

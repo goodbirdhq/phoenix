@@ -51,7 +51,6 @@ export const UsageLimitWarningBanner = memo(function UsageLimitWarningBanner({
             {warning.windowLabel.toLowerCase()}
             {" window"}
             {reset ? ` · resets ${reset}` : ""}
-            {warning.isReadingUnconfirmed ? " · last known reading" : ""}
           </span>
         </div>
         {action}

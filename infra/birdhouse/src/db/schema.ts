@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
   index,
@@ -87,34 +88,6 @@ export const workflow = pgTable("workflow", {
 });
 
 // ---------------------------------------------------------------------------
-// workflow_schedule — cron triggers for a workflow. A workflow may have
-// several (e.g. a daily digest and a weekly rollup), hence the join table
-// rather than a single cron column on `workflow`.
-// ---------------------------------------------------------------------------
-
-export const workflowSchedule = pgTable(
-  "workflow_schedule",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    workflowKey: text("workflow_key")
-      .notNull()
-      .references(() => workflow.key, { onDelete: "cascade" }),
-    cron: text("cron").notNull(),
-    timezone: text("timezone").notNull(),
-    enabled: boolean("enabled").default(true).notNull(),
-    nextRunAt: timestamp("next_run_at", { mode: "date", withTimezone: true }),
-    lastEnqueuedAt: timestamp("last_enqueued_at", { mode: "date", withTimezone: true }),
-    createdAt: timestamp("created_at", { mode: "date", withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true }).defaultNow().notNull(),
-  },
-  (t) => [
-    uniqueIndex("workflow_schedule_workflow_cron_uq").on(t.workflowKey, t.cron),
-    /** Serves the scheduler tick's due-schedule scan. */
-    index("workflow_schedule_due_idx").on(t.enabled, t.nextRunAt),
-  ],
-);
-
-// ---------------------------------------------------------------------------
 // workflow_run — one launch of a workflow, whether from a schedule, a manual
 // trigger, or the API. Mirrors the run through its lifecycle: the agent
 // session it launched, the durable job driving that launch, and the
@@ -187,6 +160,16 @@ export const workflowRun = pgTable(
   (t) => [
     index("workflow_run_workflow_created_idx").on(t.workflowKey, t.createdAt),
     index("workflow_run_status_idx").on(t.status),
+    /**
+     * At most one open scheduled run per workflow — this is what stops two
+     * agents claiming the same standing job concurrently. Scoped to
+     * `trigger = 'schedule'` on purpose: manual/API runs are never
+     * serialized by this index and can run in parallel with each other and
+     * with a scheduled run.
+     */
+    uniqueIndex("workflow_run_one_open_scheduled_per_workflow")
+      .on(t.workflowKey)
+      .where(sql`${t.trigger} = 'schedule' and ${t.status} in ('pending','launching','running')`),
   ],
 );
 

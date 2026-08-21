@@ -1,5 +1,8 @@
 import {
   EnvironmentId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ProviderAvailabilityStreamEvent,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
@@ -7,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -29,8 +33,10 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
+import { subscribe } from "../rpc/client.ts";
 import {
   applyServerConfigProjection,
+  applyProviderAvailabilityStreamEvent,
   makeEnvironmentServerConfigState,
   isLegacyUpdateHandoffLoss,
   matchesServerUpdateReadyEvent,
@@ -40,8 +46,19 @@ import {
   resolveServerUpdateProgressResult,
   serverUpdateStateForProgressEvent,
   serverUpdateStateForServerVersion,
+  supportsProviderAvailabilityChanges,
   validateServerUpdateReadyEvent,
 } from "./server.ts";
+
+const availabilityEntry = (instanceId: string, usedPercent: number) => ({
+  instanceId: ProviderInstanceId.make(instanceId),
+  driver: ProviderDriverKind.make("codex"),
+  availability: {
+    status: "available" as const,
+    source: "codex_app_server" as const,
+    windows: [{ kind: "primary", usedPercent }],
+  },
+});
 
 const CONFIG = {
   availableEditors: [],
@@ -75,6 +92,101 @@ function session(client: WsRpcProtocolClient): RpcSession {
     closed: Effect.never,
   };
 }
+
+describe("provider availability stream projection", () => {
+  it("only subscribes when the connected server advertised support", () => {
+    const config = (providerAvailabilityChanges?: boolean) =>
+      ({
+        environment: {
+          capabilities:
+            providerAvailabilityChanges === undefined ? {} : { providerAvailabilityChanges },
+        },
+      }) as ServerConfig;
+
+    expect(supportsProviderAvailabilityChanges(config())).toBe(false);
+    expect(supportsProviderAvailabilityChanges(config(false))).toBe(false);
+    expect(supportsProviderAvailabilityChanges(config(true))).toBe(true);
+  });
+
+  it.effect("does not invoke the stream RPC against an older Environment", () =>
+    Effect.gen(function* () {
+      const initialConfigRead = yield* Deferred.make<void>();
+      let subscriptionCalls = 0;
+      const client = {
+        [WS_METHODS.subscribeProviderAvailability]: () => {
+          subscriptionCalls += 1;
+          return Stream.never;
+        },
+      } as unknown as WsRpcProtocolClient;
+      const legacyConfig = {
+        ...CONFIG,
+        environment: { capabilities: {} },
+      } as unknown as ServerConfig;
+      const legacySession: RpcSession = {
+        ...session(client),
+        initialConfig: Deferred.succeed(initialConfigRead, undefined).pipe(
+          Effect.andThen(Effect.succeed(legacyConfig)),
+        ),
+      };
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: TARGET,
+        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make(Option.some(legacySession)),
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+
+      const stream = yield* subscribe(
+        WS_METHODS.subscribeProviderAvailability,
+        { contractVersion: 2 },
+        { supports: supportsProviderAvailabilityChanges },
+      ).pipe(
+        Stream.runDrain,
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(initialConfigRead);
+      yield* Effect.yieldNow;
+
+      expect(subscriptionCalls).toBe(0);
+      yield* Fiber.interrupt(stream);
+    }),
+  );
+
+  it("starts from a snapshot and replaces later instance readings in place", () => {
+    const first = availabilityEntry("codex-a", 20);
+    const second = availabilityEntry("codex-b", 40);
+    const update = availabilityEntry("codex-a", 80);
+    const snapshot: ProviderAvailabilityStreamEvent = {
+      version: 1,
+      type: "snapshot",
+      payload: { providers: [first, second] },
+    };
+    const changed: ProviderAvailabilityStreamEvent = {
+      version: 1,
+      type: "updated",
+      payload: update,
+    };
+
+    const afterSnapshot = applyProviderAvailabilityStreamEvent(null, snapshot);
+    const afterUpdate = applyProviderAvailabilityStreamEvent(afterSnapshot, changed);
+
+    expect(afterUpdate.providers).toEqual([update, second]);
+  });
+
+  it("retains an update that arrives before a snapshot is available", () => {
+    const update = availabilityEntry("codex-a", 80);
+    const changed: ProviderAvailabilityStreamEvent = {
+      version: 1,
+      type: "updated",
+      payload: update,
+    };
+
+    expect(applyProviderAvailabilityStreamEvent(null, changed).providers).toEqual([update]);
+  });
+});
 
 describe("update restart reconnect nudges", () => {
   it.effect("retries once per backoff entry instead of only the first", () =>

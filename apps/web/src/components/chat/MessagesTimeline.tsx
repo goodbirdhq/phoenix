@@ -48,6 +48,7 @@ import {
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
+  CalendarClockIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -66,6 +67,8 @@ import {
   XIcon,
   ZapIcon,
 } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { SCHEDULE_ACTION_LABELS } from "@t3tools/shared/scheduleToolActivity";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -2311,6 +2314,85 @@ const SessionSpawnCtaRow = memo(function SessionSpawnCtaRow(props: {
   );
 });
 
+/** Next run in the Schedule's own zone — the answer to "when does this fire?". */
+function formatScheduleNextRun(instant: string | null, timeZone: string): string | null {
+  if (!instant) return null;
+  const epochMillis = Date.parse(instant);
+  if (Number.isNaN(epochMillis)) return null;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: timeZone || undefined,
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(epochMillis);
+  } catch {
+    return null;
+  }
+}
+
+function isFailedWorkEntry(workEntry: TimelineWorkEntry): boolean {
+  return (
+    workEntry.tone === "error" ||
+    workEntry.toolLifecycleStatus === "failed" ||
+    workEntry.toolLifecycleStatus === "declined" ||
+    workEntry.toolLifecycleStatus === "stopped"
+  );
+}
+
+/**
+ * A Schedule write is a durable change to the user's environment made while
+ * they were looking at a chat, so it gets its own row rather than reading as an
+ * opaque MCP call. Deliberately a static receipt built from the tool result:
+ * subscribing every historical row to live Schedule state would both cost a
+ * subscription per row on long threads and misreport history, showing a
+ * Schedule's state today next to the moment it was created. The row links to
+ * /schedules, which is the live view.
+ */
+const ScheduleWriteRow = memo(function ScheduleWriteRow(props: { workEntry: TimelineWorkEntry }) {
+  const navigate = useNavigate();
+  const schedule = props.workEntry.scheduleActivity;
+  if (!schedule) {
+    return null;
+  }
+
+  const lead = SCHEDULE_ACTION_LABELS[schedule.action];
+  const cadence = [schedule.cadence, schedule.timeZone].filter(Boolean).join(" · ");
+  const paused = schedule.state === "paused";
+  const nextRun = paused
+    ? null
+    : formatScheduleNextRun(schedule.nextOccurrenceAt, schedule.timeZone);
+
+  return (
+    <button
+      type="button"
+      onClick={() => void navigate({ to: "/schedules" })}
+      aria-label={`Open Schedules: ${schedule.name}`}
+      className="-mx-1 flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px] transition hover:bg-accent/50"
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          paused ? "bg-muted-foreground" : "bg-success",
+        )}
+      />
+      <CalendarClockIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      <span className="min-w-0 truncate">
+        <span className="font-medium">{lead}</span>
+        <span className="text-muted-foreground"> · {schedule.name}</span>
+        {cadence ? <span className="text-muted-foreground"> · {cadence}</span> : null}
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
+        {paused ? <span>paused</span> : null}
+        {nextRun ? <span className="hidden sm:inline">next {nextRun}</span> : null}
+        <span className="text-info-foreground">Open ▸</span>
+      </span>
+    </button>
+  );
+});
+
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
@@ -2322,6 +2404,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   }
   if (workEntry.spawnedSession) {
     return <SessionSpawnCtaRow workEntry={workEntry} />;
+  }
+  // A failed write changed nothing, so it falls through to the generic row,
+  // where the error text is already visible on expand.
+  if (workEntry.scheduleActivity && !isFailedWorkEntry(workEntry)) {
+    return <ScheduleWriteRow workEntry={workEntry} />;
   }
   return <PlainWorkEntryRow workEntry={workEntry} workspaceRoot={workspaceRoot} />;
 });

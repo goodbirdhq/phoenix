@@ -19,22 +19,28 @@ import {
   ProviderSendTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  ProviderAvailability,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
-  type ProviderAvailability,
 } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -62,7 +68,13 @@ import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
+import {
+  readProviderAvailabilityCache,
+  writeProviderAvailabilityCache,
+  type DurableProviderAvailability,
+} from "../providerAvailabilityCache.ts";
 const isModelSelection = Schema.is(ModelSelection);
+const providerAvailabilityEquals = Schema.toEquivalence(ProviderAvailability);
 
 /**
  * Hook for tests that want to override the canonical event logger pulled
@@ -263,8 +275,14 @@ const PROVIDER_AVAILABILITY_MAX_AGE_MS = 15 * 60 * 1_000;
 const PROVIDER_AVAILABILITY_REFRESH_COOLDOWN_MS = 30_000;
 
 export type CachedProviderAvailability = {
+  readonly driver?: ProviderDriverKind;
   readonly availability: ProviderAvailability;
   readonly receivedAtMs: number;
+};
+
+type AvailabilityRefreshClaim = {
+  readonly deferred: Deferred.Deferred<ProviderAvailability>;
+  readonly owner: boolean;
 };
 
 /**
@@ -376,16 +394,30 @@ export const cacheProviderAvailability = (
   cached: CachedProviderAvailability | undefined,
   incoming: ProviderAvailability,
   nowMs: number,
+  driver?: ProviderDriverKind,
 ): CachedProviderAvailability => {
   const availability = mergeProviderAvailability(cached?.availability, incoming);
-  if (cached === undefined) return { availability, receivedAtMs: nowMs };
+  if (cached === undefined) {
+    return { ...(driver ? { driver } : {}), availability, receivedAtMs: nowMs };
+  }
+  const nextDriver = driver ?? cached.driver;
+  if (
+    nextDriver === cached.driver &&
+    providerAvailabilityEquals(cached.availability, availability)
+  ) {
+    return cached;
+  }
   // A retained reading keeps the age it already had, whether or not it picked
   // up a stale marker on the way through. Restamping it would let a run of
   // failed refreshes keep a single old panel alive forever.
   if (retainsPreviousReading(cached.availability, incoming)) {
     return availability === cached.availability ? cached : { ...cached, availability };
   }
-  return { availability, receivedAtMs: nowMs };
+  return {
+    ...((driver ?? cached.driver) ? { driver: driver ?? cached.driver } : {}),
+    availability,
+    receivedAtMs: nowMs,
+  };
 };
 
 export const availabilityAt = (
@@ -394,22 +426,21 @@ export const availabilityAt = (
   nowMs: number,
 ): ProviderAvailability => {
   if (cached === undefined) return unknownAvailabilityForDriver(provider);
+  if (cached.driver !== undefined && cached.driver !== provider) {
+    return unknownAvailabilityForDriver(provider);
+  }
   if (!isNativeAvailabilitySource(provider, cached.availability.source)) {
     return unknownAvailabilityForDriver(provider);
   }
   if (nowMs - cached.receivedAtMs <= PROVIDER_AVAILABILITY_MAX_AGE_MS) {
     return cached.availability;
   }
-  // Aged out: the quota numbers are dropped, but which channel observed them,
-  // when, and for which account stay — those facts did not expire, and clients
-  // use them to keep an account card in place instead of flickering it away.
-  return {
-    status: "unknown",
-    source: cached.availability.source,
-    ...(cached.availability.observedAt ? { observedAt: cached.availability.observedAt } : {}),
-    ...(cached.availability.account ? { account: cached.availability.account } : {}),
-    windows: [],
-  };
+  // Freshness decides whether a read should revalidate, not whether Phoenix
+  // forgets the last observation. Keeping the windows here lets a stale
+  // revalidation run without blanking the account and quota rows the user was
+  // already looking at; the unknown status is the existing-decodable signal
+  // used by refresh planning.
+  return { ...cached.availability, status: "unknown" };
 };
 
 /**
@@ -620,16 +651,99 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const issueMcpCredential =
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
-  const availabilityByInstance = yield* Ref.make(
-    new Map<ProviderInstanceId, CachedProviderAvailability>(),
-  );
+  const availabilityChangesPubSub =
+    yield* PubSub.unbounded<ProviderService.ProviderAvailabilityChange>();
+  const availabilityCachePath = path.join(serverConfig.stateDir, "provider-availability.json");
+  const persistedAvailability = yield* readProviderAvailabilityCache(availabilityCachePath);
+  const availabilityByInstance = yield* Ref.make<
+    ReadonlyMap<ProviderInstanceId, CachedProviderAvailability>
+  >(new Map(persistedAvailability));
   const lastAvailabilityRefreshAt = yield* Ref.make<ReadonlyMap<ProviderInstanceId, number>>(
     new Map(),
   );
+  const availabilityRefreshes = yield* Ref.make(
+    new Map<ProviderInstanceId, Deferred.Deferred<ProviderAvailability>>(),
+  );
+  // Every entry point (web, MCP, or another future client) shares this bound.
+  // Per-request fan-out alone cannot prevent several concurrent targeted RPCs
+  // from spawning every provider CLI at once.
+  const availabilityRefreshPermits = yield* Semaphore.make(
+    ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY,
+  );
+  const availabilityPersistence = yield* Semaphore.make(1);
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+  const persistAvailability = availabilityPersistence.withPermits(1)(
+    Effect.gen(function* () {
+      const current = yield* Ref.get(availabilityByInstance);
+      const durable = new Map<ProviderInstanceId, DurableProviderAvailability>();
+      for (const [instanceId, entry] of current) {
+        if (entry.driver !== undefined) {
+          durable.set(instanceId, { ...entry, driver: entry.driver });
+        }
+      }
+      yield* writeProviderAvailabilityCache({
+        filePath: availabilityCachePath,
+        entries: durable,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to persist provider availability cache", {
+          path: availabilityCachePath,
+          errorTag: causeErrorTag(cause),
+        }),
+      ),
+    ),
+  );
+
+  // Returns the stored entry, so a caller can answer with exactly what a
+  // subsequent read of this instance returns rather than with the snapshot it
+  // handed in. Persistence reads the latest Ref value under one permit, so
+  // overlapping passive events cannot finish their disk writes out of order.
+  const cacheAvailability = (
+    instanceId: ProviderInstanceId,
+    provider: ProviderDriverKind,
+    availability: ProviderAvailability,
+    nowMs: number,
+  ) =>
+    Ref.modify(
+      availabilityByInstance,
+      (
+        entries,
+      ): readonly [
+        { readonly entry: CachedProviderAvailability; readonly changed: boolean },
+        ReadonlyMap<ProviderInstanceId, CachedProviderAvailability>,
+      ] => {
+        const previous = entries.get(instanceId);
+        const entry = cacheProviderAvailability(previous, availability, nowMs, provider);
+        if (entry === previous) {
+          return [{ entry, changed: false }, entries] as const;
+        }
+        const next = new Map(entries);
+        next.set(instanceId, entry);
+        return [{ entry, changed: true }, next] as const;
+      },
+    ).pipe(
+      Effect.tap(({ changed }) => (changed ? persistAvailability : Effect.void)),
+      Effect.tap(({ changed, entry }) =>
+        changed
+          ? PubSub.publish(availabilityChangesPubSub, {
+              instanceId,
+              provider,
+              availability: availabilityAt(entry, provider, nowMs),
+            })
+          : Effect.void,
+      ),
+      Effect.map(({ entry }) => entry),
+    );
   /**
    * Attach the `phoenix` MCP server to the session that is about to start.
    *
@@ -717,18 +831,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const availability = availabilityFromRuntimeEvent(canonicalEvent);
         return availability
           ? Effect.flatMap(DateTime.now, (now) =>
-              Ref.update(availabilityByInstance, (entries) => {
-                const next = new Map(entries);
-                next.set(
-                  source.instanceId,
-                  cacheProviderAvailability(
-                    entries.get(source.instanceId),
-                    availability,
-                    DateTime.toEpochMillis(now),
-                  ),
-                );
-                return next;
-              }),
+              cacheAvailability(
+                source.instanceId,
+                source.provider,
+                availability,
+                DateTime.toEpochMillis(now),
+              ),
             )
           : Effect.void;
       }),
@@ -762,21 +870,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     Effect.map((map) => Array.from(map.entries())),
   );
 
-  // Returns the stored entry, so a caller can answer with exactly what a
-  // subsequent read of this instance returns rather than with the snapshot it
-  // handed in.
-  const cacheAvailability = (
-    instanceId: ProviderInstanceId,
-    availability: ProviderAvailability,
-    nowMs: number,
-  ) =>
-    Ref.modify(availabilityByInstance, (entries) => {
-      const entry = cacheProviderAvailability(entries.get(instanceId), availability, nowMs);
-      const next = new Map(entries);
-      next.set(instanceId, entry);
-      return [entry, next] as const;
-    });
-
   const refreshAvailability = (instanceId: ProviderInstanceId, provider: ProviderDriverKind) =>
     Effect.gen(function* () {
       const now = DateTime.toEpochMillis(yield* DateTime.now);
@@ -795,41 +888,101 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       ) {
         return yield* cachedAt();
       }
-      const claimed = yield* Ref.modify(lastAvailabilityRefreshAt, (entries) =>
-        claimAvailabilityRefresh(entries, instanceId, now),
-      );
-      if (!claimed) {
-        return yield* cachedAt();
+      const collectAvailability = adapter.value.refreshAvailability;
+      const deferred = yield* Deferred.make<ProviderAvailability>();
+      const refresh = yield* Ref.modify(availabilityRefreshes, (entries) => {
+        const existing = entries.get(instanceId);
+        if (existing !== undefined) {
+          return [
+            { deferred: existing, owner: false } as AvailabilityRefreshClaim,
+            entries,
+          ] as const;
+        }
+        const next = new Map(entries);
+        next.set(instanceId, deferred);
+        return [{ deferred, owner: true } as AvailabilityRefreshClaim, next] as const;
+      });
+      if (!refresh.owner) {
+        return yield* Deferred.await(refresh.deferred);
       }
-      const availability = yield* adapter.value.refreshAvailability().pipe(
-        // A refresh that failed reports the channel it failed on, not the
-        // driver's passive one. The whole cause is caught, not just the typed
-        // error: an adapter that throws while shelling out to its CLI is a
-        // defect, and a defect escaping here would take down the caller's
-        // whole availability fan-out over one misbehaving instance.
-        // Interruption is the caller going away and stays a cancellation.
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause as Cause.Cause<never>)
-            : Effect.logWarning("provider availability refresh failed", {
-                instanceId,
-                provider,
-                cause,
-              }).pipe(
-                Effect.andThen(DateTime.now),
-                Effect.map((failedAt) =>
-                  unknownRefreshAvailability(provider, DateTime.formatIso(failedAt)),
-                ),
-              ),
+
+      return yield* Effect.gen(function* () {
+        const claimed = yield* Ref.modify(lastAvailabilityRefreshAt, (entries) =>
+          claimAvailabilityRefresh(entries, instanceId, now),
+        );
+        if (!claimed) {
+          return yield* cachedAt();
+        }
+        const availability = yield* availabilityRefreshPermits
+          .withPermits(1)(collectAvailability())
+          .pipe(
+            // A refresh that failed reports the channel it failed on, not the
+            // driver's passive one. The whole cause is caught, not just the typed
+            // error: an adapter that throws while shelling out to its CLI is a
+            // defect, and a defect escaping here would take down the caller's
+            // whole availability fan-out over one misbehaving instance.
+            // Interruption is the caller going away and stays a cancellation.
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause as Cause.Cause<never>)
+                : Effect.logWarning("provider availability refresh failed", {
+                    instanceId,
+                    provider,
+                    cause,
+                  }).pipe(
+                    Effect.andThen(DateTime.now),
+                    Effect.map((failedAt) =>
+                      unknownRefreshAvailability(provider, DateTime.formatIso(failedAt)),
+                    ),
+                  ),
+            ),
+          );
+        // Stamped when the reading came back rather than when the request
+        // started: the CLI call itself can take seconds. Answering through
+        // `availabilityAt` keeps one owner of freshness — a refresh reports what
+        // the cache now holds, never a snapshot the cache would not present.
+        const receivedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
+        const entry = yield* cacheAvailability(instanceId, provider, availability, receivedAtMs);
+        return availabilityAt(entry, provider, receivedAtMs);
+      }).pipe(
+        Effect.onExit((exit) =>
+          Effect.gen(function* () {
+            yield* Ref.update(availabilityRefreshes, (entries) => {
+              if (entries.get(instanceId) !== deferred) return entries;
+              const next = new Map(entries);
+              next.delete(instanceId);
+              return next;
+            });
+            yield* Exit.isSuccess(exit)
+              ? Deferred.succeed(deferred, exit.value)
+              : Deferred.succeed(deferred, yield* cachedAt());
+          }),
         ),
       );
-      // Stamped when the reading came back rather than when the request
-      // started: the CLI call itself can take seconds. Answering through
-      // `availabilityAt` keeps one owner of freshness — a refresh reports what
-      // the cache now holds, never a snapshot the cache would not present.
-      const receivedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
-      const entry = yield* cacheAvailability(instanceId, availability, receivedAtMs);
-      return availabilityAt(entry, provider, receivedAtMs);
+    });
+
+  const subscribeAvailability: ProviderService.ProviderService["Service"]["subscribeAvailability"] =
+    Effect.gen(function* () {
+      // Register before reading the cache so a passive event cannot land in
+      // the gap between the initial snapshot and the live stream.
+      const subscription = yield* PubSub.subscribe(availabilityChangesPubSub);
+      const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+      const latest = yield* Ref.get(availabilityByInstance).pipe(
+        Effect.map((entries) =>
+          [...entries].flatMap(([instanceId, entry]) =>
+            entry.driver === undefined
+              ? []
+              : [
+                  {
+                    instanceId,
+                    provider: entry.driver,
+                    availability: availabilityAt(entry, entry.driver, nowMs),
+                  } satisfies ProviderService.ProviderAvailabilityChange,
+                ],
+          ),
+        ),
+      );
+      return { latest, changes: Stream.fromSubscription(subscription) };
     });
 
   // Rebuild the map of id → adapter from the registry and fork a new event
@@ -854,9 +1007,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     // makes late buffered events from a replaced adapter harmless, then the
     // cache reset cannot erase an initial signal from its replacement.
     yield* Ref.set(subscribedAdapters, next);
-    yield* Ref.update(availabilityByInstance, (entries) =>
-      clearAvailabilityForReconciledAdapters(entries, previous, next),
-    );
+    yield* Ref.update(availabilityByInstance, (entries) => {
+      const retained = clearAvailabilityForReconciledAdapters(entries, previous, next);
+      for (const [instanceId, entry] of retained) {
+        const adapter = next.get(instanceId);
+        if (entry.driver !== undefined && adapter?.provider !== entry.driver) {
+          retained.delete(instanceId);
+        }
+      }
+      return retained;
+    });
     // The cooldown map is keyed by instance id too; without the same pruning it
     // keeps a timestamp per instance that ever existed and would silence the
     // first refresh of a rebuilt instance.
@@ -877,6 +1037,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ).pipe(Effect.forkScoped);
       }
     }
+    yield* persistAvailability;
   });
 
   const instanceChanges = yield* registry.subscribeChanges;
@@ -1692,6 +1853,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ),
       ),
     refreshAvailability,
+    subscribeAvailability,
     rollbackConversation,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
@@ -1705,8 +1867,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 export const ProviderServiceLive = Layer.effect(
   ProviderService.ProviderService,
   makeProviderService(),
-);
+).pipe(Layer.provide(NodeServices.layer));
 
 export function makeProviderServiceLive(options?: ProviderServiceLiveOptions) {
-  return Layer.effect(ProviderService.ProviderService, makeProviderService(options));
+  return Layer.effect(ProviderService.ProviderService, makeProviderService(options)).pipe(
+    Layer.provide(NodeServices.layer),
+  );
 }

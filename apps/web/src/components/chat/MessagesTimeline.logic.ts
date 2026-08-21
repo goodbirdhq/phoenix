@@ -22,8 +22,19 @@ export const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const TIMELINE_CONTENT_MAX_WIDTH = 768;
 export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
 
+/**
+ * Rows that survive work-group folding. A spawn CTA and a Schedule receipt are
+ * both durable changes to the user's environment made mid-turn, and both are
+ * likeliest on exactly the busy turns that overflow — collapsing them into
+ * "+N previous tool calls" hides the one row that mattered. Mobile keeps the
+ * same two visible via `alwaysVisible`.
+ */
 function workEntryIsSpawnCta(entry: WorkLogEntry): boolean {
-  return entry.agentSpawn !== undefined || entry.spawnedSession !== undefined;
+  return (
+    entry.agentSpawn !== undefined ||
+    entry.spawnedSession !== undefined ||
+    entry.scheduleActivity !== undefined
+  );
 }
 
 export interface TimelineEndState {

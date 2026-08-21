@@ -49,6 +49,8 @@ function workRowSymbolName(icon: ThreadFeedActivity["icon"]): AppSymbolName {
       return { ios: "sparkles", android: "auto_awesome" };
     case "alert":
       return { ios: "exclamationmark.triangle", android: "error" };
+    case "calendar":
+      return { ios: "clock.arrow.circlepath", android: "schedule" };
     case "check":
       return { ios: "checkmark", android: "check" };
     case "command":

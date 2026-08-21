@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { latestScheduleOccurrenceAtOrBefore, previewScheduleTiming } from "./timing.ts";
+import {
+  countScheduleOccurrencesWithin,
+  latestScheduleOccurrenceAtOrBefore,
+  previewScheduleTiming,
+} from "./timing.ts";
 
 describe("Schedule timing", () => {
   it("accepts the five-minute cron boundary and rejects a four-minute rule", () => {
@@ -83,5 +87,44 @@ describe("Schedule timing", () => {
         "2026-08-19T10:02:00.000Z",
       ),
     ).toThrow(/time zone/i);
+  });
+});
+
+describe("countScheduleOccurrencesWithin", () => {
+  const day = 24 * 60 * 60 * 1000;
+
+  it("counts a burst cadence over the real day, not from its first gaps", () => {
+    // 09:00-17:59 every ten minutes is 54 runs a day. Reading the interval off
+    // the first few occurrences instead says 144, because they all land inside
+    // the busy window.
+    expect(
+      countScheduleOccurrencesWithin(
+        { type: "cron", expression: "*/10 9-17 * * *" },
+        "Europe/London",
+        "2026-08-20T09:02:00.000Z",
+        day,
+      ),
+    ).toBe(54);
+  });
+
+  it("counts a uniform cadence exactly", () => {
+    expect(
+      countScheduleOccurrencesWithin(
+        { type: "cron", expression: "*/5 * * * *" },
+        "Europe/London",
+        "2026-08-20T09:00:00.000Z",
+        day,
+      ),
+    ).toBe(288);
+  });
+
+  it("counts a one-time schedule only inside the window", () => {
+    const timing = { type: "one-time", runAt: "2026-08-21T09:00:00.000Z" } as const;
+    expect(
+      countScheduleOccurrencesWithin(timing, "Europe/London", "2026-08-20T09:00:00.000Z", day),
+    ).toBe(1);
+    expect(
+      countScheduleOccurrencesWithin(timing, "Europe/London", "2026-08-18T09:00:00.000Z", day),
+    ).toBe(0);
   });
 });

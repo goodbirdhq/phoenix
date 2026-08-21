@@ -650,6 +650,13 @@ export const ServerSettings = Schema.Struct({
   // sessions MCP toolkit. Checked per tool call, so flipping it applies to
   // running sessions immediately.
   enableSessionOrchestration: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Lets an agent session create, edit, and trigger this environment's
+  // Schedules through the schedules MCP toolkit. Checked per tool call, so
+  // flipping it applies to running sessions immediately. Reading Schedules is
+  // gated with writing them: the toggle answers "may agents touch my
+  // automation at all", and a half-on state would be harder to reason about
+  // than either end of it.
+  enableScheduleManagement: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /**
    * Whether agents may drive the in-app preview browser. Turning this off
    * withholds the MCP credential, so the Phoenix MCP server (and with it every
@@ -874,6 +881,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   enableSessionOrchestration: Schema.optionalKey(Schema.Boolean),
+  enableScheduleManagement: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({

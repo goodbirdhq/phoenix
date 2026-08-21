@@ -78,29 +78,92 @@ const makeManualProviderMaintenanceCapabilities = (provider: ProviderDriverKind)
 const hasModelCapabilities = (model: ServerProvider["models"][number]): boolean =>
   (model.capabilities?.optionDescriptors?.length ?? 0) > 0;
 
-const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean => {
-  if (provider.driver !== ProviderDriverKind.make("opencode")) {
+const OPENCODE_DRIVER = ProviderDriverKind.make("opencode");
+
+/**
+ * A successful OpenCode probe that reports zero models is only trusted after
+ * it has been observed this many consecutive times. A single flaky inventory
+ * (locked CLI database, transient auth hiccup in the upstream gateway) must
+ * not wipe the model picker; a genuinely stale inventory disappears on the
+ * next confirmation.
+ */
+export const OPENCODE_EMPTY_INVENTORY_CONFIRMATIONS = 2;
+
+export interface OpenCodeInventoryRetention {
+  /**
+   * `checkedAt` of the last snapshot folded into `consecutiveEmptyInventories`.
+   * Counting each distinct probe once keeps duplicate deliveries of the same
+   * snapshot (subscription race, enrichment republish) from double-counting.
+   */
+  readonly lastCountedCheckedAt: string | null;
+  readonly consecutiveEmptyInventories: number;
+}
+
+export const initialOpenCodeInventoryRetention: OpenCodeInventoryRetention = {
+  lastCountedCheckedAt: null,
+  consecutiveEmptyInventories: 0,
+};
+
+export const isOpenCodeEmptySuccessfulInventory = (provider: ServerProvider): boolean =>
+  provider.driver === OPENCODE_DRIVER &&
+  provider.enabled &&
+  provider.installed &&
+  provider.status !== "error" &&
+  provider.models.length === 0;
+
+export const advanceOpenCodeInventoryRetention = (
+  previous: OpenCodeInventoryRetention,
+  provider: ServerProvider,
+): OpenCodeInventoryRetention => {
+  if (provider.driver !== OPENCODE_DRIVER || provider.checkedAt === previous.lastCountedCheckedAt) {
+    return previous;
+  }
+  return {
+    lastCountedCheckedAt: provider.checkedAt,
+    consecutiveEmptyInventories: isOpenCodeEmptySuccessfulInventory(provider)
+      ? previous.consecutiveEmptyInventories + 1
+      : 0,
+  };
+};
+
+const shouldRetainMissingProviderModels = (
+  provider: ServerProvider,
+  consecutiveEmptyInventories: number,
+): boolean => {
+  if (provider.driver !== OPENCODE_DRIVER) {
     return true;
   }
 
   // OpenCode's initial snapshot is deliberately non-authoritative while its
   // first probe is still running. A probe error from an installed CLI/server
   // is likewise partial: it could not establish the current inventory.
-  // Conversely, disabled and missing-CLI snapshots are authoritative removals,
-  // as are successful ready/warning inventories (including an empty one after
-  // logout or plugin removal).
   const isPendingInitialProbe =
     provider.enabled && !provider.installed && provider.status === "warning";
   const didInstalledProviderProbeFail = provider.installed && provider.status === "error";
-  return isPendingInitialProbe || didInstalledProviderProbeFail;
+  if (isPendingInitialProbe || didInstalledProviderProbeFail) {
+    return true;
+  }
+
+  // A successful empty inventory (logout, plugin removal) is an authoritative
+  // removal, but only once confirmed by consecutive probes.
+  if (isOpenCodeEmptySuccessfulInventory(provider)) {
+    return consecutiveEmptyInventories < OPENCODE_EMPTY_INVENTORY_CONFIRMATIONS;
+  }
+
+  // Disabled and missing-CLI snapshots are immediate authoritative removals.
+  return false;
 };
 
 const mergeProviderModels = (
   provider: ServerProvider,
   previousModels: ReadonlyArray<ServerProvider["models"][number]>,
   nextModels: ReadonlyArray<ServerProvider["models"][number]>,
+  consecutiveEmptyInventories: number,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
-  const shouldRetainMissingModels = shouldRetainMissingProviderModels(provider);
+  const shouldRetainMissingModels = shouldRetainMissingProviderModels(
+    provider,
+    consecutiveEmptyInventories,
+  );
 
   if (shouldRetainMissingModels && nextModels.length === 0 && previousModels.length > 0) {
     return previousModels;
@@ -123,34 +186,28 @@ const mergeProviderModels = (
     : mergedModels;
 };
 
+/**
+ * @param consecutiveEmptyInventories how many distinct consecutive successful
+ * probes have reported zero models for this instance (see
+ * `advanceOpenCodeInventoryRetention`). Zero — the default when no history is
+ * available — retains the previous models until the inventory is reconfirmed.
+ */
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
   nextProvider: ServerProvider,
+  consecutiveEmptyInventories = 0,
 ): ServerProvider =>
   !previousProvider
     ? nextProvider
     : {
         ...nextProvider,
-        models: mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
+        models: mergeProviderModels(
+          nextProvider,
+          previousProvider.models,
+          nextProvider.models,
+          consecutiveEmptyInventories,
+        ),
       };
-
-export const mergeProviderSnapshots = (
-  previousProviders: ReadonlyArray<ServerProvider>,
-  nextProviders: ReadonlyArray<ServerProvider>,
-): ReadonlyArray<ServerProvider> => {
-  const mergedProviders = new Map(
-    previousProviders.map((provider) => [snapshotInstanceKey(provider), provider] as const),
-  );
-
-  for (const provider of nextProviders) {
-    mergedProviders.set(
-      snapshotInstanceKey(provider),
-      mergeProviderSnapshot(mergedProviders.get(snapshotInstanceKey(provider)), provider),
-    );
-  }
-
-  return orderProviderSnapshots([...mergedProviders.values()]);
-};
 
 export const selectProvidersByKind = (
   providers: ReadonlyArray<ServerProvider>,
@@ -181,7 +238,15 @@ const correlateSnapshotWithSource = (
       ),
     );
   }
-  return Effect.succeed(snapshot);
+  if (source.availabilityRefreshSupported === undefined) {
+    return Effect.succeed(snapshot);
+  }
+  const { availabilityRefreshSupported: _cachedCapability, ...currentSnapshot } = snapshot;
+  return Effect.succeed(
+    source.availabilityRefreshSupported
+      ? { ...currentSnapshot, availabilityRefreshSupported: true }
+      : currentSnapshot,
+  );
 };
 
 /**
@@ -201,6 +266,7 @@ const snapshotInstanceKey = (provider: ServerProvider): ProviderInstanceId => {
 const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource => ({
   instanceId: instance.instanceId,
   driverKind: instance.driverKind,
+  availabilityRefreshSupported: instance.adapter.refreshAvailability !== undefined,
   getSnapshot: instance.snapshot.getSnapshot,
   refresh: instance.snapshot.refresh,
   streamChanges: instance.snapshot.streamChanges,
@@ -289,6 +355,11 @@ export const ProviderRegistryLive = Layer.effect(
       ),
     );
     const providersRef = yield* Ref.make<ReadonlyArray<ServerProvider>>(cachedProviders);
+    // Per-instance OpenCode empty-inventory confirmations. Folded in lockstep
+    // with `mergeProviderSnapshot` so a flaky empty probe cannot wipe models.
+    const inventoryRetentionRef = yield* Ref.make(
+      new Map<ProviderInstanceId, OpenCodeInventoryRetention>(),
+    );
     const maintenanceActionStatesRef = yield* Ref.make<
       ReadonlyMap<ProviderInstanceId, { readonly update?: ServerProviderUpdateState | undefined }>
     >(new Map());
@@ -359,6 +430,26 @@ export const ProviderRegistryLive = Layer.effect(
           concurrency: "unbounded",
         },
       );
+      // Advance each incoming snapshot's empty-inventory confirmation before
+      // merging, so the merge decision sees the post-fold count. Distinct
+      // probes count once (see `advanceOpenCodeInventoryRetention`).
+      const retentionByIncoming = new Map<ProviderInstanceId, OpenCodeInventoryRetention>();
+      if (options?.replace !== true) {
+        for (const provider of nextProvidersWithUpdateState) {
+          const key = snapshotInstanceKey(provider);
+          const [retention] = yield* Ref.modify(inventoryRetentionRef, (retentionByInstance) => {
+            const previousRetention =
+              retentionByInstance.get(key) ?? initialOpenCodeInventoryRetention;
+            const nextRetention = advanceOpenCodeInventoryRetention(previousRetention, provider);
+            const nextMap =
+              nextRetention === previousRetention
+                ? retentionByInstance
+                : new Map(retentionByInstance).set(key, nextRetention);
+            return [[nextRetention, nextMap] as const, nextMap];
+          });
+          retentionByIncoming.set(key, retention);
+        }
+      }
       const [previousProviders, providers, providersToPersist] = yield* Ref.modify(
         providersRef,
         (previousProviders) => {
@@ -374,7 +465,11 @@ export const ProviderRegistryLive = Layer.effect(
               key,
               options?.replace === true
                 ? provider
-                : mergeProviderSnapshot(mergedProviders.get(key), provider),
+                : mergeProviderSnapshot(
+                    mergedProviders.get(key),
+                    provider,
+                    retentionByIncoming.get(key)?.consecutiveEmptyInventories ?? 0,
+                  ),
             );
           }
 
@@ -619,6 +714,15 @@ export const ProviderRegistryLive = Layer.effect(
           yield* PubSub.publish(changesPubSub, providers);
         }
         yield* Ref.update(maintenanceActionStatesRef, (previous) => {
+          const next = new Map(previous);
+          for (const instanceId of previous.keys()) {
+            if (!knownInstanceIds.has(instanceId)) {
+              next.delete(instanceId);
+            }
+          }
+          return next;
+        });
+        yield* Ref.update(inventoryRetentionRef, (previous) => {
           const next = new Map(previous);
           for (const instanceId of previous.keys()) {
             if (!knownInstanceIds.has(instanceId)) {

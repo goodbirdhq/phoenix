@@ -19,6 +19,7 @@ import {
 } from "../providerSnapshot.ts";
 import {
   OpenCodeRuntime,
+  isOpenCodeCommandMissingCause,
   openCodeRuntimeErrorDetail,
   type OpenCodeInventory,
 } from "../opencodeRuntime.ts";
@@ -65,6 +66,7 @@ function formatOpenCodeProbeError(input: {
   readonly cause: unknown;
   readonly isExternalServer: boolean;
   readonly serverUrl: string;
+  readonly version: string | null;
 }): { readonly installed: boolean; readonly message: string } {
   const detail = normalizedErrorMessage(input.cause);
   const lower = detail?.toLowerCase() ?? "";
@@ -103,7 +105,12 @@ function formatOpenCodeProbeError(input: {
     };
   }
 
-  if (lower.includes("enoent") || lower.includes("notfound")) {
+  // A missing binary is concluded only from structural spawn evidence, never
+  // from substring matches on arbitrary error text — a transient failure whose
+  // message merely contains "not found" must not mark an installed CLI as
+  // missing (that classification wipes its discovered model list). A resolved
+  // version is itself proof the binary runs.
+  if (input.version === null && isOpenCodeCommandMissingCause(input.cause)) {
     return {
       installed: false,
       message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
@@ -311,6 +318,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       cause,
       isExternalServer,
       serverUrl: openCodeSettings.serverUrl,
+      version,
     });
     return buildServerProvider({
       presentation: OPENCODE_PRESENTATION,

@@ -9,6 +9,11 @@ import type {
 } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import {
+  deriveScheduleToolActivity,
+  SCHEDULE_ACTION_LABELS,
+  type ScheduleToolActivity,
+} from "@t3tools/shared/scheduleToolActivity";
+import {
   deriveSpawnedSessionToolActivity,
   type SpawnedSessionToolActivity,
 } from "@t3tools/shared/toolActivity";
@@ -46,6 +51,7 @@ export interface ThreadFeedActivity {
   readonly icon:
     | "agent"
     | "alert"
+    | "calendar"
     | "check"
     | "command"
     | "edit"
@@ -82,6 +88,7 @@ interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   toolData?: unknown;
   spawnedSession?: SpawnedSessionToolActivity;
+  scheduleActivity?: ScheduleToolActivity;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -430,6 +437,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (spawnedSession) {
       entry.spawnedSession = spawnedSession;
     }
+    const scheduleActivity = deriveScheduleToolActivity(data);
+    if (scheduleActivity) {
+      entry.scheduleActivity = scheduleActivity;
+    }
     if (data?.item !== undefined) {
       entry.toolData = data.item;
     }
@@ -651,6 +662,7 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
   }
   if (entry.activityKind === "runtime.warning") return "warning";
   if (entry.spawnedSession) return "agent";
+  if (entry.scheduleActivity) return "calendar";
   if (entry.requestKind === "command") return "command";
   if (entry.requestKind === "file-read") return "eye";
   if (entry.requestKind === "file-change") return "edit";
@@ -711,8 +723,15 @@ function memoizeValue<T>(build: () => T): () => T {
 }
 
 function workEntryPreview(
-  workEntry: Pick<WorkLogEntry, "detail" | "command" | "changedFiles" | "spawnedSession">,
+  workEntry: Pick<
+    WorkLogEntry,
+    "detail" | "command" | "changedFiles" | "spawnedSession" | "scheduleActivity"
+  >,
 ): string | null {
+  if (workEntry.scheduleActivity) {
+    const { name, cadence, timeZone } = workEntry.scheduleActivity;
+    return [name, cadence, timeZone].filter(Boolean).join(" · ");
+  }
   if (workEntry.spawnedSession) return workEntry.spawnedSession.title;
   if (workEntry.command) return workEntry.command;
   if (workEntry.detail) return workEntry.detail;
@@ -732,14 +751,24 @@ function capitalizePhrase(value: string): string {
   return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
 }
 
+function workEntryFailed(workEntry: WorkLogEntry): boolean {
+  return (
+    workEntry.tone === "error" ||
+    workEntry.toolLifecycleStatus === "failed" ||
+    workEntry.toolLifecycleStatus === "declined" ||
+    workEntry.toolLifecycleStatus === "stopped"
+  );
+}
+
 function workEntryHeading(workEntry: WorkLogEntry): string {
+  // Mobile has no bespoke chat cards; a Schedule write earns a rewritten
+  // heading, its own icon, and a cadence preview instead — the same treatment
+  // spawn_session gets, and the same information web's card carries.
+  if (workEntry.scheduleActivity && !workEntryFailed(workEntry)) {
+    return SCHEDULE_ACTION_LABELS[workEntry.scheduleActivity.action];
+  }
   if (workEntry.spawnedSession) {
-    if (
-      workEntry.tone === "error" ||
-      workEntry.toolLifecycleStatus === "failed" ||
-      workEntry.toolLifecycleStatus === "declined" ||
-      workEntry.toolLifecycleStatus === "stopped"
-    ) {
+    if (workEntryFailed(workEntry)) {
       return "Failed to spawn session";
     }
     return workEntry.spawnedSession.threadId ? "Spawned session" : "Spawning session";
@@ -1616,7 +1645,8 @@ export function buildThreadFeed(
               icon: workEntryIcon(entry),
               toolLike: workLogEntryIsToolLike(entry),
               status: workEntryStatus(entry),
-              alwaysVisible: entry.spawnedSession !== undefined,
+              alwaysVisible:
+                entry.spawnedSession !== undefined || entry.scheduleActivity !== undefined,
             },
           };
         }),

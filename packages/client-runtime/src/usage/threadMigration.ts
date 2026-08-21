@@ -29,6 +29,14 @@ export interface MigrationModeAvailability {
   readonly briefDisabledReason: string | null;
 }
 
+const hasConfirmedAvailability = (
+  availability: ProviderAvailability | null | undefined,
+): availability is ProviderAvailability =>
+  availability !== null &&
+  availability !== undefined &&
+  availability.status !== "unknown" &&
+  availability.stale === undefined;
+
 export function resolveThreadBoundInstanceId(input: {
   readonly sessionProviderInstanceId: ProviderInstanceId | null | undefined;
   readonly threadModelSelectionInstanceId: ProviderInstanceId | null | undefined;
@@ -39,10 +47,10 @@ export function resolveThreadBoundInstanceId(input: {
 export function isProviderUsageLimited(
   availability: ProviderAvailability | null | undefined,
 ): boolean {
+  if (!hasConfirmedAvailability(availability)) return false;
   return Boolean(
-    availability &&
-    (availability.status === "limited" ||
-      availability.windows.some((window) => window.usedPercent >= 100)),
+    availability.status === "limited" ||
+    availability.windows.some((window) => window.usedPercent >= 100),
   );
 }
 
@@ -75,7 +83,8 @@ export function modelUsageLimitWindows(
   availability: ProviderAvailability | null | undefined,
   model: string | null | undefined,
 ): readonly ProviderAvailabilityWindow[] {
-  return (availability?.windows ?? [])
+  if (!hasConfirmedAvailability(availability)) return [];
+  return availability.windows
     .filter((window) => window.usedPercent >= 100 && windowConstrainsModel(window, model))
     .toSorted((left, right) => right.usedPercent - left.usedPercent);
 }
@@ -89,7 +98,7 @@ export function isProviderUsageLimitedForModel(
   availability: ProviderAvailability | null | undefined,
   model: string | null | undefined,
 ): boolean {
-  if (!availability) return false;
+  if (!hasConfirmedAvailability(availability)) return false;
   return availability.windows.some((window) => window.usedPercent >= 100)
     ? modelUsageLimitWindows(availability, model).length > 0
     : availability.status === "limited";
@@ -98,7 +107,7 @@ export function isProviderUsageLimitedForModel(
 export function providerRemainingQuotaPercent(
   availability: ProviderAvailability | null | undefined,
 ): number | null {
-  if (!availability || availability.windows.length === 0) return null;
+  if (!hasConfirmedAvailability(availability) || availability.windows.length === 0) return null;
   const mostUsedWindow = Math.max(...availability.windows.map((window) => window.usedPercent));
   return Math.max(0, 100 - mostUsedWindow);
 }

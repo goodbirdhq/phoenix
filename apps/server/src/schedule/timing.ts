@@ -87,7 +87,7 @@ export function previewScheduleTiming(
   timing: ScheduleTiming,
   timeZone: string,
   after: string,
-  options?: { readonly allowPastOneTime?: boolean },
+  options?: { readonly allowPastOneTime?: boolean; readonly previewCount?: number },
 ): ReadonlyArray<string> {
   assertTimeZone(timeZone);
   const afterDate = DateTime.makeUnsafe(decodeScheduleInstant(after));
@@ -105,6 +105,10 @@ export function previewScheduleTiming(
 
   const cron = parseCron(timing.expression, timeZone);
   const sequence = validCronOccurrences(cron, timeZone, afterDate);
+  const previewCount = Math.min(
+    Math.max(options?.previewCount ?? PREVIEW_COUNT, 1),
+    VALIDATION_OCCURRENCE_COUNT,
+  );
   const preview: Array<string> = [];
   let previousMillis = DateTime.toEpochMillis(afterDate);
   for (let index = 0; index < VALIDATION_OCCURRENCE_COUNT; index += 1) {
@@ -115,10 +119,41 @@ export function previewScheduleTiming(
     if (next.getTime() - previousMillis < MINIMUM_RECURRENCE_MS && index > 0) {
       throw new Error("Recurring Schedules must be at least five minutes apart.");
     }
-    if (preview.length < PREVIEW_COUNT) preview.push(next.toISOString());
+    if (preview.length < previewCount) preview.push(next.toISOString());
     previousMillis = next.getTime();
   }
   return preview;
+}
+
+/**
+ * Occurrences in the window starting at `after`, capped so a dense cadence
+ * cannot spin. Counting a real window is the only honest way to state a run
+ * rate: extrapolating from the first few gaps reads a burst — every ten
+ * minutes between 09:00 and 17:59, sampled at 09:02 — as if it ran all day.
+ */
+export function countScheduleOccurrencesWithin(
+  timing: ScheduleTiming,
+  timeZone: string,
+  after: string,
+  windowMs: number,
+): number {
+  assertTimeZone(timeZone);
+  const start = DateTime.toEpochMillis(DateTime.makeUnsafe(decodeScheduleInstant(after)));
+  const end = start + windowMs;
+
+  if (timing.type === "one-time") {
+    const runAt = DateTime.toEpochMillis(DateTime.makeUnsafe(decodeScheduleInstant(timing.runAt)));
+    return runAt > start && runAt <= end ? 1 : 0;
+  }
+
+  const cron = parseCron(timing.expression, timeZone);
+  let count = 0;
+  for (const occurrence of validCronOccurrences(cron, timeZone, DateTime.makeUnsafe(start))) {
+    if (occurrence.getTime() > end) break;
+    count += 1;
+    if (count >= VALIDATION_OCCURRENCE_COUNT) break;
+  }
+  return count;
 }
 
 export function nextScheduleOccurrence(

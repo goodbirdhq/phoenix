@@ -70,6 +70,77 @@ Reads and subscriptions require `orchestration:read`. Create, update, pause, res
 now, and failure acknowledgement require `orchestration:operate`. Schedules introduce no new
 administrator-only capability and no provider-specific execution path.
 
+## Agent access (schedules MCP toolkit)
+
+`apps/server/src/mcp/toolkits/schedules/{tools,handlers}.ts` exposes six tools on the per-thread
+`phoenix` MCP server: `list_schedules`, `get_schedule`, `create_schedule`, `update_schedule`,
+`set_schedule_state`, and `run_schedule_now`. Handlers call `ScheduleService.dispatch` directly, so
+agent writes take the same command-decider-projector path as the UI; nothing bypasses the domain.
+
+Three properties shape the surface:
+
+**Project is derived, never passed.** Writes resolve the calling session's thread through
+`ProjectionSnapshotQuery` and use its `projectId`, so an agent cannot author automation into a
+project it is not working in. There is no `projectId` parameter to get wrong. Execution settings
+default from the same shell, which makes them provably runnable in this environment; `model` and
+`workspaceMode` are the only overrides. Reads may widen to every project with `allProjects: true`,
+because "what have I got scheduled" should not depend on which project a session is in. For the same
+reason `get_schedule` is not project-scoped at all: an id that came back from a widened list has to
+stay readable. Reads are gated by the capability and the settings toggle, not by project.
+
+**Updates are patches over a whole-definition command.** `schedule.update` carries a complete
+definition. The handler reads the stored detail, merges the fields the caller sent, and dispatches
+the result, so editing a Schedule's time never requires resending a 120k-character prompt the agent
+never read. This is last-write-wins against a concurrent UI edit; the `revision` field is available
+if that ever needs tightening.
+
+**No delete, and pause is the way out.** The domain has `schedule.delete`; this toolkit does not
+expose it. An agent that misreads a request can pause a Schedule, which the user can undo in one
+click, but cannot destroy one. For the same reason `create_schedule` refuses a name already used by
+an enabled or paused Schedule in that project and returns the colliding id: a duplicate is something
+this surface cannot clean up. `schedule.acknowledge-failures` is likewise withheld — clearing a
+failure badge is the user saying they have seen it.
+
+Gating stacks the way the other toolkits do: a `schedules` capability on the MCP credential, then
+`enableScheduleManagement` read per call so flipping it reaches running sessions. Reads are gated
+with writes; a half-on state is harder to reason about than either end.
+
+Every write returns the next `SCHEDULE_UPCOMING_OCCURRENCE_COUNT` occurrences and the cadence in
+plain language, because `0 6 * * 1-5` and `0 6 * * 1,5` differ by one character and mean completely
+different things. Aggressive cadences also return a thread-count warning; the five-minute floor
+stays in the domain rather than being duplicated here.
+
+### Chat rows
+
+`packages/shared/src/scheduleToolActivity.ts` reduces a write result to the six fields a chat row
+renders, and `ActivityPayloadProjection` carries it as `data.scheduleActivity`. This is necessary,
+not decorative: the projection drops `result` from MCP items and summarizes tool output to 84
+characters, which would cut the Schedule's id and cadence out entirely. The five upcoming
+occurrences are deliberately _not_ carried — they are for the agent to read back in prose, and
+putting them on the wire for every write would be payload bloat.
+
+Web renders `ScheduleWriteRow` in `MessagesTimeline.tsx`; mobile gives the row a rewritten heading,
+a calendar icon, and a cadence preview in `threadActivity.ts`, matching how `spawn_session` is
+handled on each surface. Both are static receipts built from the tool result — a live subscription
+per historical row would cost real work on long threads and would misreport history by showing a
+Schedule's state today next to the moment it was created. The row links to the Schedules page, which
+is the live view. Failed writes fall through to the generic tool row, where the error is visible on
+expand.
+
+Provider coverage for the row is currently **Claude and Codex only**, and this is a known gap
+rather than a decision. `deriveScheduleToolActivity` recognizes two payload shapes: Codex's
+`item.server`/`item.tool` pair, and Claude's flattened `mcp__phoenix__*` tool name. OpenCode
+classifies tool items by substring on the tool name (`toToolLifecycleItemType`), and Cursor and Grok
+arrive over ACP, where anything that is not execute/edit/search maps to `dynamic_tool_call` — so the
+MCP projection path never runs for them at all. The tools themselves work on every provider; only
+the row is missing, and those threads fall back to the generic expandable tool row, which still
+shows the call and its arguments. Closing this needs the real tool-name strings each adapter emits,
+confirmed against a live session per provider rather than inferred from adapter source.
+
+The cadence humanizer is `packages/shared/src/scheduleCadence.ts`. It names common shapes and falls
+back to the raw expression rather than guessing, on the grounds that a confident wrong sentence is
+worse than cron.
+
 ## Testing boundary
 
 The primary behavioral seam drives public Schedule commands through real persistence, migrations,

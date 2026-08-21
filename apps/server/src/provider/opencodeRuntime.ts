@@ -30,7 +30,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { isWindowsCommandNotFound } from "../processRunner.ts";
-import { collectStreamAsString } from "./providerSnapshot.ts";
+import { collectStreamAsString, isCommandMissingCause } from "./providerSnapshot.ts";
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -91,6 +91,30 @@ export function openCodeRuntimeErrorDetail(cause: unknown): string {
     }
   }
   return String(cause);
+}
+
+/**
+ * Walk an error's cause chain looking for structural missing-binary evidence:
+ * Node surfaces a failed spawn as `Error('spawn <binary> ENOENT')`, Windows
+ * command resolution as `ProviderCommandNotFoundError`, and Effect platform
+ * spawn failures as a `PlatformError` with reason `NotFound`.
+ *
+ * Never classify by substring alone — arbitrary failure text ("404 not found",
+ * sqlite errors) would misreport an installed CLI as missing and wipe its
+ * discovered model list.
+ */
+export function isOpenCodeCommandMissingCause(cause: unknown): boolean {
+  let current: unknown = cause;
+  for (let depth = 0; depth < 6 && current !== undefined && current !== null; depth += 1) {
+    if (isCommandMissingCause(current)) {
+      return true;
+    }
+    if (current instanceof Error && /^spawn \S+ ENOENT$/.test(current.message)) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 export const runOpenCodeSdk = <A>(

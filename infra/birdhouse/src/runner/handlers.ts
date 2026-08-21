@@ -1,6 +1,3 @@
-import * as NodeFSP from "node:fs/promises";
-import * as NodePath from "node:path";
-
 import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { config } from "../config.ts";
@@ -15,23 +12,11 @@ import {
   type PhoenixClient,
   type PhoenixThreadDetail,
 } from "../phoenix/client.ts";
-import { resolveWorkflowsDir } from "../workflows/loader.ts";
+import { loadSkillMarkdown } from "../workflows/skill.ts";
 import { writeAuditEvent } from "./audit.ts";
 import { deriveRunPhoenixIds } from "./ids.ts";
 import { buildRunPrompt } from "./prompt.ts";
 import { enqueueStopSession, resolveWorkflowTimeoutMs } from "./runs.ts";
-
-// `workflow.skill_path` is stored relative to the workflows root
-// (`BIRDHOUSE_WORKFLOWS_DIR`), which is where the loader wrote it — so the
-// launcher resolves it with the loader's own rule rather than a second copy
-// that could drift and leave the scheduler syncing a skill this handler
-// can't find.
-async function loadSkillMarkdown(skillPath: string): Promise<string> {
-  const resolved = NodePath.isAbsolute(skillPath)
-    ? skillPath
-    : NodePath.resolve(resolveWorkflowsDir(config.BIRDHOUSE_WORKFLOWS_DIR), skillPath);
-  return NodeFSP.readFile(resolved, "utf8");
-}
 
 function stringField(payload: Record<string, unknown>, key: string): string | undefined {
   const value = payload[key];

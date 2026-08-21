@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { ProviderInstanceConfig, ProviderInstanceId } from "@t3tools/contracts";
+import type {
+  ProviderAvailability,
+  ProviderInstanceConfig,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 
-import { failoverCandidates } from "./LimitFailoverReactor.ts";
+import { failoverCandidates, remainingScore } from "./LimitFailoverReactor.ts";
 
 const instance = (
   driver: string,
@@ -48,5 +52,28 @@ describe("failoverCandidates", () => {
     expect(
       select({ origin: instance("codex"), grok: instance("grok", { enabled: true }) }),
     ).toEqual(["grok"]);
+  });
+});
+
+describe("remainingScore", () => {
+  it("does not rank an unconfirmed reading from retained stale windows", () => {
+    const availability = {
+      status: "unknown",
+      source: "codex_app_server",
+      windows: [{ kind: "session", usedPercent: 10 }],
+    } as ProviderAvailability;
+
+    expect(remainingScore(availability)).toBe(0);
+  });
+
+  it("does not rank a retained reading after its refresh failed", () => {
+    const availability = {
+      status: "available",
+      source: "codex_app_server",
+      stale: { reason: "refresh_failed", attemptedAt: "2026-08-19T12:00:00.000Z" },
+      windows: [{ kind: "session", usedPercent: 10 }],
+    } as ProviderAvailability;
+
+    expect(remainingScore(availability)).toBe(0);
   });
 });

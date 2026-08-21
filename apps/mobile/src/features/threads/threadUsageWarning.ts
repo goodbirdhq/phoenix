@@ -61,7 +61,6 @@ export function mobileUsageWarningLabel(
   return [
     `${warning.accountName} · ${Math.round(warning.usedPercent)}% used in ${warning.windowLabel.toLowerCase()}`,
     reset ? `resets ${reset}` : null,
-    warning.isReadingUnconfirmed ? "last known reading" : null,
   ]
     .filter((part): part is string => part !== null)
     .join(" · ");

@@ -1399,6 +1399,76 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.subscribeProviderAvailability]: (input) =>
+          observeRpcStreamEffect(
+            WS_METHODS.subscribeProviderAvailability,
+            Effect.gen(function* () {
+              const providers = yield* providerRegistry.getProviders;
+              const subscription =
+                Option.isSome(providerService) &&
+                providerService.value.subscribeAvailability !== undefined
+                  ? yield* providerService.value.subscribeAvailability
+                  : undefined;
+              const cachedByInstance = new Map(
+                subscription?.latest.map((change) => [change.instanceId, change] as const) ?? [],
+              );
+              const toEntry = (
+                provider: (typeof providers)[number],
+                availability: ProviderAvailability,
+              ) => ({
+                instanceId: provider.instanceId,
+                driver: provider.driver,
+                ...(provider.displayName ? { displayName: provider.displayName } : {}),
+                availability: narrowProviderAvailability(availability, input.contractVersion),
+              });
+              const initial = yield* Effect.forEach(providers, (provider) => {
+                const cached = cachedByInstance.get(provider.instanceId);
+                return cached === undefined
+                  ? providerAvailabilityFor(provider.instanceId, provider.driver).pipe(
+                      Effect.map((availability) => toEntry(provider, availability)),
+                    )
+                  : Effect.succeed(toEntry(provider, cached.availability));
+              });
+              const updates = subscription
+                ? subscription.changes.pipe(
+                    Stream.mapEffect((change) =>
+                      providerRegistry.getProviders.pipe(
+                        Effect.map((currentProviders) => {
+                          const provider = currentProviders.find(
+                            (candidate) => candidate.instanceId === change.instanceId,
+                          );
+                          return provider === undefined
+                            ? undefined
+                            : {
+                                version: 1 as const,
+                                type: "updated" as const,
+                                payload: toEntry(provider, change.availability),
+                              };
+                        }),
+                      ),
+                    ),
+                    Stream.filter(
+                      (
+                        event,
+                      ): event is {
+                        readonly version: 1;
+                        readonly type: "updated";
+                        readonly payload: ReturnType<typeof toEntry>;
+                      } => event !== undefined,
+                    ),
+                  )
+                : Stream.empty;
+              return Stream.concat(
+                Stream.make({
+                  version: 1 as const,
+                  type: "snapshot" as const,
+                  payload: { providers: initial },
+                }),
+                updates,
+              );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) =>
           observeRpcEffect(WS_METHODS.serverRetryResourceTelemetry, resourceTelemetry.retry, {
             "rpc.aggregate": "server",

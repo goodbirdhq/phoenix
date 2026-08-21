@@ -79,6 +79,14 @@
       "types": "./src/toolActivity.ts",
       "import": "./src/toolActivity.ts"
     },
+    "./scheduleToolActivity": {
+      "types": "./src/scheduleToolActivity.ts",
+      "import": "./src/scheduleToolActivity.ts"
+    },
+    "./scheduleCadence": {
+      "types": "./src/scheduleCadence.ts",
+      "import": "./src/scheduleCadence.ts"
+    },
     "./Struct": {
       "types": "./src/Struct.ts",
       "import": "./src/Struct.ts"
