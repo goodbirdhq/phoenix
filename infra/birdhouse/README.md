@@ -230,21 +230,47 @@ For anything longer than a foreground test, run it under systemd — see
 
    1. In the Phoenix UI, open `/schedules` (or use the command palette:
       "create schedule"), pointing it at the **Birdhouse** project.
-   2. Paste the following as the schedule's prompt, filling in `<key>`:
+   2. Paste the following as the schedule's prompt, replacing **both**
+      occurrences of `<key>`:
 
       ```
-      Run the birdhouse workflow `<key>`.
+      Run the birdhouse workflow `<key>`. Do this first, before reading or
+      exploring anything in the workspace.
 
-      1. POST http://127.0.0.1:3878/api/workflows/<key>/claim with an empty JSON body.
-      2. On 200 the response gives you `instructions`, `runId`, `callbackUrl` and
-         `callbackToken`. Follow `instructions` exactly — they are the whole task.
-      3. On 409, or any other error, stop immediately and do nothing else.
-         Do not improvise the task.
+      1. In the shell, run:
+         curl -sS -X POST http://127.0.0.1:3878/api/workflows/<key>/claim \
+           -H 'Content-Type: application/json' -d '{}'
+      2. On 200 the response gives you `instructions`, `runId`, `callbackUrl`
+         and `callbackToken`. `instructions` is the whole task, and it carries
+         its own completion protocol — follow it exactly and invent nothing.
+      3. On 409 the workflow is already running: stop immediately and do
+         nothing else. Same for any other error — never improvise the task.
+      4. Once you have posted your result, stop. Do not start further work.
+      ```
+
+      A ready-to-paste version for the `ping` smoke test:
+
+      ```
+      Run the birdhouse workflow `ping`. Do this first, before reading or
+      exploring anything in the workspace.
+
+      1. In the shell, run:
+         curl -sS -X POST http://127.0.0.1:3878/api/workflows/ping/claim \
+           -H 'Content-Type: application/json' -d '{}'
+      2. On 200 the response gives you `instructions`, `runId`, `callbackUrl`
+         and `callbackToken`. `instructions` is the whole task, and it carries
+         its own completion protocol — follow it exactly and invent nothing.
+      3. On 409 the workflow is already running: stop immediately and do
+         nothing else. Same for any other error — never improvise the task.
+      4. Once you have posted your result, stop. Do not start further work.
       ```
 
    3. Settings we use for every birdhouse schedule: timing = cron (five
       fields, at least five minutes apart), timezone `Europe/London`,
-      execution = provider instance `claudeAgent`, model `claude-fable-5`,
+      execution = provider instance `claudeAgent`, the cheapest model that
+      can actually do the work (`claude-haiku-4-5` for `ping`; a claim ticket
+      is a `curl` and a hand-off, so most workflows need far less model than
+      their skill implies),
       runtime mode `auto`, interaction `default`, workspace mode **`local`**,
       base branch null. Workspace mode is `local`, not `worktree`: these
       workflows write to Notion and Gmail, never to files, so there's

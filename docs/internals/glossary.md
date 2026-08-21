@@ -216,7 +216,7 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 
 Terms belonging to [birdhouse][28], the separate service that runs business workflows as Phoenix agent threads. Everything here lives outside the app — nothing in `apps/` or `packages/` uses these words — but they collide with product terms often enough to be worth pinning down. See [birdhouse.md][29].
 
-The collision that matters most is with [Scheduling](#scheduling) above. Both systems turn a cron occurrence into an agent turn, and they are genuinely separate implementations: a **Schedule** is environment-owned and lives in the server, while a birdhouse **workflow schedule** lives in birdhouse's own Postgres and reaches Phoenix over HTTP like any other client. When either word appears without qualification, it means the product's. Consolidating the two is open work — see [birdhouse.md][29].
+There is no longer a scheduling collision. Birdhouse briefly ran its own cron; it now delegates timing entirely to [Scheduling](#scheduling) above, so **Schedule** always means the product's. A Schedule fires a thread that **claims** its assignment from birdhouse over HTTP, like any other client.
 
 #### Workflow
 
