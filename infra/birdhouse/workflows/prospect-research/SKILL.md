@@ -142,8 +142,12 @@ Write this into the **Goodbird CRM** in Notion (parent page
 - **Contacts** (data source `402355f7-31d6-4e17-8611-3c8a4d05d125`): upsert
   the person, relate them to the Account, and write the dossier as the
   contact page's **body** (update `notionPageUrl`'s page if you were given
-  one). Set Status to "Researched", then "Draft ready" once the Gmail draft
-  exists, and put the draft link in "Gmail draft".
+  one). Walk Status through the three states as you actually reach them:
+  "Contact found" once you've identified the person, "Dossier written" once
+  the page body is in place, and "Draft ready" once the Gmail draft exists —
+  then put the draft link in "Gmail draft". Don't skip ahead: the states are
+  what the CRM's views filter on, and a contact sitting at "Contact found"
+  with no dossier is a signal the run died, not a tidiness problem.
 - **Activity** (data source `01eb2982-56b2-440e-8ae4-4f71b3e2235a`): do NOT
   log research here — Activity rows are real touches (emails actually sent,
   replies, meetings), created when they happen, "Logged by" = Agent.
