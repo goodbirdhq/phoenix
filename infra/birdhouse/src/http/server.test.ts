@@ -1,4 +1,7 @@
 import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -7,24 +10,46 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { workflow } from "../db/schema.ts";
 import { startHttpServer } from "./server.ts";
 
+const SKILL_MARKDOWN = "# Claim test skill\n\nDo the claim test thing.\n";
+
 // The HTTP surface is birdhouse's only inbound boundary; the callback route
 // is covered end-to-end in runner/lifecycle.test.ts, so these cover the parts
-// that route doesn't: the manual trigger, and startup itself.
+// that route doesn't: the manual trigger, the claim route, and startup itself.
 describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("http server", () => {
   const pool = new Pool({ connectionString: process.env.BIRDHOUSE_TEST_DATABASE_URL });
   const db = drizzle({ client: pool });
   let server: Awaited<ReturnType<typeof startHttpServer>>;
   let baseUrl: string;
+  let tmpDir: string;
+  let skillPath: string;
 
   beforeAll(async () => {
     server = await startHttpServer({ db, port: 0 });
     baseUrl = `http://127.0.0.1:${server.port}`;
+    tmpDir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "birdhouse-http-skill-"));
+    skillPath = NodePath.join(tmpDir, "SKILL.md");
+    await NodeFSP.writeFile(skillPath, SKILL_MARKDOWN, "utf8");
   });
 
   afterAll(async () => {
     await server.close();
+    await NodeFSP.rm(tmpDir, { recursive: true, force: true });
     await pool.end();
   });
+
+  /** Inserts a workflow whose skill file is real and readable, for the claim route. */
+  async function insertClaimableWorkflow(overrides: { enabled?: boolean } = {}): Promise<string> {
+    const key = `test-claim-${NodeCrypto.randomUUID()}`;
+    await db.insert(workflow).values({
+      key,
+      title: "Claimable workflow",
+      skillPath,
+      manifest: {},
+      manifestHash: "test",
+      enabled: overrides.enabled ?? true,
+    });
+    return key;
+  }
 
   it("reports health with database reachability", async () => {
     const response = await fetch(`${baseUrl}/health`);
@@ -105,5 +130,77 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("http server", () => {
   it("keeps the callback URL default in step with the configured port", async () => {
     const { config } = await import("../config.ts");
     expect(config.BIRDHOUSE_PUBLIC_URL).toContain(String(config.BIRDHOUSE_HTTP_PORT));
+  });
+
+  it("claims a run and returns instructions carrying the skill body and callback token", async () => {
+    const key = await insertClaimableWorkflow();
+
+    const response = await fetch(`${baseUrl}/api/workflows/${key}/claim`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input: { hello: "world" } }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      runId: string;
+      instructions: string;
+      callbackUrl: string;
+      callbackToken: string;
+    };
+    const { config } = await import("../config.ts");
+    expect(body.runId).toBeTruthy();
+    expect(body.callbackToken).toBeTruthy();
+    // Built from BIRDHOUSE_PUBLIC_URL, not the port this test server actually
+    // bound to (port: 0) — same as the launch handler's callback URL.
+    expect(body.callbackUrl).toBe(`${config.BIRDHOUSE_PUBLIC_URL}/api/runs/${body.runId}/result`);
+    expect(body.instructions).toContain(SKILL_MARKDOWN.trim());
+    expect(body.instructions).toContain(body.callbackToken);
+    expect(body.instructions).toContain(body.callbackUrl);
+  });
+
+  it("returns 409 while a scheduled run is already open for the workflow", async () => {
+    const key = await insertClaimableWorkflow();
+
+    const first = await fetch(`${baseUrl}/api/workflows/${key}/claim`, { method: "POST" });
+    expect(first.status).toBe(200);
+    const { runId } = (await first.json()) as { runId: string };
+
+    const second = await fetch(`${baseUrl}/api/workflows/${key}/claim`, { method: "POST" });
+    expect(second.status).toBe(409);
+    expect(await second.json()).toEqual({ error: "run_in_progress", runId });
+  });
+
+  it("does not let a manual run block a claim, or a claim block a manual run", async () => {
+    const key = await insertClaimableWorkflow();
+
+    // An open manual/API run for this workflow must not trip the claim's
+    // "one open scheduled run" guard: the partial unique index is scoped to
+    // trigger = 'schedule' precisely so these can run in parallel.
+    const manualFirst = await fetch(`${baseUrl}/api/workflows/${key}/run`, { method: "POST" });
+    expect(manualFirst.status).toBe(201);
+
+    const claim = await fetch(`${baseUrl}/api/workflows/${key}/claim`, { method: "POST" });
+    expect(claim.status).toBe(200);
+
+    // Nor does the now-open claimed (scheduled) run block a further manual
+    // run of the same workflow.
+    const manualSecond = await fetch(`${baseUrl}/api/workflows/${key}/run`, { method: "POST" });
+    expect(manualSecond.status).toBe(201);
+  });
+
+  it("rejects an unknown workflow as not found", async () => {
+    const response = await fetch(`${baseUrl}/api/workflows/does-not-exist/claim`, {
+      method: "POST",
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "unknown_workflow" });
+  });
+
+  it("rejects a disabled workflow as a client error", async () => {
+    const key = await insertClaimableWorkflow({ enabled: false });
+
+    const response = await fetch(`${baseUrl}/api/workflows/${key}/claim`, { method: "POST" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "workflow_disabled" });
   });
 });

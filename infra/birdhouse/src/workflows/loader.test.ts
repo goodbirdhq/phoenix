@@ -27,21 +27,18 @@ async function writeWorkflow(
   }
 }
 
-const DEFAULT_TZ = { defaultTimezone: "Europe/London" };
-
 describe("loadWorkflowDefinitions", () => {
   it("loads a valid workflow with a stable manifest hash", async () => {
     const manifest = {
       key: "prospect-research",
       title: "Prospect research",
       skill: "SKILL.md",
-      schedules: [{ cron: "0 6 * * 1-5", timezone: "Europe/London" }],
     };
 
     const root = await fixtureDir();
     await writeWorkflow(root, "prospect-research", { manifestJson: JSON.stringify(manifest) });
 
-    const result = await loadWorkflowDefinitions(root, DEFAULT_TZ);
+    const result = await loadWorkflowDefinitions(root);
     expect(result.errors).toEqual([]);
     expect(result.definitions).toHaveLength(1);
     const def = result.definitions[0]!;
@@ -52,7 +49,7 @@ describe("loadWorkflowDefinitions", () => {
     // An identical fixture, written from scratch elsewhere, hashes the same.
     const root2 = await fixtureDir();
     await writeWorkflow(root2, "prospect-research", { manifestJson: JSON.stringify(manifest) });
-    const result2 = await loadWorkflowDefinitions(root2, DEFAULT_TZ);
+    const result2 = await loadWorkflowDefinitions(root2);
     expect(result2.definitions[0]?.manifestHash).toBe(def.manifestHash);
   });
 
@@ -60,7 +57,7 @@ describe("loadWorkflowDefinitions", () => {
     const root = await fixtureDir();
     await writeWorkflow(root, "broken", { manifestJson: "{ not json", skillContent: null });
 
-    const result = await loadWorkflowDefinitions(root, DEFAULT_TZ);
+    const result = await loadWorkflowDefinitions(root);
     expect(result.definitions).toEqual([]);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]?.message).toMatch(/not valid JSON/);
@@ -72,7 +69,7 @@ describe("loadWorkflowDefinitions", () => {
       manifestJson: JSON.stringify({ key: "Bad Key!", title: "Bad", skill: "SKILL.md" }),
     });
 
-    const result = await loadWorkflowDefinitions(root, DEFAULT_TZ);
+    const result = await loadWorkflowDefinitions(root);
     expect(result.definitions).toEqual([]);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]?.message).toMatch(/failed validation/);
@@ -85,7 +82,7 @@ describe("loadWorkflowDefinitions", () => {
       skillContent: null,
     });
 
-    const result = await loadWorkflowDefinitions(root, DEFAULT_TZ);
+    const result = await loadWorkflowDefinitions(root);
     expect(result.definitions).toEqual([]);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]?.message).toMatch(/does not exist/);
@@ -98,7 +95,7 @@ describe("loadWorkflowDefinitions", () => {
     });
     await writeWorkflow(root, "broken", { manifestJson: "not json", skillContent: null });
 
-    const result = await loadWorkflowDefinitions(root, DEFAULT_TZ);
+    const result = await loadWorkflowDefinitions(root);
     expect(result.definitions.map((d) => d.key)).toEqual(["ok"]);
     expect(result.errors).toHaveLength(1);
   });
@@ -108,7 +105,7 @@ describe("loadWorkflowDefinitions", () => {
     await NodeFSP.mkdir(NodePath.join(root, "not-a-workflow"), { recursive: true });
     await NodeFSP.writeFile(NodePath.join(root, "not-a-workflow", "README.md"), "hi");
 
-    const result = await loadWorkflowDefinitions(root, DEFAULT_TZ);
+    const result = await loadWorkflowDefinitions(root);
     expect(result.definitions).toEqual([]);
     expect(result.errors).toEqual([]);
   });
@@ -118,7 +115,7 @@ describe("loadWorkflowDefinitions", () => {
   // must not look the same to the caller.
   it("reports an unreadable workflows directory as an error, not an empty tree", async () => {
     const root = await fixtureDir();
-    const result = await loadWorkflowDefinitions(NodePath.join(root, "does-not-exist"), DEFAULT_TZ);
+    const result = await loadWorkflowDefinitions(NodePath.join(root, "does-not-exist"));
     expect(result.definitions).toEqual([]);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]?.message).toMatch(/workflows directory could not be read/);
@@ -133,7 +130,7 @@ describe("loadWorkflowDefinitions", () => {
       manifestJson: JSON.stringify({ key: "dup", title: "Second", skill: "SKILL.md" }),
     });
 
-    const result = await loadWorkflowDefinitions(root, DEFAULT_TZ);
+    const result = await loadWorkflowDefinitions(root);
     expect(result.definitions).toHaveLength(1);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]?.message).toMatch(/already used by/);

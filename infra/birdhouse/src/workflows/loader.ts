@@ -5,9 +5,8 @@ import * as NodeURL from "node:url";
 import { and, eq, notInArray, sql } from "drizzle-orm";
 
 import type { Db } from "../db/client.ts";
-import { workflow, workflowSchedule } from "../db/schema.ts";
+import { workflow } from "../db/schema.ts";
 import { canonicalJsonHash } from "../lib/canonical-json.ts";
-import { nextCronOccurrence } from "../lib/cron.ts";
 import { createWorkflowManifestSchema, type WorkflowManifest } from "./manifest.ts";
 
 // From src/workflows/loader.ts, two levels up is the package root
@@ -50,16 +49,8 @@ function describeError(error: unknown): string {
  * the others from loading — every failure is collected into `errors`
  * instead of thrown, so one broken workflow can't take the rest offline.
  */
-export async function loadWorkflowDefinitions(
-  dir: string,
-  options: { defaultTimezone?: string } = {},
-): Promise<WorkflowLoadResult> {
-  // See manifest.ts: this is the one place config.ts is allowed to leak in,
-  // and only when the caller didn't already supply a timezone (production
-  // callers always do; tests pass one explicitly to stay DB-config-free).
-  const defaultTimezone =
-    options.defaultTimezone ?? (await import("../config.ts")).config.BIRDHOUSE_TIMEZONE;
-  const schema = createWorkflowManifestSchema(defaultTimezone);
+export async function loadWorkflowDefinitions(dir: string): Promise<WorkflowLoadResult> {
+  const schema = createWorkflowManifestSchema();
 
   let entries;
   try {
@@ -153,21 +144,18 @@ export async function loadWorkflowDefinitions(
 
 export type WorkflowSyncSummary = Readonly<{
   workflowsUpserted: number;
-  schedulesUpserted: number;
-  schedulesDisabledMissing: number;
   workflowsDisabledMissing: number;
   /** False when load errors made the disk view too incomplete to disable anything. */
   reconciled: boolean;
 }>;
 
 /**
- * Projects disk-defined workflows into the `workflow` / `workflow_schedule`
- * tables. `workflow.mode` and `workflow.enabled` are operational toggles,
- * not disk state: the upsert below never writes them for a row that already
- * exists — new rows just take the column defaults. Reconciliation (the two
- * loops after the upserts) is the only place that flips `enabled`, and only
- * to turn things off that disk no longer declares; nothing here ever
- * deletes a row.
+ * Projects disk-defined workflows into the `workflow` table. `workflow.mode`
+ * and `workflow.enabled` are operational toggles, not disk state: the
+ * upsert below never writes them for a row that already exists — new rows
+ * just take the column defaults. Reconciliation (the loop after the upsert)
+ * is the only place that flips `enabled`, and only to turn things off that
+ * disk no longer declares; nothing here ever deletes a row.
  */
 export async function syncWorkflows(
   db: Db,
@@ -219,59 +207,6 @@ export async function syncWorkflows(
     workflowsUpserted = definitions.length;
   }
 
-  let schedulesUpserted = 0;
-  if (definitions.length > 0) {
-    const desired = definitions.flatMap((def) =>
-      def.manifest.schedules.map((schedule) => ({
-        workflowKey: def.key,
-        cron: schedule.cron,
-        timezone: schedule.timezone,
-        enabled: schedule.enabled,
-        // Only takes effect for a genuinely new row: the `set` clause below
-        // deliberately omits next_run_at so an existing schedule's progress
-        // survives every tick's re-sync (this runs once per tick).
-        nextRunAt: nextCronOccurrence(schedule.cron, schedule.timezone, now),
-      })),
-    );
-    if (desired.length > 0) {
-      await db
-        .insert(workflowSchedule)
-        .values(desired)
-        .onConflictDoUpdate({
-          target: [workflowSchedule.workflowKey, workflowSchedule.cron],
-          set: {
-            timezone: sql`excluded.timezone`,
-            enabled: sql`excluded.enabled`,
-            updatedAt: now,
-          },
-          setWhere: sql`${workflowSchedule.timezone} is distinct from excluded.timezone
-            or ${workflowSchedule.enabled} is distinct from excluded.enabled`,
-        });
-      schedulesUpserted = desired.length;
-    }
-  }
-
-  // Disable schedules that were synced from a workflow still on disk, but
-  // whose particular cron entry disk no longer declares.
-  let schedulesDisabledMissing = 0;
-  for (const def of reconcileMissing ? definitions : []) {
-    const cronsOnDisk = def.manifest.schedules.map((s) => s.cron);
-    const result = await db
-      .update(workflowSchedule)
-      .set({ enabled: false, updatedAt: now })
-      .where(
-        cronsOnDisk.length > 0
-          ? and(
-              eq(workflowSchedule.workflowKey, def.key),
-              notInArray(workflowSchedule.cron, cronsOnDisk),
-              eq(workflowSchedule.enabled, true),
-            )
-          : and(eq(workflowSchedule.workflowKey, def.key), eq(workflowSchedule.enabled, true)),
-      )
-      .returning({ id: workflowSchedule.id });
-    schedulesDisabledMissing += result.length;
-  }
-
   // Disable workflows this sync didn't see on disk at all — but only ones a
   // previous sync actually created (`synced_at is not null`); a workflow
   // row seeded some other way is left alone.
@@ -294,8 +229,6 @@ export async function syncWorkflows(
 
   const summary: WorkflowSyncSummary = {
     workflowsUpserted,
-    schedulesUpserted,
-    schedulesDisabledMissing,
     workflowsDisabledMissing: missingWorkflows.length,
     reconciled: reconcileMissing,
   };

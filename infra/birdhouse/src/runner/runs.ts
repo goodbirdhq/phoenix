@@ -9,6 +9,7 @@ import { opsJob } from "../db/schema.ts";
 import { enqueueJob, requestJobCancellation } from "../jobs/queue.ts";
 import { writeAuditEvent } from "./audit.ts";
 import { mintCallbackToken } from "./callbackToken.ts";
+import type { RunPromptMode } from "./prompt.ts";
 
 export type WorkflowRunTrigger = "schedule" | "manual" | "api";
 
@@ -19,8 +20,8 @@ export interface CreateWorkflowRunInput {
   input?: unknown;
   /**
    * Deduplication key for the backing job. Callers that can fire more than
-   * once for the same logical occurrence (the scheduler, retried API calls)
-   * must pass a stable key, e.g. `schedule:{scheduleId}:{occurrenceIso}`.
+   * once for the same logical occurrence (retried API calls) must pass a
+   * stable key.
    */
   dedupeKey?: string;
 }
@@ -149,6 +150,139 @@ export async function createWorkflowRun(
   });
 }
 
+export type ClaimWorkflowRunInput = Readonly<{
+  db: Db;
+  workflowKey: string;
+  input?: unknown;
+}>;
+
+export type ClaimWorkflowRunResult =
+  | Readonly<{
+      status: "claimed";
+      runId: string;
+      callbackToken: string;
+      /**
+       * The workflow fields as they were when the run row was written. The
+       * caller builds the agent's instructions from these rather than
+       * re-reading the workflow, so the mode the instructions describe is
+       * always the mode the run was recorded under.
+       */
+      workflow: Readonly<{ key: string; title: string; skillPath: string; mode: RunPromptMode }>;
+    }>
+  /** Some other scheduled run for this workflow is already open. */
+  | Readonly<{ status: "busy"; runId: string }>;
+
+/**
+ * Claims a run for a Phoenix Schedule to execute inline: a Schedule fires a
+ * thread whose static prompt tells the agent to call this, collect its
+ * assignment, and report back through the existing result callback — so,
+ * unlike `createWorkflowRun`, the caller *is* the agent. The row is inserted
+ * already 'running' (`started_at`/`timeout_at` stamped from the database
+ * clock, same discipline as `createWorkflowRun`) and no job is enqueued:
+ * there is nothing left here to launch or watch.
+ *
+ * The partial unique index `workflow_run_one_open_scheduled_per_workflow`
+ * is what actually enforces "at most one open scheduled run per workflow";
+ * this insert targets it with `onConflictDoNothing`, the same
+ * losing-a-race-isn't-an-error idiom `enqueueJob` uses for its idempotency
+ * key (jobs/queue.ts). Losing means some other claim is already open, which
+ * the fallback select below turns into a `busy` result carrying that run's
+ * id instead of a raw constraint violation reaching the caller.
+ */
+export async function claimWorkflowRun(
+  input: ClaimWorkflowRunInput,
+): Promise<ClaimWorkflowRunResult> {
+  const { db, workflowKey } = input;
+
+  const [workflowRow] = await db
+    .select()
+    .from(workflow)
+    .where(eq(workflow.key, workflowKey))
+    .limit(1);
+  if (!workflowRow) {
+    throw new Error(`claimWorkflowRun: unknown workflow "${workflowKey}"`);
+  }
+  if (!workflowRow.enabled) {
+    throw new Error(`claimWorkflowRun: workflow "${workflowKey}" is disabled`);
+  }
+
+  const runId = NodeCrypto.randomUUID();
+  const { token: callbackToken, hash: callbackTokenHash } = mintCallbackToken();
+  const timeoutMs = resolveWorkflowTimeoutMs(workflowRow.manifest);
+
+  const [inserted] = await db
+    .insert(workflowRun)
+    .values({
+      id: runId,
+      workflowKey,
+      trigger: "schedule",
+      status: "running",
+      input: (input.input ?? null) as Record<string, unknown> | null,
+      mode: workflowRow.mode,
+      callbackTokenHash,
+      startedAt: sql`now()`,
+      timeoutAt: sql`now() + (${timeoutMs} * interval '1 millisecond')`,
+    })
+    .onConflictDoNothing({
+      target: workflowRun.workflowKey,
+      where: sql`${workflowRun.trigger} = 'schedule' and ${workflowRun.status} in ('pending','launching','running')`,
+    })
+    .returning();
+
+  if (!inserted) {
+    const [busy] = await db
+      .select({ id: workflowRun.id })
+      .from(workflowRun)
+      .where(
+        and(
+          eq(workflowRun.workflowKey, workflowKey),
+          eq(workflowRun.trigger, "schedule"),
+          inArray(workflowRun.status, [...OPEN_RUN_STATUSES]),
+        ),
+      )
+      .limit(1);
+    if (!busy) {
+      // The row that caused our conflict finished between the insert losing
+      // and this select — vanishingly unlikely, but surfacing it plainly is
+      // more honest than fabricating a runId nothing points to.
+      throw new Error(
+        `claimWorkflowRun: insert for workflow "${workflowKey}" conflicted but no open scheduled run was found`,
+      );
+    }
+    await writeAuditEvent(db, {
+      actor: "phoenix-schedule",
+      action: "run.claimed",
+      targetType: "workflow_run",
+      targetId: busy.id,
+      outcome: "denied",
+      reason: "already_running",
+      metadata: { workflowKey },
+    });
+    return { status: "busy", runId: busy.id };
+  }
+
+  await writeAuditEvent(db, {
+    actor: "phoenix-schedule",
+    action: "run.claimed",
+    targetType: "workflow_run",
+    targetId: runId,
+    outcome: "succeeded",
+    metadata: { workflowKey },
+  });
+
+  return {
+    status: "claimed",
+    runId,
+    callbackToken,
+    workflow: {
+      key: workflowRow.key,
+      title: workflowRow.title,
+      skillPath: workflowRow.skillPath,
+      mode: workflowRow.mode,
+    },
+  };
+}
+
 export type ExpiredRunSweepSummary = Readonly<{ timedOut: number }>;
 
 /**
@@ -160,8 +294,8 @@ export type ExpiredRunSweepSummary = Readonly<{ timedOut: number }>;
  * keeps 500ing), and nothing re-creates it. Without a sweep, a run whose
  * chain broke sits `pending`/`running` forever — no timeout, no failure, no
  * signal. This is the backstop that makes `timeout_at` mean something on
- * every path, so it runs on the scheduler's cadence rather than inside the
- * job chain it exists to cover for.
+ * every path, so it runs on the maintenance loop's cadence rather than
+ * inside the job chain it exists to cover for.
  *
  * The comparison runs in SQL against `now()`, and the status guard makes the
  * update idempotent against a watch job or callback completing the same run
@@ -223,6 +357,8 @@ export type CancelWorkflowRunResult = Readonly<{
   status: string;
   /** Outstanding launch/watch jobs this cancellation retired. */
   jobsCancelled: number;
+  /** False when the run had no linked Phoenix thread to stop — the normal case for a claimed scheduled run. */
+  hadPhoenixThread: boolean;
 }>;
 
 /**
@@ -248,7 +384,12 @@ export async function cancelWorkflowRun(db: Db, runId: string): Promise<CancelWo
     .where(and(eq(workflowRun.id, runId), inArray(workflowRun.status, [...OPEN_RUN_STATUSES])))
     .returning();
   if (!cancelled) {
-    return { cancelled: false, status: existing.status, jobsCancelled: 0 };
+    return {
+      cancelled: false,
+      status: existing.status,
+      jobsCancelled: 0,
+      hadPhoenixThread: Boolean(existing.phoenixThreadId),
+    };
   }
 
   // Everything still queued for this run, whichever stage it reached: the
@@ -278,5 +419,10 @@ export async function cancelWorkflowRun(db: Db, runId: string): Promise<CancelWo
     metadata: { previousStatus: existing.status, jobsCancelled },
   });
 
-  return { cancelled: true, status: "cancelled", jobsCancelled };
+  return {
+    cancelled: true,
+    status: "cancelled",
+    jobsCancelled,
+    hadPhoenixThread: Boolean(cancelled.phoenixThreadId),
+  };
 }
