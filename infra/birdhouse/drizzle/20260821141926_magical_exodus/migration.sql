@@ -1,2 +1,0 @@
-DROP TABLE "workflow_schedule";--> statement-breakpoint
-CREATE UNIQUE INDEX "workflow_run_one_open_scheduled_per_workflow" ON "workflow_run" ("workflow_key") WHERE "trigger" = 'schedule' and "status" in ('pending','launching','running');
