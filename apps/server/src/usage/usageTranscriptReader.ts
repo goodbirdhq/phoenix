@@ -14,6 +14,8 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
+import * as NodeSqlite from "node:sqlite";
+import * as NodeTimersPromises from "node:timers/promises";
 
 import type { UsageProviderKind } from "@t3tools/contracts";
 
@@ -22,6 +24,8 @@ import {
   mightCarryUsage,
   parseClaudeLine,
   parseCodexLine,
+  parseOpenCodeMessage,
+  totalTokens,
   type UsageRecord,
 } from "./usageTranscripts.ts";
 
@@ -29,6 +33,59 @@ export interface TranscriptFile {
   readonly path: string;
   readonly size: number;
   readonly mtimeMs: number;
+}
+
+export interface OpenCodeDatabaseUsage {
+  readonly records: readonly UsageRecord[];
+  readonly scannedRows: number;
+  readonly malformedRecords: number;
+}
+
+/**
+ * Reads assistant usage from a current OpenCode SQLite store without mutating
+ * it. The lower time bound keeps large histories off the page-load path; exact
+ * day/hour filtering remains the aggregator's responsibility.
+ */
+export async function readOpenCodeUsageDatabase(
+  databasePath: string,
+  sinceMs: number,
+): Promise<OpenCodeDatabaseUsage | null> {
+  let database: NodeSqlite.DatabaseSync | undefined;
+  try {
+    database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
+    const rows = database
+      .prepare(
+        `SELECT id, session_id AS sessionId, time_created AS timestampMs, data
+         FROM message
+         WHERE time_created >= ?
+           AND json_valid(data)
+           AND json_extract(data, '$.role') = 'assistant'`,
+      )
+      .iterate(sinceMs) as unknown as Iterable<{
+      readonly id: unknown;
+      readonly sessionId: unknown;
+      readonly timestampMs: unknown;
+      readonly data: unknown;
+    }>;
+
+    const records: UsageRecord[] = [];
+    let scannedRows = 0;
+    let malformedRecords = 0;
+    for (const row of rows) {
+      scannedRows += 1;
+      const record = parseOpenCodeMessage(row);
+      if (record === null) malformedRecords += 1;
+      else if (totalTokens(record.totals) > 0) records.push(record);
+      // `node:sqlite` is synchronous. Yield between small batches so a large
+      // OpenCode history cannot monopolize the WebSocket server event loop.
+      if (scannedRows % 100 === 0) await NodeTimersPromises.setImmediate();
+    }
+    return { records, scannedRows, malformedRecords };
+  } catch {
+    return null;
+  } finally {
+    database?.close();
+  }
 }
 
 /**

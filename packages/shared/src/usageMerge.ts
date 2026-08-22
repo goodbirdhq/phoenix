@@ -82,7 +82,7 @@ export interface MergedUsage {
 }
 
 /**
- * Two sources are the same physical transcript directory only when host,
+ * Two sources are the same physical provider history store only when host,
  * provider, path and filesystem identity all agree.
  *
  * `volumeId` is what stops two machines that happen to share a hostname and a
@@ -99,7 +99,7 @@ function fingerprintKey(fingerprint: UsageSourceFingerprint): string {
 }
 
 /**
- * Decides which environment owns each physical transcript directory.
+ * Decides which environment owns each physical provider history store.
  *
  * Several environments on one machine (worktree servers, for instance) resolve
  * the same provider home and would otherwise double count every token. The

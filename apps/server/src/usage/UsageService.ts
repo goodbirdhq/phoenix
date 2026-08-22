@@ -39,6 +39,7 @@ import {
   claudeInstanceHomes,
   claudeProjectsDirCandidates,
   codexInstanceHomes,
+  opencodeInstanceDatabases,
   type ProviderInstanceHome,
 } from "../provider/providerHomes.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
@@ -46,6 +47,7 @@ import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
   readDirectoryVolumeId,
+  readOpenCodeUsageDatabase,
   readTranscriptRecords,
 } from "./usageTranscriptReader.ts";
 import {
@@ -123,10 +125,20 @@ export const layerTest = Layer.succeed(
 
 /** One physical directory to scan, and the source row it will report as. */
 interface TranscriptDir {
+  readonly kind: "transcriptDir";
   readonly provider: UsageProviderKind;
-  readonly dir: string;
+  readonly storePath: string;
   readonly sourceId: string;
 }
+
+interface OpenCodeDatabase {
+  readonly kind: "opencodeDatabase";
+  readonly provider: "opencode";
+  readonly storePath: string;
+  readonly sourceId: string;
+}
+
+type UsageStore = TranscriptDir | OpenCodeDatabase;
 
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -211,8 +223,8 @@ export const make = Effect.gen(function* () {
       return candidates[candidates.length - 1] ?? home.homePath;
     });
 
-  /** Resolves the transcript directories of every configured provider instance. */
-  const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* () {
+  /** Resolves the history stores of every configured provider instance. */
+  const resolveUsageStores = Effect.fn("UsageService.resolveUsageStores")(function* () {
     // A settings failure must surface as an error: swallowing it here would
     // present "zero usage from every provider" as a valid answer.
     const settings = yield* settingsService.getSettings.pipe(
@@ -232,15 +244,30 @@ export const make = Effect.gen(function* () {
     // Every configured instance, not just the default one: a machine with two
     // signed-in Claude accounts keeps two homes, and scanning one of them
     // reports half the tokens as all of them.
-    const dirs: TranscriptDir[] = [];
-    const seenDirs = new Set<string>();
+    const stores: UsageStore[] = [];
+    const seenStores = new Set<string>();
     const addDir = (provider: UsageProviderKind, dir: string) => {
-      if (seenDirs.has(dir)) return;
-      seenDirs.add(dir);
+      if (seenStores.has(dir)) return;
+      seenStores.add(dir);
       // Positional, and meaningful only inside this summary: buckets point at
       // it so a client can drop one duplicated directory without dropping the
       // provider's other homes with it.
-      dirs.push({ provider, dir, sourceId: String(dirs.length) });
+      stores.push({
+        kind: "transcriptDir",
+        provider,
+        storePath: dir,
+        sourceId: String(stores.length),
+      });
+    };
+    const addOpenCodeDatabase = (databasePath: string) => {
+      if (seenStores.has(databasePath)) return;
+      seenStores.add(databasePath);
+      stores.push({
+        kind: "opencodeDatabase",
+        provider: "opencode",
+        storePath: databasePath,
+        sourceId: String(stores.length),
+      });
     };
 
     for (const home of yield* claudeInstanceHomes(settings)) {
@@ -249,8 +276,11 @@ export const make = Effect.gen(function* () {
     for (const home of yield* codexInstanceHomes(settings)) {
       addDir("codex", path.join(home.homePath, "sessions"));
     }
+    for (const database of yield* opencodeInstanceDatabases(settings)) {
+      addOpenCodeDatabase(database.databasePath);
+    }
 
-    return dirs;
+    return stores;
   });
 
   /**
@@ -357,7 +387,7 @@ export const make = Effect.gen(function* () {
     const hostId = NodeOS.hostname();
     // The home resolvers ask for `Path` themselves; satisfy them from the
     // instance we already hold so `readSummary` stays context-free.
-    const dirs = yield* resolveTranscriptDirs().pipe(Effect.provideService(Path.Path, path));
+    const stores = yield* resolveUsageStores().pipe(Effect.provideService(Path.Path, path));
     const windowStart = DateTime.make(`${input.sinceDay}T00:00:00Z`);
     if (Option.isNone(windowStart)) {
       return yield* new UsageReadError({
@@ -381,28 +411,68 @@ export const make = Effect.gen(function* () {
     const livePaths = new Set<string>();
     const walkedRoots: string[] = [];
 
-    for (const { provider, dir, sourceId } of dirs) {
-      const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
+    for (const { kind, provider, storePath, sourceId } of stores) {
+      const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(storePath));
       const exists = yield* fileSystem
-        .exists(dir)
+        .exists(storePath)
         .pipe(Effect.catchCause(() => Effect.succeed(false)));
 
       if (!exists) {
         sources.push({
-          fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
+          fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
           id: sourceId,
           status: "missing",
           scannedFiles: 0,
           skippedFiles: 0,
           malformedRecords: 0,
           distinctSessions: 0,
-          message: "No transcript directory on this environment.",
+          message:
+            kind === "opencodeDatabase"
+              ? "No OpenCode usage database on this environment."
+              : "No transcript directory on this environment.",
         });
         continue;
       }
 
-      walkedRoots.push(dir);
-      const files = yield* Effect.promise(() => listTranscriptFiles(dir, windowStartMs));
+      if (kind === "opencodeDatabase") {
+        const read = yield* Effect.promise(() =>
+          readOpenCodeUsageDatabase(storePath, windowStartMs),
+        );
+        if (read === null) {
+          sources.push({
+            fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
+            id: sourceId,
+            status: "failed",
+            scannedFiles: 0,
+            skippedFiles: 1,
+            malformedRecords: 0,
+            distinctSessions: 0,
+            message: "OpenCode usage database could not be read.",
+          });
+          continue;
+        }
+
+        const sessionIds = new Set<string>();
+        for (const record of read.records) {
+          if (aggregator.add(record, sourceId) && record.sessionId.length > 0) {
+            sessionIds.add(record.sessionId);
+          }
+        }
+        sources.push({
+          fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
+          id: sourceId,
+          status: "ok",
+          scannedFiles: 1,
+          skippedFiles: 0,
+          malformedRecords: read.malformedRecords,
+          distinctSessions: sessionIds.size,
+          message: null,
+        });
+        continue;
+      }
+
+      walkedRoots.push(storePath);
+      const files = yield* Effect.promise(() => listTranscriptFiles(storePath, windowStartMs));
       let scannedFiles = 0;
       let skippedFiles = 0;
       // Distinct per directory. Buckets carry per-cell session counts, but a
@@ -427,7 +497,7 @@ export const make = Effect.gen(function* () {
       }
 
       sources.push({
-        fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
+        fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
         id: sourceId,
         status: "ok",
         scannedFiles,

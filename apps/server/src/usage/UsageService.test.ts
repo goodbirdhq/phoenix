@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 
 import {
   ProviderDriverKind,
@@ -27,6 +28,7 @@ import * as UsageService from "./UsageService.ts";
 const stateRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-usage-service-"));
 const claudeAHome = NodePath.join(stateRoot, "claude-a");
 const claudeBHome = NodePath.join(stateRoot, "claude-b");
+const openCodeDataHome = NodePath.join(stateRoot, "opencode-data");
 
 function writeClaudeTranscript(home: string, sessionId: string, messageId: string): void {
   const dir = NodePath.join(home, "projects", "-tmp-project");
@@ -53,6 +55,59 @@ function writeClaudeTranscript(home: string, sessionId: string, messageId: strin
 writeClaudeTranscript(claudeAHome, "session-a", "msg_a");
 writeClaudeTranscript(claudeBHome, "session-b", "msg_b");
 
+function writeOpenCodeDatabase(): void {
+  const dataDir = NodePath.join(openCodeDataHome, "opencode");
+  NodeFS.mkdirSync(dataDir, { recursive: true });
+  const database = new NodeSqlite.DatabaseSync(NodePath.join(dataDir, "opencode.db"));
+  database.exec(`
+    CREATE TABLE message (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      time_created INTEGER NOT NULL,
+      time_updated INTEGER NOT NULL,
+      data TEXT NOT NULL
+    )
+  `);
+  const insert = database.prepare(
+    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+  );
+  insert.run(
+    "msg-opencode",
+    "session-opencode",
+    Date.parse("2026-08-07T12:00:00.000Z"),
+    Date.parse("2026-08-07T12:00:01.000Z"),
+    JSON.stringify({
+      role: "assistant",
+      time: { created: Date.parse("2026-08-07T12:00:00.000Z") },
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4-5",
+      cost: 0.0125,
+      tokens: {
+        input: 100,
+        output: 50,
+        reasoning: 10,
+        cache: { read: 20, write: 30 },
+      },
+    }),
+  );
+  insert.run(
+    "msg-opencode-zero",
+    "session-opencode-zero",
+    Date.parse("2026-08-07T12:01:00.000Z"),
+    Date.parse("2026-08-07T12:01:01.000Z"),
+    JSON.stringify({
+      role: "assistant",
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4-5",
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    }),
+  );
+  database.close();
+}
+
+writeOpenCodeDatabase();
+
 afterAll(() => {
   NodeFS.rmSync(stateRoot, { recursive: true, force: true });
 });
@@ -63,9 +118,23 @@ const offlineHttpClient = Layer.succeed(
   HttpClient.make(() => Effect.die("usage tests do not fetch rates")),
 );
 
-const layerFor = (settings: Parameters<typeof serverSettingsLayerTest>[0]) =>
+const layerFor = (settings: Parameters<typeof serverSettingsLayerTest>[0] = {}) =>
   UsageService.layer.pipe(
-    Layer.provide(serverSettingsLayerTest(settings)),
+    Layer.provide(
+      serverSettingsLayerTest({
+        ...settings,
+        providerInstances: {
+          [ProviderInstanceId.make("opencode")]: {
+            driver: ProviderDriverKind.make("opencode"),
+            environment: [
+              { name: "XDG_DATA_HOME", value: NodePath.join(stateRoot, "missing-opencode-data") },
+            ],
+            config: {},
+          },
+          ...settings.providerInstances,
+        },
+      }),
+    ),
     Layer.provide(offlineHttpClient),
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-usage-service-test-" })),
     Layer.provide(NodeServices.layer),
@@ -81,6 +150,49 @@ const claudeSources = (summary: UsageSummary) =>
   summary.sources.filter((source) => source.fingerprint.provider === "claude");
 
 describe("UsageService transcript sources", () => {
+  effectIt.effect("includes usage from an OpenCode database", () =>
+    Effect.gen(function* () {
+      const usage = yield* UsageService.UsageService;
+      const summary = yield* usage.readSummary(window);
+
+      const source = summary.sources.find(
+        (candidate) => String(candidate.fingerprint.provider) === "opencode",
+      );
+      assert.isDefined(source);
+      assert.equal(
+        source?.fingerprint.resolvedHomePath,
+        NodePath.join(openCodeDataHome, "opencode", "opencode.db"),
+      );
+      assert.equal(source?.distinctSessions, 1);
+      assert.equal(source?.malformedRecords, 0);
+
+      const bucket = summary.buckets.find((candidate) => String(candidate.provider) === "opencode");
+      assert.isDefined(bucket);
+      assert.equal(bucket?.model, "anthropic/claude-sonnet-4-5");
+      assert.deepEqual(bucket?.totals, {
+        uncachedInputTokens: 100,
+        cachedInputTokens: 20,
+        cacheCreationTokens: 30,
+        outputTokens: 60,
+        reasoningTokens: 10,
+      });
+      assert.equal(bucket?.costUsd, 0.0125);
+      assert.equal(bucket?.costSource, "providerReported");
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          providerInstances: {
+            [ProviderInstanceId.make("opencode")]: {
+              driver: ProviderDriverKind.make("opencode"),
+              environment: [{ name: "XDG_DATA_HOME", value: openCodeDataHome }],
+              config: {},
+            },
+          },
+        }),
+      ),
+    ),
+  );
+
   effectIt.effect("reads every configured Claude account, not just the default one", () =>
     Effect.gen(function* () {
       const usage = yield* UsageService.UsageService;
