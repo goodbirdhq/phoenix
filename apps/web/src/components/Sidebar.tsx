@@ -1342,6 +1342,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // A nested row is a child of the card above it: indented, with a rail down
   // the gutter so the eye can follow the nesting without counting pixels.
   const isNested = props.hierarchyIndentDepth > 0;
+  // Nested rows drop the branch line, and with it the provider glyph and model
+  // label it carried. The leading slot takes both over: a child's project is
+  // already stated by the card it hangs under (and repeats across every
+  // sibling), while the provider and model behind the spawn are exactly what
+  // that card can't tell you. Null while the descriptor is unresolved — remote
+  // threads often are, since entries resolve against the primary server — so
+  // the row keeps its project identity instead of going blank.
+  const nestedProvider = isNested && driverKind ? { driverKind, label: modelLabel } : null;
+  const leadingLabel = nestedProvider?.label ?? props.projectTitle;
   return (
     <li
       data-thread-item
@@ -1396,20 +1405,34 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             )}
           >
             <div className="flex h-5 min-w-0 items-center gap-1.5">
-              <ProjectFavicon
-                environmentId={thread.environmentId}
-                cwd={props.projectCwd ?? ""}
-                faviconPath={props.projectFaviconPath}
-                className="size-4 shrink-0"
-              />
-              {props.projectTitle ? (
+              {nestedProvider ? (
+                <ProviderInstanceIcon
+                  driverKind={nestedProvider.driverKind}
+                  displayName={
+                    providerEntry?.displayName ?? thread.session?.providerName ?? modelInstanceId
+                  }
+                  accentColor={providerEntry?.accentColor}
+                  showBadge={showInstanceBadge}
+                  className="size-4"
+                  iconClassName="size-4"
+                  badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"
+                />
+              ) : (
+                <ProjectFavicon
+                  environmentId={thread.environmentId}
+                  cwd={props.projectCwd ?? ""}
+                  faviconPath={props.projectFaviconPath}
+                  className="size-4 shrink-0"
+                />
+              )}
+              {leadingLabel ? (
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-secondary-label text-xs",
                     shouldRecede ? "font-normal" : "font-medium",
                   )}
                 >
-                  {props.projectTitle}
+                  {leadingLabel}
                 </span>
               ) : (
                 <span className="flex-1" />
