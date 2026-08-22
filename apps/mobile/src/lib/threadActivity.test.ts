@@ -152,6 +152,113 @@ function makeThread(
 }
 
 describe("buildThreadFeed", () => {
+  const retryRows = (feed: ReadonlyArray<ThreadFeedEntry>) =>
+    feed.flatMap((entry) =>
+      entry.type === "activity-group"
+        ? entry.activities.map((activity) => ({
+            id: activity.id,
+            summary: activity.summary,
+            detail: activity.detail,
+            icon: activity.icon,
+            canExpand: activity.canExpand,
+          }))
+        : [],
+    );
+
+  const retryActivity = (id: string, createdAt: string, attempt: number, message: string) =>
+    makeActivity({
+      id: EventId.make(id),
+      createdAt,
+      kind: "runtime.warning",
+      summary: message,
+      turnId: TurnId.make("turn-1"),
+      payload: { message, detail: { type: "retry", attempt, message } },
+    });
+
+  const retryThread = (
+    activities: ReadonlyArray<OrchestrationThreadActivity>,
+    turnState: "running" | "completed",
+  ) =>
+    makeThread({
+      id: ThreadId.make("retry-thread"),
+      projectId: ProjectId.make("project-1"),
+      title: "Retries",
+      latestTurn: {
+        turnId: TurnId.make("turn-1"),
+        state: turnState,
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: turnState === "completed" ? "2026-04-01T00:00:09.000Z" : null,
+        assistantMessageId: null,
+      },
+      activities: [...activities],
+    });
+
+  it("collapses a live run of provider retries into one reconnecting row", () => {
+    const feed = buildThreadFeed(
+      retryThread(
+        [
+          retryActivity("retry-1", "2026-04-01T00:00:02.000Z", 1, "Service Unavailable"),
+          retryActivity("retry-2", "2026-04-01T00:00:03.000Z", 2, "Service Unavailable"),
+          retryActivity("retry-3", "2026-04-01T00:00:04.000Z", 3, "Endpoint is unavailable."),
+        ],
+        "running",
+      ),
+    );
+
+    expect(retryRows(feed)).toEqual([
+      {
+        id: "retry-1",
+        summary: "Reconnecting to the provider (attempt 3)",
+        detail: "Endpoint is unavailable.",
+        icon: "refresh",
+        canExpand: true,
+      },
+    ]);
+  });
+
+  it("settles a retry run to recovered once its turn finishes", () => {
+    const feed = buildThreadFeed(
+      retryThread(
+        [
+          retryActivity("retry-1", "2026-04-01T00:00:02.000Z", 1, "Service Unavailable"),
+          retryActivity("retry-2", "2026-04-01T00:00:03.000Z", 2, "Service Unavailable"),
+        ],
+        "completed",
+      ),
+    );
+
+    expect(retryRows(feed)[0]).toMatchObject({
+      summary: "Provider connection recovered after 2 retries",
+      icon: "refresh",
+    });
+  });
+
+  it("shows a retry run that ended in a hard error as exhausted", () => {
+    const feed = buildThreadFeed(
+      retryThread(
+        [
+          retryActivity("retry-1", "2026-04-01T00:00:02.000Z", 1, "Service Unavailable"),
+          makeActivity({
+            id: EventId.make("runtime-error"),
+            createdAt: "2026-04-01T00:00:03.000Z",
+            kind: "runtime.error",
+            tone: "error",
+            summary: "Service Unavailable",
+            turnId: TurnId.make("turn-1"),
+            payload: { message: "Service Unavailable" },
+          }),
+        ],
+        "running",
+      ),
+    );
+
+    expect(retryRows(feed)[0]).toMatchObject({
+      summary: "Provider retries exhausted after 1 attempt",
+      icon: "alert",
+    });
+  });
+
   it("excludes child-report read bookkeeping from the mobile timeline", () => {
     const thread = makeThread({
       id: ThreadId.make("parent-thread"),

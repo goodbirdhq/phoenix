@@ -731,6 +731,133 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  const retryActivity = (
+    id: string,
+    createdAt: string,
+    attempt: number,
+    message: string,
+    turnId = "turn-1",
+  ) =>
+    makeActivity({
+      id,
+      createdAt,
+      turnId,
+      kind: "runtime.warning",
+      tone: "info",
+      summary: message,
+      payload: { message, detail: { type: "retry", attempt, message } },
+    });
+
+  it("collapses a run of provider retry notices into one row", () => {
+    const entries = deriveWorkLogEntries([
+      retryActivity("retry-1", "2026-02-23T00:00:01.000Z", 1, "Service Unavailable"),
+      retryActivity("retry-2", "2026-02-23T00:00:02.000Z", 2, "Service Unavailable"),
+      retryActivity(
+        "retry-3",
+        "2026-02-23T00:00:03.000Z",
+        1,
+        "Provider finish_reason: network_error",
+      ),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    // The row stays pinned to where the wobble started.
+    expect(entries[0]?.id).toBe("retry-1");
+    expect(entries[0]?.providerRetry).toEqual({
+      attempts: 3,
+      messages: ["Service Unavailable", "Provider finish_reason: network_error"],
+      exhausted: false,
+      followedByActivity: false,
+    });
+  });
+
+  it("does not collapse retry notices across turns", () => {
+    const entries = deriveWorkLogEntries([
+      retryActivity("retry-1", "2026-02-23T00:00:01.000Z", 1, "Service Unavailable", "turn-1"),
+      retryActivity("retry-2", "2026-02-23T00:00:02.000Z", 1, "Service Unavailable", "turn-2"),
+    ]);
+
+    expect(entries.map((entry) => entry.id)).toEqual(["retry-1", "retry-2"]);
+    expect(entries[0]?.providerRetry?.attempts).toBe(1);
+    expect(entries[0]?.providerRetry?.followedByActivity).toBe(true);
+  });
+
+  it("marks a retry run followed by other work as resolved", () => {
+    const entries = deriveWorkLogEntries([
+      retryActivity("retry-1", "2026-02-23T00:00:01.000Z", 1, "Service Unavailable"),
+      makeActivity({
+        id: "tool-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        turnId: "turn-1",
+        kind: "tool.completed",
+        summary: "Read file",
+      }),
+    ]);
+
+    expect(entries[0]?.providerRetry).toMatchObject({
+      attempts: 1,
+      exhausted: false,
+      followedByActivity: true,
+    });
+  });
+
+  it("marks a retry run that ends in a hard error as exhausted", () => {
+    const entries = deriveWorkLogEntries([
+      retryActivity("retry-1", "2026-02-23T00:00:01.000Z", 1, "Service Unavailable"),
+      retryActivity("retry-2", "2026-02-23T00:00:02.000Z", 2, "Service Unavailable"),
+      makeActivity({
+        id: "runtime-error",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        turnId: "turn-1",
+        kind: "runtime.error",
+        tone: "error",
+        summary: "Service Unavailable",
+        payload: { message: "Service Unavailable" },
+      }),
+    ]);
+
+    expect(entries.map((entry) => entry.id)).toEqual(["retry-1", "runtime-error"]);
+    expect(entries[0]?.providerRetry).toMatchObject({ attempts: 2, exhausted: true });
+  });
+
+  it("treats a turn-less hard error as the end of the retry run", () => {
+    // Adapters historically emitted session errors without a turn id.
+    const entries = deriveWorkLogEntries([
+      retryActivity("retry-1", "2026-02-23T00:00:01.000Z", 1, "Service Unavailable"),
+      makeActivity({
+        id: "runtime-error",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.error",
+        tone: "error",
+        summary: "Service Unavailable",
+        payload: { message: "Service Unavailable" },
+      }),
+    ]);
+
+    expect(entries[0]?.providerRetry).toMatchObject({ attempts: 1, exhausted: true });
+  });
+
+  it("leaves non-retry runtime warnings on their own rows", () => {
+    const warning = (id: string, createdAt: string) =>
+      makeActivity({
+        id,
+        createdAt,
+        turnId: "turn-1",
+        kind: "runtime.warning",
+        tone: "info",
+        summary: "OpenCode's stream ended without output",
+        payload: { message: "OpenCode's stream ended without output", detail: {} },
+      });
+
+    const entries = deriveWorkLogEntries([
+      warning("warn-1", "2026-02-23T00:00:01.000Z"),
+      warning("warn-2", "2026-02-23T00:00:02.000Z"),
+    ]);
+
+    expect(entries.map((entry) => entry.id)).toEqual(["warn-1", "warn-2"]);
+    expect(entries[0]?.providerRetry).toBeUndefined();
+  });
+
   it("renders thread migrations as compact activity rows", () => {
     const entries = deriveWorkLogEntries([
       makeActivity({

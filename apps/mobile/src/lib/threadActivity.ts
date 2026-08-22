@@ -17,6 +17,14 @@ import {
   deriveSpawnedSessionToolActivity,
   type SpawnedSessionToolActivity,
 } from "@t3tools/shared/toolActivity";
+import {
+  appendProviderRetryAttempt,
+  deriveProviderRetryAttempt,
+  providerRetryDetail,
+  providerRetryState,
+  providerRetrySummary,
+  type ProviderRetryGroup,
+} from "@t3tools/shared/providerRetryActivity";
 
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -59,6 +67,7 @@ export interface ThreadFeedActivity {
     | "globe"
     | "hammer"
     | "message"
+    | "refresh"
     | "warning"
     | "wrench"
     | "zap";
@@ -89,6 +98,8 @@ interface WorkLogEntry {
   toolData?: unknown;
   spawnedSession?: SpawnedSessionToolActivity;
   scheduleActivity?: ScheduleToolActivity;
+  /** Set on rows that collapsed a run of provider retry notices. */
+  providerRetry?: ProviderRetryGroup & { readonly followedByActivity: boolean };
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -458,6 +469,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (toolLifecycleStatus) {
     entry.toolLifecycleStatus = toolLifecycleStatus;
   }
+  if (activity.kind === "runtime.warning") {
+    const attempt = deriveProviderRetryAttempt(activity.payload);
+    if (attempt) {
+      entry.providerRetry = {
+        ...appendProviderRetryAttempt(undefined, attempt),
+        followedByActivity: false,
+      };
+    }
+  }
   const collapseKey = deriveToolLifecycleCollapseKey(entry);
   if (collapseKey) {
     entry.collapseKey = collapseKey;
@@ -489,13 +509,74 @@ function collapseDerivedWorkLogEntries(
       continue;
     }
     const previous = collapsed.at(-1);
+    // A run of provider retry notices is one event (mirrors web's
+    // session-logic): the provider wobbled and backed off on its own.
+    if (previous?.providerRetry && entry.providerRetry && previous.turnId === entry.turnId) {
+      collapsed[collapsed.length - 1] = {
+        ...previous,
+        providerRetry: {
+          ...mergeProviderRetryGroups(previous.providerRetry, entry.providerRetry),
+          followedByActivity: false,
+        },
+      };
+      continue;
+    }
     if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
       continue;
     }
     collapsed.push(entry);
   }
-  return collapsed;
+  return resolveProviderRetryRows(collapsed);
+}
+
+/**
+ * The hard error that ends a retry run. Adapters historically emitted these
+ * turn-less (OpenCode cleared the active turn before building the event), so
+ * a missing turn on the error counts as "same turn" — adjacency in the
+ * activity stream is the real signal.
+ */
+function isProviderRetryTerminalError(
+  entry: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry | undefined,
+): boolean {
+  if (next?.activityKind !== "runtime.error") {
+    return false;
+  }
+  return next.turnId === entry.turnId || next.turnId === null || next.turnId === undefined;
+}
+
+function mergeProviderRetryGroups(
+  previous: ProviderRetryGroup,
+  next: ProviderRetryGroup,
+): ProviderRetryGroup {
+  return {
+    attempts: previous.attempts + next.attempts,
+    messages: [
+      ...previous.messages,
+      ...next.messages.filter((m) => !previous.messages.includes(m)),
+    ],
+    exhausted: previous.exhausted || next.exhausted,
+  };
+}
+
+function resolveProviderRetryRows(
+  collapsed: ReadonlyArray<DerivedWorkLogEntry>,
+): DerivedWorkLogEntry[] {
+  return collapsed.map((entry, index) => {
+    if (!entry.providerRetry) {
+      return entry;
+    }
+    const next = collapsed[index + 1];
+    return {
+      ...entry,
+      providerRetry: {
+        ...entry.providerRetry,
+        exhausted: isProviderRetryTerminalError(entry, next),
+        followedByActivity: next !== undefined,
+      },
+    };
+  });
 }
 
 function shouldCollapseToolLifecycleEntries(
@@ -659,6 +740,9 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
     entry.activityKind === "user-input.resolved"
   ) {
     return "message";
+  }
+  if (entry.providerRetry) {
+    return entry.providerRetry.exhausted ? "alert" : "refresh";
   }
   if (entry.activityKind === "runtime.warning") return "warning";
   if (entry.spawnedSession) return "agent";
@@ -1600,6 +1684,8 @@ export function buildThreadFeed(
   const oldestLoadedMessageCreatedAt =
     options?.loadedMessages !== undefined ? (loadedMessages[0]?.createdAt ?? null) : null;
   const workLogEntries = deriveWorkLogEntries(thread.activities);
+  // A retry run only reads as "still retrying" while its own turn is live.
+  const unsettledTurnId = deriveUnsettledTurnId(thread.latestTurn);
   const entries = Arr.sortWith(
     [
       ...loadedMessages.map<RawThreadFeedEntry>((message) => ({
@@ -1618,9 +1704,21 @@ export function buildThreadFeed(
           );
         })
         .map<RawThreadFeedEntry>((entry) => {
-          const summary = workEntryHeading(entry);
-          const detail = workEntryPreview(entry);
-          const getFullDetail = memoizeValue(() => buildWorkEntryExpandedBody(entry));
+          const retry = entry.providerRetry;
+          const retryState = retry
+            ? providerRetryState(retry, {
+                followedByActivity: retry.followedByActivity,
+                turnInProgress: entry.turnId !== null && entry.turnId === unsettledTurnId,
+              })
+            : null;
+          const summary =
+            retry && retryState ? providerRetrySummary(retry, retryState) : workEntryHeading(entry);
+          const detail = retry ? (retry.messages.at(-1) ?? null) : workEntryPreview(entry);
+          const getFullDetail = memoizeValue(() =>
+            retry && retry.messages.length > 1
+              ? providerRetryDetail(retry)
+              : buildWorkEntryExpandedBody(entry),
+          );
           const getCopyText = memoizeValue(() =>
             [summary, detail, getFullDetail()]
               .filter((value, index, values): value is string => {
@@ -1639,7 +1737,7 @@ export function buildThreadFeed(
               turnId: entry.turnId,
               summary,
               detail,
-              canExpand: workEntryHasExpandedBody(entry),
+              canExpand: retry ? retry.messages.length > 1 : workEntryHasExpandedBody(entry),
               getFullDetail,
               getCopyText,
               icon: workEntryIcon(entry),

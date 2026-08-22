@@ -79,6 +79,10 @@
       "types": "./src/toolActivity.ts",
       "import": "./src/toolActivity.ts"
     },
+    "./providerRetryActivity": {
+      "types": "./src/providerRetryActivity.ts",
+      "import": "./src/providerRetryActivity.ts"
+    },
     "./scheduleToolActivity": {
       "types": "./src/scheduleToolActivity.ts",
       "import": "./src/scheduleToolActivity.ts"

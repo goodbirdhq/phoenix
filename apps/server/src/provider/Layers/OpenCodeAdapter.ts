@@ -1317,6 +1317,11 @@ export function makeOpenCodeAdapter(
           yield* emit({
             ...(yield* buildEventBase({
               threadId: context.session.threadId,
+              // The error belongs to the turn it killed. `activeTurnId` is
+              // captured above, before the session clears it, so the row
+              // groups with its turn instead of landing turn-less at the
+              // end of the thread.
+              ...(activeTurnId ? { turnId: activeTurnId } : {}),
               raw: event,
             })),
             type: "runtime.error",

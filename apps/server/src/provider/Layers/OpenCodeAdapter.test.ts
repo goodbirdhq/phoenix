@@ -794,6 +794,58 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
   );
 
   it.effect(
+    "stamps a session.error runtime.error with the turn it killed",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-session-error-turn-id");
+        const firstEvent = makeSubscribedEventGate({
+          type: "session.error",
+          properties: {
+            sessionID: openCodeSessionId,
+            error: { name: "ProviderError", data: { message: "Service Unavailable" } },
+          },
+        });
+        runtimeMock.state.subscribedEvents = [firstEvent.value];
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter(
+            (event) =>
+              event.threadId === threadId &&
+              (event.type === "turn.completed" || event.type === "runtime.error"),
+          ),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+          title: "Session error turn id",
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "do the work",
+          modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5"),
+        });
+        firstEvent.release();
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        const failed = events.find((event) => event.type === "turn.completed");
+        const runtimeError = events.find((event) => event.type === "runtime.error");
+        NodeAssert.ok(failed?.type === "turn.completed" ? failed.turnId : undefined);
+        NodeAssert.ok(runtimeError);
+        // The error row must group with the turn it ended, not float free.
+        NodeAssert.equal(
+          runtimeError?.turnId,
+          failed?.type === "turn.completed" ? failed.turnId : undefined,
+        );
+      }),
+    { sequential: true },
+  );
+
+  it.effect(
     "automatically continues a truncated idle without completing the turn",
     () =>
       Effect.gen(function* () {
