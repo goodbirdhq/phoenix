@@ -179,6 +179,12 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
+import {
+  HostMetricsHistory,
+  HostMetricsHistoryInput,
+  HostMetricsSnapshot,
+  HostMetricsSubscriptionInput,
+} from "./hostMetrics.ts";
 import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import {
   ProviderAvailabilityInput,
@@ -285,6 +291,8 @@ export const WS_METHODS = {
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
+  serverGetHostMetrics: "server.getHostMetrics",
+  serverGetHostMetricsHistory: "server.getHostMetricsHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
@@ -332,6 +340,7 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+  subscribeHostMetrics: "subscribeHostMetrics",
   subscribeProviderAvailability: "subscribeProviderAvailability",
 } as const;
 
@@ -442,6 +451,18 @@ export const WsServerGetResourceTelemetryHistoryRpc = Rpc.make(
     error: EnvironmentAuthorizationError,
   },
 );
+
+export const WsServerGetHostMetricsRpc = Rpc.make(WS_METHODS.serverGetHostMetrics, {
+  payload: Schema.Struct({}),
+  success: HostMetricsSnapshot,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsServerGetHostMetricsHistoryRpc = Rpc.make(WS_METHODS.serverGetHostMetricsHistory, {
+  payload: HostMetricsHistoryInput,
+  success: HostMetricsHistory,
+  error: EnvironmentAuthorizationError,
+});
 
 export const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourceTelemetry, {
   payload: Schema.Struct({}),
@@ -1021,6 +1042,13 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
   stream: true,
 });
 
+export const WsSubscribeHostMetricsRpc = Rpc.make(WS_METHODS.subscribeHostMetrics, {
+  payload: HostMetricsSubscriptionInput,
+  success: HostMetricsSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export const WsScheduleDispatchCommandRpc = Rpc.make(SCHEDULE_WS_METHODS.dispatchCommand, {
   payload: ScheduleCommand,
   success: ScheduleDispatchResult,
@@ -1068,6 +1096,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
+  WsServerGetHostMetricsRpc,
+  WsServerGetHostMetricsHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
   WsServerGetUsageSummaryRpc,
   WsServerGetProviderAvailabilityRpc,
@@ -1146,6 +1176,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsSubscribeHostMetricsRpc,
   WsScheduleDispatchCommandRpc,
   WsScheduleGetSnapshotRpc,
   WsScheduleGetDetailRpc,

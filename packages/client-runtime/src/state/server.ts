@@ -752,6 +752,24 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetResourceTelemetryHistory,
       staleTimeMs: 5_000,
     }),
+    hostMetrics: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:host-metrics",
+      tag: WS_METHODS.serverGetHostMetrics,
+      staleTimeMs: 10_000,
+      refreshIntervalMs: 10_000,
+      idleTtlMs: 0,
+    }),
+    hostMetricsHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:host-metrics-history",
+      tag: WS_METHODS.serverGetHostMetricsHistory,
+      staleTimeMs: 5_000,
+      idleTtlMs: 0,
+    }),
+    hostMetricsLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:host-metrics-live",
+      tag: WS_METHODS.subscribeHostMetrics,
+      idleTtlMs: 0,
+    }),
     // A cold transcript scan is measured in seconds, so keep the result around
     // long enough that switching windows or re-rendering does not rescan. The
     // version is injected here so every web/mobile call declares the provider

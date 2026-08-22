@@ -1639,6 +1639,17 @@ function OpenCommandPaletteDialog(props: {
 
   actionItems.push({
     kind: "action",
+    value: "action:environments",
+    searchTerms: ["environment", "environments", "machine", "system", "performance", "resources"],
+    title: "Open Environments",
+    icon: <ServerIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/environments" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
     value: "action:schedules:create",
     searchTerms: ["create schedule", "new schedule", "automation", "cron"],
     title: "Create Schedule",

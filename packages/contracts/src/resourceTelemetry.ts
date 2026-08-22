@@ -152,6 +152,12 @@ export const ResourceMonitorHelloEvent = Schema.Struct({
 });
 export type ResourceMonitorHelloEvent = typeof ResourceMonitorHelloEvent.Type;
 
+export const ResourceMonitorHostMemory = Schema.Struct({
+  totalBytes: NonNegativeInt,
+  availableBytes: NonNegativeInt,
+});
+export type ResourceMonitorHostMemory = typeof ResourceMonitorHostMemory.Type;
+
 export const ResourceMonitorSnapshotEvent = Schema.Struct({
   version: Schema.Literal(RESOURCE_MONITOR_PROTOCOL_VERSION),
   type: Schema.Literal("snapshot"),
@@ -163,6 +169,7 @@ export const ResourceMonitorSnapshotEvent = Schema.Struct({
   inaccessibleProcessCount: NonNegativeInt,
   requestId: Schema.optionalKey(TrimmedNonEmptyString),
   externalProcesses: Schema.optionalKey(Schema.Array(ResourceMonitorExternalProcess)),
+  hostMemory: Schema.optionalKey(ResourceMonitorHostMemory),
   processes: Schema.Array(ResourceMonitorProcessSample),
 });
 export type ResourceMonitorSnapshotEvent = typeof ResourceMonitorSnapshotEvent.Type;
@@ -368,6 +375,7 @@ export const ResourceTelemetrySnapshot = Schema.Struct({
   speedLimitPercent: Schema.Option(Schema.Number),
   attribution: ResourceAttributionSnapshot,
   health: ResourceTelemetryHealth,
+  hostMemory: Schema.optionalKey(ResourceMonitorHostMemory),
 });
 export type ResourceTelemetrySnapshot = typeof ResourceTelemetrySnapshot.Type;
 

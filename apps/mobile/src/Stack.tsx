@@ -57,6 +57,10 @@ import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnv
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
 import { SettingsProjectGroupingRouteScreen } from "./features/settings/SettingsProjectGroupingRouteScreen";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
+import {
+  EnvironmentMetricsDetailRouteScreen,
+  EnvironmentMetricsRouteScreen,
+} from "./features/host-metrics/EnvironmentMetricsRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
 import { SchedulesRouteScreen } from "./features/schedules/SchedulesRouteScreen";
 import { ScheduleDetailRouteScreen } from "./features/schedules/ScheduleDetailRouteScreen";
@@ -203,6 +207,20 @@ const SettingsContentStack = createNativeStackNavigator({
       linking: "usage",
       options: {
         title: "Usage",
+      },
+    }),
+    SettingsEnvironmentPerformance: createNativeStackScreen({
+      screen: EnvironmentMetricsRouteScreen,
+      linking: "environment-performance",
+      options: {
+        title: "Environments",
+      },
+    }),
+    SettingsEnvironmentPerformanceDetail: createNativeStackScreen({
+      screen: EnvironmentMetricsDetailRouteScreen,
+      linking: "environment-performance/:environmentId",
+      options: {
+        title: "Environment",
       },
     }),
     SettingsSchedules: createNativeStackScreen({
