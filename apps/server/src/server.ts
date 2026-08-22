@@ -106,6 +106,7 @@ import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as HostMetrics from "./hostMetrics/HostMetrics.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
@@ -161,6 +162,8 @@ const ResourceTelemetryLayerLive = ResourceTelemetry.layer.pipe(
   Layer.provideMerge(DesktopTelemetryReceiverLayerLive),
 );
 
+const HostMetricsLayerLive = HostMetrics.layer.pipe(Layer.provide(ResourceTelemetryLayerLive));
+
 const HostPowerMonitorLayerLive = HostPowerMonitor.layer.pipe(
   Layer.provide(DesktopTelemetryReceiverLayerLive),
 );
@@ -174,6 +177,7 @@ const UsageLayerLive = UsageService.layer.pipe(Layer.provide(ServerSettingsLayer
 
 const ResourceDiagnosticsLayerLive = Layer.mergeAll(
   ResourceTelemetryLayerLive,
+  HostMetricsLayerLive,
   ProcessDiagnostics.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
   ProcessResourceMonitor.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
 );

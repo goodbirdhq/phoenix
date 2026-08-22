@@ -13,6 +13,7 @@ import {
   EnvironmentId,
   EventId,
   GitCommandError,
+  type HostMetricsSnapshot,
   KeybindingRule,
   MessageId,
   ExternalLauncherCommandNotFoundError,
@@ -160,6 +161,7 @@ import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryR
 import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as HostMetrics from "./hostMetrics/HostMetrics.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as Data from "effect/Data";
 
@@ -432,6 +434,7 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
+    hostMetrics?: Partial<HostMetrics.HostMetrics["Service"]>;
   };
 }) =>
   Effect.gen(function* () {
@@ -618,6 +621,9 @@ const buildAppUnderTest = (options?: {
         ),
       ),
     );
+    const hostMetricsLayer = options?.layers?.hostMetrics
+      ? Layer.mock(HostMetrics.HostMetrics)({ ...options.layers.hostMetrics })
+      : HostMetrics.layer.pipe(Layer.provide(resourceTelemetryLayer));
     const serviceLauncherClientLayer = ServiceLauncherClient.layer.pipe(
       Layer.provide(Layer.succeed(HostProcessEnvironment, {})),
     );
@@ -872,6 +878,7 @@ const buildAppUnderTest = (options?: {
 
     const appLayer = servedRoutesLayer.pipe(
       Layer.provide(resourceTelemetryLayer),
+      Layer.provide(hostMetricsLayer),
       Layer.provide(UsageService.layerTest),
       Layer.provide(
         Layer.mock(BrowserTraceCollector.BrowserTraceCollector)({
@@ -4658,6 +4665,103 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(Option.isSome(snapshot));
       assert.equal(snapshot.value.processes.length, 0);
       assert.equal(snapshot.value.groups.backend.processCount, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("redacts host inventory unless the websocket session has access:read", () =>
+    Effect.gen(function* () {
+      const hostSnapshot = (includeAdministrativeDetails: boolean): HostMetricsSnapshot => ({
+        sampledAt: TEST_EPOCH,
+        sampleIntervalMs: 1_000,
+        cpu: {
+          status: "available",
+          statusReason: null,
+          utilizationPercent: 25,
+          loadAverage1m: 1,
+          loadAverage5m: 1,
+          loadAverage15m: 1,
+        },
+        memory: {
+          status: "available",
+          statusReason: null,
+          availabilityKind: "available",
+          totalBytes: 1_024,
+          availableBytes: 512,
+          usedBytes: 512,
+          utilizationPercent: 50,
+        },
+        storage: [],
+        phoenix: {
+          cpuCorePercent: 10,
+          cpuMachinePercent: 2.5,
+          residentBytes: 128,
+          memoryMachinePercent: 12.5,
+          processCount: 1,
+          ioReadBytesPerSecond: 0,
+          ioWriteBytesPerSecond: 0,
+          sourceStatus: "healthy",
+        },
+        inventory: {
+          logicalCpuCount: 4,
+          totalMemoryBytes: 1_024,
+          systemUptimeSeconds: 60,
+          serverUptimeSeconds: 30,
+        },
+        administrativeDetails: includeAdministrativeDetails
+          ? { cpuModel: "Private CPU", osVersion: "Private OS", kernelRelease: "Private kernel" }
+          : null,
+      });
+      yield* buildAppUnderTest({
+        layers: {
+          hostMetrics: {
+            read: (includeAdministrativeDetails) =>
+              Effect.succeed(hostSnapshot(includeAdministrativeDetails)),
+            subscribe: (_input, includeAdministrativeDetails) =>
+              Effect.succeed({
+                latest: hostSnapshot(includeAdministrativeDetails),
+                changes: Stream.empty,
+              }),
+            readHistory: (input) =>
+              Effect.succeed({ readAt: TEST_EPOCH, windowMs: input.windowMs, samples: [] }),
+          },
+        },
+      });
+
+      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+      const pairingResponse = yield* HttpClient.post("/api/auth/pairing-token", {
+        headers: { cookie: ownerCookie },
+        body: yield* HttpBody.json({ scopes: ["orchestration:read"] }),
+      });
+      const pairingBody = (yield* pairingResponse.json) as { readonly credential: string };
+      const ordinaryCookie = yield* getAuthenticatedSessionCookieHeader(pairingBody.credential);
+      const plainWsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+      const ordinaryWsUrl = appendSessionCookieToWsUrl(plainWsUrl, ordinaryCookie);
+      const adminWsUrl = appendSessionCookieToWsUrl(plainWsUrl, ownerCookie);
+
+      const ordinaryRead = yield* Effect.scoped(
+        withWsRpcClient(ordinaryWsUrl, (client) => client[WS_METHODS.serverGetHostMetrics]({})),
+      );
+      const ordinarySubscription = yield* Effect.scoped(
+        withWsRpcClient(ordinaryWsUrl, (client) =>
+          client[WS_METHODS.subscribeHostMetrics]({ sampleIntervalMs: 1_000 }).pipe(Stream.runHead),
+        ),
+      );
+      const adminRead = yield* Effect.scoped(
+        withWsRpcClient(adminWsUrl, (client) => client[WS_METHODS.serverGetHostMetrics]({})),
+      );
+      const adminSubscription = yield* Effect.scoped(
+        withWsRpcClient(adminWsUrl, (client) =>
+          client[WS_METHODS.subscribeHostMetrics]({ sampleIntervalMs: 1_000 }).pipe(Stream.runHead),
+        ),
+      );
+
+      assert.equal(ordinaryRead.administrativeDetails, null);
+      assert.equal(Option.getOrThrow(ordinarySubscription).administrativeDetails, null);
+      assert.equal(adminRead.administrativeDetails?.cpuModel, "Private CPU");
+      assert.equal(
+        Option.getOrThrow(adminSubscription).administrativeDetails?.cpuModel,
+        "Private CPU",
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

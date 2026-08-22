@@ -22,9 +22,10 @@ describe("resolveAgentAwarenessPlatformPresentation", () => {
 });
 
 describe("Settings navigation", () => {
-  it("places Schedules beside Usage", () => {
+  it("places environment performance beside Usage and Schedules", () => {
     expect(GENERAL_INSIGHT_SETTINGS_ROWS.map((row) => row.target)).toEqual([
       "SettingsUsage",
+      "SettingsEnvironmentPerformance",
       "SettingsSchedules",
     ]);
   });

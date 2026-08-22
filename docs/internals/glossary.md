@@ -18,6 +18,14 @@ This is a living glossary for Phoenix. It explains what common terms mean in thi
 
 ### Project and workspace
 
+#### Environment
+
+One running Phoenix server and the machine, filesystem, provider credentials, and state it owns. An
+Environment has a persisted `environmentId` and is the unit clients connect to, projects belong to,
+and resource metrics address. It is not a physical-machine identity: two Environments may run on one
+computer, and WSL or a container may expose a different host view. See
+[resource telemetry][31].
+
 #### Project
 
 The top-level workspace record in the app. In [the orchestration contracts][1], a project has a `workspaceRoot` and a title. It does not contain threads: `OrchestrationProject` and `OrchestrationThread` are separate arrays on the read model, and a project can have zero threads. See [workspace-layout.md][2].
@@ -287,3 +295,4 @@ A row in birdhouse's own Postgres-backed durable queue — leased with `for upda
 [28]: ../../infra/birdhouse/README.md
 [29]: ./birdhouse.md
 [30]: ../../packages/shared/src/providerRetryActivity.ts
+[31]: ./resource-telemetry.md

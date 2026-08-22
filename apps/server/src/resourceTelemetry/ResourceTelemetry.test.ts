@@ -47,6 +47,7 @@ function nativeSnapshot(input: {
   readonly childCpuTimeMs: number;
   readonly childWriteBytes: number;
   readonly externalProcesses?: ResourceMonitorSnapshotEvent["externalProcesses"];
+  readonly hostMemory?: ResourceMonitorSnapshotEvent["hostMemory"];
 }): ResourceMonitorSnapshotEvent {
   const processes = [
     processSample({
@@ -93,6 +94,7 @@ function nativeSnapshot(input: {
     ...(input.externalProcesses === undefined
       ? {}
       : { externalProcesses: input.externalProcesses }),
+    ...(input.hostMemory === undefined ? {} : { hostMemory: input.hostMemory }),
     processes,
   };
 }
@@ -150,6 +152,7 @@ describe("ResourceTelemetry", () => {
         sampledAtUnixMs,
         childCpuTimeMs: 100,
         childWriteBytes: 1_000,
+        hostMemory: { totalBytes: 8 * 1_024 ** 3, availableBytes: 6 * 1_024 ** 3 },
       });
       const demandChanges = yield* Ref.make<ReadonlyArray<boolean>>([]);
       const nativeLayer = NativeTelemetryClient.layerTest({
@@ -180,6 +183,10 @@ describe("ResourceTelemetry", () => {
       ).pipe(Effect.provide(telemetryLayer));
 
       expect(Option.isSome(live)).toBe(true);
+      expect(Option.getOrThrow(live).hostMemory).toEqual({
+        totalBytes: 8 * 1_024 ** 3,
+        availableBytes: 6 * 1_024 ** 3,
+      });
       expect(yield* Ref.get(demandChanges)).toEqual([true, false]);
     }),
   );

@@ -146,6 +146,13 @@ struct ProcessSample {
     io_semantics: IoSemantics,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostMemorySample {
+    total_bytes: u64,
+    available_bytes: u64,
+}
+
 impl ProcessSample {
     fn estimated_history_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
@@ -170,6 +177,8 @@ struct SnapshotEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     request_id: Option<String>,
     external_processes: Vec<ExternalProcess>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_memory: Option<HostMemorySample>,
     processes: Vec<ProcessSample>,
 }
 
@@ -354,6 +363,7 @@ impl Collector {
             true,
             process_refresh_kind(),
         );
+        self.system.refresh_memory();
         self.cpu_baseline_refreshed_at = Some(Instant::now());
 
         let rows = self
@@ -445,6 +455,10 @@ impl Collector {
             ),
             request_id,
             external_processes,
+            host_memory: Some(HostMemorySample {
+                total_bytes: self.system.total_memory(),
+                available_bytes: self.system.available_memory(),
+            }),
             processes,
         }
     }
@@ -965,6 +979,7 @@ mod tests {
                     pid: 7,
                     start_time_ms: Some(1_000),
                 }],
+                host_memory: None,
                 processes: Vec::new(),
             });
         }
@@ -1003,6 +1018,7 @@ mod tests {
             inaccessible_process_count: 0,
             request_id: None,
             external_processes: Vec::new(),
+            host_memory: None,
             processes: Vec::new(),
         };
         history.record(&snapshot);
@@ -1056,6 +1072,7 @@ mod tests {
                     inaccessible_process_count: 0,
                     request_id: None,
                     external_processes: Vec::new(),
+                    host_memory: None,
                     processes: vec![ProcessSample {
                         pid: sequence as u32 + 1,
                         start_time_ms: sequence * 1_000,
@@ -1096,6 +1113,7 @@ mod tests {
             inaccessible_process_count: 0,
             request_id: None,
             external_processes,
+            host_memory: None,
             processes: Vec::new(),
         };
         let snapshot_bytes = snapshot.estimated_history_bytes();

@@ -85,6 +85,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can stream Provider availability changes. Absent on older servers,
       so clients keep the query snapshot and never send the unknown subscription RPC. */
   providerAvailabilityChanges: Schema.optionalKey(Schema.Boolean),
+  /** Server can report demand-driven host resource metrics. Absent on older servers,
+      so clients show an update-required state instead of probing an unknown RPC. */
+  hostMetrics: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

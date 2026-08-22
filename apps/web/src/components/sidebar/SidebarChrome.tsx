@@ -8,6 +8,7 @@ import {
   CalendarClockIcon,
   ChartNoAxesColumnIcon,
   GitPullRequestIcon,
+  ServerIcon,
   SettingsIcon,
 } from "lucide-react";
 import { memo, useCallback } from "react";
@@ -114,11 +115,13 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     select: (location) =>
       location.pathname === "/usage"
         ? "usage"
-        : location.pathname === "/schedules"
-          ? "schedules"
-          : location.pathname === "/pull-requests"
-            ? "pull-requests"
-            : null,
+        : location.pathname === "/environments"
+          ? "environments"
+          : location.pathname === "/schedules"
+            ? "schedules"
+            : location.pathname === "/pull-requests"
+              ? "pull-requests"
+              : null,
   });
   const { environments } = useEnvironments();
   const { environments: scheduleEnvironments } = useWebEnvironmentSchedules();
@@ -160,6 +163,11 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     }
     void navigate({ to: "/usage" });
   }, [isMobile, navigate, setOpenMobile]);
+
+  const handleEnvironmentsClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/environments" });
+  }, [closeMobileSidebar, navigate]);
 
   const handleSchedulesClick = useCallback(() => {
     closeMobileSidebar();
@@ -243,6 +251,22 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
                   }
                 />
                 <TooltipPopup side="top">Schedules</TooltipPopup>
+              </Tooltip>
+            </SidebarMenuItem>
+            <SidebarMenuItem className="shrink-0">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton
+                      aria-label="Environments"
+                      onClick={handleEnvironmentsClick}
+                      size="icon"
+                    >
+                      <ServerIcon />
+                    </SidebarMenuButton>
+                  }
+                />
+                <TooltipPopup side="top">Environments</TooltipPopup>
               </Tooltip>
             </SidebarMenuItem>
             <SidebarMenuItem className="shrink-0">

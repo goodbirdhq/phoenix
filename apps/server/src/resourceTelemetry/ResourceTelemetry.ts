@@ -312,6 +312,11 @@ export const make = Effect.fn("resourceTelemetry.resourceTelemetry.make")(functi
             desktop: desktopHealth,
             nativeSnapshot,
           }),
+          ...Option.match(nativeSnapshot, {
+            onNone: () => ({}),
+            onSome: (native) =>
+              native.hostMemory === undefined ? {} : { hostMemory: native.hostMemory },
+          }),
         };
         yield* Ref.set(state, {
           nativeSnapshot,

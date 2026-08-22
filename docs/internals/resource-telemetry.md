@@ -17,6 +17,38 @@ The native monitor owns bounded in-memory history. The server only merges and
 summarizes that history when diagnostics requests it. Telemetry history is not
 persisted to disk or continuously copied into Node.
 
+The Environments performance page adds a sibling `HostMetrics` Effect service. Resource telemetry
+continues to own Phoenix process-tree attribution; host metrics owns the machine view visible from
+the environment:
+
+- normalized whole-host CPU utilization and load averages;
+- total, available, and used memory;
+- filesystem capacity for the server working directory and T3 home, deduplicated by device;
+- logical CPU count plus host and server uptime;
+- an explicitly normalized Phoenix share derived from the existing `allT3` aggregate.
+
+The split is intentional. The Rust monitor adds an optional cross-platform available-memory sample
+to its existing process snapshot, while host CPU, inventory, and filesystem scope stay at the
+environment adapter boundary. Older or unavailable monitors degrade cleanly: Linux reads
+`MemAvailable` from `/proc/meminfo`, Windows' portable API reports available physical memory, and
+free-only fallbacks are excluded from trends and low-memory warnings. Cached native memory is
+ignored once that collector is no longer healthy. Filesystem capacity uses the runtime's `statfs`
+boundary, refreshes at most every ten seconds, and never sends paths or mount names to a client.
+
+`server.getHostMetrics` supplies ten-second overview snapshots. One shared, demand-scoped sampler
+owns the CPU baseline, latest snapshot, and history for every client. `subscribeHostMetrics` retains
+that sampler and emits host CPU and memory once per second independently of the power-adaptive
+process-monitor cadence; the latest Phoenix process aggregate is merged into each host snapshot.
+Concurrent readers consume the shared snapshot instead of resetting one another's CPU baseline.
+Releasing the last subscription stops both the host sampler and native process streaming. Host CPU
+and trustworthy available-memory trend samples are capped to fifteen minutes in server memory and exposed by
+`server.getHostMetricsHistory`; they are not persisted.
+
+The `hostMetrics` environment capability gates every client call under version skew. The RPCs need
+`orchestration:read`. CPU model and detailed OS/kernel versions are included only when the session
+also has `access:read`; hostnames, network identifiers, mount paths, and process commands are not
+part of the contract.
+
 ## Why a standalone executable
 
 The monitor is intentionally not a Node native addon.
