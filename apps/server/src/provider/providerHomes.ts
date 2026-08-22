@@ -19,8 +19,11 @@ import {
   defaultInstanceIdForDriver,
   ProviderDriverKind,
   type ProviderInstanceConfig,
+  type ProviderInstanceEnvironment,
   type ServerSettings,
 } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as NodeOS from "node:os";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Path from "effect/Path";
@@ -28,9 +31,11 @@ import * as Schema from "effect/Schema";
 
 import { resolveClaudeHomePath } from "./Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
+import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.ts";
 
 const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
+const OPENCODE_DRIVER = ProviderDriverKind.make("opencode");
 
 /**
  * The legacy single-instance-per-driver blob a driver's default instance falls
@@ -46,6 +51,7 @@ export const legacyProviderConfigFor = (
 export interface ProviderInstanceConfigEntry {
   readonly instanceId: string;
   readonly config: unknown;
+  readonly environment: ProviderInstanceEnvironment | undefined;
 }
 
 /**
@@ -64,13 +70,17 @@ export const providerInstanceConfigsForDriver = (
   for (const [instanceId, instance] of Object.entries(
     settings.providerInstances as Record<string, ProviderInstanceConfig>,
   )) {
-    if (instance.driver === driver) entries.push({ instanceId, config: instance.config });
+    if (instance.driver === driver) {
+      entries.push({ instanceId, config: instance.config, environment: instance.environment });
+    }
   }
 
   const defaultInstanceId = defaultInstanceIdForDriver(driver);
   if (!(defaultInstanceId in settings.providerInstances)) {
     const legacy = legacyProviderConfigFor(settings, driver);
-    if (legacy !== undefined) entries.push({ instanceId: defaultInstanceId, config: legacy });
+    if (legacy !== undefined) {
+      entries.push({ instanceId: defaultInstanceId, config: legacy, environment: undefined });
+    }
   }
 
   return entries.sort((a, b) => a.instanceId.localeCompare(b.instanceId));
@@ -154,6 +164,54 @@ export const codexInstanceHomes = Effect.fn("providerHomes.codexInstanceHomes")(
   }
   return homes;
 });
+
+export interface OpenCodeInstanceDatabase {
+  readonly instanceId: string;
+  readonly databasePath: string;
+}
+
+/**
+ * Resolves the SQLite store used by every configured OpenCode instance.
+ *
+ * OpenCode follows XDG for its data directory and lets `OPENCODE_DB` select a
+ * different file. A relative override is resolved below the OpenCode data
+ * directory, matching OpenCode itself. In-memory stores have no history a
+ * separate Phoenix process can read, so they are omitted.
+ */
+export const opencodeInstanceDatabases = Effect.fn("providerHomes.opencodeInstanceDatabases")(
+  function* (
+    settings: ServerSettings,
+    baseEnvironment: NodeJS.ProcessEnv = process.env,
+  ): Effect.fn.Return<ReadonlyArray<OpenCodeInstanceDatabase>, never, Path.Path> {
+    const path = yield* Path.Path;
+    const platform = yield* HostProcessPlatform;
+    const databases: OpenCodeInstanceDatabase[] = [];
+    const seen = new Set<string>();
+
+    for (const entry of providerInstanceConfigsForDriver(settings, OPENCODE_DRIVER)) {
+      const environment = mergeProviderInstanceEnvironment(entry.environment, baseEnvironment);
+
+      const configuredDataHome = environment.XDG_DATA_HOME?.trim();
+      const effectiveHome =
+        (platform === "win32" ? environment.USERPROFILE : environment.HOME)?.trim() ||
+        NodeOS.homedir();
+      const dataHome = configuredDataHome || path.join(effectiveHome, ".local", "share");
+      const openCodeDataDir = path.join(dataHome, "opencode");
+      const configuredDatabase = environment.OPENCODE_DB?.trim();
+      if (configuredDatabase === ":memory:") continue;
+      const databasePath =
+        configuredDatabase && path.isAbsolute(configuredDatabase)
+          ? configuredDatabase
+          : path.join(openCodeDataDir, configuredDatabase || "opencode.db");
+
+      if (seen.has(databasePath)) continue;
+      seen.add(databasePath);
+      databases.push({ instanceId: entry.instanceId, databasePath });
+    }
+
+    return databases;
+  },
+);
 
 /**
  * The directories a Claude home may keep session transcripts and workflow

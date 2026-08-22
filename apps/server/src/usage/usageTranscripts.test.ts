@@ -4,8 +4,78 @@ import {
   initialCodexScanState,
   parseClaudeLine,
   parseCodexLine,
+  parseOpenCodeMessage,
   totalTokens,
 } from "./usageTranscripts.ts";
+
+describe("parseOpenCodeMessage", () => {
+  it("extracts additive OpenCode tokens and provider-reported cost", () => {
+    const record = parseOpenCodeMessage({
+      id: "msg_opencode",
+      sessionId: "session_opencode",
+      timestampMs: Date.parse("2026-08-07T12:00:00.000Z"),
+      data: JSON.stringify({
+        role: "assistant",
+        time: { completed: Date.parse("2026-08-08T13:00:00.000Z") },
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4-5",
+        cost: 0.0125,
+        tokens: {
+          input: 100,
+          output: 50,
+          reasoning: 10,
+          cache: { read: 20, write: 30 },
+        },
+      }),
+    });
+
+    expect(record).not.toBeNull();
+    expect(record?.provider).toBe("opencode");
+    expect(record?.timestampMs).toBe(Date.parse("2026-08-08T13:00:00.000Z"));
+    expect(record?.model).toBe("anthropic/claude-sonnet-4-5");
+    expect(record?.totals).toEqual({
+      uncachedInputTokens: 100,
+      cachedInputTokens: 20,
+      cacheCreationTokens: 30,
+      // OpenCode's reasoning axis is additive; Phoenix exposes it as a subset.
+      outputTokens: 60,
+      reasoningTokens: 10,
+    });
+    expect(record?.reportedCostUsd).toBe(0.0125);
+    expect(record?.dedupeKey).toBe("opencode:msg_opencode");
+  });
+
+  it("falls back to the row timestamp when completion time is absent", () => {
+    const timestampMs = Date.parse("2026-08-07T12:00:00.000Z");
+    const record = parseOpenCodeMessage({
+      id: "msg_fallback",
+      sessionId: "session",
+      timestampMs,
+      data: JSON.stringify({
+        role: "assistant",
+        providerID: "openai",
+        modelID: "gpt-5",
+        tokens: { input: 1, output: 1 },
+      }),
+    });
+
+    expect(record?.timestampMs).toBe(timestampMs);
+  });
+
+  it("ignores non-assistant and malformed rows", () => {
+    expect(
+      parseOpenCodeMessage({ id: "msg_user", sessionId: "session", timestampMs: 1, data: "{}" }),
+    ).toBeNull();
+    expect(
+      parseOpenCodeMessage({
+        id: "msg_bad",
+        sessionId: "session",
+        timestampMs: 1,
+        data: "not json",
+      }),
+    ).toBeNull();
+  });
+});
 
 /** Shaped after a real Claude Code assistant record. */
 function claudeLine(overrides: {

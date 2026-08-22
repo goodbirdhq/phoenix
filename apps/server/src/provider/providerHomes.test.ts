@@ -3,6 +3,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { ProviderDriverKind, ServerSettings } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -13,6 +14,7 @@ import {
   claudeInstanceHomes,
   claudeProjectsDirCandidates,
   codexInstanceHomes,
+  opencodeInstanceDatabases,
   providerInstanceConfigsForDriver,
 } from "./providerHomes.ts";
 
@@ -131,6 +133,53 @@ describe("codexInstanceHomes", () => {
       const homes = yield* codexInstanceHomes(settings);
       assert.deepEqual(homePaths(homes), ["/homes/codex", "/homes/codex-work"]);
     }).pipe(Effect.provide(Path.layer)),
+  );
+});
+
+describe("opencodeInstanceDatabases", () => {
+  effectIt.effect("resolves the default database from each instance's XDG data home", () =>
+    Effect.gen(function* () {
+      const settings = decodeSettings({
+        providerInstances: {
+          opencode: {
+            driver: "opencode",
+            environment: [{ name: "XDG_DATA_HOME", value: "/data/open-code" }],
+          },
+        },
+      });
+      const databases = yield* opencodeInstanceDatabases(settings, {});
+      assert.deepEqual(databases, [
+        {
+          instanceId: "opencode",
+          databasePath: "/data/open-code/opencode/opencode.db",
+        },
+      ]);
+    }).pipe(Effect.provide(Path.layer), Effect.provideService(HostProcessPlatform, "linux")),
+  );
+
+  effectIt.effect("honors relative and absolute OPENCODE_DB overrides", () =>
+    Effect.gen(function* () {
+      const settings = decodeSettings({
+        providerInstances: {
+          opencode: {
+            driver: "opencode",
+            environment: [
+              { name: "XDG_DATA_HOME", value: "/data/open-code" },
+              { name: "OPENCODE_DB", value: "work.db" },
+            ],
+          },
+          opencode_absolute: {
+            driver: "opencode",
+            environment: [{ name: "OPENCODE_DB", value: "/accounts/personal.db" }],
+          },
+        },
+      });
+      const databases = yield* opencodeInstanceDatabases(settings, {});
+      assert.deepEqual(databases.map((database) => database.databasePath).toSorted(), [
+        "/accounts/personal.db",
+        "/data/open-code/opencode/work.db",
+      ]);
+    }).pipe(Effect.provide(Path.layer), Effect.provideService(HostProcessPlatform, "linux")),
   );
 });
 

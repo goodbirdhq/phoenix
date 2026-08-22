@@ -7,9 +7,10 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
 import type { DailyTotals } from "@t3tools/shared/usageMerge";
 
-import { PROVIDER_ORDER } from "./usageProviders";
-
 export type UsageChartMetric = "cost" | "tokens";
+
+/** Bottom-to-top order for every provider band in the mobile chart. */
+const PROVIDER_ORDER: readonly UsageProviderKind[] = ["codex", "claude", "opencode"];
 
 export interface UsageChartDay {
   readonly day: string;

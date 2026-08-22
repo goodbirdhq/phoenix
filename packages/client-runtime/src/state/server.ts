@@ -1,5 +1,6 @@
 import {
   PROVIDER_AVAILABILITY_CONTRACT_VERSION,
+  USAGE_CONTRACT_VERSION,
   type EnvironmentId,
   type ProviderAvailabilityInput,
   type ProviderAvailabilityResult,
@@ -718,6 +719,11 @@ export function createServerEnvironmentAtoms<R, E>(
     tag: WS_METHODS.serverGetProviderAvailability,
     staleTimeMs: 15_000,
   });
+  const usageSummaryQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:server:usage-summary",
+    tag: WS_METHODS.serverGetUsageSummary,
+    staleTimeMs: 60_000,
+  });
 
   return {
     configValueAtom,
@@ -747,12 +753,17 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 5_000,
     }),
     // A cold transcript scan is measured in seconds, so keep the result around
-    // long enough that switching windows or re-rendering does not rescan.
-    usageSummary: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:usage-summary",
-      tag: WS_METHODS.serverGetUsageSummary,
-      staleTimeMs: 60_000,
-    }),
+    // long enough that switching windows or re-rendering does not rescan. The
+    // version is injected here so every web/mobile call declares the provider
+    // vocabulary it can decode while retaining the same structural atom key.
+    usageSummary: (target: {
+      readonly environmentId: EnvironmentId;
+      readonly input: EnvironmentRpcInput<typeof WS_METHODS.serverGetUsageSummary>;
+    }) =>
+      usageSummaryQuery({
+        environmentId: target.environmentId,
+        input: { ...target.input, contractVersion: USAGE_CONTRACT_VERSION },
+      }),
     // Every caller declares the availability vocabulary this build can decode,
     // here rather than at each call site: a server newer than the app answers
     // in the caller's words, and a caller that forgot to say would be told a
