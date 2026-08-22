@@ -23,6 +23,9 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  */
 export const USAGE_CONTRACT_VERSION = 5 as const;
 
+/** The last deployed vocabulary before OpenCode usage was added. */
+const LEGACY_USAGE_CONTRACT_VERSION = 4 as const;
+
 export const UsageProviderKind = Schema.Literals(["claude", "codex", "opencode"]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
@@ -195,6 +198,11 @@ export const UsageSummaryInput = Schema.Struct({
   sinceTime: Schema.optional(TrimmedNonEmptyString),
   /** Exclusive UTC instant for an hourly rolling window. */
   untilTime: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The provider vocabulary the caller can decode. Absent means version 4,
+   * which is what already-deployed clients send.
+   */
+  contractVersion: Schema.optional(NonNegativeInt),
 });
 export type UsageSummaryInput = typeof UsageSummaryInput.Type;
 
@@ -211,6 +219,29 @@ export const UsageSummary = Schema.Struct({
   scanDurationMs: NonNegativeInt,
 });
 export type UsageSummary = typeof UsageSummary.Type;
+
+/**
+ * Expresses a summary in the vocabulary an older caller can decode.
+ *
+ * Version 5 added the `opencode` provider to a closed literal union. A v4
+ * client rejects the entire RPC response if either a bucket or source contains
+ * that value, so older callers receive the Claude/Codex subset and a v4
+ * contract marker instead.
+ */
+export const narrowUsageSummary = (
+  summary: UsageSummary,
+  contractVersion: number | undefined,
+): UsageSummary => {
+  if ((contractVersion ?? LEGACY_USAGE_CONTRACT_VERSION) >= USAGE_CONTRACT_VERSION) {
+    return summary;
+  }
+  return {
+    ...summary,
+    contractVersion: LEGACY_USAGE_CONTRACT_VERSION,
+    buckets: summary.buckets.filter((bucket) => bucket.provider !== "opencode"),
+    sources: summary.sources.filter((source) => source.fingerprint.provider !== "opencode"),
+  };
+};
 
 export class UsageReadError extends Schema.TaggedErrorClass<UsageReadError>()("UsageReadError", {
   reason: Schema.Literals(["scanFailed", "invalidWindow"]),

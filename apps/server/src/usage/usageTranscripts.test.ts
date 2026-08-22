@@ -16,6 +16,7 @@ describe("parseOpenCodeMessage", () => {
       timestampMs: Date.parse("2026-08-07T12:00:00.000Z"),
       data: JSON.stringify({
         role: "assistant",
+        time: { completed: Date.parse("2026-08-08T13:00:00.000Z") },
         providerID: "anthropic",
         modelID: "claude-sonnet-4-5",
         cost: 0.0125,
@@ -30,6 +31,7 @@ describe("parseOpenCodeMessage", () => {
 
     expect(record).not.toBeNull();
     expect(record?.provider).toBe("opencode");
+    expect(record?.timestampMs).toBe(Date.parse("2026-08-08T13:00:00.000Z"));
     expect(record?.model).toBe("anthropic/claude-sonnet-4-5");
     expect(record?.totals).toEqual({
       uncachedInputTokens: 100,
@@ -41,6 +43,23 @@ describe("parseOpenCodeMessage", () => {
     });
     expect(record?.reportedCostUsd).toBe(0.0125);
     expect(record?.dedupeKey).toBe("opencode:msg_opencode");
+  });
+
+  it("falls back to the row timestamp when completion time is absent", () => {
+    const timestampMs = Date.parse("2026-08-07T12:00:00.000Z");
+    const record = parseOpenCodeMessage({
+      id: "msg_fallback",
+      sessionId: "session",
+      timestampMs,
+      data: JSON.stringify({
+        role: "assistant",
+        providerID: "openai",
+        modelID: "gpt-5",
+        tokens: { input: 1, output: 1 },
+      }),
+    });
+
+    expect(record?.timestampMs).toBe(timestampMs);
   });
 
   it("ignores non-assistant and malformed rows", () => {

@@ -7,6 +7,7 @@ import * as NodeSqlite from "node:sqlite";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
+  USAGE_CONTRACT_VERSION,
   type UsageDay,
   type UsageSummary,
 } from "@t3tools/contracts";
@@ -144,6 +145,7 @@ const window = {
   sinceDay: "2026-08-01" as UsageDay,
   untilDay: "2026-08-31" as UsageDay,
   timeZone: "UTC",
+  contractVersion: USAGE_CONTRACT_VERSION,
 };
 
 const claudeSources = (summary: UsageSummary) =>
@@ -178,6 +180,21 @@ describe("UsageService transcript sources", () => {
       });
       assert.equal(bucket?.costUsd, 0.0125);
       assert.equal(bucket?.costSource, "providerReported");
+
+      const legacySummary = yield* usage.readSummary({
+        sinceDay: window.sinceDay,
+        untilDay: window.untilDay,
+        timeZone: window.timeZone,
+      });
+      assert.equal(legacySummary.contractVersion, 4);
+      assert.isFalse(
+        legacySummary.buckets.some((candidate) => String(candidate.provider) === "opencode"),
+      );
+      assert.isFalse(
+        legacySummary.sources.some(
+          (candidate) => String(candidate.fingerprint.provider) === "opencode",
+        ),
+      );
     }).pipe(
       Effect.provide(
         layerFor({

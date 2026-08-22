@@ -114,9 +114,18 @@ export function parseOpenCodeMessage(row: OpenCodeMessageRow): UsageRecord | nul
 
   const cost = message["cost"];
   const messageId = typeof row.id === "string" ? row.id : "";
+  const time = message["time"];
+  const completed =
+    typeof time === "object" && time !== null
+      ? (time as Record<string, unknown>)["completed"]
+      : undefined;
+  const completedAt =
+    typeof completed === "number" && Number.isFinite(completed)
+      ? Math.trunc(completed)
+      : Math.trunc(row.timestampMs);
   return {
     provider: "opencode",
-    timestampMs: Math.trunc(row.timestampMs),
+    timestampMs: completedAt,
     model: `${providerId}/${modelId}`,
     sessionId: typeof row.sessionId === "string" ? row.sessionId : "",
     totals,

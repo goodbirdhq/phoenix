@@ -31,6 +31,7 @@ import * as Schema from "effect/Schema";
 
 import { resolveClaudeHomePath } from "./Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
+import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.ts";
 
 const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
@@ -188,8 +189,7 @@ export const opencodeInstanceDatabases = Effect.fn("providerHomes.opencodeInstan
     const seen = new Set<string>();
 
     for (const entry of providerInstanceConfigsForDriver(settings, OPENCODE_DRIVER)) {
-      const environment = { ...baseEnvironment };
-      for (const variable of entry.environment ?? []) environment[variable.name] = variable.value;
+      const environment = mergeProviderInstanceEnvironment(entry.environment, baseEnvironment);
 
       const configuredDataHome = environment.XDG_DATA_HOME?.trim();
       const effectiveHome =

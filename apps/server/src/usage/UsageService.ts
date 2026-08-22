@@ -15,6 +15,7 @@ import * as NodeOS from "node:os";
 
 import {
   USAGE_CONTRACT_VERSION,
+  narrowUsageSummary,
   type UsageProviderKind,
   type UsageSource,
   type UsageSummary,
@@ -104,22 +105,27 @@ export const layerTest = Layer.succeed(
   UsageService,
   UsageService.of({
     readSummary: (input) =>
-      Effect.succeed({
-        contractVersion: USAGE_CONTRACT_VERSION,
-        readAt: "1970-01-01T00:00:00.000Z",
-        timeZone: input.timeZone,
-        sinceDay: input.sinceDay,
-        untilDay: input.untilDay,
-        buckets: [],
-        sources: [],
-        pricing: {
-          status: "unavailable",
-          source: LITELLM_RATES_URL,
-          fetchedAt: null,
-          knownModels: 0,
-        },
-        scanDurationMs: 0,
-      }),
+      Effect.succeed(
+        narrowUsageSummary(
+          {
+            contractVersion: USAGE_CONTRACT_VERSION,
+            readAt: "1970-01-01T00:00:00.000Z",
+            timeZone: input.timeZone,
+            sinceDay: input.sinceDay,
+            untilDay: input.untilDay,
+            buckets: [],
+            sources: [],
+            pricing: {
+              status: "unavailable",
+              source: LITELLM_RATES_URL,
+              fetchedAt: null,
+              knownModels: 0,
+            },
+            scanDurationMs: 0,
+          },
+          input.contractVersion,
+        ),
+      ),
   }),
 );
 
@@ -435,8 +441,13 @@ export const make = Effect.gen(function* () {
       }
 
       if (kind === "opencodeDatabase") {
+        const sessionIds = new Set<string>();
         const read = yield* Effect.promise(() =>
-          readOpenCodeUsageDatabase(storePath, windowStartMs),
+          readOpenCodeUsageDatabase(storePath, windowStartMs, (record) => {
+            if (aggregator.add(record, sourceId) && record.sessionId.length > 0) {
+              sessionIds.add(record.sessionId);
+            }
+          }),
         );
         if (read === null) {
           sources.push({
@@ -452,21 +463,15 @@ export const make = Effect.gen(function* () {
           continue;
         }
 
-        const sessionIds = new Set<string>();
-        for (const record of read.records) {
-          if (aggregator.add(record, sourceId) && record.sessionId.length > 0) {
-            sessionIds.add(record.sessionId);
-          }
-        }
         sources.push({
           fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
           id: sourceId,
-          status: "ok",
+          status: read.complete ? "ok" : "partial",
           scannedFiles: 1,
-          skippedFiles: 0,
+          skippedFiles: read.complete ? 0 : 1,
           malformedRecords: read.malformedRecords,
           distinctSessions: sessionIds.size,
-          message: null,
+          message: read.complete ? null : "OpenCode usage database was only partially read.",
         });
         continue;
       }
@@ -521,25 +526,28 @@ export const make = Effect.gen(function* () {
     const readAt = yield* DateTime.now;
     const finishedAtMs = yield* Clock.currentTimeMillis;
 
-    return {
-      contractVersion: USAGE_CONTRACT_VERSION,
-      readAt: DateTime.formatIso(readAt),
-      timeZone: input.timeZone,
-      sinceDay: input.sinceDay,
-      untilDay: input.untilDay,
-      buckets: aggregated.buckets,
-      sources,
-      pricing: {
-        status: ratesStatus,
-        source: LITELLM_RATES_URL,
-        fetchedAt:
-          ratesFetchedAtMs === null
-            ? null
-            : DateTime.formatIso(DateTime.makeUnsafe(ratesFetchedAtMs)),
-        knownModels: rates.size,
-      },
-      scanDurationMs: Math.max(0, finishedAtMs - startedAtMs),
-    } satisfies UsageSummary;
+    return narrowUsageSummary(
+      {
+        contractVersion: USAGE_CONTRACT_VERSION,
+        readAt: DateTime.formatIso(readAt),
+        timeZone: input.timeZone,
+        sinceDay: input.sinceDay,
+        untilDay: input.untilDay,
+        buckets: aggregated.buckets,
+        sources,
+        pricing: {
+          status: ratesStatus,
+          source: LITELLM_RATES_URL,
+          fetchedAt:
+            ratesFetchedAtMs === null
+              ? null
+              : DateTime.formatIso(DateTime.makeUnsafe(ratesFetchedAtMs)),
+          knownModels: rates.size,
+        },
+        scanDurationMs: Math.max(0, finishedAtMs - startedAtMs),
+      } satisfies UsageSummary,
+      input.contractVersion,
+    );
   });
 
   return { readSummary } as const;

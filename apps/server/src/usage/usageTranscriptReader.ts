@@ -36,55 +36,87 @@ export interface TranscriptFile {
 }
 
 export interface OpenCodeDatabaseUsage {
-  readonly records: readonly UsageRecord[];
   readonly scannedRows: number;
   readonly malformedRecords: number;
+  readonly complete: boolean;
 }
+
+const OPEN_CODE_SCAN_BATCH_SIZE = 100;
 
 /**
  * Reads assistant usage from a current OpenCode SQLite store without mutating
- * it. The lower time bound keeps large histories off the page-load path; exact
- * day/hour filtering remains the aggregator's responsibility.
+ * it. Rows are keyset-paged so every synchronous SQLite call has bounded work,
+ * and matching records are emitted immediately so memory does not grow with
+ * the requested history window. Exact day/hour filtering remains the
+ * aggregator's responsibility.
  */
 export async function readOpenCodeUsageDatabase(
   databasePath: string,
   sinceMs: number,
+  onRecord: (record: UsageRecord) => void,
 ): Promise<OpenCodeDatabaseUsage | null> {
   let database: NodeSqlite.DatabaseSync | undefined;
+  let scannedRows = 0;
+  let malformedRecords = 0;
   try {
     database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
-    const rows = database
-      .prepare(
-        `SELECT id, session_id AS sessionId, time_created AS timestampMs, data
-         FROM message
-         WHERE time_created >= ?
-           AND json_valid(data)
-           AND json_extract(data, '$.role') = 'assistant'`,
-      )
-      .iterate(sinceMs) as unknown as Iterable<{
-      readonly id: unknown;
-      readonly sessionId: unknown;
-      readonly timestampMs: unknown;
-      readonly data: unknown;
-    }>;
+    const readBatch = database.prepare(
+      `SELECT rowid AS rowId, id, session_id AS sessionId,
+              time_created AS timestampMs, data,
+              CASE WHEN json_valid(data) THEN json_extract(data, '$.role') END AS role
+       FROM message
+       WHERE rowid > ?
+       ORDER BY rowid
+       LIMIT ?`,
+    );
 
-    const records: UsageRecord[] = [];
-    let scannedRows = 0;
-    let malformedRecords = 0;
-    for (const row of rows) {
-      scannedRows += 1;
-      const record = parseOpenCodeMessage(row);
-      if (record === null) malformedRecords += 1;
-      else if (totalTokens(record.totals) > 0) records.push(record);
-      // `node:sqlite` is synchronous. Yield between small batches so a large
-      // OpenCode history cannot monopolize the WebSocket server event loop.
-      if (scannedRows % 100 === 0) await NodeTimersPromises.setImmediate();
+    let lastRowId = 0;
+    while (true) {
+      const rows = readBatch.all(lastRowId, OPEN_CODE_SCAN_BATCH_SIZE) as unknown as ReadonlyArray<{
+        readonly rowId: unknown;
+        readonly id: unknown;
+        readonly sessionId: unknown;
+        readonly timestampMs: unknown;
+        readonly data: unknown;
+        readonly role: unknown;
+      }>;
+      if (rows.length === 0) break;
+
+      for (const row of rows) {
+        scannedRows += 1;
+        if (typeof row.rowId !== "number" || !Number.isFinite(row.rowId)) return null;
+        lastRowId = Math.trunc(row.rowId);
+        if (
+          row.role !== "assistant" ||
+          typeof row.timestampMs !== "number" ||
+          !Number.isFinite(row.timestampMs)
+        ) {
+          continue;
+        }
+        const record = parseOpenCodeMessage(row);
+        if (record === null) {
+          if (row.timestampMs >= sinceMs) malformedRecords += 1;
+        } else if (record.timestampMs >= sinceMs && totalTokens(record.totals) > 0) {
+          onRecord(record);
+        }
+      }
+
+      if (rows.length < OPEN_CODE_SCAN_BATCH_SIZE) break;
+      // Each SQLite call is bounded by the rowid page above. Yield after every
+      // page, including pages with no in-window assistant messages, so excluded
+      // history cannot monopolize the WebSocket server event loop.
+      await NodeTimersPromises.setImmediate();
     }
-    return { records, scannedRows, malformedRecords };
+    return { scannedRows, malformedRecords, complete: true };
   } catch {
-    return null;
+    return scannedRows === 0 ? null : { scannedRows, malformedRecords, complete: false };
   } finally {
-    database?.close();
+    try {
+      database?.close();
+    } catch {
+      // The read result already describes any partial scan; closing a read-only
+      // handle cannot invalidate records that were emitted before this point.
+    }
   }
 }
 
