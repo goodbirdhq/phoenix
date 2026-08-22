@@ -196,14 +196,14 @@ export async function startHttpServer(deps: { db: Db; port?: number }): Promise<
       return c.json({ error: "run_in_progress", runId: claim.runId }, 409);
     }
 
-    // Built from the snapshot the claim recorded, not a fresh read: the mode
-    // these instructions describe must be the mode the run row was written
-    // under, even if an operator flips the workflow in between.
+    // Built from the snapshot the claim recorded, not a fresh read: a disk
+    // sync between the claim and this response must not change the
+    // instructions a run is already executing under.
     const skillMarkdown = await loadSkillMarkdown(claim.workflow.skillPath);
     const callbackUrl = `${config.BIRDHOUSE_PUBLIC_URL.replace(/\/+$/, "")}/api/runs/${claim.runId}/result`;
     const instructions = buildRunPrompt({
       workflow: { key: claim.workflow.key, title: claim.workflow.title },
-      run: { id: claim.runId, mode: claim.workflow.mode, input: parsed.data.input ?? null },
+      run: { id: claim.runId, input: parsed.data.input ?? null },
       skillMarkdown,
       callbackUrl,
       callbackToken: claim.callbackToken,

@@ -66,12 +66,9 @@ export const opsJob = pgTable(
 // ---------------------------------------------------------------------------
 // workflow — the synced projection of a disk-defined workflow manifest, plus
 // operational toggles. The manifest on disk is the source of truth for what
-// a workflow does; this row exists so `mode` and `enabled` can be flipped
-// without a deploy, and so a run can be traced back to the manifest that
-// produced it.
+// a workflow does; this row exists so `enabled` can be flipped without a
+// deploy, and so a run can be traced back to the manifest that produced it.
 // ---------------------------------------------------------------------------
-
-export const workflowModeEnum = pgEnum("workflow_mode", ["fake", "shadow", "live"]);
 
 export const workflow = pgTable("workflow", {
   key: text("key").primaryKey(),
@@ -80,7 +77,6 @@ export const workflow = pgTable("workflow", {
   skillPath: text("skill_path").notNull(),
   manifest: jsonb("manifest").$type<Record<string, unknown>>().notNull(),
   manifestHash: text("manifest_hash").notNull(),
-  mode: workflowModeEnum("mode").default("shadow").notNull(),
   enabled: boolean("enabled").default(true).notNull(),
   syncedAt: timestamp("synced_at", { mode: "date", withTimezone: true }),
   createdAt: timestamp("created_at", { mode: "date", withTimezone: true }).defaultNow().notNull(),
@@ -146,8 +142,6 @@ export const workflowRun = pgTable(
     input: jsonb("input").$type<Record<string, unknown>>(),
     result: jsonb("result").$type<Record<string, unknown>>(),
     error: text("error"),
-    /** The mode this run launched under; `workflow.mode` may change later without rewriting history. */
-    mode: workflowModeEnum("mode").notNull(),
     phoenixThreadId: text("phoenix_thread_id"),
     /** Hash of the bearer token handed to the agent for its result callback; the token itself is never stored. */
     callbackTokenHash: text("callback_token_hash"),
@@ -175,7 +169,7 @@ export const workflowRun = pgTable(
 
 // ---------------------------------------------------------------------------
 // audit_event — an append-only log of who did what, for every action that
-// carries operational weight (schedule changes, mode flips, manual runs,
+// carries operational weight (schedule changes, enable/disable, manual runs,
 // callback deliveries). Never updated or deleted.
 // ---------------------------------------------------------------------------
 

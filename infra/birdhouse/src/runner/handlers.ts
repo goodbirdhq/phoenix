@@ -145,30 +145,6 @@ export function createWorkflowLaunchHandler(deps: {
         );
       }
 
-      if (run.mode === "fake") {
-        const [completed] = await db
-          .update(workflowRun)
-          .set({
-            status: "succeeded",
-            result: { fake: true, input: run.input ?? null },
-            startedAt: sql`now()`,
-            completedAt: sql`now()`,
-          })
-          .where(and(eq(workflowRun.id, runId), eq(workflowRun.status, "pending")))
-          .returning();
-        if (completed) {
-          await writeAuditEvent(db, {
-            actor: "system",
-            action: "run.completed",
-            targetType: "workflow_run",
-            targetId: runId,
-            outcome: "succeeded",
-            metadata: { mode: "fake" },
-          });
-        }
-        return { fake: true };
-      }
-
       const projectId = config.PHOENIX_PROJECT_ID;
       if (!projectId) {
         // Terminal for the job, so it must be terminal for the run too —
@@ -183,7 +159,7 @@ export function createWorkflowLaunchHandler(deps: {
       const callbackUrl = `${config.BIRDHOUSE_PUBLIC_URL.replace(/\/+$/, "")}/api/runs/${runId}/result`;
       const promptText = buildRunPrompt({
         workflow: { key: workflowRow.key, title: workflowRow.title },
-        run: { id: runId, mode: run.mode, input: run.input },
+        run: { id: runId, input: run.input },
         skillMarkdown,
         callbackUrl,
         callbackToken,

@@ -106,7 +106,6 @@ describe.skipIf(!process.env.BIRDHOUSE_TEST_DATABASE_URL)("runMaintenanceTick", 
         workflowKey,
         trigger: "manual",
         status: "running",
-        mode: "shadow",
         timeoutAt: sql`now() - interval '1 second'`,
       })
       .returning();

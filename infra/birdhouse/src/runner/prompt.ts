@@ -1,10 +1,6 @@
-import type { workflowModeEnum } from "../db/schema.ts";
-
-export type RunPromptMode = (typeof workflowModeEnum.enumValues)[number];
-
 export interface BuildRunPromptInput {
   workflow: { key: string; title: string };
-  run: { id: string; mode: RunPromptMode; input: unknown };
+  run: { id: string; input: unknown };
   /** The workflow's SKILL.md body, embedded verbatim. */
   skillMarkdown: string;
   /** Absolute URL of this run's result callback (`BIRDHOUSE_PUBLIC_URL` + path). */
@@ -24,32 +20,8 @@ export function buildRunPrompt(input: BuildRunPromptInput): string {
   const { workflow, run, skillMarkdown, callbackUrl, callbackToken } = input;
 
   const sections: string[] = [
-    `# Ops workflow run\n\nYou are executing ops workflow \`${workflow.key}\` (run \`${run.id}\`) in **${run.mode}** mode.`,
+    `# Ops workflow run\n\nYou are executing ops workflow \`${workflow.key}\` (run \`${run.id}\`).`,
   ];
-
-  if (run.mode === "shadow") {
-    sections.push(
-      [
-        "## Shadow mode — no external side effects",
-        "",
-        "This run is in **shadow** mode: do not perform any external side effect",
-        "(no emails, no CRM writes, no messages sent, no third-party API calls that",
-        "change state). Instead, for every side effect you would have performed,",
-        "record it in your result payload under a `shadowedEffects` array — one",
-        "entry per action, with enough detail to reconstruct what would have",
-        "happened.",
-        "",
-        // A smaller model read "no third-party API calls that change state"
-        // as covering the callback itself, finished its work, wrote the
-        // payload into its own transcript, and never posted — leaving the run
-        // open until its deadline. Shadow mode is about the workflow's
-        // effects on the outside world, never about reporting back.
-        "**The completion callback below is not a side effect.** Posting your",
-        "result is how this run finishes, in every mode. Always post it, and",
-        "never record it as a `shadowedEffects` entry.",
-      ].join("\n"),
-    );
-  }
 
   sections.push(["## Workflow instructions", "", skillMarkdown.trim()].join("\n"));
 

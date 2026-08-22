@@ -22,15 +22,15 @@ now delegates it entirely to Phoenix Schedules.
               workflow_run: pending           claim ticket)
                        │  (workflow.launch job enqueued,          │
                        │   idempotency key = run:<id>)            ▼
-              mode = fake?                          agent POSTs
-              ┌────yes─┴───no──┐                     /api/workflows/:key/claim
-              ▼                ▼                            │
-        succeeded        thread.create           200: workflow_run created
-      (stub result,      + thread.turn           directly in `running` —
-       no Phoenix         .start                  no job, the caller already
-       thread ever        dispatched               IS the agent. Response:
-       created)           to Phoenix                {runId, instructions,
-                                │                     callbackUrl, callbackToken}
+                       ▼                             agent POSTs
+                 thread.create                /api/workflows/:key/claim
+                 + thread.turn                        │
+                   .start                    200: workflow_run created
+                  dispatched                  directly in `running` —
+                  to Phoenix                   no job, the caller already
+                       │                        IS the agent. Response:
+                       │                         {runId, instructions,
+                       │                          callbackUrl, callbackToken}
                                 ▼                            │
                         workflow_run: running    409 run_in_progress if a
                         (timeoutAt set,           `trigger='schedule'` run
@@ -78,12 +78,12 @@ than dead code to remove.
 
 ## What each table owns
 
-| Table          | Owns                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ops_job`      | The durable work queue itself: lease state, retry count/backoff, idempotency key. Two job types drive a run: `workflow.launch` (fires once) and `workflow.watch` (re-enqueues itself with an incrementing `attempt` until the run goes terminal).                                                                                                                                                                                                        |
-| `workflow`     | The synced projection of a disk manifest (title, description, skill path, manifest JSON + hash), plus the two operational toggles disk doesn't own: `mode` and `enabled`. Never a second place workflow _logic_ lives — only pointers back to disk plus switches. Carries no timing — that's Phoenix Schedules' data, not birdhouse's.                                                                                                                   |
-| `workflow_run` | One launch: trigger, input, current status, result/error, which mode it launched under (frozen at creation — `workflow.mode` can change later without rewriting history), the Phoenix thread id (push-path only — a claimed run has none, see README), the callback token's hash, and the timeout deadline. A partial unique index enforces at most one open `trigger='schedule'` run per workflow. This is the row everything above ultimately updates. |
-| `audit_event`  | Append-only record of anything with operational weight: run created, run launched, run completed (and by which path — callback/report/timeout), schedule/mode changes made directly in SQL. Never updated or deleted; not a source of machine state, just the trail.                                                                                                                                                                                     |
+| Table          | Owns                                                                                                                                                                                                                                                                                                                                     |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ops_job`      | The durable work queue itself: lease state, retry count/backoff, idempotency key. Two job types drive a run: `workflow.launch` (fires once) and `workflow.watch` (re-enqueues itself with an incrementing `attempt` until the run goes terminal).                                                                                        |
+| `workflow`     | The synced projection of a disk manifest (title, description, skill path, manifest JSON + hash), plus the one operational toggle disk doesn't own: `enabled`. Never a second place workflow _logic_ lives — only pointers back to disk plus a switch. Carries no timing — that's Phoenix Schedules' data, not birdhouse's.               |
+| `workflow_run` | One launch: trigger, input, current status, result/error, the Phoenix thread id (push-path only — a claimed run has none, see README), the callback token's hash, and the timeout deadline. A partial unique index enforces at most one open `trigger='schedule'` run per workflow. This is the row everything above ultimately updates. |
+| `audit_event`  | Append-only record of anything with operational weight: run created, run launched, run completed (and by which path — callback/report/timeout), workflows enabled and disabled. Never updated or deleted; not a source of machine state, just the trail.                                                                                 |
 
 ## The idempotency story
 
@@ -159,15 +159,17 @@ keys, deterministic ids, and status-guarded updates — at every hop.
   the workflow key. See README's "Known gaps in the pull path" for the
   operational consequences (finding the thread, stopping a runaway run,
   the lost-response edge case).
-- **No capability scoping per run.** Workflow mode (`fake`/`shadow`/`live`)
-  and the SKILL's own rules are prose the agent is asked to honour, not a
-  sandbox: nothing stops a `shadow` run's agent from calling a write tool,
-  because the dispatch contract carries no per-thread tool allowlist. The
-  run prompt's "Untrusted content" section narrows the obvious
+- **No capability scoping per run.** A SKILL's own rules are prose the agent
+  is asked to honour, not a sandbox: nothing stops a run's agent from calling
+  any tool it has, because the dispatch contract carries no per-thread tool
+  allowlist. The run prompt's "Untrusted content" section narrows the obvious
   prompt-injection path, and `runtime_mode` (global or per-workflow via
   `manifest.phoenix.runtime_mode`) is the only real lever available today.
   Scoping tools per run needs a Phoenix-side change and is the main thing
-  standing between this and running untrusted-input workflows in `live`.
+  standing between this and running untrusted-input workflows at all. A
+  `shadow` tier used to sit here as a partial mitigation; it was removed
+  because asking an agent not to act is not a control, and pretending
+  otherwise was the more dangerous half of it.
 - **Report ingestion is best-effort.** The Phoenix HTTP contract itself
   flags this (`docs/phoenix-http-contract.md`, "Notes for the runner"):
   whether a root (non-spawned) thread can post a structured report at all is

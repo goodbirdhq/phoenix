@@ -76,7 +76,7 @@ on `BIRDHOUSE_TEST_DATABASE_URL` and skip without it.
 - **The repo owns definitions; Postgres owns machine state.** A workflow's
   behaviour lives in its skill manifest on disk, versioned like any other
   code. The `workflow` table is a synced projection of that manifest plus
-  operational toggles (`mode`, `enabled`) — it never becomes a second place
+  operational toggle (`enabled`) — it never becomes a second place
   workflow logic lives.
 - **Every external effect is idempotent.** Jobs carry an `idempotency_key`;
   enqueuing the same unit of work twice returns the existing row rather than
@@ -95,7 +95,7 @@ on `BIRDHOUSE_TEST_DATABASE_URL` and skip without it.
 Phoenix Schedules own _when_ work happens — one-time or five-field cron, an
 IANA timezone, a five-minute minimum interval, DST-correct, managed from the
 Phoenix web/desktop/mobile UI. Birdhouse owns _what_ the work is and _what
-happened_: workflow definitions, run records, modes, results, the audit
+happened_: workflow definitions, run records, results, the audit
 trail. Neither side reaches into the other's job. See
 `docs/adr/0003-birdhouse-delegates-timing-to-phoenix-schedules.md` for the
 one-line version of why.
@@ -293,36 +293,31 @@ For anything longer than a foreground test, run it under systemd — see
    duplicate names.
 
    The manifest's `workflows/<key>/manifest.json` still governs the run
-   itself — mode, `phoenix.{model, runtime_mode}` for push-path runs,
+   itself — `phoenix.{model, runtime_mode}` for push-path runs,
    `input_schema` — just not when it happens.
 
 4. `input_schema` is an opaque JSON Schema document describing the shape a
    run's `input` should have — it documents the contract but isn't enforced
    by the manifest loader itself.
 
-### The mode ladder
+### On or off, and nothing in between
 
-Every workflow has a `mode`: `fake`, `shadow`, or `live`, stored on the
-`workflow` row (not the manifest — it's an operational toggle, flipped
-without a deploy or a disk change).
+A workflow either runs or it doesn't. `enabled` on the `workflow` row is the
+only switch, and `ops enable` / `ops disable` are the only way to move it —
+both of which write an audit event.
 
-- **`fake`** — `workflow.launch` short-circuits: no Phoenix thread is ever
-  created, the run is marked `succeeded` immediately with a stub result.
-  Use it to test that a workflow's job wiring works end-to-end without
-  spending an agent turn.
-- **`shadow`** — a real agent thread runs, but the birdhouse tells it (in the
-  prompt, automatically) not to perform any external side effect — record
-  what it would have done instead. **New workflows default to `shadow`.**
-- **`live`** — the agent performs real side effects (sends, writes,
-  drafts). Flip a workflow to `live` only once you trust its shadow-mode
-  output, by updating the `mode` column on its `workflow` row directly:
+There is deliberately no dry-run tier. A workflow that wants one asks for it
+in its own `input_schema` (a `dryRun` flag its skill defines the meaning of),
+because only the workflow knows which of its effects are worth withholding.
+The runtime used to carry a `fake`/`shadow`/`live` ladder and it earned its
+keep in neither direction: `fake` short-circuited before any Phoenix thread
+existed, so it tested less than the `ping` workflow already does, and
+`shadow` was a paragraph in the prompt asking the agent not to act — a
+request, never a boundary, and one a smaller model has already misread.
 
-  ```sql
-  update workflow set mode = 'live' where key = '<key>';
-  ```
-
-  (No CLI for this yet — it's a rare, deliberate action; a raw `UPDATE` is
-  fine at this scale.)
+Treat "this workflow cannot send email" as a property no code enforces. The
+real fix is a per-thread capability allowlist on the Phoenix side; see the
+security notes below.
 
 ### Manual runs
 
@@ -348,7 +343,7 @@ shows recent runs and their status.
 ### Everyday commands
 
 ```sh
-ops list                     # workflows, their mode/enabled state, recent runs
+ops list                     # workflows, their enabled state, recent runs
 ops run <workflow-key>       # start one run now, printing its id
 ops cancel <run-id>          # stop a queued or in-flight run and its session
 ops disable <workflow-key>   # stop the workflow being runnable, keep its history
@@ -439,8 +434,8 @@ aggregation beyond the systemd journal yet.
   can send mail and write to shared systems. Birdhouse mitigates this from
   its own layer only: the run prompt states that fetched content is data
   rather than instructions and that outward-facing actions need explicit
-  workflow authority (`src/runner/prompt.ts`), and new workflows default to
-  `shadow`. Those are mitigations, not a boundary. Treat "this workflow
-  cannot send email" as a property no code enforces today; the real fix is a
-  per-thread capability allowlist on the Phoenix side, and until it exists,
-  review a workflow's tool surface before flipping it to `live`.
+  workflow authority (`src/runner/prompt.ts`). That is a mitigation, not a
+  boundary. Treat "this workflow cannot send email" as a property no code
+  enforces today; the real fix is a per-thread capability allowlist on the
+  Phoenix side, and until it exists, review a workflow's tool surface before
+  enabling it.

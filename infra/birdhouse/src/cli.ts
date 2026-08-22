@@ -140,7 +140,6 @@ async function runListCommand(args: readonly string[]): Promise<void> {
       .select({
         key: workflow.key,
         title: workflow.title,
-        mode: workflow.mode,
         enabled: workflow.enabled,
       })
       .from(workflow)
@@ -160,8 +159,8 @@ async function runListCommand(args: readonly string[]): Promise<void> {
 
     console.log("Workflows:");
     const workflowRows = [
-      ["KEY", "TITLE", "MODE", "ENABLED"],
-      ...workflows.map((w) => [w.key, w.title, w.mode, String(w.enabled)]),
+      ["KEY", "TITLE", "ENABLED"],
+      ...workflows.map((w) => [w.key, w.title, String(w.enabled)]),
     ];
     for (const line of padColumns(workflowRows)) console.log(`  ${line}`);
     if (workflows.length === 0) console.log("  (none)");

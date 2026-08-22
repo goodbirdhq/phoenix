@@ -9,7 +9,6 @@ import { opsJob } from "../db/schema.ts";
 import { enqueueJob, requestJobCancellation } from "../jobs/queue.ts";
 import { writeAuditEvent } from "./audit.ts";
 import { mintCallbackToken } from "./callbackToken.ts";
-import type { RunPromptMode } from "./prompt.ts";
 
 export type WorkflowRunTrigger = "schedule" | "manual" | "api";
 
@@ -94,7 +93,6 @@ export async function createWorkflowRun(
         trigger,
         status: "pending",
         input: (input.input ?? null) as Record<string, unknown> | null,
-        mode: workflowRow.mode,
         callbackTokenHash,
         timeoutAt: sql`now() + (${timeoutMs} * interval '1 millisecond')`,
       })
@@ -164,10 +162,10 @@ export type ClaimWorkflowRunResult =
       /**
        * The workflow fields as they were when the run row was written. The
        * caller builds the agent's instructions from these rather than
-       * re-reading the workflow, so the mode the instructions describe is
-       * always the mode the run was recorded under.
+       * re-reading the workflow, so a mid-flight disk sync cannot change the
+       * instructions a claimed run is already executing.
        */
-      workflow: Readonly<{ key: string; title: string; skillPath: string; mode: RunPromptMode }>;
+      workflow: Readonly<{ key: string; title: string; skillPath: string }>;
     }>
   /** Some other scheduled run for this workflow is already open. */
   | Readonly<{ status: "busy"; runId: string }>;
@@ -218,7 +216,6 @@ export async function claimWorkflowRun(
       trigger: "schedule",
       status: "running",
       input: (input.input ?? null) as Record<string, unknown> | null,
-      mode: workflowRow.mode,
       callbackTokenHash,
       startedAt: sql`now()`,
       timeoutAt: sql`now() + (${timeoutMs} * interval '1 millisecond')`,
@@ -278,7 +275,6 @@ export async function claimWorkflowRun(
       key: workflowRow.key,
       title: workflowRow.title,
       skillPath: workflowRow.skillPath,
-      mode: workflowRow.mode,
     },
   };
 }
