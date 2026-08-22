@@ -184,6 +184,10 @@ Controls how assistant text reaches the thread timeline. In [the contracts][1], 
 
 The prior conversation handed to a provider when a thread starts a fresh session on another provider instance, rebuilt from Phoenix's own read model rather than from provider-native session files (those are instance-scoped). Adapters declare one of two seeding tiers in their capabilities: `native-history` (Codex hands the transcript to the app-server as thread history) or `framed-prompt` (Claude and the ACP adapters frame it into the first prompt of the new session). See [conversationSeed.ts][26], [ProviderAdapter.ts][15], and [providers.md][16].
 
+#### Provider retry run
+
+A consecutive run of `runtime.warning` activities in which a provider reports that an upstream request failed and it is backing off to try again. Adapters signal it in their own shapes — OpenCode with `detail.type: "retry"`, Codex with `detail.willRetry` — and clients collapse a run into one timeline row rather than one row per notice. The row reads as `retrying` while it is the newest activity in a live turn, `recovered` once the turn moves past it, and `exhausted` when a `runtime.error` follows. Retries are not failures: the turn keeps running. See [providerRetryActivity.ts][30].
+
 #### Snapshot
 
 A point-in-time view of state. The word is used in multiple layers, including orchestration, provider, and checkpointing. See [ProjectionSnapshotQuery.ts][10], [ProviderAdapter.ts][15], and [CheckpointStore.ts][19].
@@ -282,3 +286,4 @@ A row in birdhouse's own Postgres-backed durable queue — leased with `for upda
 [27]: ./schedules.md
 [28]: ../../infra/birdhouse/README.md
 [29]: ./birdhouse.md
+[30]: ../../packages/shared/src/providerRetryActivity.ts

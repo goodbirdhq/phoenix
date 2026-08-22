@@ -10,6 +10,11 @@ import {
   type SpawnedSessionToolActivity,
 } from "@t3tools/shared/toolActivity";
 import {
+  appendProviderRetryAttempt,
+  deriveProviderRetryAttempt,
+  type ProviderRetryGroup,
+} from "@t3tools/shared/providerRetryActivity";
+import {
   ApprovalRequestId,
   isToolLifecycleItemType,
   type OrchestrationLatestTurn,
@@ -90,6 +95,12 @@ export interface WorkLogEntry {
   spawnedSession?: SpawnedSessionToolActivity;
   /** Dedicated presentation for Phoenix Schedule write MCP calls. */
   scheduleActivity?: ScheduleToolActivity;
+  /**
+   * Present on rows that collapsed a run of provider retry notices. The row
+   * label is derived at render time, where the turn's live state decides
+   * between "retrying" and "recovered".
+   */
+  providerRetry?: ProviderRetryGroup & { readonly followedByActivity: boolean };
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
   /** Grouping key for subagent lifecycle rows (one row per agent). */
@@ -930,6 +941,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (isTaskActivity && payload && isBackgroundTaskActivity(payload)) {
     entry.isBackgroundTask = true;
   }
+  if (activity.kind === "runtime.warning") {
+    const attempt = deriveProviderRetryAttempt(activity.payload);
+    if (attempt) {
+      entry.providerRetry = {
+        ...appendProviderRetryAttempt(undefined, attempt),
+        followedByActivity: false,
+      };
+    }
+  }
   const collapseKey = deriveToolLifecycleCollapseKey(entry);
   if (collapseKey) {
     entry.collapseKey = collapseKey;
@@ -1024,13 +1044,80 @@ function collapseDerivedWorkLogEntries(
       continue;
     }
     const previous = collapsed.at(-1);
+    // A run of provider retry notices is one event: the provider wobbled and
+    // backed off. Adjacency plus turn identity is the whole rule — anything
+    // landing between two notices means the first run already resolved.
+    if (previous?.providerRetry && entry.providerRetry && previous.turnId === entry.turnId) {
+      collapsed[collapsed.length - 1] = {
+        ...previous,
+        providerRetry: {
+          ...mergeProviderRetryGroups(previous.providerRetry, entry.providerRetry),
+          followedByActivity: false,
+        },
+      };
+      continue;
+    }
     if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
       continue;
     }
     collapsed.push(entry);
   }
-  return collapsed;
+  return resolveProviderRetryRows(collapsed);
+}
+
+/**
+ * The hard error that ends a retry run. Adapters historically emitted these
+ * turn-less (OpenCode cleared the active turn before building the event), so
+ * a missing turn on the error counts as "same turn" — adjacency in the
+ * activity stream is the real signal.
+ */
+function isProviderRetryTerminalError(
+  entry: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry | undefined,
+): boolean {
+  if (next?.activityKind !== "runtime.error") {
+    return false;
+  }
+  return next.turnId === entry.turnId || next.turnId === null || next.turnId === undefined;
+}
+
+function mergeProviderRetryGroups(
+  previous: ProviderRetryGroup,
+  next: ProviderRetryGroup,
+): ProviderRetryGroup {
+  return {
+    attempts: previous.attempts + next.attempts,
+    messages: [
+      ...previous.messages,
+      ...next.messages.filter((m) => !previous.messages.includes(m)),
+    ],
+    exhausted: previous.exhausted || next.exhausted,
+  };
+}
+
+/**
+ * Retries are only "still retrying" while they are the newest thing in the
+ * turn. Anything after them means the provider got through; a hard runtime
+ * error right after means it gave up instead.
+ */
+function resolveProviderRetryRows(
+  collapsed: ReadonlyArray<DerivedWorkLogEntry>,
+): DerivedWorkLogEntry[] {
+  return collapsed.map((entry, index) => {
+    if (!entry.providerRetry) {
+      return entry;
+    }
+    const next = collapsed[index + 1];
+    return {
+      ...entry,
+      providerRetry: {
+        ...entry.providerRetry,
+        exhausted: isProviderRetryTerminalError(entry, next),
+        followedByActivity: next !== undefined,
+      },
+    };
+  });
 }
 
 function shouldCollapseToolLifecycleEntries(

@@ -41,6 +41,11 @@ import {
 } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import {
+  providerRetryDetail,
+  providerRetryState,
+  providerRetrySummary,
+} from "@t3tools/shared/providerRetryActivity";
+import {
   getRenderablePatch,
   resolveDiffThemeName,
   resolveFileDiffPath,
@@ -60,6 +65,7 @@ import {
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
+  RefreshCwIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -1976,6 +1982,7 @@ type WorkEntryIconName =
   | "globe"
   | "hammer"
   | "message-circle"
+  | "refresh-cw"
   | "square-pen"
   | "terminal"
   | "wrench"
@@ -1998,6 +2005,8 @@ function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; classN
       return <HammerIcon className={className} aria-hidden />;
     case "message-circle":
       return <MessageCircleIcon className={className} aria-hidden />;
+    case "refresh-cw":
+      return <RefreshCwIcon className={className} aria-hidden />;
     case "square-pen":
       return <SquarePenIcon className={className} aria-hidden />;
     case "terminal":
@@ -2421,10 +2430,29 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const activity = use(TimelineRowActivityCtx);
   const [expanded, setExpanded] = useState(false);
   const iconConfig = workToneIcon(workEntry.tone);
-  const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
-  const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
-  const heading = toolWorkEntryHeading(workEntry);
-  const rawPreview = workEntryPreview(workEntry, workspaceRoot);
+  // Retry rows are their own thing: a self-healing provider wobble, not a
+  // failure, so they never take the warning ✗ treatment.
+  const retry = workEntry.providerRetry;
+  const retryState = retry
+    ? providerRetryState(retry, {
+        followedByActivity: retry.followedByActivity,
+        turnInProgress: activity.activeTurnInProgress,
+      })
+    : null;
+  const showWarningIndicator =
+    workEntry.sourceActivityKind === "runtime.warning" && retryState === null;
+  const entryIconName = retryState
+    ? retryState === "exhausted"
+      ? "circle-alert"
+      : "refresh-cw"
+    : showWarningIndicator
+      ? "x"
+      : workEntryIconName(workEntry);
+  const heading =
+    retry && retryState ? providerRetrySummary(retry, retryState) : toolWorkEntryHeading(workEntry);
+  const rawPreview = retry
+    ? (retry.messages.at(-1) ?? null)
+    : workEntryPreview(workEntry, workspaceRoot);
   const preview =
     rawPreview &&
     normalizeCompactToolLabel(rawPreview).toLowerCase() ===
@@ -2432,7 +2460,10 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
       ? null
       : rawPreview;
   const displayText = preview ? `${heading} - ${preview}` : heading;
-  const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
+  const expandedBody =
+    retry && retry.messages.length > 1
+      ? providerRetryDetail(retry)
+      : buildToolCallExpandedBody(workEntry, workspaceRoot);
   const canExpand = expandedBody !== null;
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle =
@@ -2440,19 +2471,29 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
     (workEntry.sourceActivityKind === "runtime.error" || !workLogEntryIsToolLike(workEntry));
   const iconWrapperClass = cn(
     "flex size-5 shrink-0 items-center justify-center",
-    showWarningIndicator
-      ? "text-destructive"
-      : showDestructiveRowStyle
+    retryState
+      ? retryState === "exhausted"
         ? "text-destructive"
-        : workEntry.tone === "tool" || showFailedIndicator
-          ? "text-icon-muted"
-          : iconConfig.className,
+        : "text-icon-muted"
+      : showWarningIndicator
+        ? "text-destructive"
+        : showDestructiveRowStyle
+          ? "text-destructive"
+          : workEntry.tone === "tool" || showFailedIndicator
+            ? "text-icon-muted"
+            : iconConfig.className,
   );
-  const headingClass = showWarningIndicator
-    ? "font-medium text-warning"
-    : showDestructiveRowStyle
+  const headingClass = retryState
+    ? retryState === "exhausted"
       ? "font-medium text-destructive"
-      : "font-medium text-foreground";
+      : retryState === "retrying"
+        ? "font-medium text-warning"
+        : "font-medium text-muted-foreground"
+    : showWarningIndicator
+      ? "font-medium text-warning"
+      : showDestructiveRowStyle
+        ? "font-medium text-destructive"
+        : "font-medium text-foreground";
   const turnSettled = !activity.activeTurnInProgress;
   const showNeutralIndicator = !turnSettled && workEntryIndicatesToolNeutralStatus(workEntry);
   const showSuccessIndicator =
