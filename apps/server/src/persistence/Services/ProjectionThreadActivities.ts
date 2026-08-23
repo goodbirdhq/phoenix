@@ -39,6 +39,21 @@ export const ListProjectionThreadActivitiesInput = Schema.Struct({
 });
 export type ListProjectionThreadActivitiesInput = typeof ListProjectionThreadActivitiesInput.Type;
 
+/**
+ * Activity kinds that can change a thread's pending-user-input tally.
+ *
+ * `listUserInputByThreadId` filters on exactly this set, and
+ * `derivePendingUserInputCountFromActivities` branches on exactly these kinds
+ * — every other kind is inert in that fold, so loading it is pure waste. Keep
+ * the two in sync: adding a branch to the fold without adding its kind here
+ * silently undercounts, which is why a test asserts the two agree.
+ */
+export const PENDING_USER_INPUT_ACTIVITY_KINDS = [
+  "user-input.requested",
+  "user-input.resolved",
+  "provider.user-input.respond.failed",
+] as const;
+
 export const DeleteProjectionThreadActivitiesInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -72,6 +87,18 @@ export interface ProjectionThreadActivityRepositoryShape {
    * sequence is unavailable).
    */
   readonly listByThreadId: (
+    input: ListProjectionThreadActivitiesInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectionThreadActivity>, ProjectionRepositoryError>;
+
+  /**
+   * List only the activity rows that can change the pending-user-input tally.
+   *
+   * Same ordering as `listByThreadId`, filtered to
+   * `PENDING_USER_INPUT_ACTIVITY_KINDS`. Threads accumulate tens of thousands
+   * of tool activities whose payloads run to megabytes; the summary refresh
+   * runs on nearly every event, so it must not read history it cannot use.
+   */
+  readonly listUserInputByThreadId: (
     input: ListProjectionThreadActivitiesInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadActivity>, ProjectionRepositoryError>;
 

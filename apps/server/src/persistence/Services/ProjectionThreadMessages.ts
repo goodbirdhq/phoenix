@@ -79,6 +79,18 @@ export interface ProjectionThreadMessageRepositoryShape {
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadMessage>, ProjectionRepositoryError>;
 
   /**
+   * Newest `createdAt` among the thread's user messages, or null when it has
+   * none.
+   *
+   * The summary refresh needs only this one timestamp; long threads carry
+   * thousands of messages, so it must not page the whole conversation in to
+   * take a maximum.
+   */
+  readonly getLatestUserMessageAt: (
+    input: ListProjectionThreadMessagesInput,
+  ) => Effect.Effect<IsoDateTime | null, ProjectionRepositoryError>;
+
+  /**
    * Delete projected thread messages by thread.
    */
   readonly deleteByThreadId: (
