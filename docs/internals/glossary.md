@@ -24,7 +24,7 @@ One running Phoenix server and the machine, filesystem, provider credentials, an
 Environment has a persisted `environmentId` and is the unit clients connect to, projects belong to,
 and resource metrics address. It is not a physical-machine identity: two Environments may run on one
 computer, and WSL or a container may expose a different host view. See
-[resource telemetry][31].
+[resource telemetry][30].
 
 #### Project
 
@@ -194,7 +194,7 @@ The prior conversation handed to a provider when a thread starts a fresh session
 
 #### Provider retry run
 
-A consecutive run of `runtime.warning` activities in which a provider reports that an upstream request failed and it is backing off to try again. Adapters signal it in their own shapes — OpenCode with `detail.type: "retry"`, Codex with `detail.willRetry` — and clients collapse a run into one timeline row rather than one row per notice. The row reads as `retrying` while it is the newest activity in a live turn, `recovered` once the turn moves past it, and `exhausted` when a `runtime.error` follows. Retries are not failures: the turn keeps running. See [providerRetryActivity.ts][30].
+A consecutive run of `runtime.warning` activities in which a provider reports that an upstream request failed and it is backing off to try again. Adapters signal it in their own shapes — OpenCode with `detail.type: "retry"`, Codex with `detail.willRetry` — and clients collapse a run into one timeline row rather than one row per notice. The row reads as `retrying` while it is the newest activity in a live turn, `recovered` once the turn moves past it, and `exhausted` when a `runtime.error` follows. Retries are not failures: the turn keeps running. See [providerRetryActivity.ts][29].
 
 #### Snapshot
 
@@ -226,27 +226,17 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 
 ### Birdhouse workflows
 
-Terms belonging to [birdhouse][28], the separate service that runs business workflows as Phoenix agent threads. Everything here lives outside the app — nothing in `apps/` or `packages/` uses these words — but they collide with product terms often enough to be worth pinning down. See [birdhouse.md][29].
+Terms belonging to [birdhouse][28], the separate repository whose business workflows run as Phoenix agent threads. Everything here lives outside the app — nothing in `apps/` or `packages/` uses these words — but they collide with product terms often enough to be worth pinning down.
 
-There is no longer a scheduling collision. Birdhouse briefly ran its own cron; it now delegates timing entirely to [Scheduling](#scheduling) above, so **Schedule** always means the product's. A Schedule fires a thread that **claims** its assignment from birdhouse over HTTP, like any other client.
+There is no scheduling collision: birdhouse does not schedule, so **Schedule** always means the product's, as defined in [Scheduling](#scheduling) above. A Schedule triggers a thread in a birdhouse checkout, and the thread reads its instructions from the repo it is already sitting in.
 
 #### Workflow
 
-A repeatable unit of business work, defined on disk as a directory holding `manifest.json` and `SKILL.md`. The repo owns the definition; birdhouse's database owns only its mode and whether it is enabled.
+A repeatable unit of business work, defined on disk in the birdhouse repo as a directory holding `SKILL.md`. There is no other copy: the file the agent reads is the definition.
 
 #### Run
 
-One execution of a workflow. A run drives exactly one **thread** and one **turn** in the senses above — birdhouse launches a real Phoenix thread per run and starts a single turn on it.
-
-#### Workflow mode
-
-How far a run's side effects may go: `fake` (complete immediately, touch nothing), `shadow` (do the work, record what it would have changed), or `live`. New workflows start in `shadow`.
-
-Not to be confused with **runtime mode** above, which is the Phoenix permission mode the launched thread runs under. Both are in play on the same run: a workflow's mode decides whether it should act, the thread's runtime mode decides what its harness will let it do. When either appears unqualified in a birdhouse context, it means the workflow one.
-
-#### Job
-
-A row in birdhouse's own Postgres-backed durable queue — leased with `for update skip locked`, heartbeated, retried. Unrelated to any queue in the app.
+Colloquially, one occasion of a workflow being carried out — a triggered thread doing the work end to end. Phoenix stores no such record, and neither does birdhouse; whether a given run happened, and whether it happened twice, is answered from the domain the workflow writes to.
 
 ## Practical Shortcuts
 
@@ -263,7 +253,7 @@ A row in birdhouse's own Postgres-backed durable queue — leased with `for upda
 - [Permission modes][18]
 - [Workspace layout][2]
 - [Schedule architecture][27]
-- [Birdhouse][29]
+- [Birdhouse][28]
 
 [1]: ../../packages/contracts/src/orchestration.ts
 [2]: ./workspace-layout.md
@@ -292,7 +282,6 @@ A row in birdhouse's own Postgres-backed durable queue — leased with `for upda
 [25]: ../../packages/contracts/src/providerInstance.ts
 [26]: ../../apps/server/src/provider/conversationSeed.ts
 [27]: ./schedules.md
-[28]: ../../infra/birdhouse/README.md
-[29]: ./birdhouse.md
-[30]: ../../packages/shared/src/providerRetryActivity.ts
-[31]: ./resource-telemetry.md
+[28]: ./birdhouse.md
+[29]: ../../packages/shared/src/providerRetryActivity.ts
+[30]: ./resource-telemetry.md
