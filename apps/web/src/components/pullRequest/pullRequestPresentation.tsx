@@ -187,10 +187,10 @@ export function pullRequestChecksState(
   checks: ReadonlyArray<PullRequestCheck>,
 ): PullRequestChecksState | null {
   if (checks.length === 0) return null;
-  const statuses = checks.map((check) => check.status);
-  if (statuses.includes("failure") || statuses.includes("cancelled")) return "failing";
-  if (statuses.includes("pending")) return "pending";
-  return statuses.includes("success") ? "passing" : null;
+  const statuses = new Set(checks.map((check) => check.status));
+  if (statuses.has("failure") || statuses.has("cancelled")) return "failing";
+  if (statuses.has("pending")) return "pending";
+  return statuses.has("success") ? "passing" : null;
 }
 
 /**
@@ -225,7 +225,7 @@ const REVIEW_OUTCOME_PRESENTATION = {
     toneClassName: "text-muted-foreground/70",
     ringClassName: "ring-2 ring-muted-foreground/60",
     staleRingClassName:
-      "ring-2 ring-[color-mix(in_srgb,var(--muted-foreground)_30%,var(--background))]",
+      "ring-2 ring-[color-mix(in_srgb,var(--contrast-muted-foreground)_30%,var(--background))]",
     badgeVariant: "outline",
   },
 } as const satisfies Record<

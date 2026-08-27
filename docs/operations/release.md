@@ -11,7 +11,7 @@ This document covers the unified release workflow for stable and nightly desktop
   - push tag matching `v*.*.*` for stable releases
   - scheduled nightly check every three hours
   - manual `workflow_dispatch` for either channel
-- Runs quality gates first: lint, typecheck, test.
+- Runs lint, typecheck, and tests alongside artifact builds. Publishing waits for every check.
 - Reads the shared production T3 Connect relay URL and Clerk client configuration before packaging clients.
 - Builds four artifacts in parallel for both channels:
   - macOS `arm64` DMG
@@ -176,6 +176,16 @@ workspace package named `t3`; that package name belongs to upstream. Desktop and
 must not advertise an automatic npm-based server update until Phoenix has a separately owned package
 identity and a tested distribution path.
 
+Upstream's ordering invariant — `publish_cli` before `release` before `deploy_web`, so a client is
+never released ahead of the server package it updates to — does not apply while there is no package
+to publish. Preserve it in shape if Phoenix ever gains one.
+
+For a release smoke test, connect the new client to a server on the previous version and verify that
+the update action reconnects to the matching server. When the release adds database migrations,
+verify that the remote update applies them and reconnects. A failed trial must restore the database
+snapshot and restart the previous server. Also test the manual and desktop-managed guidance when
+those environments are available.
+
 ## Desktop auto-update notes
 
 - Updater runtime: `apps/desktop/src/updates/DesktopUpdates.ts`.
@@ -326,6 +336,7 @@ Checklist:
 4. Push tag.
 5. Verify workflow steps:
    - preflight passes
+   - release quality checks pass
    - all matrix builds pass
    - release job uploads expected files
 6. Smoke test downloaded artifacts.

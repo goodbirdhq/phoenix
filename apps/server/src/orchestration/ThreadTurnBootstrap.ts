@@ -10,6 +10,7 @@ import {
   CommandId,
   EventId,
   GitCommandError,
+  type OrchestrationClientOrigin,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
   type ThreadId,
@@ -188,6 +189,7 @@ export class ThreadTurnBootstrap extends Context.Service<
   {
     readonly bootstrapTurnStart: (
       command: ThreadTurnStartCommand,
+      options?: { readonly origin?: OrchestrationClientOrigin },
     ) => Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError>;
     readonly cleanupRecoveredThread: (
       threadId: ThreadId,
@@ -223,6 +225,7 @@ export const make = Effect.gen(function* () {
 
   const appendSetupScriptActivity = (input: {
     readonly threadId: ThreadId;
+    readonly origin?: { readonly origin?: OrchestrationClientOrigin } | undefined;
     readonly kind:
       | "setup-script.requested"
       | "setup-script.started"
@@ -238,27 +241,30 @@ export const make = Effect.gen(function* () {
       activityId: serverEventId,
     }).pipe(
       Effect.flatMap(({ commandId, activityId }) =>
-        orchestrationEngine.dispatch({
-          type: "thread.activity.append",
-          commandId,
-          threadId: input.threadId,
-          activity: {
-            id: activityId,
-            tone: input.tone,
-            kind: input.kind,
-            summary: input.summary,
-            payload: input.payload,
-            turnId: null,
+        orchestrationEngine.dispatch(
+          {
+            type: "thread.activity.append",
+            commandId,
+            threadId: input.threadId,
+            activity: {
+              id: activityId,
+              tone: input.tone,
+              kind: input.kind,
+              summary: input.summary,
+              payload: input.payload,
+              turnId: null,
+              createdAt: input.createdAt,
+            },
             createdAt: input.createdAt,
           },
-          createdAt: input.createdAt,
-        }),
+          input.origin,
+        ),
       ),
     );
 
   const bootstrapTurnStart: ThreadTurnBootstrap["Service"]["bootstrapTurnStart"] = Effect.fn(
     "ThreadTurnBootstrap.bootstrapTurnStart",
-  )(function* (command) {
+  )(function* (command, options) {
     const bootstrap = command.bootstrap;
     const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
     // A retry owns the deterministic Thread left by its interrupted first
@@ -277,15 +283,18 @@ export const make = Effect.gen(function* () {
       createdThread
         ? serverCommandId("bootstrap-thread-delete").pipe(
             Effect.flatMap((commandId) =>
-              orchestrationEngine.dispatch({
-                type: "thread.delete",
-                commandId,
-                threadId: command.threadId,
-              }),
+              orchestrationEngine.dispatch(
+                {
+                  type: "thread.delete",
+                  commandId,
+                  threadId: command.threadId,
+                },
+                options,
+              ),
             ),
-            Effect.ignoreCause({ log: true }),
+            Effect.as(true),
           )
-        : Effect.void;
+        : Effect.succeed(false);
 
     const recordSetupScriptLaunchFailure = (input: {
       readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
@@ -295,6 +304,7 @@ export const make = Effect.gen(function* () {
       const detail = projectSetupScriptCompatibilityDetail(input.error);
       return appendSetupScriptActivity({
         threadId: command.threadId,
+        origin: options,
         kind: "setup-script.failed",
         summary: "Setup script failed to start",
         createdAt: input.requestedAt,
@@ -338,6 +348,7 @@ export const make = Effect.gen(function* () {
         };
         const startedActivity = appendSetupScriptActivity({
           threadId: command.threadId,
+          origin: options,
           kind: "setup-script.started",
           summary: "Setup script started",
           createdAt: startedAt,
@@ -349,6 +360,7 @@ export const make = Effect.gen(function* () {
             ? [
                 appendSetupScriptActivity({
                   threadId: command.threadId,
+                  origin: options,
                   kind: "setup-script.requested",
                   summary: "Starting setup script",
                   createdAt: input.requestedAt,
@@ -400,6 +412,7 @@ export const make = Effect.gen(function* () {
           }
           yield* appendSetupScriptActivity({
             threadId: command.threadId,
+            origin: options,
             kind: "setup-script.requested",
             summary: "Starting setup script",
             createdAt: requestedAt,
@@ -431,6 +444,7 @@ export const make = Effect.gen(function* () {
                     ? Effect.void
                     : appendSetupScriptActivity({
                         threadId: command.threadId,
+                        origin: options,
                         kind: "setup-script.completed",
                         summary: "No setup script configured",
                         createdAt: requestedAt,
@@ -455,21 +469,24 @@ export const make = Effect.gen(function* () {
 
     const bootstrapProgram = Effect.gen(function* () {
       if (bootstrap?.createThread) {
-        yield* orchestrationEngine.dispatch({
-          type: "thread.create",
-          commandId: yield* serverCommandId("bootstrap-thread-create"),
-          threadId: command.threadId,
-          projectId: bootstrap.createThread.projectId,
-          title: bootstrap.createThread.title,
-          modelSelection: bootstrap.createThread.modelSelection,
-          runtimeMode: bootstrap.createThread.runtimeMode,
-          interactionMode: bootstrap.createThread.interactionMode,
-          branch: bootstrap.createThread.branch,
-          worktreePath: bootstrap.createThread.worktreePath,
-          spawnedByThreadId: bootstrap.createThread.spawnedByThreadId ?? null,
-          reportDelivery: bootstrap.createThread.reportDelivery ?? null,
-          createdAt: bootstrap.createThread.createdAt,
-        });
+        yield* orchestrationEngine.dispatch(
+          {
+            type: "thread.create",
+            commandId: yield* serverCommandId("bootstrap-thread-create"),
+            threadId: command.threadId,
+            projectId: bootstrap.createThread.projectId,
+            title: bootstrap.createThread.title,
+            modelSelection: bootstrap.createThread.modelSelection,
+            runtimeMode: bootstrap.createThread.runtimeMode,
+            interactionMode: bootstrap.createThread.interactionMode,
+            branch: bootstrap.createThread.branch,
+            worktreePath: bootstrap.createThread.worktreePath,
+            spawnedByThreadId: bootstrap.createThread.spawnedByThreadId ?? null,
+            reportDelivery: bootstrap.createThread.reportDelivery ?? null,
+            createdAt: bootstrap.createThread.createdAt,
+          },
+          options,
+        );
         createdThread = true;
       }
 
@@ -532,19 +549,22 @@ export const make = Effect.gen(function* () {
           targetWorktreePath = worktree.worktree.path;
           resolvedBranch = worktree.worktree.refName;
         }
-        yield* orchestrationEngine.dispatch({
-          type: "thread.meta.update",
-          commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
-          threadId: command.threadId,
-          branch: resolvedBranch,
-          worktreePath: targetWorktreePath,
-        });
+        yield* orchestrationEngine.dispatch(
+          {
+            type: "thread.meta.update",
+            commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
+            threadId: command.threadId,
+            branch: resolvedBranch,
+            worktreePath: targetWorktreePath,
+          },
+          options,
+        );
         yield* refreshGitStatus(targetWorktreePath);
       }
 
       yield* runSetupProgram();
 
-      return yield* orchestrationEngine.dispatch(finalTurnStartCommand);
+      return yield* orchestrationEngine.dispatch(finalTurnStartCommand, options);
     });
 
     return yield* bootstrapProgram.pipe(
@@ -553,7 +573,25 @@ export const make = Effect.gen(function* () {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.fail(dispatchError);
         }
-        return cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
+        return Effect.uninterruptible(cleanupCreatedThread()).pipe(
+          Effect.matchCauseEffect({
+            onFailure: (cleanupCause) =>
+              Effect.logWarning("bootstrap thread cleanup failed", {
+                threadId: command.threadId,
+                detail: Cause.pretty(cleanupCause),
+              }).pipe(Effect.flatMap(() => Effect.fail(dispatchError))),
+            onSuccess: (threadDeleted) =>
+              Effect.fail(
+                threadDeleted
+                  ? new OrchestrationDispatchCommandError({
+                      message: dispatchError.message,
+                      ...(dispatchError.cause !== undefined ? { cause: dispatchError.cause } : {}),
+                      bootstrapThreadDisposition: "deleted",
+                    })
+                  : dispatchError,
+              ),
+          }),
+        );
       }),
     );
   });

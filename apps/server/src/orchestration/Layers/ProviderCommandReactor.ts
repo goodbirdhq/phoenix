@@ -23,6 +23,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -328,6 +329,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     const providerService = yield* ProviderService;
     const providerRegistry = yield* ProviderRegistry;
     const gitWorkflow = yield* GitWorkflowService;
+    const fileSystem = yield* FileSystem.FileSystem;
     const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
     const textGeneration = yield* TextGeneration;
     const serverSettingsService = yield* ServerSettingsService;
@@ -454,6 +456,52 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       return yield* projectionSnapshotQuery
         .getProjectShellById(projectId)
         .pipe(Effect.map(Option.getOrUndefined));
+    });
+
+    /**
+     * Recreates a thread's worktree from its branch when the directory has
+     * disappeared. Provider sessions resume into the persisted cwd, so a missing
+     * worktree makes every later turn fail as a bogus "session not found".
+     * Best-effort: on failure the turn proceeds and reports the real error.
+     */
+    const ensureThreadWorktree = Effect.fnUntraced(function* (thread: {
+      readonly id: ThreadId;
+      readonly projectId: ProjectId;
+      readonly branch: string | null;
+      readonly worktreePath: string | null;
+    }) {
+      const { worktreePath, branch } = thread;
+      if (!worktreePath || !branch) {
+        return;
+      }
+      const exists = yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true));
+      if (exists) {
+        return;
+      }
+      const project = yield* resolveProject(thread.projectId);
+      if (!project) {
+        return;
+      }
+      const cwd = project.workspaceRoot;
+      yield* Effect.logWarning("provider command reactor recreating missing worktree", {
+        threadId: thread.id,
+        worktreePath,
+        branch,
+      });
+      // A directory deleted without `git worktree remove` leaves an admin entry
+      // that makes `git worktree add` refuse the path; prune clears it.
+      yield* gitWorkflow.pruneWorktrees({ cwd }).pipe(
+        Effect.andThen(gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath })),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("provider command reactor failed to recreate worktree", {
+                threadId: thread.id,
+                worktreePath,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      );
     });
 
     const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -1228,6 +1276,8 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         return;
       }
 
+      yield* ensureThreadWorktree(thread);
+
       const isFirstUserMessageTurn =
         thread.messages.filter((entry) => entry.role === "user").length === 1;
       if (isFirstUserMessageTurn) {
@@ -1363,6 +1413,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             }),
           ),
           Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) {
+              return Effect.interrupt;
+            }
             const orphaned = hasProviderAdapterSessionNotFoundError(cause);
             return appendProviderFailureActivity({
               threadId: event.payload.threadId,
@@ -1381,9 +1434,12 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       // lifecycle event the session stays "running" forever, stranding queued
       // messages. Settle on success, on timeout (the user asked to stop; do not
       // recreate the stuck-forever state), and for phantom sessions whose
-      // runtime died with a previous process. A definite failure keeps the
-      // session running: the provider is alive and may still be working, so
-      // claiming idle would invite messages that interleave with live work.
+      // runtime died with a previous process.
+      //
+      // A definite failure keeps the session running: the provider is alive and
+      // may still be working, so claiming it idle — or stopped — would invite
+      // the next message to interleave with live work. Upstream escalates to a
+      // session stop here instead; see docs/operations/upstream-integrations.
       if (outcome === "failed") {
         return;
       }
