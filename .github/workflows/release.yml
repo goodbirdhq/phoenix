@@ -344,15 +344,15 @@ jobs:
             arch: arm64
             rust_target: aarch64-apple-darwin
             resource_key: darwin-arm64
-          - label: macOS x64
-            runner: macos-15
-            platform: mac
-            target: dmg
-            arch: x64
-            rust_target: x86_64-apple-darwin
-            resource_key: darwin-x64
-          # Linux and Windows builds are parked until we want them — macOS is
-          # the only desktop target we ship right now.
+          # Linux, Windows, and Intel macOS builds are parked until we want
+          # them — Apple Silicon is the only desktop target we ship right now.
+          # - label: macOS x64
+          #   runner: macos-15
+          #   platform: mac
+          #   target: dmg
+          #   arch: x64
+          #   rust_target: x86_64-apple-darwin
+          #   resource_key: darwin-x64
           # - label: Linux x64
           #   runner: ubuntu-24.04
           #   platform: linux
