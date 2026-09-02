@@ -715,29 +715,26 @@ jobs:
   publish_cli:
     name: Publish CLI to npm
     needs: [preflight, relay_public_config, quality, build]
-    # Skips gracefully (per-step) while the NPM_TOKEN secret is unset, and
-    # tolerates the skipped relay job like the build does. Unlike upstream we
-    # publish token-based (no trusted-publisher config) and without bundled
-    # resource monitors: the matrix only builds darwin-arm64, and shipping one
+    # Publishes via npm trusted publishing (OIDC, id-token: write) — the
+    # registry trusts this workflow directly, no token secret. Gated on the
+    # NPM_TRUSTED_PUBLISHING repo variable so forks without the npmjs-side
+    # trusted-publisher config skip cleanly. Tolerates the skipped relay job
+    # like the build does. Unlike upstream we publish without bundled resource
+    # monitors: the matrix only builds darwin-arm64, and shipping one
     # platform's monitor in a cross-platform npm package helps no one.
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && needs.build.result == 'success' && (needs.relay_public_config.result == 'success' || needs.relay_public_config.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && needs.build.result == 'success' && (needs.relay_public_config.result == 'success' || needs.relay_public_config.result == 'skipped') && vars.NPM_TRUSTED_PUBLISHING == 'true' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read
+      id-token: write
     env:
-      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
       T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
       T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
       T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       T3CODE_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
     steps:
-      - name: Explain skip
-        if: ${{ env.HAS_NPM_TOKEN != 'true' }}
-        run: echo "NPM_TOKEN is not configured; skipping npm publish."
-
       - name: Checkout
-        if: ${{ env.HAS_NPM_TOKEN == 'true' }}
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
@@ -747,7 +744,6 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Setup Vite+
-        if: ${{ env.HAS_NPM_TOKEN == 'true' }}
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
@@ -759,23 +755,16 @@ jobs:
               - --filter=@t3tools/scripts...
 
       - name: Align package versions to release version
-        if: ${{ env.HAS_NPM_TOKEN == 'true' }}
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
       # The @goodbirdhq/phoenix build task depends on @t3tools/web#build, so the
       # web client is built (once) as part of this step.
       - name: Build CLI package
-        if: ${{ env.HAS_NPM_TOKEN == 'true' }}
         run: vp run --filter t3 build
 
       - name: Publish CLI package
-        if: ${{ env.HAS_NPM_TOKEN == 'true' }}
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-
           channel="${{ needs.preflight.outputs.release_channel }}"
           if [[ "$channel" == "nightly" ]]; then
             dist_tag="nightly"
