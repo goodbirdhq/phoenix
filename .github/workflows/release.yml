@@ -889,12 +889,14 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+    env:
+      HAS_RELEASE_APP: ${{ secrets.RELEASE_APP_ID != '' }}
     steps:
       # Forks without the release GitHub App fall back to the workflow token;
       # the version-bump commit then comes from github-actions[bot].
       - id: app_token
         name: Mint release app token
-        if: ${{ secrets.RELEASE_APP_ID != '' }}
+        if: ${{ env.HAS_RELEASE_APP == 'true' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
