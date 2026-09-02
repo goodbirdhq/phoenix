@@ -71,6 +71,15 @@ export type AuthSessionId = typeof AuthSessionId.Type;
 export const RpcClientId = NonNegativeInt.pipe(Schema.brand("RpcClientId"));
 export type RpcClientId = typeof RpcClientId.Type;
 
+/**
+ * Which client app a connection comes from. Unlike
+ * `AuthClientMetadataDeviceType` (a UA-style device class where web and
+ * desktop are both "desktop"), this names the actual product surface.
+ * Optional everywhere it appears: old clients never send it.
+ */
+export const ClientSurface = Schema.Literals(["web", "desktop", "mobile"]);
+export type ClientSurface = typeof ClientSurface.Type;
+
 export const ProviderItemId = makeEntityId("ProviderItemId");
 export type ProviderItemId = typeof ProviderItemId.Type;
 export const RuntimeSessionId = makeEntityId("RuntimeSessionId");
@@ -85,3 +94,14 @@ export const ApprovalRequestId = makeEntityId("ApprovalRequestId");
 export type ApprovalRequestId = typeof ApprovalRequestId.Type;
 export const CheckpointRef = makeEntityId("CheckpointRef");
 export type CheckpointRef = typeof CheckpointRef.Type;
+
+/**
+ * Why a provider runtime error ended a turn, when the adapter can tell.
+ *
+ * Lives here rather than beside the rest of the provider runtime schemas
+ * because both `orchestration.ts` and `providerRuntime.ts` need it, and those
+ * two already reference each other; a shared leaf keeps that from becoming a
+ * module-initialisation cycle.
+ */
+export const ProviderRuntimeErrorKind = Schema.Literals(["usage-limit"]);
+export type ProviderRuntimeErrorKind = typeof ProviderRuntimeErrorKind.Type;

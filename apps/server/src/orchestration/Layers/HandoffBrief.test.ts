@@ -171,6 +171,7 @@ const makeProviderHarness = Effect.fn("makeProviderHarness")(function* (outcome:
         },
       }),
     rollbackConversation: () => unsupported(),
+    uploadFeedback: () => unsupported(),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEvents);
     },

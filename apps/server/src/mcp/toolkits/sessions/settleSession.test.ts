@@ -325,7 +325,7 @@ const makeHarness = (options: HarnessOptions) => {
           : Effect.succeed({ commitSha: remoteSha, remoteRefName: `origin/${input.refName}` });
       }),
     listWorktrees: () => Effect.sync(() => []),
-    ...(options.gitOverrides ?? {}),
+    ...options.gitOverrides,
   } as unknown as GitWorkflowService.GitWorkflowService["Service"];
 
   const sourceControlProviders = {

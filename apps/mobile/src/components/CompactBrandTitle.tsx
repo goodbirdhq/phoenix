@@ -32,6 +32,7 @@ export function brandTitleOffset(nativeLeadingItem: boolean): number {
  */
 export function CompactBrandTitle(
   props: {
+    readonly allowFontScaling?: boolean;
     readonly nativeLeadingItem?: boolean;
   } = {},
 ) {
@@ -55,6 +56,7 @@ export function CompactBrandTitle(
       }}
     >
       <Text
+        allowFontScaling={props.allowFontScaling}
         style={{
           color: iconColor,
           fontFamily: "DMSans-Medium",
@@ -73,6 +75,7 @@ export function CompactBrandTitle(
         }}
       >
         <Text
+          allowFontScaling={props.allowFontScaling}
           style={{
             color: mutedColor,
             fontFamily: "DMSans-Bold",
@@ -89,7 +92,7 @@ export function CompactBrandTitle(
 }
 
 export function renderCompactBrandTitle() {
-  return <CompactBrandTitle />;
+  return <CompactBrandTitle allowFontScaling={Platform.OS === "ios"} />;
 }
 
 export function renderCompactBrandHeaderItems(): NativeStackHeaderItem[] {

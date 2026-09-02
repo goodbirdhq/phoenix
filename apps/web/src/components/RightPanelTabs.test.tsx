@@ -1,11 +1,11 @@
 import type { DesktopPreviewFavicon, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
-  isLauncherShortcutTypingElement,
   RightPanelTabs,
   surfaceShortcutActionForKey,
+  surfaceShortcutTargetsTypingContext,
   tabMuteMenuItem,
 } from "./RightPanelTabs";
 
@@ -148,16 +148,6 @@ describe("RightPanelTabs preview favicon", () => {
   });
 });
 
-describe("RightPanelTabs launcher shortcuts", () => {
-  it("treats an empty contenteditable composer as a typing target", () => {
-    const closest = vi.fn().mockReturnValue({ contentEditable: "true", textContent: "" });
-    const target = { closest } as unknown as HTMLElement;
-
-    expect(isLauncherShortcutTypingElement(target)).toBe(true);
-    expect(closest).toHaveBeenCalledWith("input, textarea, select, [contenteditable]");
-  });
-});
-
 describe("surface shortcuts", () => {
   const actions = [
     { shortcut: "B", available: true, label: "Browser" },
@@ -181,6 +171,33 @@ describe("surface shortcuts", () => {
     expect(
       surfaceShortcutActionForKey(actions, shortcutEvent("b", { defaultPrevented: true })),
     ).toBeNull();
+  });
+});
+
+describe("surface shortcut typing contexts", () => {
+  // Selector-aware stub: closest() answers only tokens the combined selector
+  // would actually match, mirroring how the browser resolves it.
+  const makeTarget = (matches: string | null) => ({
+    closest(selectors: string) {
+      if (matches === null || !selectors.includes(matches)) return null;
+      return {};
+    },
+  });
+
+  it("treats form fields and every editable region as typing contexts", () => {
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("input"))).toBe(true);
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("textarea"))).toBe(true);
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("select"))).toBe(true);
+    // The chat composer is a contenteditable that sits empty until a draft
+    // exists; launcher letters claimed from it redirected prompts into shells.
+    // The :not clause sees past contenteditable="false" islands to an editable
+    // host around them, so nested editors stay protected too.
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("[contenteditable]"))).toBe(true);
+  });
+
+  it("claims letters when focus sits outside any editable region", () => {
+    expect(surfaceShortcutTargetsTypingContext(null)).toBe(false);
+    expect(surfaceShortcutTargetsTypingContext(makeTarget(null))).toBe(false);
   });
 });
 

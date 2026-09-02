@@ -9,11 +9,38 @@ possible.** Anything we can turn off outside the repository, we do.
 
 ## What runs
 
-| Workflow                              | State  | Notes                                                                                       |
-| ------------------------------------- | ------ | ------------------------------------------------------------------------------------------- |
-| `CI` (`ci.yml`)                       | **on** | `check`, `test`, `release_smoke`. Our only edits are the runner labels and one `if: false`. |
-| `Phoenix Build` (`phoenix-build.yml`) | **on** | Phoenix-only file. Unsigned macOS build per merge to `main`.                                |
-| `PR Size`, `Issue Labels`             | on     | Self-contained, no external services.                                                       |
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs these quality gates on pull
+requests and pushes to `main`:
+
+- **Check**: `vp check` (format and lint; this repo sets `typeCheck: false` in its lint options),
+  then `vpr typecheck` for the workspace type check. The same job builds the desktop pipeline
+  (`vp run build:desktop`) and verifies the preload bundle exists and still exports its expected
+  symbols.
+- **Test**: every workspace package except `t3` (the server) and the monorepo root.
+- **Test Server 1..3**: `apps/server` sets `fileParallelism: false`, so its files run strictly one
+  at a time. Three shards spread them over separate runners rather than separate workers, keeping
+  that isolation while cutting wall-clock. Exactly one shard produces the transfer budget report.
+- **Rust**: `native/resource-monitor` format, clippy, and tests, split out so `check` and `test`
+  stop paying for a Rust toolchain install they barely use.
+- **Mobile Native Static Analysis**: `vp run lint:mobile` on macOS. **Parked** for Phoenix (see
+  below). A cheap Linux **Mobile Native Changes** job gates it: the macOS runner only boots when
+  the diff touches `apps/mobile` Swift/Kotlin sources, the SwiftLint/detekt/ktlint configuration,
+  the `Brewfile`, the check script, the root `package.json` that defines `lint:mobile`, or
+  `ci.yml`. Renames are matched on both their old and new path. The gate fails open in every other
+  case: if the changed-file list cannot be resolved, GitHub truncates it, or the gate job itself
+  fails, the lint runs.
+- **Release Smoke**: exercises release-only workflow steps through `scripts/release-smoke.ts`, so
+  release breakage surfaces on PRs rather than at tag time.
+
+New job names mean new required-check names. `Test Server 1`, `Test Server 2`, `Test Server 3`, and
+`Rust` have to be added to branch protection, and the old single `Test` check no longer covers the
+server.
+
+| Workflow                              | State  | Notes                                                                                                              |
+| ------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------ |
+| `CI` (`ci.yml`)                       | **on** | `check`, `test`, `test_server`, `rust`, `release_smoke`. Our only edits are the runner labels and one `if: false`. |
+| `Phoenix Build` (`phoenix-build.yml`) | **on** | Phoenix-only file. Unsigned macOS build per merge to `main`.                                                       |
+| `PR Size`, `Issue Labels`             | on     | Self-contained, no external services.                                                                              |
 
 ## What is disabled, and why
 
@@ -28,6 +55,7 @@ and never conflict on merge:
 | `Mobile EAS Preview` / `Mobile EAS Production` | Needs T3's Expo account (`EXPO_TOKEN`).                                                                                             |
 | `Mobile Fingerprint Check`                     | Native mobile work is parked; would flag our bundle-ID and scheme changes on every PR.                                              |
 | `Mobile Showcase Screenshots`                  | Marketing screenshots for T3's app-store listings.                                                                                  |
+| `Desktop macOS Preview`                        | Per-PR macOS DMG on a Blacksmith runner behind a `preview:mac` label. Inert unlabelled; queues forever if labelled.                 |
 | `PR Vouch`                                     | Upstream's contributor-vouching process.                                                                                            |
 | `Thread Transfer Report`                       | Upstream-internal reporting.                                                                                                        |
 
@@ -35,9 +63,10 @@ Re-enable any of them with `gh workflow enable "<name>"`. Because this is reposi
 than committed config, it is **invisible in a fresh clone** — that is the trade-off we accepted for
 zero merge conflicts. This table is the record.
 
-`ci.yml`'s `mobile_native_static_analysis` job is the exception: it is disabled in-repo with
-`if: false` because it is a job inside an otherwise-enabled workflow. Flip it back when mobile
-native work restarts.
+`ci.yml`'s `mobile_native_static_analysis` job is the exception: it is disabled in-repo because it
+is a job inside an otherwise-enabled workflow. Upstream's change-detection gate is kept wired
+underneath the park, so the condition reads `false && !cancelled() && ...`. Drop the `false &&`
+when mobile native work restarts and the job returns to running only on native diffs.
 
 ## Runners
 
