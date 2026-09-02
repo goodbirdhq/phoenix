@@ -250,7 +250,9 @@ jobs:
         run: |
           failed=0
           version="$(npx expo config --json --type public | jq -r '.version')"
-          for platform in ios android; do
+          # Android is parked: auto-submit needs a Google Play service account
+          # key this fork has not set up. Restore "ios android" once it exists.
+          for platform in ios; do
             latest="$(eas build:list --platform "$platform" --build-profile production --limit 1 --json --non-interactive | jq -r '.[0].appVersion // "none"')"
             if [ "$latest" = "$version" ]; then
               echo "$platform: production build for $version already exists (or is in progress)"
