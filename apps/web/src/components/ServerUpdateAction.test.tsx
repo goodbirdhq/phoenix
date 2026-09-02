@@ -1,23 +1,78 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import type { EnvironmentId } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/unstable/reactivity";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+const testState = vi.hoisted(() => ({
+  updateServer: vi.fn(),
+  toast: vi.fn(),
+  continueThreadsAfterServerUpdate: false,
+}));
+
+vi.mock("~/hooks/useCopyToClipboard", () => ({
+  useCopyToClipboard: () => ({ copyToClipboard: vi.fn() }),
+}));
+vi.mock("~/hooks/useSettings", () => ({
+  useClientSettings: (
+    selector: (settings: { continueThreadsAfterServerUpdate: boolean }) => unknown,
+  ) => selector({ continueThreadsAfterServerUpdate: testState.continueThreadsAfterServerUpdate }),
+}));
+vi.mock("~/state/server", () => ({
+  serverEnvironment: { updateServer: Symbol("updateServer") },
+}));
+vi.mock("~/state/use-atom-command", () => ({
+  useAtomCommand: () => testState.updateServer,
+}));
+vi.mock("./ui/toast", () => ({
+  toastManager: { add: testState.toast },
+}));
 
 import { ServerUpdateAction, ServerUpdateProgress } from "./ServerUpdateAction";
 
+type ActionElement = ReactElement<{
+  readonly onClick?: () => void;
+}>;
+
+function renderAction(): ActionElement {
+  return ServerUpdateAction({
+    environmentId: "env-test" as EnvironmentId,
+    serverLabel: "Test server",
+    selfUpdate: "boot-service",
+    targetVersion: "0.0.31",
+  }) as ActionElement;
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("ServerUpdateAction", () => {
-  it("does not offer legacy npm-based server updates", () => {
-    const markup = renderToStaticMarkup(
-      <ServerUpdateAction
-        environmentId={"env-test" as EnvironmentId}
-        serverLabel="Test server"
-        selfUpdate="boot-service"
-        targetVersion="0.0.31"
-      />,
+  beforeEach(() => {
+    testState.updateServer.mockReset();
+    testState.toast.mockReset();
+    testState.continueThreadsAfterServerUpdate = false;
+  });
+
+  it("reports success only after the shared update flow reconnects", async () => {
+    testState.updateServer.mockResolvedValue(
+      AsyncResult.success({ targetVersion: "0.0.31", method: "boot-service" as const }),
     );
 
-    expect(markup).toContain("Build and relaunch Phoenix from source");
-    expect(markup).not.toContain("t3@");
-    expect(markup).not.toContain("<button");
+    renderAction().props.onClick?.();
+    await flushPromises();
+
+    expect(testState.updateServer).toHaveBeenCalledWith({
+      environmentId: "env-test",
+      input: { targetVersion: "0.0.31" },
+    });
+    expect(testState.toast).toHaveBeenCalledWith({
+      type: "success",
+      title: "Test server updated",
+      description: "Reconnected on @goodbirdhq/phoenix@0.0.31.",
+    });
   });
 
   it("directs desktop-managed servers to the desktop app", () => {
@@ -31,6 +86,92 @@ describe("ServerUpdateAction", () => {
     );
 
     expect(markup).toContain("Update the desktop app on the machine that runs Desktop server");
+  });
+
+  it("keeps the manual instruction for desktop servers without remote update support", () => {
+    const markup = renderToStaticMarkup(
+      <ServerUpdateAction
+        environmentId={"env-test" as EnvironmentId}
+        serverLabel="Test server"
+        selfUpdate="desktop-managed"
+        targetVersion="0.0.31"
+      />,
+    );
+
+    expect(markup).toContain("Update the desktop app on that machine to update this server.");
+    expect(markup).not.toContain("<button");
+  });
+
+  it("updates remote desktop apps through the shared update flow", async () => {
+    testState.updateServer.mockResolvedValue(
+      AsyncResult.success({ targetVersion: "0.0.34", method: "desktop-app" as const }),
+    );
+
+    const action = ServerUpdateAction({
+      environmentId: "env-test" as EnvironmentId,
+      serverLabel: "Test server",
+      selfUpdate: "desktop-managed",
+      desktopAppUpdate: true,
+      targetVersion: "0.0.31",
+    }) as ActionElement;
+
+    // No confirm-dialog host is mounted in this test, which the component
+    // treats as consent: the click itself was the request.
+    action.props.onClick?.();
+    await flushPromises();
+
+    expect(testState.updateServer).toHaveBeenCalledWith({
+      environmentId: "env-test",
+      input: { targetVersion: "0.0.31" },
+    });
+    expect(testState.toast).toHaveBeenCalledWith({
+      type: "success",
+      title: "Test server updated",
+      description: "Desktop app relaunched on 0.0.34.",
+    });
+  });
+
+  it("leaves thread continuation off by default", async () => {
+    testState.updateServer.mockResolvedValue(
+      AsyncResult.success({ targetVersion: "0.0.31", method: "boot-service" as const }),
+    );
+    const action = ServerUpdateAction({
+      environmentId: "env-test" as EnvironmentId,
+      serverLabel: "Test server",
+      selfUpdate: "boot-service",
+      threadContinuation: true,
+      targetVersion: "0.0.31",
+    }) as ActionElement;
+
+    action.props.onClick?.();
+    await flushPromises();
+
+    expect(testState.updateServer).toHaveBeenCalledWith({
+      environmentId: "env-test",
+      input: { targetVersion: "0.0.31" },
+    });
+  });
+
+  it("applies the saved thread continuation preference automatically", async () => {
+    testState.updateServer.mockResolvedValue(
+      AsyncResult.success({ targetVersion: "0.0.31", method: "boot-service" as const }),
+    );
+    testState.continueThreadsAfterServerUpdate = true;
+    const action = ServerUpdateAction({
+      environmentId: "env-test" as EnvironmentId,
+      serverLabel: "Test server",
+      selfUpdate: "boot-service",
+      threadContinuation: true,
+      targetVersion: "0.0.31",
+    }) as ActionElement;
+
+    action.props.onClick?.();
+    await flushPromises();
+
+    expect(testState.updateServer).toHaveBeenCalledWith({
+      environmentId: "env-test",
+      input: { targetVersion: "0.0.31", continueRunningThreads: true },
+    });
   });
 });
 

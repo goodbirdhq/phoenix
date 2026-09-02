@@ -1,3 +1,5 @@
+import * as Cause from "effect/Cause";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -14,8 +16,13 @@ import {
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
+  ClientConnectionMethod,
+  ClientDeviceType,
+  ClientOs,
   ClientSurface,
+  ClientWebDeployment,
   CommandId,
+  EventId,
   type DiscoveredLocalServerList,
   type EditorId,
   type FileManagerRevealKind,
@@ -27,7 +34,6 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
-  type OrchestrationThreadStreamItem,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationSearchThreadsError,
@@ -46,7 +52,7 @@ import {
   ProviderUploadFeedbackError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
-  type ServerSelfUpdateError,
+  ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
@@ -73,12 +79,14 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
+import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import {
   projectActivityEvent,
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
+import { makeThreadLiveEventCoalescer } from "./orchestration/ThreadLiveEventCoalescer.ts";
 import {
   cleanupFailedUploadedAttachments,
   normalizeDispatchCommand,
@@ -86,6 +94,7 @@ import {
 import { prepareClientOrchestrationCommand } from "./orchestration/ClientCommandPreparation.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -101,6 +110,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -112,7 +122,6 @@ import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
-import * as ThreadTurnBootstrap from "./orchestration/ThreadTurnBootstrap.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -137,7 +146,6 @@ import * as SourceControlProviderRegistry from "./sourceControl/SourceControlPro
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
-import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
@@ -166,6 +174,18 @@ export const resolveFileManagerRevealKindForConfig = <E, R>(
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
+}
+
+function legacySetupFailureDescription(cause: unknown): string {
+  if (
+    typeof cause === "object" &&
+    cause !== null &&
+    "message" in cause &&
+    typeof cause.message === "string"
+  ) {
+    return cause.message;
+  }
+  return String(cause);
 }
 
 /** Preserve the setup runner's broader pre-refactor message normalization. */
@@ -273,6 +293,19 @@ function projectFileFailureContext(
   }
 }
 
+function projectSetupScriptCompatibilityDetail(
+  error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError,
+): string {
+  switch (error._tag) {
+    case "ProjectSetupScriptOperationError":
+      return legacySetupFailureDescription(error.cause);
+    case "ProjectSetupScriptProjectNotFoundError":
+      return "Project was not found for setup script execution.";
+    default:
+      return unexpectedCompatibilityError(error);
+  }
+}
+
 export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
@@ -316,6 +349,10 @@ const SHELL_RESUME_MAX_GAP = 1_000;
 // hundreds of thousands of events behind have OOM-killed servers on large
 // databases. Past this gap the client is reset with a fresh thread snapshot.
 const THREAD_RESUME_MAX_GAP = 1_000;
+// Row count alone does not bound replay memory: a few events with large tool
+// payloads can decode to gigabytes. Before replaying, sum the serialized
+// payload bytes of the range in SQL and reset with a snapshot past this budget.
+const ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES = 8 * 1024 * 1024;
 
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
@@ -358,7 +395,12 @@ function toAuthAccessStreamEvent(
 }
 
 const isClientSurface = Schema.is(ClientSurface);
+const isClientConnectionMethod = Schema.is(ClientConnectionMethod);
+const isClientDeviceType = Schema.is(ClientDeviceType);
+const isClientOs = Schema.is(ClientOs);
+const isClientWebDeployment = Schema.is(ClientWebDeployment);
 const MAX_CLIENT_APP_VERSION_LENGTH = 64;
+const MAX_CLIENT_BROWSER_LENGTH = 64;
 const MAX_CLIENT_DEVICE_MODEL_LENGTH = 80;
 
 // Optional client identity announced on the /ws upgrade URL next to wsTicket.
@@ -381,43 +423,65 @@ function readClientConnectionOrigin(
   };
 }
 
-const clientOriginAnalyticsProps = (origin: OrchestrationClientOrigin) => ({
-  ...(origin.surface !== undefined ? { surface: origin.surface } : {}),
-  ...(origin.appVersion !== undefined ? { appVersion: origin.appVersion } : {}),
-});
-
-function readMobileDeviceAnalyticsProps(request: HttpServerRequest.HttpServerRequest) {
+// Client telemetry stays in this socket's RPC layer. It must not become a
+// server-global "current client" because several client types can connect at once.
+function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) {
   const url = HttpServerRequest.toURL(request);
-  if (Option.isNone(url) || url.value.searchParams.get("clientSurface") !== "mobile") {
+  if (Option.isNone(url)) {
     return {};
   }
 
+  const surface = url.value.searchParams.get("clientSurface");
+  const appVersion = url.value.searchParams.get("clientAppVersion")?.trim() ?? "";
+  const deviceType = url.value.searchParams.get("clientDeviceType");
   const os = url.value.searchParams.get("clientOs");
+  const webDeployment = url.value.searchParams.get("clientWebDeployment");
+  const browser = url.value.searchParams.get("clientBrowser")?.trim() ?? "";
+  const connectionMethod = url.value.searchParams.get("connectionMethod");
   const rawOsMajorVersion = url.value.searchParams.get("clientOsMajorVersion") ?? "";
   const osMajorVersion = Number(rawOsMajorVersion);
   const deviceModel = url.value.searchParams.get("clientDeviceModel")?.trim() ?? "";
+  const isMobile = surface === "mobile";
+  const hasOsMajorVersion =
+    isMobile && rawOsMajorVersion !== "" && Number.isInteger(osMajorVersion) && osMajorVersion > 0;
+  const hasDeviceModel =
+    isMobile && deviceModel !== "" && deviceModel.length <= MAX_CLIENT_DEVICE_MODEL_LENGTH;
 
   return {
-    ...(os === "iOS" || os === "Android" ? { os } : {}),
-    ...(rawOsMajorVersion !== "" && Number.isInteger(osMajorVersion) && osMajorVersion > 0
-      ? { osMajorVersion }
+    ...(isClientSurface(surface) ? { surface } : {}),
+    ...(appVersion !== "" && appVersion.length <= MAX_CLIENT_APP_VERSION_LENGTH
+      ? { appVersion, clientAppVersion: appVersion }
       : {}),
-    ...(deviceModel !== "" && deviceModel.length <= MAX_CLIENT_DEVICE_MODEL_LENGTH
-      ? { deviceModel }
+    ...(isClientOs(os)
+      ? {
+          clientOs: os,
+          ...(isMobile && (os === "iOS" || os === "Android") ? { os } : {}),
+        }
       : {}),
+    ...(isClientDeviceType(deviceType) ? { clientDeviceType: deviceType } : {}),
+    ...(surface === "web" && isClientWebDeployment(webDeployment) ? { webDeployment } : {}),
+    ...(surface === "web" && browser !== "" && browser.length <= MAX_CLIENT_BROWSER_LENGTH
+      ? { clientBrowser: browser }
+      : {}),
+    ...(hasOsMajorVersion ? { osMajorVersion, clientOsMajorVersion: osMajorVersion } : {}),
+    ...(hasDeviceModel ? { deviceModel, clientDeviceModel: deviceModel } : {}),
+    ...(isClientConnectionMethod(connectionMethod) ? { connectionMethod } : {}),
   };
 }
 
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
+  clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
+      const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const threadDeletionReactor = yield* ThreadDeletionReactor;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Every command dispatched on this connection carries the connecting
       // client's origin, including server-generated bootstrap sub-commands:
@@ -431,28 +495,24 @@ const makeWsRpcLayer = (
           command,
           hasClientOrigin ? { origin: clientOrigin } : undefined,
         );
-      // The bootstrap service is shared with the sessions MCP toolkit, which has
-      // no client, so the origin rides in as an argument rather than a captured
-      // dispatcher.
-      const dispatchOptions = hasClientOrigin ? { origin: clientOrigin } : undefined;
-      const originProps = clientOriginAnalyticsProps(clientOrigin);
       const recordClientCommandAnalytics = (command: OrchestrationCommand) => {
         switch (command.type) {
           case "thread.create":
-            return analytics.record("client.thread.started", originProps);
+            return analytics.record("client.thread.started", clientAnalyticsProps);
           case "thread.turn.start":
             return command.bootstrap?.createThread
               ? Effect.andThen(
-                  analytics.record("client.thread.started", originProps),
-                  analytics.record("client.turn.requested", originProps),
+                  analytics.record("client.thread.started", clientAnalyticsProps),
+                  analytics.record("client.turn.requested", clientAnalyticsProps),
                 )
-              : analytics.record("client.turn.requested", originProps);
+              : analytics.record("client.turn.requested", clientAnalyticsProps);
           default:
             return Effect.void;
         }
       };
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
+      const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -483,14 +543,50 @@ const makeWsRpcLayer = (
         } satisfies ProviderAvailability);
       };
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
-      const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+      const serverUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
-      const threadTurnBootstrap = yield* ThreadTurnBootstrap.ThreadTurnBootstrap;
+      const canReplayPersistedRange = Effect.fnUntraced(function* (
+        afterSequence: number,
+        headSequence: number,
+        maxGap: number,
+      ) {
+        const replayGap = headSequence - afterSequence;
+        if (replayGap < 0 || replayGap > maxGap) {
+          return false;
+        }
+        const stats = yield* projectionSnapshotQuery
+          .getEventReplayStats({
+            fromSequenceExclusive: afterSequence,
+            toSequenceInclusive: headSequence,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationGetSnapshotError({
+                  message: "Failed to measure orchestration replay range",
+                  cause,
+                }),
+            ),
+          );
+        if (stats.payloadBytes > ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES) {
+          yield* Effect.logDebug("orchestration replay replaced by snapshot", {
+            afterSequence,
+            headSequence,
+            replayGap,
+            eventCount: stats.eventCount,
+            payloadBytes: stats.payloadBytes,
+            payloadBudgetBytes: ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES,
+          });
+          return false;
+        }
+        return true;
+      });
+      const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
@@ -592,6 +688,15 @@ const makeWsRpcLayer = (
               message: cause instanceof Error ? cause.message : fallbackMessage,
               cause,
             });
+      const randomUUID = crypto.randomUUIDv4.pipe(
+        Effect.mapError((cause) =>
+          toDispatchCommandError(cause, "Failed to generate orchestration command identifier."),
+        ),
+      );
+      const serverEventId = randomUUID.pipe(Effect.map(EventId.make));
+      const serverCommandId = (tag: string) =>
+        randomUUID.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
+
       const loadAuthAccessSnapshot = () =>
         Effect.all({
           pairingLinks: serverAuth.listPairingLinks(),
@@ -604,6 +709,48 @@ const makeWsRpcLayer = (
               }),
           ),
         );
+
+      const appendSetupScriptActivity = (input: {
+        readonly threadId: ThreadId;
+        readonly kind: "setup-script.requested" | "setup-script.started" | "setup-script.failed";
+        readonly summary: string;
+        readonly createdAt: string;
+        readonly payload: Record<string, unknown>;
+        readonly tone: "info" | "error";
+      }) =>
+        Effect.all({
+          commandId: serverCommandId("setup-script-activity"),
+          activityId: serverEventId,
+        }).pipe(
+          Effect.flatMap(({ commandId, activityId }) =>
+            dispatchFromClient({
+              type: "thread.activity.append",
+              commandId,
+              threadId: input.threadId,
+              activity: {
+                id: activityId,
+                tone: input.tone,
+                kind: input.kind,
+                summary: input.summary,
+                payload: input.payload,
+                turnId: null,
+                createdAt: input.createdAt,
+              },
+              createdAt: input.createdAt,
+            }),
+          ),
+        );
+
+      const toBootstrapDispatchCommandCauseError = (cause: Cause.Cause<unknown>) => {
+        const error = Cause.squash(cause);
+        return isOrchestrationDispatchCommandError(error)
+          ? error
+          : new OrchestrationDispatchCommandError({
+              message:
+                error instanceof Error ? error.message : "Failed to bootstrap thread turn start.",
+              cause,
+            });
+      };
 
       const toShellStreamEvent = (
         event: OrchestrationEvent,
@@ -816,13 +963,267 @@ const makeWsRpcLayer = (
           Stream.flatMap((items) => Stream.fromIterable(items)),
         );
 
+      const dispatchBootstrapTurnStart = (
+        command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+      ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
+        Effect.gen(function* () {
+          const bootstrap = command.bootstrap;
+          const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
+          let createdThread = false;
+          let targetProjectId = bootstrap?.createThread?.projectId;
+          let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
+          let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
+
+          const cleanupCreatedThread = () =>
+            createdThread
+              ? serverCommandId("bootstrap-thread-delete").pipe(
+                  Effect.flatMap((commandId) =>
+                    dispatchFromClient({
+                      type: "thread.delete",
+                      commandId,
+                      threadId: command.threadId,
+                    }),
+                  ),
+                  Effect.as(true),
+                )
+              : Effect.succeed(false);
+
+          const recordSetupScriptLaunchFailure = (input: {
+            readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
+            readonly requestedAt: string;
+            readonly worktreePath: string;
+          }) => {
+            const detail = projectSetupScriptCompatibilityDetail(input.error);
+            return appendSetupScriptActivity({
+              threadId: command.threadId,
+              kind: "setup-script.failed",
+              summary: "Setup script failed to start",
+              createdAt: input.requestedAt,
+              payload: {
+                detail,
+                worktreePath: input.worktreePath,
+              },
+              tone: "error",
+            }).pipe(
+              Effect.ignoreCause({ log: false }),
+              Effect.flatMap(() =>
+                Effect.logWarning("bootstrap turn start failed to launch setup script", {
+                  threadId: command.threadId,
+                  worktreePath: input.worktreePath,
+                  detail,
+                }),
+              ),
+            );
+          };
+
+          const recordSetupScriptStarted = (input: {
+            readonly requestedAt: string;
+            readonly worktreePath: string;
+            readonly scriptId: string;
+            readonly scriptName: string;
+            readonly terminalId: string;
+          }) =>
+            Effect.gen(function* () {
+              const startedAt = yield* nowIso;
+              const payload = {
+                scriptId: input.scriptId,
+                scriptName: input.scriptName,
+                terminalId: input.terminalId,
+                worktreePath: input.worktreePath,
+              };
+              yield* Effect.all([
+                appendSetupScriptActivity({
+                  threadId: command.threadId,
+                  kind: "setup-script.requested",
+                  summary: "Starting setup script",
+                  createdAt: input.requestedAt,
+                  payload,
+                  tone: "info",
+                }),
+                appendSetupScriptActivity({
+                  threadId: command.threadId,
+                  kind: "setup-script.started",
+                  summary: "Setup script started",
+                  createdAt: startedAt,
+                  payload,
+                  tone: "info",
+                }),
+              ]).pipe(
+                Effect.asVoid,
+                Effect.catch((error) =>
+                  Effect.logWarning(
+                    "bootstrap turn start launched setup script but failed to record setup activity",
+                    {
+                      threadId: command.threadId,
+                      worktreePath: input.worktreePath,
+                      scriptId: input.scriptId,
+                      terminalId: input.terminalId,
+                      detail: error.message,
+                    },
+                  ),
+                ),
+              );
+            });
+
+          const runSetupProgram = () =>
+            Effect.gen(function* () {
+              if (!bootstrap?.runSetupScript || !targetWorktreePath) {
+                return;
+              }
+              const worktreePath = targetWorktreePath;
+              const requestedAt = yield* nowIso;
+              yield* projectSetupScriptRunner
+                .runForThread({
+                  threadId: command.threadId,
+                  ...(targetProjectId ? { projectId: targetProjectId } : {}),
+                  ...(targetProjectCwd ? { projectCwd: targetProjectCwd } : {}),
+                  worktreePath,
+                })
+                .pipe(
+                  Effect.matchEffect({
+                    onFailure: (error) =>
+                      recordSetupScriptLaunchFailure({
+                        error,
+                        requestedAt,
+                        worktreePath,
+                      }),
+                    onSuccess: (setupResult) => {
+                      if (setupResult.status !== "started") {
+                        return Effect.void;
+                      }
+                      return recordSetupScriptStarted({
+                        requestedAt,
+                        worktreePath,
+                        scriptId: setupResult.scriptId,
+                        scriptName: setupResult.scriptName,
+                        terminalId: setupResult.terminalId,
+                      });
+                    },
+                  }),
+                );
+            });
+
+          const bootstrapProgram = Effect.gen(function* () {
+            if (bootstrap?.createThread) {
+              const created = yield* dispatchFromClient({
+                type: "thread.create",
+                commandId: yield* serverCommandId("bootstrap-thread-create"),
+                threadId: command.threadId,
+                projectId: bootstrap.createThread.projectId,
+                title: bootstrap.createThread.title,
+                modelSelection: bootstrap.createThread.modelSelection,
+                runtimeMode: bootstrap.createThread.runtimeMode,
+                interactionMode: bootstrap.createThread.interactionMode,
+                branch: bootstrap.createThread.branch,
+                worktreePath: bootstrap.createThread.worktreePath,
+                createdAt: bootstrap.createThread.createdAt,
+              });
+              // The successful create is a fence in the engine command queue:
+              // every delete for the prior incarnation committed before it.
+              // Drain through that event before setup or turn start can own
+              // terminals and provider sessions under the reused thread id.
+              yield* threadDeletionReactor.drainThrough(created.sequence);
+              createdThread = true;
+            }
+
+            if (bootstrap?.prepareWorktree) {
+              let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
+              // "Start from origin" is a stored default; repos without the
+              // requested remote branch fall back to the local base branch.
+              const startFromOrigin =
+                bootstrap.prepareWorktree.startFromOrigin === true &&
+                (yield* gitWorkflow.remoteExists({
+                  cwd: bootstrap.prepareWorktree.projectCwd,
+                  remoteName: "origin",
+                }));
+              if (startFromOrigin) {
+                yield* gitWorkflow.fetchRemote({
+                  cwd: bootstrap.prepareWorktree.projectCwd,
+                  remoteName: "origin",
+                });
+                const remoteBaseExists = yield* gitWorkflow.remoteBranchExists({
+                  cwd: bootstrap.prepareWorktree.projectCwd,
+                  refName: bootstrap.prepareWorktree.baseBranch,
+                  remoteName: "origin",
+                });
+                if (remoteBaseExists) {
+                  const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+                    cwd: bootstrap.prepareWorktree.projectCwd,
+                    refName: bootstrap.prepareWorktree.baseBranch,
+                    fallbackRemoteName: "origin",
+                  });
+                  worktreeBaseRef = resolvedRemoteBase.commitSha;
+                }
+              }
+              const worktree = yield* gitWorkflow.createWorktree({
+                cwd: bootstrap.prepareWorktree.projectCwd,
+                refName: worktreeBaseRef,
+                newRefName: bootstrap.prepareWorktree.branch,
+                baseRefName: bootstrap.prepareWorktree.baseBranch,
+                path: null,
+              });
+              targetWorktreePath = worktree.worktree.path;
+              yield* dispatchFromClient({
+                type: "thread.meta.update",
+                commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
+                threadId: command.threadId,
+                branch: worktree.worktree.refName,
+                worktreePath: targetWorktreePath,
+              });
+              yield* refreshGitStatus(targetWorktreePath);
+            }
+
+            yield* runSetupProgram();
+
+            return yield* dispatchFromClient(finalTurnStartCommand);
+          });
+
+          return yield* bootstrapProgram.pipe(
+            Effect.catchCause((cause) => {
+              const dispatchError = toBootstrapDispatchCommandCauseError(cause);
+              if (Cause.hasInterruptsOnly(cause)) {
+                return Effect.fail(dispatchError);
+              }
+              return Effect.uninterruptible(cleanupCreatedThread()).pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cleanupCause) =>
+                    Effect.logWarning("bootstrap thread cleanup failed", {
+                      threadId: command.threadId,
+                      detail: Cause.pretty(cleanupCause),
+                    }).pipe(Effect.flatMap(() => Effect.fail(dispatchError))),
+                  onSuccess: (threadDeleted) =>
+                    Effect.fail(
+                      threadDeleted
+                        ? new OrchestrationDispatchCommandError({
+                            message: dispatchError.message,
+                            ...(dispatchError.cause !== undefined
+                              ? { cause: dispatchError.cause }
+                              : {}),
+                            bootstrapThreadDisposition: "deleted",
+                          })
+                        : dispatchError,
+                    ),
+                }),
+              );
+            }),
+          );
+        });
+
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
         const dispatchEffect =
           normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
-            ? threadTurnBootstrap.bootstrapTurnStart(normalizedCommand, dispatchOptions)
+            ? dispatchBootstrapTurnStart(normalizedCommand)
             : dispatchFromClient(normalizedCommand).pipe(
+                Effect.tap(({ sequence }) =>
+                  // Returning from thread.create is the handoff point at which
+                  // clients may start resources for the new incarnation. Use
+                  // its event sequence as the exact deletion-cleanup fence.
+                  normalizedCommand.type === "thread.create"
+                    ? threadDeletionReactor.drainThrough(sequence)
+                    : Effect.void,
+                ),
                 Effect.mapError((cause) =>
                   toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
                 ),
@@ -925,23 +1326,17 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
               const preparedCommand = yield* prepareClientOrchestrationCommand(normalizedCommand);
-              // Archive and settle both mean "done with this thread", so a
-              // live provider session must not keep running background work
-              // (PR monitors, dev servers, subagent fleets) after either
-              // lands. The decider rejects settling a starting/running
-              // session, so for settle this only ever stops an idle one; a
-              // stopped session-set does not count as activity, so the stop
-              // cannot un-settle the thread it follows.
-              const parkingCommand =
-                preparedCommand.type === "thread.archive" ||
-                preparedCommand.type === "thread.settle"
-                  ? preparedCommand
-                  : undefined;
-              // Best-effort on purpose: the user's archive/settle must not
+              // Archive removes the thread from the client, so this transport
+              // closes its session and terminals after the command lands.
+              // Settlement cleanup is driven by thread.settled events in the
+              // provider reactor, including settlements that have no client.
+              const archiveCommand =
+                preparedCommand.type === "thread.archive" ? preparedCommand : undefined;
+              // Best-effort on purpose: the user's archive must not
               // fail because this cleanup read blipped, so a failed read
               // logs and skips the stop instead of propagating.
-              const shouldStopSessionAfterCommand = parkingCommand
-                ? yield* projectionSnapshotQuery.getThreadShellById(parkingCommand.threadId).pipe(
+              const shouldStopSessionAfterCommand = archiveCommand
+                ? yield* projectionSnapshotQuery.getThreadShellById(archiveCommand.threadId).pipe(
                     Effect.map(
                       Option.match({
                         onNone: () => false,
@@ -952,7 +1347,7 @@ const makeWsRpcLayer = (
                     Effect.catchCause((cause) =>
                       Effect.logWarning(
                         "failed to read thread session state before session-stop check",
-                        { threadId: parkingCommand.threadId, cause },
+                        { threadId: archiveCommand.threadId, cause },
                       ).pipe(Effect.as(false)),
                     ),
                   )
@@ -961,50 +1356,39 @@ const makeWsRpcLayer = (
                 Effect.tapError(() => cleanupFailedUploadedAttachments(command, preparedCommand)),
               );
               yield* recordClientCommandAnalytics(preparedCommand);
-              if (parkingCommand) {
-                const parkingKind = parkingCommand.type === "thread.archive" ? "archive" : "settle";
+              if (archiveCommand) {
                 if (shouldStopSessionAfterCommand) {
                   yield* Effect.gen(function* () {
                     const stopCommand = yield* normalizeDispatchCommand({
                       type: "thread.session.stop",
                       commandId: CommandId.make(
-                        `session-stop-for-${parkingKind}:${parkingCommand.commandId}`,
+                        `session-stop-for-archive:${archiveCommand.commandId}`,
                       ),
-                      threadId: parkingCommand.threadId,
+                      threadId: archiveCommand.threadId,
                       createdAt: yield* nowIso,
-                      // A settled thread can be re-engaged before this stop is
-                      // decided; the decider then drops the stop instead of
-                      // killing the new session. Archive stops stay
-                      // unconditional: turn starts on archived threads are
-                      // rejected, so there is no new session to protect.
-                      ...(parkingKind === "settle" ? { onlyIfSettled: true } : {}),
                     });
 
                     yield* dispatchNormalizedCommand(stopCommand);
                   }).pipe(
                     Effect.catchCause((cause) =>
-                      Effect.logWarning(`failed to stop provider session during ${parkingKind}`, {
-                        threadId: parkingCommand.threadId,
+                      Effect.logWarning("failed to stop provider session during archive", {
+                        threadId: archiveCommand.threadId,
                         cause,
                       }),
                     ),
                   );
                 }
 
-                // Terminals are user-opened panes, not thread background
-                // work: archive removes the thread from view so they close
-                // with it, but a settled thread stays reachable and may be
-                // un-settled, so its terminals stay up.
-                if (parkingCommand.type === "thread.archive") {
-                  yield* terminalManager.close({ threadId: parkingCommand.threadId }).pipe(
-                    Effect.catch((error) =>
-                      Effect.logWarning("failed to close thread terminals after archive", {
-                        threadId: parkingCommand.threadId,
-                        error: error.message,
-                      }),
-                    ),
-                  );
-                }
+                // Archive removes the thread from view, so its user-opened
+                // terminal panes close with it.
+                yield* terminalManager.close({ threadId: archiveCommand.threadId }).pipe(
+                  Effect.catch((error) =>
+                    Effect.logWarning("failed to close thread terminals after archive", {
+                      threadId: archiveCommand.threadId,
+                      error: error.message,
+                    }),
+                  ),
+                );
               }
               return result;
             }).pipe(
@@ -1138,7 +1522,13 @@ const makeWsRpcLayer = (
                 // is also invalid, so reset it with a snapshot. Send the snapshot
                 // followed by the buffered live tail, exactly as the
                 // no-afterSequence path does.
-                if (replayGap < 0 || replayGap > SHELL_RESUME_MAX_GAP) {
+                if (
+                  !(yield* canReplayPersistedRange(
+                    afterSequence,
+                    headSequence,
+                    SHELL_RESUME_MAX_GAP,
+                  ))
+                ) {
                   const snapshot = yield* loadSnapshot;
                   return Stream.concat(
                     Stream.make({ kind: "snapshot" as const, snapshot }),
@@ -1204,17 +1594,15 @@ const makeWsRpcLayer = (
                 Stream.filter(isThisThreadDetailEvent),
                 Stream.map((event) => ({
                   kind: "event" as const,
-                  event: projectActivityEvent(event),
+                  event,
                 })),
               );
 
               // Attach live delivery before reading either replay or snapshot state.
               // Otherwise an event published while the snapshot is loading is lost.
-              const liveBuffer = yield* Queue.unbounded<OrchestrationThreadStreamItem>();
-              yield* Effect.forkScoped(
-                liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
-              );
-              const bufferedLiveStream = Stream.fromQueue(liveBuffer);
+              const liveBuffer = yield* makeThreadLiveEventCoalescer();
+              yield* Effect.forkScoped(liveStream.pipe(Stream.runForEach(liveBuffer.offer)));
+              const bufferedLiveStream = liveBuffer.stream;
 
               // When the client already loaded the snapshot over HTTP it passes
               // that snapshot's sequence, and we resume the live subscription by
@@ -1242,7 +1630,9 @@ const makeWsRpcLayer = (
                 const afterSequence = input.afterSequence;
                 const headSequence = yield* orchestrationEngine.latestSequence;
                 const replayGap = headSequence - afterSequence;
-                if (replayGap >= 0 && replayGap <= THREAD_RESUME_MAX_GAP) {
+                if (
+                  yield* canReplayPersistedRange(afterSequence, headSequence, THREAD_RESUME_MAX_GAP)
+                ) {
                   const catchUpStream = orchestrationEngine
                     .readEvents(afterSequence, replayGap)
                     .pipe(
@@ -1263,8 +1653,10 @@ const makeWsRpcLayer = (
                     input.requestCompletionMarker === true
                       ? Stream.concat(
                           Stream.fromEffect(
-                            Queue.offer(liveBuffer, { kind: "synchronized" as const }),
-                          ).pipe(Stream.drain),
+                            liveBuffer
+                              .offerAndWait({ kind: "synchronized" as const })
+                              .pipe(Effect.andThen(liveBuffer.takeAll)),
+                          ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
                           bufferedLiveStream,
                         )
                       : bufferedLiveStream;
@@ -1305,8 +1697,10 @@ const makeWsRpcLayer = (
                 input.requestCompletionMarker === true
                   ? Stream.concat(
                       Stream.fromEffect(
-                        Queue.offer(liveBuffer, { kind: "synchronized" as const }),
-                      ).pipe(Stream.drain),
+                        liveBuffer
+                          .offerAndWait({ kind: "synchronized" as const })
+                          .pipe(Effect.andThen(liveBuffer.takeAll)),
+                      ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
                       bufferedLiveStream,
                     )
                   : bufferedLiveStream;
@@ -1331,9 +1725,14 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
-            (input.instanceId !== undefined
-              ? providerRegistry.refreshInstance(input.instanceId)
-              : providerRegistry.refresh()
+            (input.cwd !== undefined && input.instanceId !== undefined
+              ? providerRegistry.refreshWorkspaceSnapshot({
+                  instanceId: input.instanceId,
+                  cwd: input.cwd,
+                })
+              : input.instanceId !== undefined
+                ? providerRegistry.refreshInstance(input.instanceId)
+                : providerRegistry.refresh()
             ).pipe(Effect.map((providers) => ({ providers }))),
             { "rpc.aggregate": "server" },
           ),
@@ -1367,14 +1766,14 @@ const makeWsRpcLayer = (
             },
           ),
         [WS_METHODS.serverUpdateServer]: (input) =>
-          observeRpcEffect(WS_METHODS.serverUpdateServer, serverSelfUpdate.update(input), {
+          observeRpcEffect(WS_METHODS.serverUpdateServer, serverUpdate.update(input), {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverUpdateServerWithProgress]: (input) =>
           observeRpcStream(
             WS_METHODS.serverUpdateServerWithProgress,
             Stream.callback<ServerSelfUpdateProgressEvent, ServerSelfUpdateError>((queue) =>
-              serverSelfUpdate
+              serverUpdate
                 .update(input, (stage) =>
                   Queue.offer(queue, {
                     type: "progress",
@@ -1395,6 +1794,12 @@ const makeWsRpcLayer = (
                   Effect.forkScoped,
                 ),
             ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverCommitDesktopUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverCommitDesktopUpdate,
+            serverUpdate.commitDesktopUpdate(input.requestId),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverUpsertKeybinding]: (rule) =>
@@ -1685,6 +2090,10 @@ const makeWsRpcLayer = (
           }),
         [WS_METHODS.pullRequestsListStats]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsListStats, pullRequests.listStats(input), {
+            "rpc.aggregate": "pull-requests",
+          }),
+        [WS_METHODS.pullRequestsSummary]: (input) =>
+          observeRpcEffect(WS_METHODS.pullRequestsSummary, pullRequests.summary(input), {
             "rpc.aggregate": "pull-requests",
           }),
         [WS_METHODS.pullRequestsDetail]: (input) =>
@@ -2222,7 +2631,7 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "preview" },
           ),
-        [WS_METHODS.subscribeServerConfig]: (_input) =>
+        [WS_METHODS.subscribeServerConfig]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeServerConfig,
             Effect.gen(function* () {
@@ -2244,6 +2653,23 @@ const makeWsRpcLayer = (
                 })),
                 Stream.debounce(Duration.millis(PROVIDER_STATUS_DEBOUNCE_MS)),
               );
+              // The only source of published themes: the stream emits the
+              // current set before any change, so the snapshot carrying it too
+              // would just send every client the same array twice per connect.
+              // Gated on the subscriber's capability flag because an
+              // already-shipped client decodes this stream against the old
+              // event union and its whole config subscription dies on an
+              // unknown member.
+              const environmentThemeUpdates =
+                input.environmentThemes === true
+                  ? environmentTheme.streamChanges.pipe(
+                      Stream.map((themes) => ({
+                        version: 1 as const,
+                        type: "environmentThemesUpdated" as const,
+                        payload: { themes },
+                      })),
+                    )
+                  : Stream.empty;
               const settingsUpdates = serverSettings.streamChanges.pipe(
                 Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
                 Stream.map((settings) => ({
@@ -2259,7 +2685,10 @@ const makeWsRpcLayer = (
 
               const liveUpdates = Stream.merge(
                 keybindingsUpdates,
-                Stream.merge(providerStatuses, settingsUpdates),
+                Stream.merge(
+                  providerStatuses,
+                  Stream.merge(settingsUpdates, environmentThemeUpdates),
+                ),
               );
 
               return Stream.concat(
@@ -2358,7 +2787,32 @@ const makeWsRpcLayer = (
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-    const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+    const baseServerSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+    const config = yield* ServerConfig.ServerConfig;
+    const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
+    const serverSelfUpdate = yield* ServerSelfUpdate.withRunningThreadContinuation({
+      mode: config.mode,
+      selfUpdate: baseServerSelfUpdate,
+      prepare: startup.markRunningProviderSessionsForContinuation.pipe(
+        Effect.mapError(
+          (cause) =>
+            new ServerSelfUpdateError({
+              reason: "Could not prepare running threads to continue after the update.",
+              cause,
+            }),
+        ),
+      ),
+      clear: (threadIds) =>
+        startup.clearProviderSessionContinuationMarkers(threadIds).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSelfUpdateError({
+                reason: "Could not clear thread continuation markers after the update failed.",
+                cause,
+              }),
+          ),
+        ),
+    });
     const pullRequests = yield* PullRequestService.PullRequestService;
     return HttpRouter.add(
       "GET",
@@ -2370,23 +2824,29 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const analytics = yield* AnalyticsService.AnalyticsService;
         const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
           Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
-            failEnvironmentAuthInvalid(EnvironmentAuth.serverAuthCredentialReason(error)),
+            failEnvironmentAuthInvalid(
+              EnvironmentAuth.serverAuthCredentialReason(error),
+              EnvironmentAuth.serverAuthDpopFailureReason(error),
+            ),
           ),
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("internal_error", error),
           ),
         );
         const clientOrigin = readClientConnectionOrigin(request);
+        const clientAnalyticsProps = readClientAnalyticsProps(request);
         yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
-        yield* analytics.record("client.connected", {
-          ...clientOriginAnalyticsProps(clientOrigin),
-          ...readMobileDeviceAnalyticsProps(request),
-        });
+        yield* analytics.record("client.connected", clientAnalyticsProps);
         const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, clientOrigin, previewAutomationBroker).pipe(
+            makeWsRpcLayer(
+              session,
+              clientOrigin,
+              clientAnalyticsProps,
+              previewAutomationBroker,
+            ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
@@ -2411,7 +2871,6 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                       ),
                     ),
                   ),
-                  Layer.provide(VcsProcess.layer),
                 ),
               ),
             ),

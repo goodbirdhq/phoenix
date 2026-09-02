@@ -13,22 +13,19 @@ possible.** Anything we can turn off outside the repository, we do.
 requests and pushes to `main`:
 
 - **Check**: `vp check` (format and lint; this repo sets `typeCheck: false` in its lint options),
-  then `vpr typecheck` for the workspace type check. The same job builds the desktop pipeline
-  (`vp run build:desktop`) and verifies the preload bundle exists and still exports its expected
-  symbols.
-- **Test**: every workspace package except `t3` (the server) and the monorepo root.
-- **Test Server 1..3**: `apps/server` sets `fileParallelism: false`, so its files run strictly one
-  at a time. Three shards spread them over separate runners rather than separate workers, keeping
-  that isolation while cutting wall-clock. Exactly one shard produces the transfer budget report.
-- **Rust**: `native/resource-monitor` format, clippy, and tests, split out so `check` and `test`
-  stop paying for a Rust toolchain install they barely use.
-- **Mobile Native Static Analysis**: `vp run lint:mobile` on macOS. **Parked** for Phoenix (see
-  below). A cheap Linux **Mobile Native Changes** job gates it: the macOS runner only boots when
-  the diff touches `apps/mobile` Swift/Kotlin sources, the SwiftLint/detekt/ktlint configuration,
-  the `Brewfile`, the check script, the root `package.json` that defines `lint:mobile`, or
-  `ci.yml`. Renames are matched on both their old and new path. The gate fails open in every other
-  case: if the changed-file list cannot be resolved, GitHub truncates it, or the gate job itself
-  fails, the lint runs.
+  then `vpr typecheck` for the workspace type check. The same job
+  builds the desktop pipeline (`vp run build:desktop`) and verifies the preload bundle exists and
+  uses only imports that Electron's sandbox can load. The verifier parses imports, then executes the
+  trusted artifact with controlled bridge stubs to confirm that its required APIs are callable.
+- **Test**: `vp run test` across the workspace.
+- **Mobile Native Static Analysis**: `vp run lint:mobile` on macOS, wrapping
+  `scripts/mobile-native-static-check.ts`. A cheap Linux **Mobile Native Changes** job gates it:
+  the macOS runner only boots when the diff touches `apps/mobile` Swift/Kotlin sources, the
+  SwiftLint/detekt/ktlint configuration, the `Brewfile`, the check script, the root `package.json`
+  that defines `lint:mobile`, or `ci.yml`. Otherwise the job is skipped, which GitHub reports as
+  success for the required check. Renames are matched on both their old and new path. The gate fails
+  open in every other case: if the changed-file list cannot be resolved, GitHub truncates it, or the
+  gate job itself fails, the lint runs.
 - **Release Smoke**: exercises release-only workflow steps through `scripts/release-smoke.ts`, so
   release breakage surfaces on PRs rather than at tag time.
 

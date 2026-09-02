@@ -212,6 +212,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
         sequence += 1;
         return { sequence };
       }),
+    subscribeDomainEvents: Effect.succeed(Stream.fromPubSub(events)),
     streamDomainEvents: Stream.merge(
       Stream.fromPubSub(events),
       Stream.fromIterable(input.boundaryEvents ?? []),

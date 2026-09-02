@@ -19,6 +19,7 @@ import { APP_BASE_NAME } from "~/branding";
 import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
 import { useWebEnvironmentSchedules } from "../../state/schedules";
+import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -75,7 +76,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       <SidebarBrand onBackdrop={backdropVariant !== null} />
       {pillLabel ? (
         <Badge
-          className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"
+          className="relative z-10 ml-1 hidden rounded-full px-1.5 text-muted-foreground @[15rem]/sidebar-header:inline-flex"
           data-environment-identification="pill"
           size="sm"
           variant="secondary"
@@ -97,6 +98,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
       )}
       to="/"
     >
+      <T3Wordmark aria-label="T3" className="h-2.5 w-auto shrink-0" />
       <span
         className={cn(
           "-translate-y-px truncate text-sm font-semibold tracking-tight",
@@ -142,15 +144,13 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) =>
       /^\/settings(?:\/|$)/.test(location.pathname)
         ? "settings"
-        : location.pathname === "/usage"
-          ? "usage"
-          : location.pathname === "/environments"
-            ? "environments"
-            : location.pathname === "/schedules"
-              ? "schedules"
-              : location.pathname === "/pull-requests"
-                ? "pull-requests"
-                : null,
+        : /^\/projects\/[^/]+\/?$/.test(location.pathname)
+          ? "project-settings"
+          : location.pathname === "/usage"
+            ? "usage"
+            : location.pathname === "/pull-requests"
+              ? "pull-requests"
+              : null,
   });
   const { environments } = useEnvironments();
   const { environments: scheduleEnvironments } = useWebEnvironmentSchedules();

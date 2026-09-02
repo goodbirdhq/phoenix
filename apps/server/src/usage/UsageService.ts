@@ -1,13 +1,14 @@
 /**
  * UsageService - scans provider transcripts and returns priced usage buckets.
  *
- * The scan reads the provider CLIs' own session files rather than Phoenix's
- * orchestration projections, so usage covers turns driven outside Phoenix too.
- * This is the approach `ccusage` takes.
+ * The scan reads the provider CLIs' own session files (Claude Code, Codex, and
+ * Grok Build) rather than T3 Code's orchestration projections, so usage covers
+ * turns driven outside T3 Code too. This is the approach `ccusage` takes.
  *
  * Transcripts are append-only, so parsed records are memoised per file by
  * `(size, mtime)`. A cold 30-day scan of ~1.4 GB lands around 2-3 seconds; warm
- * scans only reparse files that changed.
+ * scans only reparse files that changed, and a file that merely grew resumes
+ * from its cached parse position so only the appended bytes are read.
  *
  * @module UsageService
  */
@@ -22,10 +23,12 @@ import {
   type UsageSummaryInput,
   UsageReadError,
 } from "@t3tools/contracts";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -35,6 +38,7 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../config.ts";
+import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   claudeInstanceHomes,
@@ -135,6 +139,7 @@ interface TranscriptDir {
   readonly provider: UsageProviderKind;
   readonly storePath: string;
   readonly sourceId: string;
+  readonly fileName?: string;
 }
 
 interface OpenCodeDatabase {
@@ -152,6 +157,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
+  const hostEnvironment = yield* HostProcessEnvironment;
 
   const fileCache: ScanCache = new Map();
   let cacheDirty = false;
@@ -247,31 +253,26 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-    // Every configured instance, not just the default one: a machine with two
-    // signed-in Claude accounts keeps two homes, and scanning one of them
-    // reports half the tokens as all of them.
     const stores: UsageStore[] = [];
     const seenStores = new Set<string>();
-    const addDir = (provider: UsageProviderKind, dir: string) => {
-      if (seenStores.has(dir)) return;
-      seenStores.add(dir);
-      // Positional, and meaningful only inside this summary: buckets point at
-      // it so a client can drop one duplicated directory without dropping the
-      // provider's other homes with it.
+    const addDir = (provider: UsageProviderKind, storePath: string, fileName?: string) => {
+      if (seenStores.has(storePath)) return;
+      seenStores.add(storePath);
       stores.push({
         kind: "transcriptDir",
         provider,
-        storePath: dir,
+        storePath,
         sourceId: String(stores.length),
+        ...(fileName === undefined ? {} : { fileName }),
       });
     };
-    const addOpenCodeDatabase = (databasePath: string) => {
-      if (seenStores.has(databasePath)) return;
-      seenStores.add(databasePath);
+    const addOpenCodeDatabase = (storePath: string) => {
+      if (seenStores.has(storePath)) return;
+      seenStores.add(storePath);
       stores.push({
         kind: "opencodeDatabase",
         provider: "opencode",
-        storePath: databasePath,
+        storePath,
         sourceId: String(stores.length),
       });
     };
@@ -285,7 +286,15 @@ export const make = Effect.gen(function* () {
     for (const database of yield* opencodeInstanceDatabases(settings)) {
       addOpenCodeDatabase(database.databasePath);
     }
+    // Grok Settings only expose the binary path; home is `$GROK_HOME` or `~/.grok`.
+    // Empty/whitespace GROK_HOME must fall back: coalescing alone would scan cwd.
+    const grokHomeEnv = hostEnvironment["GROK_HOME"]?.trim() ?? "";
+    const grokHome =
+      grokHomeEnv.length > 0
+        ? path.resolve(expandHomePath(grokHomeEnv))
+        : path.join(NodeOS.homedir(), ".grok");
 
+    addDir("grok", path.join(grokHome, "sessions"), "updates.jsonl");
     return stores;
   });
 
@@ -321,7 +330,14 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  /** Parses one transcript, reusing the cached result when it is unchanged. */
+  /**
+   * Parses one transcript, reusing the cached result when it is unchanged.
+   *
+   * A file that only grew re-parses from the cached position, so an actively
+   * written multi-hundred-megabyte rollout costs its appended bytes per scan
+   * rather than a full re-read. The reader verifies the position's guard bytes
+   * and silently restarts from byte 0 when they no longer match.
+   */
   const readFileRecords = (
     filePath: string,
     size: number,
@@ -338,23 +354,100 @@ export const make = Effect.gen(function* () {
         cached.mtimeMs === mtimeMs &&
         cached.provider === provider
       ) {
-        return cached.records;
+        return cached.tailRecords.length === 0
+          ? cached.records
+          : [...cached.records, ...cached.tailRecords];
       }
 
-      const parsed = yield* Effect.promise(() => readTranscriptRecords(filePath, provider));
+      // Only a strictly grown file may resume. Same size with a new mtime, or
+      // a shrunken file, means rewritten content; re-parse it whole.
+      const resumeFrom =
+        cached !== undefined && cached.provider === provider && size > cached.size
+          ? cached.position
+          : undefined;
+
+      const parsed = yield* Effect.promise(() =>
+        readTranscriptRecords(filePath, provider, resumeFrom),
+      );
       // A read failure is not an empty transcript: caching it under this
       // (size, mtime) would silently drop the file's usage until it changes.
       if (parsed === null) return [];
-      // Stored already de-duplicated within the file, which is 99% of all
-      // duplicates. The aggregator still runs the cross-file dedupe pass.
-      const records = dedupeWithinFile(parsed);
 
-      fileCache.set(filePath, { size, mtimeMs, provider, records });
+      // Stored already de-duplicated within the file, which is 99% of all
+      // duplicates. The aggregator still runs the cross-file dedupe pass. One
+      // seen set spans the cached base, the new lines, and the tail so a
+      // resumed parse dedupes exactly like a full one.
+      const base = parsed.resumed && cached !== undefined ? cached.records : [];
+      const seen = new Set<string>();
+      const records = dedupeWithinFile([...base, ...parsed.records], seen);
+      const tailRecords = dedupeWithinFile(parsed.tailRecords, seen);
+
+      fileCache.set(filePath, {
+        size,
+        mtimeMs,
+        provider,
+        records,
+        tailRecords,
+        position: parsed.position,
+      });
       cacheDirty = true;
-      return records;
+      return tailRecords.length === 0 ? records : [...records, ...tailRecords];
     });
 
-  const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
+  type ScannedStore =
+    | {
+        readonly kind: "transcriptDir";
+        readonly provider: UsageProviderKind;
+        readonly storePath: string;
+        readonly sourceId: string;
+        readonly volumeId: string;
+        readonly files:
+          | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
+          | null;
+      }
+    | {
+        readonly kind: "opencodeDatabase";
+        readonly provider: "opencode";
+        readonly storePath: string;
+        readonly sourceId: string;
+        readonly volumeId: string;
+        readonly exists: boolean;
+      };
+
+  const collectStores = Effect.fn("UsageService.collectStores")(function* (windowStartMs: number) {
+    const stores = yield* resolveUsageStores().pipe(Effect.provideService(Path.Path, path));
+    const scanned: ScannedStore[] = [];
+    for (const store of stores) {
+      const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(store.storePath));
+      const exists = yield* fileSystem
+        .exists(store.storePath)
+        .pipe(Effect.catchCause(() => Effect.succeed(false)));
+      if (store.kind === "opencodeDatabase") {
+        scanned.push({ ...store, volumeId, exists });
+        continue;
+      }
+      if (!exists) {
+        scanned.push({ ...store, volumeId, files: null });
+        continue;
+      }
+      const files = yield* Effect.promise(() =>
+        listTranscriptFiles(
+          store.storePath,
+          windowStartMs,
+          store.fileName === undefined ? undefined : { fileName: store.fileName },
+        ),
+      );
+      const parsedFiles: { path: string; records: readonly UsageRecord[] }[] = [];
+      for (const file of files) {
+        const records = yield* readFileRecords(file.path, file.size, file.mtimeMs, store.provider);
+        parsedFiles.push({ path: file.path, records });
+      }
+      scanned.push({ ...store, volumeId, files: parsedFiles });
+    }
+    return scanned;
+  });
+
+  const scanSummary = Effect.fn("UsageService.scanSummary")(function* (input: UsageSummaryInput) {
     if (input.sinceDay > input.untilDay) {
       return yield* new UsageReadError({
         reason: "invalidWindow",
@@ -387,13 +480,9 @@ export const make = Effect.gen(function* () {
     }
 
     const startedAtMs = yield* Clock.currentTimeMillis;
-    yield* ensureRates();
     yield* ensureScanCacheLoaded;
 
     const hostId = NodeOS.hostname();
-    // The home resolvers ask for `Path` themselves; satisfy them from the
-    // instance we already hold so `readSummary` stays context-free.
-    const stores = yield* resolveUsageStores().pipe(Effect.provideService(Path.Path, path));
     const windowStart = DateTime.make(`${input.sinceDay}T00:00:00Z`);
     if (Option.isNone(windowStart)) {
       return yield* new UsageReadError({
@@ -403,6 +492,13 @@ export const make = Effect.gen(function* () {
     }
     const windowStartMs =
       (hourlyWindow?.sinceTimeMs ?? DateTime.toEpochMillis(windowStart.value)) - MTIME_SLACK_MS;
+
+    // Pricing only matters once records are aggregated, so the rate table
+    // loads while transcripts stream instead of gating them: a cold rates
+    // fetch on a slow network no longer delays the scan by its own timeout.
+    const [, scannedStores] = yield* Effect.all([ensureRates(), collectStores(windowStartMs)], {
+      concurrency: 2,
+    });
 
     const aggregator = new UsageAggregator({
       timeZone: input.timeZone,
@@ -417,30 +513,22 @@ export const make = Effect.gen(function* () {
     const livePaths = new Set<string>();
     const walkedRoots: string[] = [];
 
-    for (const { kind, provider, storePath, sourceId } of stores) {
-      const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(storePath));
-      const exists = yield* fileSystem
-        .exists(storePath)
-        .pipe(Effect.catchCause(() => Effect.succeed(false)));
-
-      if (!exists) {
-        sources.push({
-          fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
-          id: sourceId,
-          status: "missing",
-          scannedFiles: 0,
-          skippedFiles: 0,
-          malformedRecords: 0,
-          distinctSessions: 0,
-          message:
-            kind === "opencodeDatabase"
-              ? "No OpenCode usage database on this environment."
-              : "No transcript directory on this environment.",
-        });
-        continue;
-      }
-
+    for (const store of scannedStores) {
+      const { kind, provider, storePath, sourceId, volumeId } = store;
       if (kind === "opencodeDatabase") {
+        if (!store.exists) {
+          sources.push({
+            fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
+            id: sourceId,
+            status: "missing",
+            scannedFiles: 0,
+            skippedFiles: 0,
+            malformedRecords: 0,
+            distinctSessions: 0,
+            message: "No OpenCode usage database on this environment.",
+          });
+          continue;
+        }
         const sessionIds = new Set<string>();
         const read = yield* Effect.promise(() =>
           readOpenCodeUsageDatabase(storePath, windowStartMs, (record) => {
@@ -449,35 +537,40 @@ export const make = Effect.gen(function* () {
             }
           }),
         );
-        if (read === null) {
-          sources.push({
-            fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
-            id: sourceId,
-            status: "failed",
-            scannedFiles: 0,
-            skippedFiles: 1,
-            malformedRecords: 0,
-            distinctSessions: 0,
-            message: "OpenCode usage database could not be read.",
-          });
-          continue;
-        }
-
         sources.push({
           fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
           id: sourceId,
-          status: read.complete ? "ok" : "partial",
-          scannedFiles: 1,
-          skippedFiles: read.complete ? 0 : 1,
-          malformedRecords: read.malformedRecords,
+          status: read === null ? "failed" : read.complete ? "ok" : "partial",
+          scannedFiles: read === null ? 0 : 1,
+          skippedFiles: read === null || !read.complete ? 1 : 0,
+          malformedRecords: read?.malformedRecords ?? 0,
           distinctSessions: sessionIds.size,
-          message: read.complete ? null : "OpenCode usage database was only partially read.",
+          message:
+            read === null
+              ? "OpenCode usage database could not be read."
+              : read.complete
+                ? null
+                : "OpenCode usage database was only partially read.",
+        });
+        continue;
+      }
+
+      const { files } = store;
+      if (files === null) {
+        sources.push({
+          fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
+          id: sourceId,
+          status: "missing",
+          scannedFiles: 0,
+          skippedFiles: 0,
+          malformedRecords: 0,
+          distinctSessions: 0,
+          message: "No transcript directory on this environment.",
         });
         continue;
       }
 
       walkedRoots.push(storePath);
-      const files = yield* Effect.promise(() => listTranscriptFiles(storePath, windowStartMs));
       let scannedFiles = 0;
       let skippedFiles = 0;
       // Distinct per directory. Buckets carry per-cell session counts, but a
@@ -486,13 +579,12 @@ export const make = Effect.gen(function* () {
 
       for (const file of files) {
         livePaths.add(file.path);
-        const records = yield* readFileRecords(file.path, file.size, file.mtimeMs, provider);
-        if (records.length === 0) {
+        if (file.records.length === 0) {
           skippedFiles += 1;
           continue;
         }
         scannedFiles += 1;
-        for (const record of records) {
+        for (const record of file.records) {
           // Only sessions that contributed in-window count: the mtime slack
           // admits boundary files whose records fall outside the range.
           if (aggregator.add(record, sourceId) && record.sessionId.length > 0) {
@@ -548,6 +640,52 @@ export const make = Effect.gen(function* () {
       } satisfies UsageSummary,
       input.contractVersion,
     );
+  });
+
+  /**
+   * In-flight scans by window, so concurrent identical requests (the usage
+   * page open on two clients at once) share one scan instead of racing over
+   * the same corpus twice.
+   */
+  const inflightScans = new Map<string, Deferred.Deferred<UsageSummary, UsageReadError>>();
+
+  const scanKey = (input: UsageSummaryInput): string =>
+    JSON.stringify([
+      input.timeZone,
+      input.sinceDay,
+      input.untilDay,
+      input.resolution ?? "day",
+      input.sinceTime ?? null,
+      input.untilTime ?? null,
+    ]);
+
+  const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
+    const key = scanKey(input);
+    const deferred = yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const existing = inflightScans.get(key);
+        if (existing !== undefined) return existing;
+
+        // Enrollment and detached-fiber creation must be atomic. Otherwise a
+        // canceled first caller can leave a Deferred with no scan to finish it.
+        const created = Deferred.makeUnsafe<UsageSummary, UsageReadError>();
+        inflightScans.set(key, created);
+        // Detached so one departing client cannot tear the scan out from under
+        // the fibers awaiting it; a finished scan warms the cache either way.
+        yield* scanSummary(input).pipe(
+          Effect.onExit((exit) =>
+            Effect.sync(() => inflightScans.delete(key)).pipe(
+              Effect.andThen(Deferred.done(created, exit)),
+            ),
+          ),
+          Effect.forkDetach,
+        );
+        return created;
+      }),
+    );
+    // Waiting stays interruptible. The detached scan continues for other
+    // callers and still warms the cache if this caller leaves.
+    return yield* Deferred.await(deferred);
   });
 
   return { readSummary } as const;

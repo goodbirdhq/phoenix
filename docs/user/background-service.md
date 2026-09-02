@@ -21,6 +21,43 @@ You can stop it and remove it from startup:
 phoenix service uninstall
 ```
 
+Update or repair it:
+
+```sh
+npx t3@latest service update
+```
+
+The service uses the same T3 Code version as the CLI you run. To install a nightly or an exact
+version, use that version of the CLI:
+
+```sh
+npx t3@nightly service update
+npx t3@1.2.3 service update
+```
+
+The install and update commands refuse to replace a newer service with an older version. Setup
+through T3 Connect leaves a newer service unchanged. To downgrade, select the exact older version
+and pass `--allow-downgrade`:
+
+```sh
+npx t3@1.2.3 service update --allow-downgrade
+```
+
+Stop it and remove it from startup:
+
+```sh
+npx t3@latest service uninstall
+```
+
+Updating restarts T3 Code briefly. Let active agent work and terminal commands finish first.
+If a remote update is already in progress, wait for it to finish before retrying a local update.
+
+The service runs a small stable launcher. Exact T3 Code versions are installed separately, so a
+failed remote candidate can return to the previous version without rewriting the service
+definition. The launcher snapshots the database before a remote candidate starts, so database
+updates roll back with the server version. An older launcher may require one local
+`service update` before this is available.
+
 ## Platform Support
 
 **Linux** services use a systemd user unit at `~/.config/systemd/user/phoenix.service`. The

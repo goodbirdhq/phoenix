@@ -151,36 +151,11 @@ export function requireThreadNotArchived(input: {
   );
 }
 
-export function requireThreadAbsent(input: {
-  readonly readModel: OrchestrationReadModel;
-  readonly command: OrchestrationCommand;
-  readonly threadId: ThreadId;
-}): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (!findThreadById(input.readModel, input.threadId)) {
-    return Effect.void;
-  }
-  return Effect.fail(
-    invariantError(
-      input.command.type,
-      `Thread '${input.threadId}' already exists and cannot be created twice.`,
-    ),
-  );
-}
-
-/**
- * Rejects commands that must not land mid-turn. `latestTurn.state` is the
- * authoritative in-flight signal in this read model: the projector marks a
- * turn running while the session reports it active and settles it as soon as
- * the session leaves "running". A live session between turns is fine — only
- * a turn actually in flight blocks.
- */
 export function requireThreadTurnNotRunning(input: {
   readonly commandType: OrchestrationCommand["type"];
   readonly thread: OrchestrationThread;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (input.thread.latestTurn?.state !== "running") {
-    return Effect.void;
-  }
+  if (input.thread.latestTurn?.state !== "running") return Effect.void;
   return Effect.fail(
     invariantError(
       input.commandType,
@@ -189,18 +164,22 @@ export function requireThreadTurnNotRunning(input: {
   );
 }
 
-export function requireNonNegativeInteger(input: {
-  readonly commandType: OrchestrationCommand["type"];
-  readonly field: string;
-  readonly value: number;
+export function requireThreadAbsent(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly threadId: ThreadId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (Number.isInteger(input.value) && input.value >= 0) {
+  // Thread deletion is a soft delete and a draft keeps its client-minted id
+  // across retries, so only a live row blocks creation. Projectors reset the
+  // thread's rows when the id is created again.
+  const existing = findThreadById(input.readModel, input.threadId);
+  if (existing === undefined || existing.deletedAt !== null) {
     return Effect.void;
   }
   return Effect.fail(
     invariantError(
-      input.commandType,
-      `${input.field} must be an integer greater than or equal to 0.`,
+      input.command.type,
+      `Thread '${input.threadId}' already exists and cannot be created twice.`,
     ),
   );
 }

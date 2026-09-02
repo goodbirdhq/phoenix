@@ -12,7 +12,7 @@ This is a living glossary for Phoenix. It explains what common terms mean in thi
 - [Scheduling](#scheduling)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
-- [Birdhouse workflows](#birdhouse-workflows)
+- [Appearance](#appearance)
 
 ## Concepts
 
@@ -228,19 +228,20 @@ The patch difference between two checkpoints. Query logic lives in [CheckpointDi
 
 The file patch and changed-file summary for one turn. It is usually computed in [CheckpointDiffQuery.ts][20], represented in [the contracts][1], and recorded into thread state by [projector.ts][4].
 
-### Birdhouse workflows
+### Appearance
 
-Terms belonging to [birdhouse][28], the separate repository whose business workflows run as Phoenix agent threads. Everything here lives outside the app — nothing in `apps/` or `packages/` uses these words — but they collide with product terms often enough to be worth pinning down.
+#### Environment theme
 
-There is no scheduling collision: birdhouse does not schedule, so **Schedule** always means the product's, as defined in [Scheduling](#scheduling) above. A Schedule triggers a thread in a birdhouse checkout, and the thread reads its instructions from the repo it is already sitting in.
+A theme an environment's machine publishes for clients to follow, one file per theme under `themes/` in that environment's state directory; the filename is the theme id. [environmentTheme.ts][25] watches the directory and streams the set over `subscribeServerConfig`; clients render each as a library card, generating a full palette when the file carries seed colors and using the palette directly when it is a standard exported theme file. A desktop that retints its apps when the system theme changes rewrites its file, so T3 Code follows along without a restart. See [environment-theme.md][26].
 
-#### Workflow
+#### Default theme
 
-A repeatable unit of business work, defined on disk in the birdhouse repo as a directory holding `SKILL.md`. There is no other copy: the file the agent reads is the definition.
-
-#### Run
-
-Colloquially, one occasion of a workflow being carried out — a triggered thread doing the work end to end. Phoenix stores no such record, and neither does birdhouse; whether a given run happened, and whether it happened twice, is answered from the domain the workflow writes to.
+The environment's theme, held in its `settings.json` as `defaultTheme` (with `defaultThemeSetAt`
+as the set-generation) and set with `t3 theme set <id>`. Web and desktop clients apply each set
+once — live when connected, on the next connect otherwise — so setting it switches them, while a
+theme a user picks in Settings afterwards sticks until the next set; mobile keeps its own
+appearance settings. Naming a published [environment theme](#environment-theme) is how a desktop
+ships T3 Code already matching it.
 
 ## Practical Shortcuts
 
@@ -283,9 +284,5 @@ Colloquially, one occasion of a workflow being carried out — a triggered threa
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
-[25]: ../../packages/contracts/src/providerInstance.ts
-[26]: ../../apps/server/src/provider/conversationSeed.ts
-[27]: ./schedules.md
-[28]: ./birdhouse.md
-[29]: ../../packages/shared/src/providerRetryActivity.ts
-[30]: ./resource-telemetry.md
+[25]: ../../apps/server/src/environmentTheme.ts
+[26]: ../user/environment-theme.md

@@ -2,11 +2,12 @@ import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Terminal from "effect/Terminal";
-import { Command, GlobalFlag } from "effect/unstable/cli";
+import { Command, Flag, GlobalFlag } from "effect/unstable/cli";
 
 import packageJson from "../../package.json" with { type: "json" };
 import { formatCliVersion } from "../buildInfo.ts";
 import * as BootService from "../cloud/bootService.ts";
+import { compareExactServiceVersions } from "../cloud/serviceProtocol.ts";
 import type * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
@@ -17,6 +18,44 @@ export const bootServiceLayer = (config: ServerConfig.ServerConfig["Service"]) =
     logsDir: config.logsDir,
     cliVersion: packageJson.version,
   }).pipe(Layer.provide(ProcessRunner.layer));
+
+export type ServiceReconcileResult =
+  | {
+      readonly changed: false;
+      readonly status: BootService.BootServiceStatus;
+    }
+  | {
+      readonly changed: true;
+      readonly previouslyInstalled: boolean;
+      readonly plan: BootService.BootServicePlan;
+    };
+
+/** Install, update, or repair the service using the CLI version running this command. */
+export const reconcileService = Effect.fn("cli.service.reconcile")(function* (options?: {
+  readonly allowDowngrade?: boolean;
+}) {
+  const service = yield* BootService.BootService;
+  const status = yield* service.status;
+  if (status.installed && status.current) {
+    return { changed: false, status } satisfies ServiceReconcileResult;
+  }
+  if (
+    status.installedVersion !== undefined &&
+    options?.allowDowngrade !== true &&
+    compareExactServiceVersions(packageJson.version, status.installedVersion) < 0
+  ) {
+    return yield* new BootService.BootServiceDowngradeRefusedError({
+      installedVersion: status.installedVersion,
+      targetVersion: packageJson.version,
+    });
+  }
+  const plan = yield* service.install(options);
+  return {
+    changed: true,
+    previouslyInstalled: status.installed,
+    plan,
+  } satisfies ServiceReconcileResult;
+});
 
 export function formatServiceStatus(
   status: BootService.BootServiceStatus,
@@ -29,12 +68,25 @@ export function formatServiceStatus(
   if (!status.installed) {
     return "Phoenix service\n  Status: not installed\n  Automatic installation is unavailable in this source distribution.";
   }
+  const installedVersion = status.installedVersion ?? cliVersion;
+  if (
+    !status.current &&
+    status.installedVersion !== undefined &&
+    compareExactServiceVersions(status.installedVersion, cliVersion) > 0
+  ) {
+    return [
+      "Phoenix service",
+      `  Status: installed · phoenix@${installedVersion} (newer than this phoenix@${cliVersion} CLI)`,
+      `  Service build: ${status.runtimeVersion ?? "unavailable"}`,
+      `  CLI build: ${cliBuild}`,
+      `  Unit: ${status.unitPath}`,
+      `  Logs: ${status.logPath}`,
+      `  Next: rebuild Phoenix from source at ${installedVersion}, or pass \`--allow-downgrade\` explicitly.`,
+    ].join("\n");
+  }
   return [
     "Phoenix service",
-    `  Status: ${status.current ? `installed · phoenix@${cliVersion}` : "needs an update or repair"}`,
-    // The daemon runs a pinned copy, so an upgraded CLI does not mean an
-    // upgraded service until it is reinstalled. Naming both builds is what
-    // makes that gap visible instead of something to infer from release dates.
+    `  Status: ${status.current ? `installed · phoenix@${installedVersion}` : "needs an update or repair"}`,
     `  Service build: ${status.runtimeVersion ?? "unavailable"}`,
     `  CLI build: ${cliBuild}`,
     `  Unit: ${status.unitPath}`,
@@ -53,6 +105,56 @@ const runServiceCommand = Effect.fn("cli.service.run")(function* <A, E>(
   const config = yield* resolveCliAuthConfig(flags, logLevel);
   return yield* run.pipe(Effect.provide(bootServiceLayer(config)));
 });
+
+const serviceReconcileFlags = {
+  ...projectLocationFlags,
+  allowDowngrade: Flag.boolean("allow-downgrade").pipe(
+    Flag.withDescription("Allow replacing a newer installed service with this older CLI version."),
+    Flag.withDefault(false),
+  ),
+};
+
+const serviceInstallCommand = Command.make("install", serviceReconcileFlags).pipe(
+  Command.withDescription("Install Phoenix as a background service for this user."),
+  Command.withHandler((flags) =>
+    runServiceCommand(
+      flags,
+      Effect.gen(function* () {
+        const result = yield* reconcileService({ allowDowngrade: flags.allowDowngrade });
+        if (!result.changed) {
+          yield* Console.log(
+            `Phoenix service is already installed with phoenix@${packageJson.version}.`,
+          );
+          return;
+        }
+        yield* Console.log(
+          `${result.previouslyInstalled ? "Updated" : "Installed"} Phoenix service with phoenix@${packageJson.version}.\nLogs: ${result.plan.logPath}`,
+        );
+      }),
+    ),
+  ),
+);
+
+const serviceUpdateCommand = Command.make("update", serviceReconcileFlags).pipe(
+  Command.withDescription(
+    "Update or repair the background service using this CLI version. Use `npx t3@latest service update` for the latest release.",
+  ),
+  Command.withHandler((flags) =>
+    runServiceCommand(
+      flags,
+      Effect.gen(function* () {
+        const result = yield* reconcileService({ allowDowngrade: flags.allowDowngrade });
+        if (!result.changed) {
+          yield* Console.log(`Phoenix service is already using phoenix@${packageJson.version}.`);
+          return;
+        }
+        yield* Console.log(
+          `${result.previouslyInstalled ? "Updated" : "Installed"} Phoenix service with phoenix@${packageJson.version}.\nLogs: ${result.plan.logPath}`,
+        );
+      }),
+    ),
+  ),
+);
 
 const serviceUninstallCommand = Command.make("uninstall", projectLocationFlags).pipe(
   Command.withDescription("Stop and remove the Phoenix background service."),
@@ -100,6 +202,8 @@ export const recoverServiceOnboardingOffer = <R>(
       BootServiceInstallError: (error) =>
         Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
       BootServiceUpdatePendingError: (error) =>
+        Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
+      BootServiceDowngradeRefusedError: (error) =>
         Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
     }),
   );
