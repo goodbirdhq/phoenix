@@ -6,13 +6,11 @@ name: Mobile EAS Production
 # fingerprint (platform-specific deps + pnpm version) and errors. On this Linux
 # runner, with corepack pinning pnpm 10.24 in eas.json, local == build.
 #
-# This upstream workflow is retained as a reference only. Phoenix has not yet
-# replaced the Expo owner/project, update URL, and signing identity with
-# Phoenix-owned infrastructure, so it must never deploy from this repository.
-# Once those identities are migrated, remove the repository guard below and
-# deliberately restore any desired push trigger.
+# Deploys against our own identities: EAS project @neilbarton/phoenix,
+# Apple team 39DYB2TD96, ASC app 6807867658 (see apps/mobile/app.config.ts
+# and eas.json).
 #
-# In upstream, every merge to main that touches the mobile app reconciles, per platform:
+# Every merge to main that touches the mobile app reconciles, per platform:
 #   1. Store builds: if the latest production build's version differs from
 #      app.config.ts, cut a new build and submit it (TestFlight + Play internal
 #      track). Bumping `version` is therefore all it takes to
@@ -31,6 +29,20 @@ name: Mobile EAS Production
 # workflow_dispatch remains as a manual override for both modes (e.g. to
 # retry an errored build or force an OTA).
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - apps/mobile/**
+      - packages/client-runtime/**
+      - packages/contracts/**
+      - packages/shared/**
+      - assets/**
+      - scripts/**
+      - patches/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/mobile-eas-production.yml
   workflow_dispatch:
     inputs:
       mode:
@@ -69,8 +81,11 @@ concurrency:
 jobs:
   production:
     name: EAS Production ${{ github.event_name == 'push' && 'auto' || inputs.mode }}
-    if: ${{ github.repository == 'pingdotgg/t3code' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    if: ${{ github.repository == 'goodbirdhq/phoenix' }}
+    # ubuntu-24.04, not blacksmith: this fork has no Blacksmith runners, and
+    # the fingerprint contract above only needs Linux + the corepack-pinned
+    # pnpm, which GitHub's runner satisfies identically.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
