@@ -733,8 +733,6 @@ jobs:
           files: |
             release-assets/*.dmg
             release-assets/*.zip
-            release-assets/*.AppImage
-            release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
           fail_on_unmatched_files: true
@@ -753,8 +751,6 @@ jobs:
           files: |
             release-assets/*.dmg
             release-assets/*.zip
-            release-assets/*.AppImage
-            release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
           fail_on_unmatched_files: true
