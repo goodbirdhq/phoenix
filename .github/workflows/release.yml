@@ -174,7 +174,9 @@ jobs:
   relay_public_config:
     name: Resolve T3 Connect public config
     needs: preflight
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
+    # Forks without T3 Connect relay infrastructure (no Cloudflare access) skip
+    # this job; the desktop build then ships without baked-in relay config.
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && vars.CLOUDFLARE_ACCOUNT_ID != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment:
@@ -323,7 +325,7 @@ jobs:
     # build_wsl_node_pty failed; the Windows-only download step below then fails
     # that single platform if the prebuild is missing.
     needs: [preflight, relay_public_config, build_wsl_node_pty]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && (needs.relay_public_config.result == 'success' || needs.relay_public_config.result == 'skipped') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
@@ -397,12 +399,14 @@ jobs:
           targets: ${{ matrix.rust_target }}
 
       - name: Download relay client tracing config
+        if: ${{ needs.relay_public_config.result == 'success' }}
         uses: actions/download-artifact@v8
         with:
           name: relay-client-tracing-config
           path: ${{ runner.temp }}/relay-client-tracing
 
       - name: Load relay client tracing config
+        if: ${{ needs.relay_public_config.result == 'success' }}
         shell: bash
         run: |
           config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
@@ -795,12 +799,14 @@ jobs:
               - --filter=@t3tools/web...
 
       - name: Download relay client tracing config
+        if: ${{ needs.relay_public_config.result == 'success' }}
         uses: actions/download-artifact@v8
         with:
           name: relay-client-tracing-config
           path: ${{ runner.temp }}/relay-client-tracing
 
       - name: Load relay client tracing config
+        if: ${{ needs.relay_public_config.result == 'success' }}
         shell: bash
         run: |
           config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
@@ -881,9 +887,14 @@ jobs:
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
+      # Forks without the release GitHub App fall back to the workflow token;
+      # the version-bump commit then comes from github-actions[bot].
       - id: app_token
         name: Mint release app token
+        if: ${{ secrets.RELEASE_APP_ID != '' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
@@ -895,7 +906,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ steps.app_token.outputs.token }}
+          token: ${{ steps.app_token.outputs.token || github.token }}
           persist-credentials: true
           sparse-checkout: |
             /*
@@ -904,6 +915,7 @@ jobs:
 
       - id: app_bot
         name: Resolve GitHub App bot identity
+        if: ${{ steps.app_token.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           APP_SLUG: ${{ steps.app_token.outputs.app-slug }}
@@ -947,8 +959,8 @@ jobs:
             exit 0
           fi
 
-          git config user.name "${{ steps.app_bot.outputs.name }}"
-          git config user.email "${{ steps.app_bot.outputs.email }}"
+          git config user.name "${{ steps.app_bot.outputs.name || 'github-actions[bot]' }}"
+          git config user.email "${{ steps.app_bot.outputs.email || '41898282+github-actions[bot]@users.noreply.github.com' }}"
 
           git add apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json pnpm-lock.yaml
           git commit -m "chore(release): prepare $RELEASE_TAG"
