@@ -3,10 +3,14 @@
 > For whoever runs the server. Using the desktop app to host? Update the desktop app instead — see
 > [Keeping app and server in sync](../user/updating.md).
 
-Phoenix has no owned npm package, so `phoenix service install` and `phoenix service update` are
-disabled and `npx t3` installs a different product. That leaves one supported shape for a
-long-running server: a source checkout you build yourself, launched from a terminal or from a
-service definition you own. This runbook updates that server and proves the update took.
+The simplest long-running server is the npm package plus the managed service:
+`npm i -g @goodbirdhq/phoenix`, then `phoenix service install`; update later with
+`npx @goodbirdhq/phoenix@latest service update` — see
+[Background service](../user/background-service.md). Beware that `npx t3` installs upstream
+T3 Code, a different product.
+
+This runbook covers the other supported shape: a source checkout you build yourself, launched from
+a terminal or from a service definition you own. It updates that server and proves the update took.
 
 The whole procedure is: know what you are running, rebuild, restart onto it, confirm it changed.
 
@@ -144,7 +148,7 @@ SQLite cannot replay a journal against a database it no longer matches.
 ## What not to do
 
 - `npx t3@latest` and the `t3` npm package install **upstream T3 Code**, a different product.
-- `phoenix service install` / `phoenix service update` target a package distribution Phoenix does
-  not have. See [Background service](../user/background-service.md).
+- `phoenix service install` / `phoenix service update` pin published `@goodbirdhq/phoenix`
+  releases, not your local build. See [Background service](../user/background-service.md).
 - Do not build in a checkout with uncommitted work you did not mean to deploy. `--version` reports
   it afterwards, but only after it is already live.

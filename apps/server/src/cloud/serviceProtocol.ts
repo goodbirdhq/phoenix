@@ -247,3 +247,15 @@ export function decodeServiceLauncherParentMessage(
     ? { type: value.type, updateId: value.updateId }
     : undefined;
 }
+
+/**
+ * The npm package this fork publishes. The service machinery installs pinned
+ * runtimes from this package and boots its entry point, so every reference to
+ * the published identity funnels through here. The workspace package keeps
+ * upstream's name (t3) for Effect deterministic-key compatibility; this is the
+ * publish-time identity only.
+ */
+export const PUBLISHED_PACKAGE_NAME = "@goodbirdhq/phoenix";
+
+/** Path segments of the published package under node_modules (scoped). */
+export const PUBLISHED_PACKAGE_PATH_SEGMENTS = ["@goodbirdhq", "phoenix"] as const;

@@ -1,15 +1,20 @@
 # Running Phoenix in the Background
 
-Phoenix's inherited background-service implementation requires an exact-version package
-distribution. Phoenix is not published to npm, so new background-service installs and updates are
-currently disabled: installing the upstream `t3` package would run a different product.
+Phoenix publishes its server as `@goodbirdhq/phoenix` on npm, and the background service installs
+exact pinned versions of that package. From an npm-installed CLI:
 
-For now, run the source-built server in a terminal or create a service definition you manage
-yourself. To update a server you run that way, follow the
-[self-managed server update runbook](../operations/updating-a-self-managed-server.md). Do not run `phoenix service install` or `phoenix service update` until Phoenix has an owned
-package identity and this page announces that distribution.
+```sh
+phoenix service install
+```
 
-If an older Phoenix background service is already installed, you can inspect it:
+That registers Phoenix as a background service for your user and starts it. To update the service
+to the latest release later:
+
+```sh
+npx @goodbirdhq/phoenix@latest service update
+```
+
+Inspect the installed service — including whether the running service build matches your CLI:
 
 ```sh
 phoenix service status
@@ -20,6 +25,10 @@ You can stop it and remove it from startup:
 ```sh
 phoenix service uninstall
 ```
+
+Running a source checkout instead? Keep managing your own service definition and follow the
+[self-managed server update runbook](../operations/updating-a-self-managed-server.md) — `service
+install` pins published releases, not your local build.
 
 ## Platform Support
 

@@ -39,17 +39,16 @@ it("says the service build is unavailable rather than borrowing the CLI's", () =
   );
 });
 
-it("gives source-build guidance for a stale service", () => {
+it("points a stale service at the published update command", () => {
   assert.include(
     formatServiceStatus({ ...status, current: false }, "0.0.29"),
-    "Next: rebuild Phoenix from source and relaunch the service manually.",
+    "Next: Run `npx @goodbirdhq/phoenix@latest service update`.",
   );
 });
 
-it("does not advertise installation for a missing service", () => {
+it("advertises installation for a missing service", () => {
   const output = formatServiceStatus({ ...status, installed: false }, "0.0.29");
-  assert.include(output, "Automatic installation is unavailable in this source distribution.");
-  assert.notInclude(output, "service install");
+  assert.include(output, "Next: Run `phoenix service install`.");
 });
 
 it("explains where the service is supported", () => {
