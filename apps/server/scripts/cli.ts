@@ -190,7 +190,7 @@ const createVpPmPublishArgs = (config: PublishCommandConfig): ReadonlyArray<stri
   const args = [
     "publish",
     "--filter",
-    "@goodbird/phoenix",
+    "@goodbirdhq/phoenix",
     "--access",
     config.access,
     "--tag",

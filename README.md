@@ -31,17 +31,17 @@ Phoenix is an unofficial fork. Please don't take Phoenix bugs to the T3 Code tea
 
 ### Run the server
 
-Phoenix ships on npm as [`@goodbird/phoenix`](https://www.npmjs.com/package/@goodbird/phoenix)
+Phoenix ships on npm as [`@goodbirdhq/phoenix`](https://www.npmjs.com/package/@goodbirdhq/phoenix)
 (requires Node.js 22.16+, 23.11+, or 24.10+):
 
 ```bash
-npx @goodbird/phoenix
+npx @goodbirdhq/phoenix
 ```
 
 Or build from source and run the CLI:
 
 ```bash
-vp i && vp run --filter @goodbird/phoenix build
+vp i && vp run --filter @goodbirdhq/phoenix build
 node apps/server/dist/bin.mjs
 ```
 
