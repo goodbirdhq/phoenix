@@ -171,10 +171,9 @@ One-time Vercel dashboard setup:
 
 ## Server distribution invariant
 
-Phoenix is not published to npm. Do not restore upstream's `publish_cli` release job or publish the
-workspace package named `t3`; that package name belongs to upstream. Desktop and hosted releases
-must not advertise an automatic npm-based server update until Phoenix has a separately owned package
-identity and a tested distribution path.
+Phoenix publishes to npm as `@goodbirdhq/phoenix`: the release workflow's `publish_cli` job rewrites
+the workspace package (named `t3` for upstream compatibility) to that identity at publish time.
+Never publish under the workspace name itself; `t3` on npm belongs to upstream.
 
 Upstream's ordering invariant — `publish_cli` before `release` before `deploy_web`, so a client is
 never released ahead of the server package it updates to — does not apply while there is no package

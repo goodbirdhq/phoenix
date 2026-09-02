@@ -14,9 +14,9 @@ the server.
   run that server under a service definition you manage, follow the step-by-step
   [self-managed server update runbook](../operations/updating-a-self-managed-server.md).
 
-Phoenix does not currently publish a CLI package, so it cannot safely offer an npm command or a
-remote background-service update. Never substitute `npx t3`: that installs upstream T3 Code, not
-Phoenix.
+Phoenix publishes its CLI as `@goodbirdhq/phoenix` on npm; update a global install with
+`npm install -g @goodbirdhq/phoenix@latest`. Never substitute `npx t3`: that installs upstream
+T3 Code, not Phoenix.
 
 Updating or restarting interrupts active agent work and terminal commands. Saved threads, settings,
 and project files remain on the server machine.

@@ -27,14 +27,20 @@ import {
 } from "./pinnedRuntime.ts";
 import { decodeServicePreflightResult } from "./servicePreflight.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
-import { isExactServiceVersion, SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
+import {
+  isExactServiceVersion,
+  PUBLISHED_PACKAGE_NAME,
+  SERVICE_LAUNCHER_PROTOCOL,
+} from "./serviceProtocol.ts";
 
 const PREFLIGHT_TIMEOUT = Duration.seconds(30);
 
 export function resolveServerSelfUpdateCapability(input: {
   readonly desktopManaged: boolean;
+  readonly launcherManaged: boolean;
 }): ServerSelfUpdateCapability | null {
-  return input.desktopManaged ? ("desktop-managed" as const) : null;
+  if (input.desktopManaged) return "desktop-managed" as const;
+  return input.launcherManaged ? ("boot-service" as const) : null;
 }
 
 export class ServerSelfUpdate extends Context.Service<
@@ -172,7 +178,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   const inFlight = yield* Ref.make(false);
 
   const capability: ServerSelfUpdateCapability | null =
-    serverConfig.mode === "desktop" ? "desktop-managed" : null;
+    serverConfig.mode === "desktop" ? "desktop-managed" : launcher.managed ? "boot-service" : null;
   const failWith = (reason: string, cause?: unknown) =>
     cause === undefined
       ? new ServerSelfUpdateError({ reason })
@@ -192,19 +198,15 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         "This server is managed by the Phoenix desktop app on its machine; update the desktop app to update it.",
       );
     }
-    const requestedVersion = input.targetVersion.trim();
-    if (!isExactServiceVersion(requestedVersion)) {
-      return yield* failWith(`'${requestedVersion}' is not an exact t3 version.`);
-    }
     if (capability === null) {
       return yield* failWith(
-        "Phoenix server self-update is unavailable until Phoenix has an owned package distribution. Build and relaunch Phoenix from source on the server machine.",
+        "Remote updates require the Phoenix background service. Run `phoenix service install` on the server machine.",
       );
     }
 
     const targetVersion = input.targetVersion.trim();
     if (!isExactServiceVersion(targetVersion)) {
-      return yield* failWith(`'${targetVersion}' is not an exact t3 version.`);
+      return yield* failWith(`'${targetVersion}' is not an exact Phoenix version.`);
     }
     if (yield* Ref.getAndSet(inFlight, true)) {
       return yield* failWith("A server update is already in progress.");
@@ -291,7 +293,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         Effect.mapError((error) =>
           error._tag === "PinnedRuntimePreflightBlockedError"
             ? failWith(error.reason, error)
-            : failWith(`Could not prepare t3@${targetVersion}.`, error),
+            : failWith(`Could not prepare ${PUBLISHED_PACKAGE_NAME}@${targetVersion}.`, error),
         ),
       );
 

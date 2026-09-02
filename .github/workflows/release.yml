@@ -712,10 +712,77 @@ jobs:
           path: release-publish/*
           if-no-files-found: error
 
+  publish_cli:
+    name: Publish CLI to npm
+    needs: [preflight, relay_public_config, quality, build]
+    # Publishes via npm trusted publishing (OIDC, id-token: write) — the
+    # registry trusts this workflow directly, no token secret. Gated on the
+    # NPM_TRUSTED_PUBLISHING repo variable so forks without the npmjs-side
+    # trusted-publisher config skip cleanly. Tolerates the skipped relay job
+    # like the build does. Unlike upstream we publish without bundled resource
+    # monitors: the matrix only builds darwin-arm64, and shipping one
+    # platform's monitor in a cross-platform npm package helps no one.
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && needs.build.result == 'success' && (needs.relay_public_config.result == 'success' || needs.relay_public_config.result == 'skipped') && vars.NPM_TRUSTED_PUBLISHING == 'true' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
+      T3CODE_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=t3...
+              - --filter=@t3tools/web...
+              - --filter=@t3tools/scripts...
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      # The @goodbirdhq/phoenix build task depends on @t3tools/web#build, so the
+      # web client is built (once) as part of this step.
+      - name: Build CLI package
+        run: vp run --filter t3 build
+
+      - name: Publish CLI package
+        run: |
+          set -euo pipefail
+          channel="${{ needs.preflight.outputs.release_channel }}"
+          if [[ "$channel" == "nightly" ]]; then
+            dist_tag="nightly"
+          elif [[ "${{ needs.preflight.outputs.is_prerelease }}" == "true" ]]; then
+            dist_tag="next"
+          else
+            dist_tag="latest"
+          fi
+
+          node apps/server/scripts/cli.ts publish \
+            --tag "$dist_tag" \
+            --app-version "${{ needs.preflight.outputs.version }}" \
+            --verbose
+
   release:
     name: Publish GitHub Release
-    # Upstream gates publishing on `quality` via publish_cli; this fork does not
-    # publish to npm, so the GitHub Release is the choke point instead.
+    # publish_cli skips itself while NPM_TOKEN is unset, so the GitHub Release
+    # stays the fork's reliable choke point and does not depend on npm.
     needs: [preflight, quality, build]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && needs.build.result == 'success' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
@@ -759,42 +826,76 @@ jobs:
             fi
           done
 
-      - name: Publish release
-        if: needs.preflight.outputs.previous_tag != ''
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          target_commitish: ${{ needs.preflight.outputs.ref }}
-          name: ${{ needs.preflight.outputs.release_name }}
-          generate_release_notes: true
-          previous_tag: ${{ needs.preflight.outputs.previous_tag }}
-          prerelease: ${{ needs.preflight.outputs.is_prerelease }}
-          make_latest: ${{ needs.preflight.outputs.make_latest }}
-          files: |
-            release-assets/*.dmg
-            release-assets/*.zip
-            release-assets/*.blockmap
-            release-assets/*.yml
-          fail_on_unmatched_files: true
-          token: ${{ github.token }}
+      # - name: Merge Windows updater manifests
+      #   run: |
+      #     shopt -s nullglob
+      #     found_windows_manifest=false
+      #     for x64_manifest in release-assets/*-win-x64.yml; do
+      #       if [[ "$(basename "$x64_manifest")" == builder-debug-* ]]; then
+      #         continue
+      #       fi
 
-      - name: Publish first release
-        if: needs.preflight.outputs.previous_tag == ''
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          target_commitish: ${{ needs.preflight.outputs.ref }}
-          name: ${{ needs.preflight.outputs.release_name }}
-          generate_release_notes: true
-          prerelease: ${{ needs.preflight.outputs.is_prerelease }}
-          make_latest: ${{ needs.preflight.outputs.make_latest }}
-          files: |
-            release-assets/*.dmg
-            release-assets/*.zip
-            release-assets/*.blockmap
-            release-assets/*.yml
-          fail_on_unmatched_files: true
-          token: ${{ github.token }}
+      #       arm64_manifest="${x64_manifest/-x64.yml/-arm64.yml}"
+      #       output_manifest="${x64_manifest/-win-x64.yml/.yml}"
+      #       if [[ ! -f "$arm64_manifest" ]]; then
+      #         echo "Missing matching arm64 Windows manifest for $x64_manifest" >&2
+      #         exit 1
+      #       fi
+
+      #       found_windows_manifest=true
+      #       node scripts/merge-update-manifests.ts --platform win \
+      #         "$arm64_manifest" \
+      #         "$x64_manifest" \
+      #         "$output_manifest"
+      #       rm -f "$arm64_manifest" "$x64_manifest"
+      #     done
+
+      #     if [[ "$found_windows_manifest" != true ]]; then
+      #       echo "No Windows updater manifests found to merge." >&2
+      #       exit 1
+      #     fi
+
+      # gh release create, not softprops/action-gh-release: the action 403s
+      # creating releases on this repo even with contents:write, while gh with
+      # the same token demonstrably works (phoenix-build.yml publishes with it).
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          TARGET: ${{ needs.preflight.outputs.ref }}
+          RELEASE_NAME: ${{ needs.preflight.outputs.release_name }}
+          PREVIOUS_TAG: ${{ needs.preflight.outputs.previous_tag }}
+          IS_PRERELEASE: ${{ needs.preflight.outputs.is_prerelease }}
+          MAKE_LATEST: ${{ needs.preflight.outputs.make_latest }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release-assets/*.dmg release-assets/*.zip release-assets/*.blockmap release-assets/*.yml)
+          if ! compgen -G "release-assets/*.dmg" >/dev/null || ! compgen -G "release-assets/*.yml" >/dev/null; then
+            echo "Missing expected release assets (need at least one .dmg and one .yml):" >&2
+            ls -la release-assets/ >&2
+            exit 1
+          fi
+
+          if gh release view "$TAG" --json id >/dev/null 2>&1; then
+            echo "Release $TAG already exists; replacing assets."
+            gh release upload "$TAG" --clobber "${assets[@]}"
+            exit 0
+          fi
+
+          args=(
+            --target "$TARGET"
+            --title "$RELEASE_NAME"
+            --generate-notes
+            --latest="$MAKE_LATEST"
+          )
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            args+=(--notes-start-tag "$PREVIOUS_TAG")
+          fi
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${assets[@]}" "${args[@]}"
 
   deploy_web:
     name: Deploy hosted web app

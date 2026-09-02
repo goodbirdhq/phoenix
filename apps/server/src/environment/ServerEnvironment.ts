@@ -16,6 +16,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
+import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
@@ -187,8 +188,10 @@ export const make = Effect.gen(function* () {
   const environmentId = yield* identity.getEnvironmentId;
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
+  const launcher = yield* resolveServiceLauncherMode();
   const serverSelfUpdate = resolveServerSelfUpdateCapability({
     desktopManaged: serverConfig.mode === "desktop",
+    launcherManaged: launcher.managed,
   });
   // Static is correct: the control fd is known at bootstrap, and the desktop
   // app and its bundled server ship in one artifact, so a present fd means

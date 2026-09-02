@@ -21,6 +21,7 @@ import {
   PinnedRuntimeInstallError,
 } from "./pinnedRuntime.ts";
 import {
+  PUBLISHED_PACKAGE_NAME,
   SERVICE_LAUNCHER_FILE,
   SERVICE_LAUNCHER_PROTOCOL,
   SERVICE_STATE_FILE,
@@ -426,7 +427,7 @@ export class BootServiceDowngradeRefusedError extends Schema.TaggedErrorClass<Bo
   },
 ) {
   override get message(): string {
-    return `Refusing to replace t3@${this.installedVersion} with older t3@${this.targetVersion}. Run the command again with --allow-downgrade to continue.`;
+    return `Refusing to replace ${PUBLISHED_PACKAGE_NAME}@${this.installedVersion} with older ${PUBLISHED_PACKAGE_NAME}@${this.targetVersion}. Run the command again with --allow-downgrade to continue.`;
   }
 }
 

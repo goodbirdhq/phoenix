@@ -31,11 +31,17 @@ Phoenix is an unofficial fork. Please don't take Phoenix bugs to the T3 Code tea
 
 ### Run the server
 
-Phoenix is not published to npm, so there is no `npx` one-liner. Build from source and run the CLI
+Phoenix ships on npm as [`@goodbirdhq/phoenix`](https://www.npmjs.com/package/@goodbirdhq/phoenix)
 (requires Node.js 22.16+, 23.11+, or 24.10+):
 
 ```bash
-vp i && vp run --filter t3 build
+npx @goodbirdhq/phoenix
+```
+
+Or build from source and run the CLI:
+
+```bash
+vp i && vp run --filter @goodbirdhq/phoenix build
 node apps/server/dist/bin.mjs
 ```
 

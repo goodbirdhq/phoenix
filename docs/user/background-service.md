@@ -1,15 +1,20 @@
 # Running Phoenix in the Background
 
-Phoenix's inherited background-service implementation requires an exact-version package
-distribution. Phoenix is not published to npm, so new background-service installs and updates are
-currently disabled: installing the upstream `t3` package would run a different product.
+Phoenix publishes its server as `@goodbirdhq/phoenix` on npm, and the background service installs
+exact pinned versions of that package. From an npm-installed CLI:
 
-For now, run the source-built server in a terminal or create a service definition you manage
-yourself. To update a server you run that way, follow the
-[self-managed server update runbook](../operations/updating-a-self-managed-server.md). Do not run `phoenix service install` or `phoenix service update` until Phoenix has an owned
-package identity and this page announces that distribution.
+```sh
+phoenix service install
+```
 
-If an older Phoenix background service is already installed, you can inspect it:
+That registers Phoenix as a background service for your user and starts it. To update the service
+to the latest release later:
+
+```sh
+npx @goodbirdhq/phoenix@latest service update
+```
+
+Inspect the installed service — including whether the running service build matches your CLI:
 
 ```sh
 phoenix service status
@@ -21,18 +26,12 @@ You can stop it and remove it from startup:
 phoenix service uninstall
 ```
 
-Update or repair it:
+The service uses the same Phoenix version as the CLI you run. To install a nightly or an exact
+version, use that version of the published package:
 
 ```sh
-npx t3@latest service update
-```
-
-The service uses the same T3 Code version as the CLI you run. To install a nightly or an exact
-version, use that version of the CLI:
-
-```sh
-npx t3@nightly service update
-npx t3@1.2.3 service update
+npx @goodbirdhq/phoenix@nightly service update
+npx @goodbirdhq/phoenix@1.2.3 service update
 ```
 
 The install and update commands refuse to replace a newer service with an older version. Setup
@@ -40,23 +39,21 @@ through T3 Connect leaves a newer service unchanged. To downgrade, select the ex
 and pass `--allow-downgrade`:
 
 ```sh
-npx t3@1.2.3 service update --allow-downgrade
+npx @goodbirdhq/phoenix@1.2.3 service update --allow-downgrade
 ```
 
-Stop it and remove it from startup:
-
-```sh
-npx t3@latest service uninstall
-```
-
-Updating restarts T3 Code briefly. Let active agent work and terminal commands finish first.
+Updating restarts Phoenix briefly. Let active agent work and terminal commands finish first.
 If a remote update is already in progress, wait for it to finish before retrying a local update.
 
-The service runs a small stable launcher. Exact T3 Code versions are installed separately, so a
+The service runs a small stable launcher. Exact Phoenix versions are installed separately, so a
 failed remote candidate can return to the previous version without rewriting the service
 definition. The launcher snapshots the database before a remote candidate starts, so database
 updates roll back with the server version. An older launcher may require one local
 `service update` before this is available.
+
+Running a source checkout instead? Keep managing your own service definition and follow the
+[self-managed server update runbook](../operations/updating-a-self-managed-server.md) — `service
+install` pins published releases, not your local build.
 
 ## Platform Support
 
