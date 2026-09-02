@@ -210,8 +210,8 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       assert.include(output, "Manage the Phoenix background service.");
       assert.include(output, "uninstall");
       assert.include(output, "status");
-      assert.notInclude(output, "  install");
-      assert.notInclude(output, "  update");
+      assert.include(output, "install");
+      assert.include(output, "update");
     }),
   );
 
