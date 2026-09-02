@@ -723,7 +723,9 @@ jobs:
     # monitors: the matrix only builds darwin-arm64, and shipping one
     # platform's monitor in a cross-platform npm package helps no one.
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && needs.build.result == 'success' && (needs.relay_public_config.result == 'success' || needs.relay_public_config.result == 'skipped') && vars.NPM_TRUSTED_PUBLISHING == 'true' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    # ubuntu-24.04, not blacksmith: npm rejects provenance attestations from
+    # self-hosted runners, and Blacksmith registers as self-hosted.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
