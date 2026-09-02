@@ -190,13 +190,25 @@ const serviceStatusCommand = Command.make("status", projectLocationFlags).pipe(
 
 export const offerServiceDuringOnboarding = Effect.gen(function* () {
   const service = yield* BootService.BootService;
-  const { supported, installed, current } = yield* service.status;
+  const status = yield* service.status;
+  const { supported, installed, current } = status;
   if (!supported) {
     return false;
   }
   if (installed && current) {
     yield* Console.log("Phoenix is already set up to run in the background on this machine.");
     return true;
+  }
+  if (
+    installed &&
+    status.installedVersion !== undefined &&
+    compareExactServiceVersions(status.installedVersion, packageJson.version) > 0
+  ) {
+    yield* Console.log(
+      `A newer ${PUBLISHED_PACKAGE_NAME}@${status.installedVersion} background service is installed. Leaving it unchanged.`,
+    );
+    // This CLI cannot verify the newer service. Keep the manual fallback available.
+    return false;
   }
   // A LaunchAgent starts at login and dies at logout; there is no
   // enable-linger equivalent on macOS. Do not promise more than that.

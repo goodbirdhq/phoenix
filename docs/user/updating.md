@@ -16,7 +16,7 @@ the server.
 
 Phoenix publishes its CLI as `@goodbirdhq/phoenix` on npm; update a global install with
 `npm install -g @goodbirdhq/phoenix@latest`. Never substitute `npx t3`: that installs upstream
-T3 Code, not Phoenix.
+Phoenix, not Phoenix.
 
 Updating or restarting interrupts active agent work and terminal commands. Saved threads, settings,
 and project files remain on the server machine.
@@ -34,15 +34,15 @@ The update does not remove saved threads, settings, or project files.
 
 | Action                     | What to do                                                                                                                                                                                                                                                                                                                                                                    |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Update server**          | Available for the T3 Code Linux background service and for servers run by a current T3 Code desktop app. Select the button and leave T3 Code open while it downloads, installs, restarts, and reconnects. For desktop-app servers this closes and relaunches the desktop app on that machine. If installation fails, the desktop app stays open and reconnects to its server. |
-| **Update the desktop app** | Shown for desktop apps that predate remote updates. Open the T3 Code desktop app on the machine that runs the server and install the app update there. Reopen it if needed.                                                                                                                                                                                                   |
-| **Copy update command**    | Copy the command, open a terminal on the server machine, stop the current T3 Code server, and relaunch it with the copied command and any startup options you normally use.                                                                                                                                                                                                   |
+| **Update server**          | Available for the Phoenix Linux background service and for servers run by a current Phoenix desktop app. Select the button and leave Phoenix open while it downloads, installs, restarts, and reconnects. For desktop-app servers this closes and relaunches the desktop app on that machine. If installation fails, the desktop app stays open and reconnects to its server. |
+| **Update the desktop app** | Shown for desktop apps that predate remote updates. Open the Phoenix desktop app on the machine that runs the server and install the app update there. Reopen it if needed.                                                                                                                                                                                                   |
+| **Copy update command**    | Copy the command, open a terminal on the server machine, stop the current Phoenix server, and relaunch it with the copied command and any startup options you normally use.                                                                                                                                                                                                   |
 
-The available action depends on how that server was started. T3 Code does not update connected
+The available action depends on how that server was started. Phoenix does not update connected
 servers silently in the background.
 
 An older background-service launcher may ask you to run the exact
-`npx t3@<version> service update` command on the server machine. That one local update installs the
+`npx @goodbirdhq/phoenix@<version> service update` command on the server machine. That one local update installs the
 rollback support needed for later remote updates, including versions that change the database.
 
 After selecting **Update**, the notice becomes a live status line: **Downloading…** while the new
@@ -50,21 +50,21 @@ version is fetched and verified, then **Restarting…** while the server restart
 status appears in the conversation and in Connections, so navigating between them does not lose the
 update. A failure remains visible with its error and an option to retry.
 
-**Copy update command** gives you `npx t3@<client-version>`, which relaunches the server directly
+**Copy update command** gives you `npx @goodbirdhq/phoenix@<client-version>`, which relaunches the server directly
 at the matching version. Add whatever startup options you normally use.
 
-If the server instead runs as the T3 Code background service, update the service on the host and
+If the server instead runs as the Phoenix background service, update the service on the host and
 pin the same version:
 
 ```sh
-npx t3@<client-version> service update
+npx @goodbirdhq/phoenix@<client-version> service update
 ```
 
-`service update` installs the version of the CLI that invoked it, so `npx t3@latest service update`
+`service update` installs the version of the CLI that invoked it, so `npx @goodbirdhq/phoenix@latest service update`
 only resolves the skew when your client happens to be on the latest release. The exact version from
 the warning always works.
 
-See [Running T3 Code in the Background](./background-service.md) for install, status, and removal
+See [Running Phoenix in the Background](./background-service.md) for install, status, and removal
 commands.
 
 ## Nightly desktop release notes
@@ -87,7 +87,7 @@ If a step fails:
 
 1. Retry the offered action once.
 2. Make sure you updated the machine named in the warning, not only the device you are using.
-3. For a command-line server, relaunch it with `npx t3@<client-version>`, replacing
+3. For a command-line server, relaunch it with `npx @goodbirdhq/phoenix@<client-version>`, replacing
    `<client-version>` with the client version shown in the warning.
 
 ## The Mobile App

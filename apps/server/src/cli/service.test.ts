@@ -4,6 +4,7 @@ import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as NetService from "@t3tools/shared/Net";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Terminal from "effect/Terminal";
 import { Command } from "effect/unstable/cli";
@@ -84,8 +85,8 @@ it("reports a newer installed service and gives an exact-version repair command"
   );
 
   assert.include(output, "phoenix@0.0.32-nightly.1 (newer than this phoenix@0.0.31 CLI)");
-  assert.include(output, "rebuild Phoenix from source at 0.0.32-nightly.1");
-  assert.notInclude(output, "npx t3@latest service update");
+  assert.include(output, "npx @goodbirdhq/phoenix@0.0.32-nightly.1 service update");
+  assert.notInclude(output, "@goodbirdhq/phoenix@latest service update");
 });
 
 const newerServiceStatus = { ...status, current: false, installedVersion: "999.0.0" };
@@ -112,9 +113,11 @@ function makeTestService(serviceStatus: BootService.BootServiceStatus) {
 
 it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands", (it) => {
   it.effect.each(["install", "update"] as const)(
-    "%s is not exposed by this source distribution",
+    "%s refuses a downgrade before changing the service",
     (command) =>
       Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "phoenix-service-cli-test-" });
         const { service, installOptions } = makeTestService(newerServiceStatus);
         vi.spyOn(BootService, "layer").mockReturnValue(
           Layer.succeed(BootService.BootService, service),
@@ -122,13 +125,19 @@ it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands
 
         const error = yield* Command.runWith(serviceCommand, { version: packageJson.version })([
           command,
+          "--base-dir",
+          baseDir,
         ]).pipe(
           Effect.provideService(HostProcessEnvironment, {}),
           Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
           Effect.flip,
         );
 
-        expect(error._tag).toBe("ShowHelp");
+        expect(error).toMatchObject({
+          _tag: "BootServiceDowngradeRefusedError",
+          installedVersion: "999.0.0",
+          targetVersion: packageJson.version,
+        });
         expect(installOptions).toEqual([]);
       }),
   );

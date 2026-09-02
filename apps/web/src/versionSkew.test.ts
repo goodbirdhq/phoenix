@@ -204,7 +204,7 @@ describe("versionSkew", () => {
           },
         },
       }),
-    ).toBeNull();
+    ).toBe("boot-service");
   });
 
   it("detects remote desktop-app update support from config descriptors", () => {

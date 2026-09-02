@@ -3,8 +3,10 @@ import { expect, it } from "@effect/vitest";
 import { ServerSelfUpdateError, ThreadId } from "@t3tools/contracts";
 import { HostProcessExecutablePath } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
@@ -37,7 +39,14 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
           order.push("install");
           const prefix = input.args[input.args.indexOf("--prefix") + 1];
           if (prefix === undefined) return yield* Effect.die("missing npm prefix");
-          const entry = path.join(prefix, "node_modules", "t3", "dist", "bin.mjs");
+          const entry = path.join(
+            prefix,
+            "node_modules",
+            "@goodbirdhq",
+            "phoenix",
+            "dist",
+            "bin.mjs",
+          );
           yield* fs.makeDirectory(path.dirname(entry), { recursive: true }).pipe(Effect.orDie);
           yield* fs.writeFileString(entry, "export {};\n").pipe(Effect.orDie);
           return {
@@ -319,17 +328,15 @@ it.layer(NodeServices.layer)("server self update", (it) => {
     }),
   );
 
-  it.effect("rejects package-based updates before staging or reporting progress", () =>
+  it.effect("stages and preflights before asking the launcher for an update ID", () =>
     Effect.gen(function* () {
       const { selfUpdate, order } = yield* makeHarness();
-      const stages: string[] = [];
-      const error = yield* selfUpdate
-        .update({ targetVersion: "1.1.0" }, (stage) => Effect.sync(() => void stages.push(stage)))
-        .pipe(Effect.flip);
-
-      expect(error.reason).toContain("owned package distribution");
-      expect(stages).toEqual([]);
-      expect(order).toEqual([]);
+      expect(yield* selfUpdate.update({ targetVersion: "1.1.0" })).toEqual({
+        targetVersion: "1.1.0",
+        method: "boot-service",
+        updateId: "launcher-id",
+      });
+      expect(order).toEqual(["install", "preflight", "accept"]);
     }),
   );
 
@@ -338,11 +345,11 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       const web = yield* makeHarness();
       expect(
         (yield* web.selfUpdate.update({ targetVersion: "latest" }).pipe(Effect.flip)).reason,
-      ).toBe("'latest' is not an exact t3 version.");
+      ).toBe("'latest' is not an exact Phoenix version.");
       const desktop = yield* makeHarness({ mode: "desktop" });
       expect(
         (yield* desktop.selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason,
-      ).toContain("Phoenix desktop app");
+      ).toContain("desktop app");
       expect([...web.order, ...desktop.order]).toEqual([]);
     }),
   );
@@ -372,31 +379,32 @@ it.layer(NodeServices.layer)("server self update", (it) => {
     }),
   );
 
-  it.effect("does not enter preflight when package updates are unavailable", () =>
+  it.effect("preserves the preflight refusal reason", () =>
     Effect.gen(function* () {
-      const { selfUpdate, order } = yield* makeHarness({ preflight: "blocked" });
-      const error = yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip);
-      expect(error.reason).toContain("owned package distribution");
-      expect(order).toEqual([]);
+      const { selfUpdate } = yield* makeHarness({ preflight: "blocked" });
+      expect((yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip)).reason).toBe(
+        "local update required",
+      );
     }),
   );
 
-  it.effect("rejects concurrent package updates without invoking the launcher", () =>
+  it.effect("allows only one update at a time", () =>
     Effect.gen(function* () {
-      const { selfUpdate, order } = yield* makeHarness({
-        requestUpdate: () => Effect.die("launcher must not be called"),
+      const requested = yield* Deferred.make<void>();
+      const accepted = yield* Deferred.make<string>();
+      const { selfUpdate } = yield* makeHarness({
+        requestUpdate: () =>
+          Deferred.succeed(requested, undefined).pipe(Effect.andThen(Deferred.await(accepted))),
       });
-      const errors = yield* Effect.all(
-        ["1.1.0", "1.1.1"].map((targetVersion) =>
-          selfUpdate.update({ targetVersion }).pipe(Effect.flip),
-        ),
-        { concurrency: "unbounded" },
+      const first = yield* Effect.forkChild(selfUpdate.update({ targetVersion: "1.1.0" }), {
+        startImmediately: true,
+      });
+      yield* Deferred.await(requested);
+      expect((yield* selfUpdate.update({ targetVersion: "1.1.1" }).pipe(Effect.flip)).reason).toBe(
+        "A server update is already in progress.",
       );
-      expect(errors.map((error) => error.reason)).toEqual([
-        expect.stringContaining("owned package distribution"),
-        expect.stringContaining("owned package distribution"),
-      ]);
-      expect(order).toEqual([]);
+      yield* Deferred.succeed(accepted, "launcher-id");
+      expect((yield* Fiber.join(first)).updateId).toBe("launcher-id");
     }),
   );
 });

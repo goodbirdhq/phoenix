@@ -88,7 +88,7 @@ describe("ServerUpdateAction", () => {
     expect(markup).toContain("Update the desktop app on the machine that runs Desktop server");
   });
 
-  it("keeps the manual instruction for desktop servers without remote update support", () => {
+  it("renders desktop-managed guidance without an update action", () => {
     const markup = renderToStaticMarkup(
       <ServerUpdateAction
         environmentId={"env-test" as EnvironmentId}
@@ -98,7 +98,7 @@ describe("ServerUpdateAction", () => {
       />,
     );
 
-    expect(markup).toContain("Update the desktop app on that machine to update this server.");
+    expect(markup).toContain("Update the desktop app on the machine that runs Test server");
     expect(markup).not.toContain("<button");
   });
 
