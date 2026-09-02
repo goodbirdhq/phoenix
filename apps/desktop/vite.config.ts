@@ -15,13 +15,13 @@ export default defineConfig({
     tasks: {
       build: {
         command: "node scripts/build-preview-annotation-css.mjs && vp pack",
-        dependsOn: ["@goodbirdhq/phoenix#build"],
+        dependsOn: ["t3#build"],
         cache: false,
       },
       dev: {
         command:
           "node scripts/build-preview-annotation-css.mjs && cross-env T3CODE_DESKTOP_DEV=1 vp pack --watch",
-        dependsOn: ["@goodbirdhq/phoenix#build"],
+        dependsOn: ["t3#build"],
         cache: false,
       },
       "dev:bundle": {
@@ -30,7 +30,7 @@ export default defineConfig({
       },
       "dev:electron": {
         command: "node scripts/dev-electron.mjs",
-        dependsOn: ["@goodbirdhq/phoenix#build"],
+        dependsOn: ["t3#build"],
         cache: false,
       },
     },

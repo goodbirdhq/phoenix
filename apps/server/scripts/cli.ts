@@ -242,7 +242,11 @@ const publishCmd = Command.make(
           const workspaceCatalog = workspaceConfig.catalog ?? {};
           const workspaceOverrides = workspaceConfig.overrides ?? {};
           const pkg: PackageJson = {
-            name: serverPackageJson.name,
+            // The workspace package keeps upstream's name (t3) so Effect's
+            // deterministic service keys stay upstream-compatible; the npm
+            // identity is applied only to the published manifest, which this
+            // publish flow writes and restores around `vp pm publish`.
+            name: "@goodbirdhq/phoenix",
             repository: serverPackageJson.repository,
             bin: serverPackageJson.bin,
             type: serverPackageJson.type,
