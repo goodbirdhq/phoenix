@@ -24,6 +24,7 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
+import { ThreadDeletionReactor } from "./Services/ThreadDeletionReactor.ts";
 import {
   ThreadTurnBootstrap,
   findReusableBranchWorktree,
@@ -257,6 +258,12 @@ const bootstrapRecoveryHarness = (activities: ReadonlyArray<OrchestrationThreadA
       }),
     ),
     Layer.provide(Layer.mock(GitWorkflowService.GitWorkflowService)({})),
+    Layer.provide(
+      Layer.mock(ThreadDeletionReactor)({
+        start: () => Effect.void,
+        drainThrough: () => Effect.void,
+      }),
+    ),
     Layer.provide(Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({ runForThread })),
     Layer.provide(Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({})),
     Layer.provide(

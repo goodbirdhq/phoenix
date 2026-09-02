@@ -1030,6 +1030,14 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (itemType === "mcp_tool_call") {
     const data = asRecord(payload?.data);
+    const spawnedSession = deriveSpawnedSessionToolActivity(data);
+    if (spawnedSession) {
+      entry.spawnedSession = spawnedSession;
+    }
+    const scheduleActivity = deriveScheduleToolActivity(data);
+    if (scheduleActivity) {
+      entry.scheduleActivity = scheduleActivity;
+    }
     const toolData = typeof data?.toolName === "string" ? (data.item ?? data) : data?.item;
     if (toolData !== undefined) {
       entry.toolData = toolData;

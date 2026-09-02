@@ -15,6 +15,7 @@ import type {
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import {
   deriveScheduleToolActivity,
+  SCHEDULE_ACTION_LABELS,
   type ScheduleToolActivity,
 } from "@t3tools/shared/scheduleToolActivity";
 import {
@@ -859,6 +860,7 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
     return "message";
   }
   if (entry.sourceActivityKind === "runtime.warning") return "warning";
+  if (entry.scheduleActivity) return "calendar";
   if (entry.requestKind === "command") return "command";
   if (entry.requestKind === "file-read") return "eye";
   if (entry.requestKind === "file-change") return "edit";
@@ -955,6 +957,9 @@ function workEntryFailed(workEntry: WorkLogEntry): boolean {
 }
 
 function workEntryHeading(workEntry: WorkLogEntry): string {
+  if (workEntry.scheduleActivity && !workEntryFailed(workEntry)) {
+    return SCHEDULE_ACTION_LABELS[workEntry.scheduleActivity.action];
+  }
   const presentation = resolveWorkEntryToolPresentation(workEntry);
   if (presentation) return presentation.displayName;
   if (!workEntry.toolTitle) {

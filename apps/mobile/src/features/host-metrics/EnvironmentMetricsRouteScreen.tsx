@@ -25,7 +25,6 @@ import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { useThemeColor } from "../../lib/useThemeColor";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import {
   type MobileEnvironmentHostMetricsStatus,
@@ -115,8 +114,6 @@ function EnvironmentMetricsRow({
   environment: MobileEnvironmentHostMetricsStatus;
   onPress: () => void;
 }) {
-  const icon = useThemeColor("--color-icon");
-  const chevron = useThemeColor("--color-chevron");
   const snapshot = environment.snapshot;
   return (
     <Pressable
@@ -126,7 +123,7 @@ function EnvironmentMetricsRow({
       className="rounded-[22px] bg-card p-4 active:opacity-70"
     >
       <View className="flex-row items-start gap-3">
-        <SymbolView name="server.rack" size={22} tintColor={icon} />
+        <SymbolView name="server.rack" size={22} tintColorClassName="accent-icon" />
         <View className="min-w-0 flex-1 gap-1">
           <Text className="text-base font-t3-semibold text-foreground" numberOfLines={1}>
             {environment.label}
@@ -156,7 +153,7 @@ function EnvironmentMetricsRow({
             </View>
           ) : null}
         </View>
-        <SymbolView name="chevron.right" size={16} tintColor={chevron} />
+        <SymbolView name="chevron.right" size={16} tintColorClassName="accent-chevron" />
       </View>
     </Pressable>
   );

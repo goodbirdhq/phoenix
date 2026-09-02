@@ -6,7 +6,6 @@ import { AppText as Text } from "../../components/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
-import { useThemeColor } from "../../lib/useThemeColor";
 
 export interface UsageLimitMigrationTarget {
   readonly instanceId: ProviderInstanceId;
@@ -60,7 +59,6 @@ export const UsageLimitMigrationPopup = memo(function UsageLimitMigrationPopup(p
   readonly onSwitchAll: () => void;
   readonly onDismiss: () => void;
 }) {
-  const iconColor = String(useThemeColor("--color-icon"));
   return (
     <View
       accessibilityLabel={`${props.originName} reached its usage limit`}
@@ -69,7 +67,12 @@ export const UsageLimitMigrationPopup = memo(function UsageLimitMigrationPopup(p
       <View className="gap-3 rounded-[22px] border border-amber-500/30 bg-card p-4 shadow-lg">
         <View className="flex-row items-start gap-3">
           <View className="h-9 w-9 items-center justify-center rounded-full bg-amber-500/15">
-            <SymbolView name="chart.bar.xaxis" size={17} tintColor={iconColor} type="monochrome" />
+            <SymbolView
+              name="chart.bar.xaxis"
+              size={17}
+              tintColorClassName="accent-icon"
+              type="monochrome"
+            />
           </View>
           <View className="min-w-0 flex-1 gap-1">
             <Text accessibilityRole="header" className="text-base font-t3-bold text-foreground">
@@ -87,7 +90,7 @@ export const UsageLimitMigrationPopup = memo(function UsageLimitMigrationPopup(p
             hitSlop={8}
             onPress={props.onDismiss}
           >
-            <SymbolView name="xmark" size={13} tintColor={iconColor} type="monochrome" />
+            <SymbolView name="xmark" size={13} tintColorClassName="accent-icon" type="monochrome" />
           </Pressable>
         </View>
 
@@ -147,7 +150,7 @@ export const UsageLimitMigrationPopup = memo(function UsageLimitMigrationPopup(p
               </View>
             </View>
             {props.isTurnStreaming && props.streamingDisabledReason ? (
-              <Text className="text-xs leading-4 text-amber-700 dark:text-amber-300">
+              <Text className="text-xs leading-4 text-warning-foreground">
                 {props.streamingDisabledReason}
               </Text>
             ) : !props.failedTurnCanRetry && props.retryUnavailableReason ? (

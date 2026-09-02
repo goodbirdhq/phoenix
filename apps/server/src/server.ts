@@ -419,7 +419,7 @@ const RuntimeCoreProviderDependenciesLive = Layer.mergeAll(
   ReactorLayerLive,
   ScheduleRuntimeLayerLive,
 ).pipe(
-  Layer.provideMerge(ThreadTurnBootstrap.layer),
+  Layer.provideMerge(ThreadTurnBootstrap.layer.pipe(Layer.provide(ReactorLayerLive))),
   // Core Services
   Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(CheckpointingLayerLive),

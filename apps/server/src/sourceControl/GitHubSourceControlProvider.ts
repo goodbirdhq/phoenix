@@ -30,6 +30,7 @@ function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeReq
     baseRefName: summary.baseRefName,
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
+    ...(summary.headRefOid !== undefined ? { headRefOid: summary.headRefOid } : {}),
     updatedAt:
       summary.updatedAt === undefined
         ? Option.none()

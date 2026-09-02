@@ -241,18 +241,28 @@ export const narrowUsageSummary = (
   if (requestedVersion >= USAGE_CONTRACT_VERSION) {
     return summary;
   }
+  const narrowedContractVersion = requestedVersion >= 5 ? 5 : USAGE_MERGE_COMPATIBLE_SINCE;
+  const buckets = summary.buckets.filter(
+    (bucket) =>
+      bucket.provider !== "grok" && (requestedVersion >= 5 || bucket.provider !== "opencode"),
+  );
+  const sources = summary.sources.filter(
+    (source) =>
+      source.fingerprint.provider !== "grok" &&
+      (requestedVersion >= 5 || source.fingerprint.provider !== "opencode"),
+  );
+  if (
+    summary.contractVersion === narrowedContractVersion &&
+    buckets.length === summary.buckets.length &&
+    sources.length === summary.sources.length
+  ) {
+    return summary;
+  }
   return {
     ...summary,
-    contractVersion: requestedVersion >= 5 ? 5 : USAGE_MERGE_COMPATIBLE_SINCE,
-    buckets: summary.buckets.filter(
-      (bucket) =>
-        bucket.provider !== "grok" && (requestedVersion >= 5 || bucket.provider !== "opencode"),
-    ),
-    sources: summary.sources.filter(
-      (source) =>
-        source.fingerprint.provider !== "grok" &&
-        (requestedVersion >= 5 || source.fingerprint.provider !== "opencode"),
-    ),
+    contractVersion: narrowedContractVersion,
+    buckets,
+    sources,
   };
 };
 

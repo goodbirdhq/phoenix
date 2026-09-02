@@ -1,5 +1,6 @@
 import {
   USAGE_CONTRACT_VERSION,
+  USAGE_MERGE_COMPATIBLE_SINCE,
   type EnvironmentId,
   type UsageBucket,
   type UsageDay,
@@ -206,7 +207,7 @@ describe("mergeUsage", () => {
     expect(merged.costUsd).toBe(10);
   });
 
-  it("excludes an environment reporting an older contract version", () => {
+  it("excludes an environment reporting an incompatible contract version", () => {
     const merged = mergeUsage(
       [
         environment(
@@ -218,7 +219,7 @@ describe("mergeUsage", () => {
           summary(
             [bucket()],
             [{ provider: "claude", hostId: "linux", homePath: "/b" }],
-            USAGE_CONTRACT_VERSION - 2,
+            USAGE_MERGE_COMPATIBLE_SINCE - 1,
           ),
         ),
       ],
