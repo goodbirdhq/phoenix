@@ -82,10 +82,7 @@ jobs:
   production:
     name: EAS Production ${{ github.event_name == 'push' && 'auto' || inputs.mode }}
     if: ${{ github.repository == 'goodbirdhq/phoenix' }}
-    # ubuntu-24.04, not blacksmith: this fork has no Blacksmith runners, and
-    # the fingerprint contract above only needs Linux + the corepack-pinned
-    # pnpm, which GitHub's runner satisfies identically.
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     permissions:
       contents: read
     env:
