@@ -1,10 +1,10 @@
 {
-  "name": "t3",
+  "name": "@goodbird/phoenix",
   "version": "0.0.35",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pingdotgg/t3code",
+    "url": "https://github.com/goodbirdhq/phoenix",
     "directory": "apps/server"
   },
   "bin": {
