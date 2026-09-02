@@ -1330,22 +1330,38 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
     readonly modelCatalog: ClaudeModelCatalog;
     /** Names of the skills Claude Code can run for this session's cwd. */
     readonly skillNames: ReadonlySet<string>;
+    readonly seedPrompt?: string | undefined;
   },
 ) {
-  const text = buildPromptText(input, dependencies.boundInstanceId, dependencies.modelCatalog);
+  const promptText = buildPromptText(
+    input,
+    dependencies.boundInstanceId,
+    dependencies.modelCatalog,
+  );
   const sdkContent: Array<Record<string, unknown>> = [];
 
   // Claude Code expands a skill only from the LAST text block, and only when
   // `/name` is its first character. A `$skill` chip anywhere in the prompt is
   // therefore split into [leading text, "/name trailing text"] so the CLI
   // runs it natively and the prose around it survives. See ClaudeSkillDispatch.
-  const dispatch = planClaudeSkillDispatch(text, dependencies.skillNames);
+  const dispatch = planClaudeSkillDispatch(promptText, dependencies.skillNames);
   if (dispatch) {
-    if (dispatch.leadingText !== undefined) {
-      sdkContent.push({ type: "text", text: dispatch.leadingText });
+    const leadingText = dependencies.seedPrompt
+      ? applyConversationSeedPrefix({
+          seedPrompt: dependencies.seedPrompt,
+          text: dispatch.leadingText ?? "",
+        })
+      : dispatch.leadingText;
+    if (leadingText !== undefined) {
+      sdkContent.push({ type: "text", text: leadingText });
     }
-  } else if (text.length > 0) {
-    sdkContent.push({ type: "text", text });
+  } else {
+    const text = dependencies.seedPrompt
+      ? applyConversationSeedPrefix({ seedPrompt: dependencies.seedPrompt, text: promptText })
+      : promptText;
+    if (text.length > 0) {
+      sdkContent.push({ type: "text", text });
+    }
   }
 
   for (const attachment of input.attachments ?? []) {
@@ -4751,6 +4767,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           .filter((skill) => skill.enabled && skill.userInvocable !== false)
           .map((skill) => skill.name),
       ),
+      ...(context.pendingSeedPrompt ? { seedPrompt: context.pendingSeedPrompt } : {}),
     });
     context.pendingSeedPrompt = undefined;
 

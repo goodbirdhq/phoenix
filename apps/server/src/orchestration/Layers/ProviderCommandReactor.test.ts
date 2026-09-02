@@ -540,13 +540,12 @@ describe("ProviderCommandReactor", () => {
     }
 
     scope = await Effect.runPromise(Scope.make("sequential"));
+    const limitFailoverReactor = await runtime.runPromise(Effect.service(LimitFailoverReactor));
     await Effect.runPromise(
-      reactor
-        .start()
-        .pipe(
-          Scope.provide(scope),
-          Effect.provideService(ServerActivation, input?.serverActivation),
-        ),
+      Effect.andThen(reactor.start(), limitFailoverReactor.start()).pipe(
+        Scope.provide(scope),
+        Effect.provideService(ServerActivation, input?.serverActivation),
+      ),
     );
     const drain = () => Effect.runPromise(reactor.drain);
 
