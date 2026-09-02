@@ -29,10 +29,10 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       contains(github.event.pull_request.labels.*.name, 'preview:mac') &&
       (github.event.action != 'labeled' || github.event.label.name == 'preview:mac')
-    runs-on: macos-26
+    runs-on: blacksmith-12vcpu-macos-26
     # GitHub-hosted macOS runners are far slower than the Blacksmith machines
     # upstream sizes this cap against; the release build matrix needs 90.
-    timeout-minutes: 60
+    timeout-minutes: 30
     outputs:
       dmg_name: ${{ steps.build.outputs.dmg_name }}
       version: ${{ steps.version.outputs.version }}
@@ -127,7 +127,7 @@ jobs:
   publish:
     name: Publish anonymous download
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: write
@@ -291,7 +291,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       ((github.event.action == 'closed' && contains(github.event.pull_request.labels.*.name, 'preview:mac')) ||
       (github.event.action == 'unlabeled' && github.event.label.name == 'preview:mac'))
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: write
