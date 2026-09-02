@@ -788,42 +788,47 @@ jobs:
       #       exit 1
       #     fi
 
+      # gh release create, not softprops/action-gh-release: the action 403s
+      # creating releases on this repo even with contents:write, while gh with
+      # the same token demonstrably works (phoenix-build.yml publishes with it).
       - name: Publish release
-        if: needs.preflight.outputs.previous_tag != ''
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          target_commitish: ${{ needs.preflight.outputs.ref }}
-          name: ${{ needs.preflight.outputs.release_name }}
-          generate_release_notes: true
-          previous_tag: ${{ needs.preflight.outputs.previous_tag }}
-          prerelease: ${{ needs.preflight.outputs.is_prerelease }}
-          make_latest: ${{ needs.preflight.outputs.make_latest }}
-          files: |
-            release-assets/*.dmg
-            release-assets/*.zip
-            release-assets/*.blockmap
-            release-assets/*.yml
-          fail_on_unmatched_files: true
-          token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          TARGET: ${{ needs.preflight.outputs.ref }}
+          RELEASE_NAME: ${{ needs.preflight.outputs.release_name }}
+          PREVIOUS_TAG: ${{ needs.preflight.outputs.previous_tag }}
+          IS_PRERELEASE: ${{ needs.preflight.outputs.is_prerelease }}
+          MAKE_LATEST: ${{ needs.preflight.outputs.make_latest }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release-assets/*.dmg release-assets/*.zip release-assets/*.blockmap release-assets/*.yml)
+          if ! compgen -G "release-assets/*.dmg" >/dev/null || ! compgen -G "release-assets/*.yml" >/dev/null; then
+            echo "Missing expected release assets (need at least one .dmg and one .yml):" >&2
+            ls -la release-assets/ >&2
+            exit 1
+          fi
 
-      - name: Publish first release
-        if: needs.preflight.outputs.previous_tag == ''
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          target_commitish: ${{ needs.preflight.outputs.ref }}
-          name: ${{ needs.preflight.outputs.release_name }}
-          generate_release_notes: true
-          prerelease: ${{ needs.preflight.outputs.is_prerelease }}
-          make_latest: ${{ needs.preflight.outputs.make_latest }}
-          files: |
-            release-assets/*.dmg
-            release-assets/*.zip
-            release-assets/*.blockmap
-            release-assets/*.yml
-          fail_on_unmatched_files: true
-          token: ${{ github.token }}
+          if gh release view "$TAG" --json id >/dev/null 2>&1; then
+            echo "Release $TAG already exists; replacing assets."
+            gh release upload "$TAG" --clobber "${assets[@]}"
+            exit 0
+          fi
+
+          args=(
+            --target "$TARGET"
+            --title "$RELEASE_NAME"
+            --generate-notes
+            --latest="$MAKE_LATEST"
+          )
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            args+=(--notes-start-tag "$PREVIOUS_TAG")
+          fi
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${assets[@]}" "${args[@]}"
 
   deploy_web:
     name: Deploy hosted web app
