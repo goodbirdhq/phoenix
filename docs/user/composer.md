@@ -19,7 +19,7 @@ removed. On mobile, tap **+** to open
 the photo library from either the compact or expanded composer. When the connected server supports
 file uploads, **+** opens a menu beside the button with **Photo Library** and **Choose Files**.
 Videos use the server's file upload limit. You can also share photos, videos, and files into
-T3 Code from other apps through the system share sheet. Mobile keeps a local copy of each draft
+Phoenix from other apps through the system share sheet. Mobile keeps a local copy of each draft
 attachment, so you can still preview it and queue messages while offline. Uploads resume when
 you reconnect. Drafts and queued messages survive app restarts; signing out of T3 Connect keeps
 them on your device until you sign back into the same account. Select a received file on mobile
@@ -54,12 +54,12 @@ when starting a thread or changing an existing thread's model.
 
 ## Model defaults
 
-T3 Code remembers the last provider, model, and model options you selected and reuses that
+Phoenix remembers the last provider, model, and model options you selected and reuses that
 selection for new threads. A model configured in a project's settings overrides the remembered
 selection for that project; resetting the project setting returns it to the remembered selection.
 
-Model options shown as provider defaults remain display values until you choose them in T3 Code.
-T3 Code only sends options you selected explicitly, so an unset reasoning level or service tier can
+Model options shown as provider defaults remain display values until you choose them in Phoenix.
+Phoenix only sends options you selected explicitly, so an unset reasoning level or service tier can
 still come from the provider's own configuration.
 
 ## Quote an assistant response
@@ -81,17 +81,17 @@ Select a chip in the composer or a sent message to open the source thread, scrol
 and highlight the quoted passage — including in older history. The
 highlight pulses, holds for a moment, then fades on its own; press `Escape` to stop the navigation
 or clear it early. If the source is unavailable or its text has changed, the saved quote stays
-readable and T3 Code shows a warning.
+readable and Phoenix shows a warning.
 
 Mobile shows the full saved quote and its comment in sent messages. It does not offer
 **Cite in composer** or navigation to a quote's source.
 
 ## Images and videos in messages
 
-On web, desktop, and mobile, select a link to an image or video to open it inside T3 Code.
+On web, desktop, and mobile, select a link to an image or video to open it inside Phoenix.
 Workspace image and video links open the file viewer. Links to media outside the workspace
 open a media preview.
-Videos opened from the file explorer or a file-viewer tab also play inside T3 Code. They
+Videos opened from the file explorer or a file-viewer tab also play inside Phoenix. They
 stream from the environment as needed, rather than downloading the entire video before playback.
 Paths in inline code, such as `/tmp/recording.mp4`, work the same way. Image embeds stay inline;
 video embeds show a player with controls and an option to expand. Visible video previews load
@@ -122,7 +122,7 @@ Relative paths resolve from the thread's workspace. Absolute paths and `file://`
 the environment's machine, even when you connect remotely or use your phone. Supported media
 can live outside the workspace, including in Downloads or `/tmp`.
 
-T3 Code serves the original file without adding it to attachment storage. If that file is moved
+Phoenix serves the original file without adding it to attachment storage. If that file is moved
 or deleted, its preview can no longer load from the environment. A browser or device may still
 have a cached copy. Supported video formats and codecs depend on the browser or device.
 
@@ -143,13 +143,13 @@ it.
 On web and desktop, the file viewer shows HTML and PDF files as a rendered page. Use the
 source toggle in the viewer's header to switch an HTML file between the page and its markup; the
 choice persists like the rendered-Markdown toggle. A link to a line always opens the source. HTML
-runs in an isolated frame with no access to your T3 Code session. On desktop, the integrated
+runs in an isolated frame with no access to your Phoenix session. On desktop, the integrated
 browser remains available from the same header for a full browser view.
 
 ## Changing projects
 
 On web and desktop, changing the project from a new thread keeps the current environment when that
-project exists there. If it does not, T3 Code selects another environment that has the project.
+project exists there. If it does not, Phoenix selects another environment that has the project.
 
 ## Notices above the composer
 
@@ -185,7 +185,7 @@ you send it.
 The first use can download Apple's speech model and needs a network connection. Later transcription
 works offline for that language. A recording can be up to five minutes long. Canceling voice input,
 leaving the screen, or an audio interruption discards the new recording and keeps the existing draft
-and attachments. T3 Code deletes the local audio file after transcription or cancellation. It sends
+and attachments. Phoenix deletes the local audio file after transcription or cancellation. It sends
 only the normal message text when you submit the draft.
 
 ## Commands and skills
@@ -202,13 +202,13 @@ same `$name` skill token to your message. The original skill name remains search
 also reports that skill as a native slash command, Phoenix hides the duplicate native entry and keeps
 the `/skill:Skill Name` label.
 
-A skill token runs the skill wherever it sits in your message. T3 Code sends it to each provider in
+A skill token runs the skill wherever it sits in your message. Phoenix sends it to each provider in
 the form that provider runs, so the text before and after the token is kept. Skills that only you may
 start, and never the agent on its own, work the same way. A skill you switched off in the provider's
 settings does not appear in either menu.
 
 Provider commands such as `/compact` only run when they open the message, so the `/` menu offers
-them only there. T3 Code's own commands, such as `/model` and `/plan`, and skills stay available on
+them only there. Phoenix's own commands, such as `/model` and `/plan`, and skills stay available on
 any line.
 
 On desktop, press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux from a new thread to

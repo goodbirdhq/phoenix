@@ -235,6 +235,29 @@ function makeThread(
 }
 
 describe("buildThreadFeed", () => {
+  it("keeps session report bookkeeping out of mobile work rows", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-reports"),
+      projectId: ProjectId.make("project-1"),
+      title: "Reports",
+      activities: [
+        makeActivity({
+          id: EventId.make("posted"),
+          kind: "session-report.posted",
+          summary: "Report posted",
+          createdAt: "2026-09-01T00:00:00.000Z",
+        }),
+        makeActivity({
+          id: EventId.make("read"),
+          kind: "session-report.read",
+          summary: "Report read",
+          createdAt: "2026-09-01T00:00:01.000Z",
+        }),
+      ],
+    });
+    expect(buildThreadFeed(thread)).toEqual([]);
+  });
+
   it("keeps long Claude commands expandable without repeating them in full detail", () => {
     const command = `printf 'first line\nsecond line'\n&& printf done`;
     const thread = makeThread({

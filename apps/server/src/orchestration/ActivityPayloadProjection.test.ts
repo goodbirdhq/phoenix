@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
-import { projectActivityPayload } from "./ActivityPayloadProjection.ts";
+import type {
+  OrchestrationEvent,
+  OrchestrationThreadActivity,
+  OrchestrationThreadDetailSnapshot,
+} from "@t3tools/contracts";
+import {
+  projectActivityEvent,
+  projectActivityPayload,
+  projectThreadDetailSnapshot,
+} from "./ActivityPayloadProjection.ts";
 
 function activity(payload: Record<string, unknown>): OrchestrationThreadActivity {
   return {
@@ -413,5 +421,55 @@ describe("Schedule write carrier survival", () => {
       const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
       expect(data.scheduleActivity).toBeUndefined();
     }
+  });
+});
+
+describe("legacy attachment projection", () => {
+  const image = {
+    type: "image" as const,
+    id: "image-1",
+    name: "image.png",
+    mimeType: "image/png",
+    sizeBytes: 100,
+  };
+  const file = {
+    type: "file" as const,
+    id: "file-1",
+    name: "notes.txt",
+    mimeType: "text/plain",
+    sizeBytes: 20,
+  };
+
+  it("removes non-image attachments from legacy snapshots and live events", () => {
+    const snapshot = {
+      sequence: 3,
+      thread: { messages: [{ attachments: [image, file] }], activities: [] },
+    } as unknown as OrchestrationThreadDetailSnapshot;
+    const event = {
+      type: "thread.message-sent",
+      payload: { attachments: [image, file] },
+    } as unknown as OrchestrationEvent;
+    const projectedEvent = projectActivityEvent(event, { acceptsNonImageAttachments: false });
+
+    expect(
+      projectThreadDetailSnapshot(snapshot, { acceptsNonImageAttachments: false }).thread
+        .messages[0]?.attachments,
+    ).toEqual([image]);
+    expect(
+      projectedEvent.type === "thread.message-sent"
+        ? projectedEvent.payload.attachments
+        : undefined,
+    ).toEqual([image]);
+  });
+
+  it("preserves extended attachments for capable clients", () => {
+    const snapshot = {
+      sequence: 3,
+      thread: { messages: [{ attachments: [image, file] }], activities: [] },
+    } as unknown as OrchestrationThreadDetailSnapshot;
+    expect(
+      projectThreadDetailSnapshot(snapshot, { acceptsNonImageAttachments: true }).thread.messages[0]
+        ?.attachments,
+    ).toEqual([image, file]);
   });
 });

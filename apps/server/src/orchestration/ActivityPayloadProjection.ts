@@ -592,13 +592,35 @@ function dropSupersededToolUpdatedActivities(
   });
 }
 
+type ThreadStreamClientCapabilities = {
+  readonly acceptsNonImageAttachments?: boolean;
+};
+
+function projectAttachmentsForClient<
+  T extends {
+    readonly attachments?: ReadonlyArray<{ readonly type: string }> | undefined;
+  },
+>(value: T, capabilities?: ThreadStreamClientCapabilities): T {
+  if (capabilities?.acceptsNonImageAttachments !== false || value.attachments === undefined) {
+    return value;
+  }
+  return {
+    ...value,
+    attachments: value.attachments.filter((attachment) => attachment.type === "image"),
+  };
+}
+
 export function projectThreadDetailSnapshot(
   snapshot: OrchestrationThreadDetailSnapshot,
+  capabilities?: ThreadStreamClientCapabilities,
 ): OrchestrationThreadDetailSnapshot {
   return {
     ...snapshot,
     thread: {
       ...snapshot.thread,
+      messages: snapshot.thread.messages.map((message) =>
+        projectAttachmentsForClient(message, capabilities),
+      ),
       activities: dropSupersededToolUpdatedActivities(
         dropStaleContextWindowActivities(snapshot.thread.activities),
       ).map(projectActivityPayload),
@@ -606,7 +628,16 @@ export function projectThreadDetailSnapshot(
   };
 }
 
-export function projectActivityEvent(event: OrchestrationEvent): OrchestrationEvent {
+export function projectActivityEvent(
+  event: OrchestrationEvent,
+  capabilities?: ThreadStreamClientCapabilities,
+): OrchestrationEvent {
+  if (event.type === "thread.message-sent") {
+    return {
+      ...event,
+      payload: projectAttachmentsForClient(event.payload, capabilities),
+    };
+  }
   if (event.type !== "thread.activity-appended") {
     return event;
   }

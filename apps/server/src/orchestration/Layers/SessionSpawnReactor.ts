@@ -756,8 +756,9 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   worker = yield* makeDrainableWorker(processInputSafely);
 
   const start: SessionSpawnReactorShape["start"] = Effect.fn("start")(function* () {
+    const domainEvents = yield* engine.subscribeDomainEvents;
     yield* forkParked(
-      Stream.runForEach(engine.streamDomainEvents, (event) => {
+      Stream.runForEach(domainEvents, (event) => {
         if (
           event.type !== "thread.report-posted" &&
           event.type !== "thread.session-set" &&

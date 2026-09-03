@@ -106,6 +106,7 @@ import {
   isLatestTurnSettled,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
+import { SessionReportDigest } from "./chat/SessionReportDigest";
 import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
   getAnchoredTurnMetrics,
@@ -7554,6 +7555,27 @@ function ChatViewContent(props: ChatViewProps) {
                         : undefined
                     }
                   >
+                    {isServerThread && limitProviderInstanceId ? (
+                      <ThreadUsageLimitMigrationEntryPoint
+                        threadId={activeThread.id}
+                        environmentId={activeThread.environmentId}
+                        instanceId={limitProviderInstanceId}
+                      />
+                    ) : null}
+                    {isServerThread ? (
+                      <SessionReportDigest
+                        activities={threadActivities}
+                        onOpenChildThread={(childThreadId) => {
+                          void navigate({
+                            to: "/$environmentId/$threadId",
+                            params: {
+                              environmentId: activeThread.environmentId,
+                              threadId: childThreadId,
+                            },
+                          });
+                        }}
+                      />
+                    ) : null}
                     <ComposerSurface.Shell contextStrip={showComposerContextStrip}>
                       <ComposerSurface.Host>
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">

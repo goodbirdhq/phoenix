@@ -980,6 +980,12 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
    */
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /**
+   * Opts into attachment variants beyond images. Missing means an already-shipped
+   * image-only client, so the server removes newer variants from snapshots and
+   * message events before encoding the stream.
+   */
+  acceptsNonImageAttachments: Schema.optionalKey(Schema.Boolean),
+  /**
    * When provided, the fallback snapshot frame (sent when `afterSequence` is
    * missing or the catch-up gap is too large) is windowed to the last
    * `turnLimit` user-anchored turns and carries `page` metadata. Absent means

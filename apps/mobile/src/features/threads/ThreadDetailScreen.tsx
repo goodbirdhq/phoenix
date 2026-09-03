@@ -752,6 +752,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             {/* No paddingTop here: the overlay's measured height becomes the
                 list's bottom inset, so any padding above the pill/composer
                 pushes the resting content floor up by the same amount. */}
+            <ThreadUsageLimitMigrationEntryPoint
+              environmentId={props.environmentId}
+              thread={props.boundThread}
+              onMigrated={props.onUpdateThreadModelSelection}
+            />
+            <ThreadUsageWarningBanner
+              environmentId={props.environmentId}
+              stackedAboveStatus={usageWarningStacksAboveNotice}
+              thread={props.boundThread}
+            />
             <View ref={composerOverlayRef} onLayout={onComposerLayout} className="w-full">
               <FloatingWorkingControl
                 colorScheme={isDarkMode ? "dark" : "light"}

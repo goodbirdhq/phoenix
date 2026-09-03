@@ -891,6 +891,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         ) : null}
       </Animated.View>
 
+      <ManualThreadMigrationEntryPoint
+        environmentId={props.environmentId}
+        thread={props.boundThread}
+        request={migrationRequest}
+        onClose={() => setMigrationRequest(null)}
+        onMigrated={props.onUpdateModelSelection}
+      />
       <VideoPreviewModal source={previewVideo} onRequestClose={closePreview} />
       <FilePreviewModal source={previewFile} onRequestClose={closePreview} />
     </Animated.View>

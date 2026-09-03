@@ -857,6 +857,15 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("keeps session report bookkeeping out of the work log", () => {
+    expect(
+      deriveWorkLogEntries([
+        makeActivity({ id: "posted", kind: "session-report.posted", summary: "Report posted" }),
+        makeActivity({ id: "read", kind: "session-report.read", summary: "Report read" }),
+      ]),
+    ).toEqual([]);
+  });
+
   it("keeps the latest task progress without emitting plan-update log entries", () => {
     const activities = [
       makeActivity({ id: "before", kind: "tool.completed", summary: "Read files", sequence: 0 }),

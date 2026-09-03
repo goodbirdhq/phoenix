@@ -275,6 +275,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(LimitFailoverReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
+  Layer.provideMerge(SessionSpawnReactorLive),
   Layer.provideMerge(ThreadSettlementReactor.layer),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(HandoffBriefLive),

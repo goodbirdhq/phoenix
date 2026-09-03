@@ -76,8 +76,10 @@ const runReactor = (events: ReadonlyArray<OrchestrationEvent>, options: HarnessO
     const allEventsEnqueued = yield* Deferred.make<void>();
 
     const engine = {
-      streamDomainEvents: Stream.fromArray(events).pipe(
-        Stream.ensuring(Deferred.succeed(allEventsEnqueued, undefined)),
+      subscribeDomainEvents: Effect.succeed(
+        Stream.fromArray(events).pipe(
+          Stream.ensuring(Deferred.succeed(allEventsEnqueued, undefined)),
+        ),
       ),
       dispatch: (command: { readonly type: string; readonly threadId: ThreadId }) =>
         Effect.suspend(() => {

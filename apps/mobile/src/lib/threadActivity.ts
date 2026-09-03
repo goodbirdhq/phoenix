@@ -374,6 +374,9 @@ function deriveWorkLogEntries(
   const ordered = Arr.sort(activities, activityOrder);
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
+    if (activity.kind === "session-report.posted" || activity.kind === "session-report.read") {
+      continue;
+    }
     if (activity.tone !== "error" && isWorktreeSetupActivity(activity.kind)) continue;
     if (activity.kind === "tool.started") continue;
     if (activity.kind === "task.started") continue;

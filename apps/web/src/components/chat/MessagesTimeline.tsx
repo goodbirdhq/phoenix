@@ -69,7 +69,6 @@ import {
 } from "../../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown, { ChatMarkdownAssetImage } from "../ChatMarkdown";
-import { T3Wordmark } from "../T3Wordmark";
 import {
   BotIcon,
   BrainIcon,
@@ -89,6 +88,7 @@ import {
   PlayIcon,
   RefreshCwIcon,
   SearchIcon,
+  SparklesIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -2542,7 +2542,7 @@ function WorkEntryIcon({ name, className }: { name: WorkEntryIconName; className
     case "browser":
       return <GlobeIcon className={className} aria-hidden />;
     case "t3-code":
-      return <T3Wordmark className={className} aria-hidden />;
+      return <SparklesIcon className={className} aria-hidden />;
     case "check":
       return <CheckIcon className={className} aria-hidden />;
     case "circle-alert":

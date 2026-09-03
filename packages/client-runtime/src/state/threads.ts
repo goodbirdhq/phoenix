@@ -562,6 +562,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               ({}) as {
                 threadResumeCompletionMarker?: boolean;
                 threadSnapshotPagination?: boolean;
+                environment?: { capabilities?: { fileAttachments?: unknown } };
               },
           ),
         );
@@ -570,6 +571,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         // servers reject unknown query params, and a windowed WS fallback to
         // such a server would silently hide history.
         const supportsPagination = config.threadSnapshotPagination === true;
+        const acceptsNonImageAttachments =
+          config.environment?.capabilities?.fileAttachments !== undefined;
         yield* Ref.set(paginationSupported, supportsPagination);
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
@@ -628,6 +631,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
         return {
           threadId,
+          ...(acceptsNonImageAttachments ? { acceptsNonImageAttachments: true as const } : {}),
           ...(canResume ? { afterSequence: sequence } : {}),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
           // The WS fallback snapshot (sent when afterSequence is missing or

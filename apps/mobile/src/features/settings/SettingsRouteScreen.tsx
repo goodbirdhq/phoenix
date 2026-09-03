@@ -544,11 +544,19 @@ function ConfiguredSettingsRouteScreen() {
 }
 
 function GeneralSettingsSection() {
+  const schedulesValue = useScheduleSettingsValue();
+
   return (
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
       <AutoSettleSettingsRows />
-      <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
+      {GENERAL_INSIGHT_SETTINGS_ROWS.map((row) => (
+        <SettingsRow
+          key={row.target}
+          {...row}
+          value={row.target === "SettingsSchedules" ? schedulesValue : undefined}
+        />
+      ))}
     </SettingsSection>
   );
 }

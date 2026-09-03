@@ -19,23 +19,23 @@ This starts the Phoenix server on your machine and opens the local web app. Use
 
 ## Open a project in the desktop app
 
-When the T3 Code desktop app is running on the same machine, open the current directory with:
+When the Phoenix desktop app is running on the same machine, open the current directory with:
 
 ```bash
-npx t3 app
+npx @goodbirdhq/phoenix app
 ```
 
 Pass a path to open another directory:
 
 ```bash
-npx t3 app ../my-project
+npx @goodbirdhq/phoenix app ../my-project
 ```
 
 The command adds the directory as a project when needed, focuses the desktop app, and opens a new
-thread. It does not launch the desktop app, open a browser, or start a T3 Code server. A background
+thread. It does not launch the desktop app, open a browser, or start a Phoenix server. A background
 server does not count as the desktop app. The command also rejects SSH sessions because a remote
 shell cannot focus a local desktop window. The CLI package and the running desktop app must both
-include `t3 app` support.
+include `phoenix app` support.
 
 ## Desktop App
 
@@ -47,11 +47,10 @@ product instead.
 ### Windows Subsystem for Linux
 
 When the desktop app runs a WSL backend, it installs the matching server runtime into
-`~/.t3/wsl-runtime` inside the selected distro. The first launch after installing or updating T3
-Code may take a little longer while that release's runtime is extracted. Later launches reuse the
+`~/.phoenix/wsl-runtime` inside the selected distro. The first launch after installing or updating Phoenix may take a little longer while that release's runtime is extracted. Later launches reuse the
 Linux-local copy so startup does not depend on reading application files through `/mnt/c`. After a
-successful launch, T3 Code keeps the current runtime and one previous runtime for rollback and
-removes older caches automatically. If a cached runtime stops working, T3 Code launches from the
+successful launch, Phoenix keeps the current runtime and one previous runtime for rollback and
+removes older caches automatically. If a cached runtime stops working, Phoenix launches from the
 application files under `/mnt/c` instead and reinstalls the runtime on the next launch.
 
 ## Providers
@@ -77,7 +76,7 @@ Grok models that support adjustable reasoning show a **Reasoning** control besid
 The available levels and default come from the installed Grok Build CLI, so they can vary by model
 and CLI version.
 
-Run the login command on the machine running the T3 Code server, not on the device you browse
+Run the login command on the machine running the Phoenix server, not on the device you browse
 from.
 
 ### Binary Discovery

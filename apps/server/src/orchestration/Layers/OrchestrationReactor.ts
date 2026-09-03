@@ -20,6 +20,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const limitFailoverReactor = yield* LimitFailoverReactor;
   const checkpointReactor = yield* CheckpointReactor;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
+  const sessionSpawnReactor = yield* SessionSpawnReactor;
   const threadSettlementReactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
 
@@ -29,6 +30,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* limitFailoverReactor.start();
     yield* checkpointReactor.start();
     yield* threadDeletionReactor.start();
+    yield* sessionSpawnReactor.start();
     yield* threadSettlementReactor.start();
     yield* agentAwarenessRelay.start();
   });

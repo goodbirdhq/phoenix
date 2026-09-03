@@ -1260,6 +1260,8 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeThread,
             Effect.gen(function* () {
+              const acceptsNonImageAttachments = input.acceptsNonImageAttachments === true;
+              const projectionCapabilities = { acceptsNonImageAttachments };
               const isThisThreadDetailEvent = (event: OrchestrationEvent) =>
                 event.aggregateKind === "thread" &&
                 event.aggregateId === input.threadId &&
@@ -1269,7 +1271,7 @@ const makeWsRpcLayer = (
                 Stream.filter(isThisThreadDetailEvent),
                 Stream.map((event) => ({
                   kind: "event" as const,
-                  event,
+                  event: projectActivityEvent(event, projectionCapabilities),
                 })),
               );
 
@@ -1314,7 +1316,7 @@ const makeWsRpcLayer = (
                       Stream.filter(isThisThreadDetailEvent),
                       Stream.map((event) => ({
                         kind: "event" as const,
-                        event: projectActivityEvent(event),
+                        event: projectActivityEvent(event, projectionCapabilities),
                       })),
                       Stream.mapError(
                         (cause) =>
@@ -1382,7 +1384,7 @@ const makeWsRpcLayer = (
               return Stream.concat(
                 Stream.make({
                   kind: "snapshot" as const,
-                  snapshot: projectThreadDetailSnapshot(snapshot.value),
+                  snapshot: projectThreadDetailSnapshot(snapshot.value, projectionCapabilities),
                 }),
                 afterSnapshot,
               );

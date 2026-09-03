@@ -115,6 +115,7 @@ describe("OrchestrationReactor", () => {
       "limit-failover-reactor",
       "checkpoint-reactor",
       "thread-deletion-reactor",
+      "session-spawn-reactor",
       "thread-settlement-reactor",
       "agent-awareness-relay",
     ]);
