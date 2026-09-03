@@ -296,6 +296,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
             ELSE state
           END AS state,
           requested_at AS "requestedAt",
+          releasing_at AS "releasingAt",
+          redelivery_count AS "redeliveryCount",
           consumed_by_turn_id AS "consumedByTurnId",
           consumed_at AS "consumedAt",
           cancelled_at AS "cancelledAt",

@@ -1,12 +1,16 @@
 import {
   CommandId,
+  DEFAULT_SESSION_REPORT_DELIVERY,
+  deriveSessionExitReason,
   EventId,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationSession,
   type OrchestrationSessionStatus,
   type OrchestrationThread,
-  DEFAULT_SESSION_REPORT_DELIVERY,
+  type OrchestrationMessageOrigin,
+  type OrchestrationThreadShell,
+  type SessionExitReason,
   type SessionReport,
   type SessionReportNotificationActivity,
   type SessionReportStatus,
@@ -26,6 +30,7 @@ import * as Stream from "effect/Stream";
 import * as Duration from "effect/Duration";
 
 import { forkParked } from "../../serverActivation.ts";
+import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -40,7 +45,8 @@ import {
 type ReportPostedEvent = Extract<OrchestrationEvent, { type: "thread.report-posted" }>;
 type SessionSetEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
 type TurnQueuedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-queued" }>;
-type WatchedEvent = ReportPostedEvent | SessionSetEvent | TurnQueuedEvent;
+type TurnRequestedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>;
+type WatchedEvent = ReportPostedEvent | SessionSetEvent | TurnQueuedEvent | TurnRequestedEvent;
 type WorkerInput =
   | { readonly type: "event"; readonly event: WatchedEvent }
   | { readonly type: "recover"; readonly threadId: ThreadId }
@@ -68,6 +74,24 @@ const MAX_QUEUED_TURN_REDELIVERIES = 3;
 
 const truncate = (text: string, maxLength: number) =>
   text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`;
+
+const SESSION_REPORT_DELIVERY_MESSAGE_PREFIX = "session-report-delivery:";
+
+/**
+ * Recovers the child/report identity from a report-delivery message id
+ * (`session-report-delivery:<childThreadId>:<reportId>`, minted in the
+ * report branch below). Both ids are server-generated UUIDs, so the first
+ * two colons are unambiguous separators.
+ */
+export const parseReportDeliveryMessageId = (
+  messageId: string,
+): { readonly childThreadId: string; readonly reportId: string } | null => {
+  if (!messageId.startsWith(SESSION_REPORT_DELIVERY_MESSAGE_PREFIX)) return null;
+  const rest = messageId.slice(SESSION_REPORT_DELIVERY_MESSAGE_PREFIX.length);
+  const separator = rest.indexOf(":");
+  if (separator <= 0 || separator === rest.length - 1) return null;
+  return { childThreadId: rest.slice(0, separator), reportId: rest.slice(separator + 1) };
+};
 
 export const formatReportMessage = (childTitle: string, report: SessionReport): string => {
   const envelope = toSessionReportEnvelope(report);
@@ -153,6 +177,90 @@ export const formatQueuedReportWarning = (messageIds: ReadonlyArray<MessageId>):
     ? ""
     : `\n\n[Phoenix] ${messageIds.length} queued message${messageIds.length === 1 ? "" : "s"} were not consumed before this report was written: ${messageIds.join(", ")}.`;
 
+const EXIT_REASON_DESCRIPTIONS: Record<SessionExitReason, string> = {
+  usage_limit: "the provider subscription hit its usage limit",
+  provider_crashed: "the provider process crashed or disappeared",
+  stopped_by_user: "a user stopped it",
+  stopped_by_parent: "its parent session stopped it",
+  permission_denied: "it was stopped after a permission was denied",
+  tool_failed: "it was stopped after a tool failure",
+  provider_error: "the provider reported an error",
+  exited: "its provider process exited without a recorded cause",
+};
+
+/**
+ * Best-effort git accounting attached to a death notice. Null counts mean
+ * the worktree could not be inspected in time, which is itself worth
+ * telling the parent — "unknown" and "clean" must not read the same.
+ */
+export interface TerminalWorktreeRisk {
+  readonly worktreePath: string;
+  readonly branch: string | null;
+  readonly dirtyFileCount: number | null;
+  readonly unpushedCommitCount: number | null;
+}
+
+/**
+ * The message a parent receives when a spawned child's session terminates.
+ *
+ * Always delivered, unlike a report: a report is the child's (or Phoenix's
+ * substitute) account of the WORK, opt-out-able via reportDelivery, while
+ * this is the fact of the DEATH — exit reason, what the worktree holds, and
+ * where the durable account lives. A parent that opted out of report wakes
+ * still needs to know its child is gone; silence here is how work gets lost.
+ */
+export const formatDeathNotice = (input: {
+  readonly childTitle: string;
+  readonly childThreadId: ThreadId;
+  readonly exitReason: SessionExitReason;
+  readonly lastError: string | null;
+  readonly worktree: TerminalWorktreeRisk | null;
+  readonly synthesizedReportId: string | null;
+  readonly hadAgentReport: boolean;
+}): string => {
+  const lines: Array<string> = [
+    `[Phoenix] Spawned session "${input.childTitle}" terminated — exit reason: ${input.exitReason} (${EXIT_REASON_DESCRIPTIONS[input.exitReason]}).`,
+  ];
+  if (input.lastError !== null) {
+    lines.push(`Provider error: ${truncate(input.lastError, 400)}`);
+  }
+  if (input.worktree !== null) {
+    const { worktreePath, branch, dirtyFileCount, unpushedCommitCount } = input.worktree;
+    const at = `${worktreePath}${branch !== null ? ` (branch ${branch})` : ""}`;
+    if (dirtyFileCount === null || unpushedCommitCount === null) {
+      lines.push(
+        `Its worktree at ${at} could not be inspected; check it for uncommitted work before discarding anything.`,
+      );
+    } else if (dirtyFileCount > 0 || unpushedCommitCount > 0) {
+      lines.push(
+        `Its worktree holds ${dirtyFileCount} uncommitted file${dirtyFileCount === 1 ? "" : "s"} and ${unpushedCommitCount} unpushed commit${unpushedCommitCount === 1 ? "" : "s"} at ${at} — that work exists nowhere else; recover it before archiving.`,
+      );
+    } else {
+      lines.push(`Its worktree at ${at} is clean: nothing uncommitted or unpushed.`);
+    }
+  }
+  if (input.hadAgentReport) {
+    lines.push(
+      "It had already posted a report; treat that report as its account of the work and this notice as the record of how the session ended.",
+    );
+  } else if (input.synthesizedReportId !== null) {
+    lines.push(
+      `It never posted a report; Phoenix generated one from its final state (reportId "${input.synthesizedReportId}") — call read_report for the details.`,
+    );
+  } else {
+    lines.push("It never posted a report.");
+  }
+  if (input.exitReason === "usage_limit") {
+    lines.push(
+      "Its provider account is exhausted: resuming this session will fail until the quota resets. To continue the work, spawn a fresh session on a different provider instance (list_session_providers shows availability).",
+    );
+  }
+  lines.push(
+    `The thread and its history remain: read_session to inspect, send_to_session to resume it, settle_session/archive_session to reclaim it.\n\n(spawned thread: ${input.childThreadId})`,
+  );
+  return lines.join("\n\n");
+};
+
 // A stop is an external decision with unknown progress ("partial"); a provider
 // error is the session failing outright ("failure").
 export const terminalReportStatus = (status: OrchestrationSessionStatus): SessionReportStatus =>
@@ -170,6 +278,7 @@ export const terminalReportTitle = (status: OrchestrationSessionStatus) =>
  */
 export const buildTerminalReportSummary = (input: {
   readonly sessionStatus: OrchestrationSessionStatus;
+  readonly exitReason: SessionExitReason;
   readonly lastError: string | null;
   // Stop auditing records who asked, why, and what the child was in the middle
   // of — exactly the context the parent cannot reconstruct once the session is
@@ -201,6 +310,8 @@ export const buildTerminalReportSummary = (input: {
     "_This report was generated by Phoenix, not by the session's agent._",
     "",
     termination,
+    "",
+    `Exit reason: \`${input.exitReason}\` (${EXIT_REASON_DESCRIPTIONS[input.exitReason]}).`,
     // A tool call cut off mid-flight is the case most likely to have left the
     // working tree in a half-written state, so it is called out rather than
     // buried in the activity line.
@@ -230,6 +341,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const providerService = yield* ProviderService;
+  const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
 
   const randomUUID = crypto.randomUUIDv4.pipe(Effect.orDie);
   const serverCommandId = (tag: string) =>
@@ -314,6 +426,18 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       },
       createdAt,
     });
+    // The error activity above lands on the (probably wedged) child's own
+    // thread, where nobody who can act on it is looking. The parent is the
+    // one holding the spawn slot, so it gets told directly — this is the
+    // "delivered but never consumed" signature surfacing instead of rotting.
+    const child = yield* snapshotQuery.getThreadShellById(input.threadId);
+    const childTitle = Option.isSome(child) ? child.value.title : input.threadId;
+    yield* notifyParent({
+      origin: { kind: "phoenix", threadId: input.threadId },
+      childThreadId: input.threadId,
+      text: `[Phoenix] Spawned session "${childTitle}" appears WEDGED: a message queued for it was delivered ${MAX_QUEUED_TURN_REDELIVERIES} times but never started a turn, and has now been cancelled (messageId ${input.messageId}). The session accepts deliveries without consuming them, so further send_to_session calls will likely rot the same way. Consider stop_session followed by a fresh send_to_session to restart it, or spawn a replacement.\n\n(spawned thread: ${input.threadId})`,
+      commandTag: "queued-turn-redelivery-limit-notify",
+    });
   });
 
   const cancelTerminalQueue = Effect.fn("SessionSpawnReactor.cancelTerminalQueue")(function* (
@@ -323,12 +447,52 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     yield* cancelQueuedTurns({ threadId, reason: "session_terminal" });
   });
 
+  /**
+   * What a dead child's worktree holds, for its death notice.
+   *
+   * Best-effort and bounded: the full status includes a change-request
+   * lookup that can hang on a slow host, and a death notice that arrives
+   * minutes late has failed at its one job. On timeout or error the counts
+   * degrade to null ("could not be inspected") rather than reading clean.
+   */
+  const resolveTerminalWorktreeRisk = Effect.fn("SessionSpawnReactor.resolveTerminalWorktreeRisk")(
+    function* (shell: OrchestrationThreadShell) {
+      const worktreePath = shell.worktreePath;
+      if (worktreePath === null) return null;
+      const status = yield* gitWorkflow.status({ cwd: worktreePath }).pipe(
+        Effect.timeout(Duration.seconds(5)),
+        Effect.catch(() => Effect.succeed(null)),
+      );
+      if (status === null || !status.isRepo) {
+        return {
+          worktreePath,
+          branch: shell.branch,
+          dirtyFileCount: null,
+          unpushedCommitCount: null,
+        } satisfies TerminalWorktreeRisk;
+      }
+      return {
+        worktreePath,
+        branch: status.refName ?? shell.branch,
+        dirtyFileCount: status.workingTree.files.length,
+        // Same accounting as settle_session's cleanup risk: with an
+        // upstream, unpushed is what the remote lacks; without one, every
+        // commit past the default branch exists only here.
+        unpushedCommitCount: status.hasUpstream
+          ? status.aheadCount
+          : (status.aheadOfDefaultCount ?? 0),
+      } satisfies TerminalWorktreeRisk;
+    },
+  );
+
   const notifyParent = Effect.fn("SessionSpawnReactor.notifyParent")(function* (input: {
     readonly childThreadId: ThreadId;
     readonly text: string;
     readonly commandTag: string;
     readonly commandId?: CommandId | undefined;
     readonly messageId?: MessageId | undefined;
+    /** Who is speaking: the child session itself, or Phoenix about it. */
+    readonly origin: OrchestrationMessageOrigin;
   }) {
     const child = yield* snapshotQuery.getThreadShellById(input.childThreadId);
     if (Option.isNone(child)) return;
@@ -352,6 +516,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         role: "user",
         text: input.text,
         attachments: [],
+        origin: input.origin,
       },
       runtimeMode: parent.value.runtimeMode,
       interactionMode: parent.value.interactionMode,
@@ -371,17 +536,24 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     function* (input: {
       readonly threadId: ThreadId;
       readonly sessionStatus: OrchestrationSessionStatus;
+      readonly exitReason: SessionExitReason;
       readonly lastError: string | null;
       readonly session: OrchestrationSession;
     }) {
       const detail = yield* snapshotQuery.getThreadDetailById(input.threadId);
       // Only spawned children get synthesized reports: a report on a thread
       // nobody is waiting on is noise in the user's timeline.
-      if (Option.isNone(detail) || (detail.value.spawnedByThreadId ?? null) === null) return false;
+      if (Option.isNone(detail) || (detail.value.spawnedByThreadId ?? null) === null) {
+        return { isSpawnedChild: false, hadAgentReport: false, reportId: null } as const;
+      }
       // The agent already had its say; a synthesized report would only muddy
       // which one the parent should believe. This persisted check — not the
-      // in-memory episode set — is the real guard against duplicates.
-      if (detail.value.reports.length > 0) return true;
+      // in-memory episode set — is the real guard against duplicates. The
+      // death notice still goes out either way: an existing report says what
+      // the work was, not that the session later died holding it.
+      if (detail.value.reports.length > 0) {
+        return { isSpawnedChild: true, hadAgentReport: true, reportId: null } as const;
+      }
 
       const createdAt = yield* nowIso;
       // What the child cost before it died, so the parent is not left
@@ -391,16 +563,18 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         createdAt: detail.value.createdAt,
         latestTurn: detail.value.latestTurn,
       });
+      const reportId = yield* randomUUID;
       yield* engine
         .dispatch({
           type: "thread.report.post",
           commandId: yield* serverCommandId("spawn-terminal-report"),
           threadId: input.threadId,
-          reportId: yield* randomUUID,
+          reportId,
           status: terminalReportStatus(input.sessionStatus),
           title: terminalReportTitle(input.sessionStatus),
           summary: buildTerminalReportSummary({
             sessionStatus: input.sessionStatus,
+            exitReason: input.exitReason,
             lastError: input.lastError,
             session: input.session,
             detail,
@@ -427,7 +601,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         // the last chance to reach the parent: a transient dispatch failure
         // here would otherwise mean permanent silence.
         .pipe(Effect.retry({ times: 2, schedule: Schedule.exponential(100) }));
-      return true;
+      return { isSpawnedChild: true, hadAgentReport: false, reportId } as const;
     },
   );
 
@@ -435,6 +609,41 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     event: WatchedEvent,
   ) {
     if (event.type === "thread.turn-start-queued") return;
+    if (event.type === "thread.turn-start-requested") {
+      // A parent turn starting on a delivered report message IS the parent
+      // reading that report — with queue delivery (the default) the agent
+      // gets the full text as its input and has no reason to ever call
+      // read_report, which used to leave the inbox entry unread forever.
+      // The receipt is byte-identical to read_report's (same deterministic
+      // command and activity ids), so the two acknowledgement paths converge
+      // on one durable record instead of double-counting.
+      const delivery = parseReportDeliveryMessageId(event.payload.messageId);
+      if (delivery === null) return;
+      const readAt = yield* nowIso;
+      yield* engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make(
+          `session-report-read:${event.payload.threadId}:${delivery.reportId}`,
+        ),
+        threadId: event.payload.threadId,
+        activity: {
+          id: EventId.make(`session-report-read:${event.payload.threadId}:${delivery.reportId}`),
+          tone: "info",
+          kind: "session-report.read",
+          summary: "Parent received child report",
+          payload: {
+            childThreadId: delivery.childThreadId,
+            reportId: delivery.reportId,
+            readByThreadId: event.payload.threadId,
+            readAt,
+          },
+          turnId: null,
+          createdAt: readAt,
+        },
+        createdAt: readAt,
+      });
+      return;
+    }
     if (event.type === "thread.report-posted") {
       const child = yield* snapshotQuery.getThreadShellById(event.payload.threadId);
       if (Option.isNone(child)) {
@@ -493,12 +702,27 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       // an idle parent wakes on it and a busy one receives it after its
       // current turn. "notify-only" leaves the parent to read on its own
       // schedule. A child spawned before this was configurable has no stored
-      // preference, so it takes the default.
+      // preference, so it takes the default. A system-origin report is never
+      // delivered as a message at all: it only exists because the session
+      // terminated, and the death notice (which always goes out, and names
+      // this report) is the single wake for that event — two messages for
+      // one death would double-turn every parent.
+      if (event.payload.report.origin === "system") return;
       const delivery = child.value.reportDelivery ?? DEFAULT_SESSION_REPORT_DELIVERY;
       if (delivery === "notify-only") return;
+      // A report written over unconsumed queued messages is answering a
+      // conversation the child never heard: say so in the same delivery,
+      // instead of letting the parent believe its last instructions were
+      // taken into account.
+      const unconsumed = (yield* projectionTurnRepository.listQueuedTurnStarts.pipe(
+        Effect.catch(() => Effect.succeed([])),
+      )).filter((entry) => entry.threadId === event.payload.threadId);
       yield* notifyParent({
+        // A delivered report is the child speaking (its own account of the
+        // work), even though Phoenix formatted the envelope.
+        origin: { kind: "session", threadId: event.payload.threadId },
         childThreadId: event.payload.threadId,
-        text: formatReportMessage(child.value.title, event.payload.report),
+        text: `${formatReportMessage(child.value.title, event.payload.report)}${formatQueuedReportWarning(unconsumed.map((entry) => entry.messageId))}`,
         commandTag: "session-report-delivery",
         // Deterministic for the same reason the activity is: a replay after a
         // crash re-dispatches an already-receipted command instead of
@@ -522,28 +746,67 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       yield* releaseNextQueuedTurn(threadId);
     }
     if (isTerminalStatus(session.status)) {
-      // Two independent reactions to the same terminal event, in this order on
-      // purpose. Cancelling the queue first tells the parent its pending work
-      // was dropped; the synthesized report then explains where the child
-      // actually stopped. Reversing them would deliver the epitaph before the
-      // news that queued messages died with it. Neither depends on the other:
-      // cancellation is a no-op with an empty queue, and a second terminal
-      // event re-runs it harmlessly (nothing left to cancel, so no notice).
+      // Three reactions to the same terminal event, in this order on
+      // purpose. Cancelling the queue first tells the parent its pending
+      // work was dropped; the synthesized report (when the child never
+      // reported) preserves the durable account; the death notice then
+      // wakes the parent with the exit reason, the worktree's git state,
+      // and where that account lives. The notice comes last so it can name
+      // the synthesized report it points at.
       yield* cancelTerminalQueue(threadId, session.status);
       if (terminalReportedThreads.has(threadId)) return;
-      const reported = yield* synthesizeTerminalReport({
+      const exitReason = deriveSessionExitReason(session);
+      const outcome = yield* synthesizeTerminalReport({
         threadId,
         sessionStatus: session.status,
+        exitReason,
         lastError: session.lastError ?? null,
         session,
       });
-      // Marked only once the report is actually persisted. Marking up front
-      // would let a failed dispatch — which processInputSafely swallows —
-      // brand the episode "handled" with nothing stored, and a stopped
-      // session has no later transition to re-arm the guard.
-      if (reported) {
-        terminalReportedThreads.add(threadId);
+      if (!outcome.isSpawnedChild) return;
+      const shell = yield* snapshotQuery.getThreadShellById(threadId);
+      // A parent-initiated stop (stop_session, settle, archive) is the one
+      // death the parent cannot be surprised by — it caused it. Waking it
+      // with a notice would turn every settle into a self-notification. The
+      // synthesized report above still preserves the durable record.
+      if (Option.isSome(shell) && exitReason !== "stopped_by_parent") {
+        // Unlike report delivery, the death notice ignores reportDelivery:
+        // "notify-only" opts out of report chatter, not out of learning the
+        // child died. It is the one message that must always land — see
+        // formatDeathNotice.
+        yield* notifyParent({
+          origin: { kind: "phoenix", threadId },
+          childThreadId: threadId,
+          text: formatDeathNotice({
+            childTitle: shell.value.title,
+            childThreadId: threadId,
+            exitReason,
+            lastError: session.lastError ?? null,
+            worktree: yield* resolveTerminalWorktreeRisk(shell.value),
+            synthesizedReportId: outcome.reportId,
+            hadAgentReport: outcome.hadAgentReport,
+          }),
+          commandTag: "session-death-notice",
+          // The notice IS the synthesized report's delivery — it carries the
+          // reason and points at the reportId — so it borrows the delivery
+          // message-id shape: the parent turn that consumes it acknowledges
+          // the report through the same turn-start-requested path, instead
+          // of the epitaph sitting "unread" in the inbox forever.
+          ...(outcome.reportId !== null
+            ? {
+                messageId: MessageId.make(
+                  `${SESSION_REPORT_DELIVERY_MESSAGE_PREFIX}${threadId}:${outcome.reportId}`,
+                ),
+              }
+            : {}),
+        }).pipe(Effect.retry({ times: 2, schedule: Schedule.exponential(100) }));
       }
+      // Marked only once the report and notice are actually dispatched.
+      // Marking up front would let a failed dispatch — which
+      // processInputSafely swallows — brand the episode "handled" with
+      // nothing stored, and a stopped session has no later transition to
+      // re-arm the guard.
+      terminalReportedThreads.add(threadId);
       return;
     }
     if (
@@ -733,6 +996,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       createdAt: yield* nowIso,
     });
     yield* notifyParent({
+      origin: { kind: "phoenix", threadId: input.threadId },
       childThreadId: input.threadId,
       text: `[Phoenix] Interrupt delivery timed out; the queued replacement was cancelled and the spawned session was stopped.\n\n(spawned thread: ${input.threadId})`,
       commandTag: "queued-turn-interrupt-timeout-notify",
@@ -761,7 +1025,16 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         if (
           event.type !== "thread.report-posted" &&
           event.type !== "thread.session-set" &&
-          event.type !== "thread.turn-start-queued"
+          event.type !== "thread.turn-start-queued" &&
+          event.type !== "thread.turn-start-requested"
+        ) {
+          return Effect.void;
+        }
+        // Turn starts are frequent; only report-delivery consumptions are
+        // worth a trip through the worker.
+        if (
+          event.type === "thread.turn-start-requested" &&
+          parseReportDeliveryMessageId(event.payload.messageId) === null
         ) {
           return Effect.void;
         }

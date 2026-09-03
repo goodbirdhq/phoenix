@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  deriveSessionExitReason,
   ClientOrchestrationCommand,
   ModelSelection,
   OrchestrationCommand,
@@ -1261,4 +1262,50 @@ it("recognizes a migration history row", () => {
     isThreadMigrationActivity({ ...activity, payload: { ...activity.payload, toModel: "" } }),
     false,
   );
+});
+
+it("derives one typed exit reason with quota first, then the stop audit, then the status", () => {
+  // Quota exhaustion outranks everything else recorded: the account being
+  // dead changes what the parent does next, regardless of who pulled the plug.
+  assert.strictEqual(
+    deriveSessionExitReason({
+      status: "error",
+      stopReason: "provider_crashed",
+      stoppedBy: "system",
+      lastErrorKind: "usage-limit",
+    }),
+    "usage_limit",
+  );
+  assert.strictEqual(
+    deriveSessionExitReason({ status: "error", stopReason: "provider_crashed" }),
+    "provider_crashed",
+  );
+  assert.strictEqual(
+    deriveSessionExitReason({ status: "stopped", stopReason: "user_stopped" }),
+    "stopped_by_user",
+  );
+  assert.strictEqual(
+    deriveSessionExitReason({ status: "stopped", stopReason: "parent_stopped" }),
+    "stopped_by_parent",
+  );
+  assert.strictEqual(
+    deriveSessionExitReason({ status: "stopped", stopReason: "permission_denied" }),
+    "permission_denied",
+  );
+  assert.strictEqual(
+    deriveSessionExitReason({ status: "stopped", stopReason: "tool_failed" }),
+    "tool_failed",
+  );
+  // A bare actor with no recorded reason still attributes the stop.
+  assert.strictEqual(
+    deriveSessionExitReason({ status: "stopped", stoppedBy: "parent" }),
+    "stopped_by_parent",
+  );
+  assert.strictEqual(
+    deriveSessionExitReason({ status: "stopped", stoppedBy: "user" }),
+    "stopped_by_user",
+  );
+  // Nothing recorded: an error is the provider's fault, a stop is just an exit.
+  assert.strictEqual(deriveSessionExitReason({ status: "error" }), "provider_error");
+  assert.strictEqual(deriveSessionExitReason({ status: "stopped" }), "exited");
 });

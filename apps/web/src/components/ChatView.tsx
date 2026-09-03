@@ -7104,6 +7104,7 @@ function ChatViewContent(props: ChatViewProps) {
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
                 loadEarlier={loadEarlierTurns}
+                queuedTurnStarts={activeThread.queuedTurnStarts ?? null}
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
@@ -7173,6 +7174,8 @@ function ChatViewContent(props: ChatViewProps) {
                   {isServerThread ? (
                     <SessionReportDigest
                       activities={threadActivities}
+                      queuedTurnStarts={activeThread.queuedTurnStarts ?? null}
+                      messages={activeThread.messages}
                       onOpenChildThread={(childThreadId) => {
                         void navigate({
                           to: "/$environmentId/$threadId",

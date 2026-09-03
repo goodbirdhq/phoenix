@@ -133,6 +133,7 @@ export interface ThreadStatusPill {
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
+    | "Waiting on Parent"
     | "Plan Ready";
   colorClass: string;
   dotClass: string;
@@ -142,11 +143,14 @@ export interface ThreadStatusPill {
 // Rollup order mirrors the per-thread resolver exactly: attention states,
 // then active work, then the actionable plan prompt, then passive
 // monitoring. A Monitoring sibling must never hide a Plan Ready thread.
+// Waiting on Parent rolls up below the working states: it asks nothing of
+// the user directly, but it is a stall worth seeing over passive states.
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
-  "Pending Approval": 6,
-  "Awaiting Input": 5,
-  Working: 4,
-  Connecting: 4,
+  "Pending Approval": 7,
+  "Awaiting Input": 6,
+  Working: 5,
+  Connecting: 5,
+  "Waiting on Parent": 4,
   "Plan Ready": 3,
   Monitoring: 2,
   Completed: 1,
@@ -161,6 +165,7 @@ type ThreadStatusInput = Pick<
   | "latestTurn"
   | "session"
   | "backgroundLiveness"
+  | "awaitingParentReplySince"
 > & {
   lastVisitedAt?: string | undefined;
 };
@@ -470,6 +475,7 @@ export function resolveThreadRowClassName(input: {
 export type SidebarThreadStatus =
   | "approval"
   | "input"
+  | "awaiting-parent"
   | "working"
   | "monitoring"
   | "failed"
@@ -477,7 +483,11 @@ export type SidebarThreadStatus =
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
-  "hasPendingApprovals" | "hasPendingUserInput" | "session" | "backgroundLiveness"
+  | "hasPendingApprovals"
+  | "hasPendingUserInput"
+  | "session"
+  | "backgroundLiveness"
+  | "awaitingParentReplySince"
 >;
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
@@ -494,6 +504,13 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   // see the failure, not a stale Working (review finding).
   if (thread.session?.status === "error") {
     return "failed";
+  }
+  // A spawned thread that declared itself blocked on its parent's answer.
+  // Ranked under the live states above (a running turn is still the truth of
+  // "what is happening now") but above background liveness: waiting is the
+  // actionable fact once the turn has ended.
+  if ((thread.awaitingParentReplySince ?? null) !== null) {
+    return "awaiting-parent";
   }
   // Background work outlives the turn: fleets read as working; monitoring
   // only when watch loops are the sole live work.
@@ -799,6 +816,18 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+    };
+  }
+
+  // A spawned thread blocked on its parent's answer. Indigo like Awaiting
+  // Input — both mean "stopped until someone replies", they just name a
+  // different someone.
+  if ((thread.awaitingParentReplySince ?? null) !== null && thread.session?.status !== "error") {
+    return {
+      label: "Waiting on Parent",
+      colorClass: "text-indigo-600 dark:text-indigo-300/90",
+      dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
+      pulse: false,
     };
   }
 

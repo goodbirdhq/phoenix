@@ -4,7 +4,10 @@ import type {
   OrchestrationThreadDetailSnapshot,
 } from "@t3tools/contracts";
 import { deriveScheduleToolActivity } from "@t3tools/shared/scheduleToolActivity";
-import { deriveSpawnedSessionToolActivity } from "@t3tools/shared/toolActivity";
+import {
+  deriveSessionMessageToolActivity,
+  deriveSpawnedSessionToolActivity,
+} from "@t3tools/shared/toolActivity";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -271,6 +274,14 @@ function projectMcpToolCallData(data: Record<string, unknown>): Record<string, u
   const spawnedSession = deriveSpawnedSessionToolActivity(data);
   if (spawnedSession?.threadId !== undefined) {
     projectedData.spawnedSession = spawnedSession;
+  }
+
+  // send_to_session / send_to_parent get the same carve-out: their chat rows
+  // link to the other end of the exchange, and the up direction's target
+  // (parentThreadId) lives only in the result that summarizing destroys.
+  const sessionMessage = deriveSessionMessageToolActivity(data);
+  if (sessionMessage?.threadId !== undefined) {
+    projectedData.sessionMessage = sessionMessage;
   }
 
   // Same problem, same remedy: a Schedule write's card names the Schedule, its

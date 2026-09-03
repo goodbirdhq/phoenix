@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   type ChatAttachment,
+  isSessionMessageSentActivity,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
@@ -919,13 +920,46 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          // A send_to_parent marker updates the awaiting-reply signal inside
+          // the upsert this event already pays for. Latest marker wins: a
+          // follow-up sent without awaitingReply withdraws the earlier claim.
+          const awaitingParentReply =
+            event.type === "thread.activity-appended" &&
+            isSessionMessageSentActivity(event.payload.activity)
+              ? {
+                  awaitingParentReplySince: event.payload.activity.payload.awaitingReply
+                    ? event.payload.activity.payload.sentAt
+                    : null,
+                }
+              : {};
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
+            ...awaitingParentReply,
             updatedAt: event.occurredAt,
           });
           if (shouldRefreshThreadShellSummary(event)) {
             yield* refreshThreadShellSummary(event.payload.threadId);
           }
+          return;
+        }
+
+        case "thread.turn-start-requested": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          // Any turn start means new input reached this thread — exactly what
+          // an awaiting-reply child was waiting for, whoever it came from.
+          // Only threads actually holding the marker pay for an upsert here.
+          if (
+            Option.isNone(existingRow) ||
+            (existingRow.value.awaitingParentReplySince ?? null) === null
+          ) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            awaitingParentReplySince: null,
+          });
           return;
         }
 
@@ -1039,6 +1073,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+            ...(event.payload.origin !== undefined
+              ? { origin: event.payload.origin }
+              : previousMessage?.origin !== undefined
+                ? { origin: previousMessage.origin }
+                : {}),
             isStreaming: event.payload.streaming,
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,

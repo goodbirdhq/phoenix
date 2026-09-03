@@ -1770,6 +1770,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           role: "user",
           text: `A parent session requested that you stop. Finish the current tool call if one is in progress, then stop working.${partialReportInstruction}`,
           attachments: [],
+          // Phoenix relaying the parent's stop request — not the human, and
+          // not the parent speaking in its own words.
+          origin: { kind: "phoenix", threadId: thread.spawnedByThreadId ?? null },
         },
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,

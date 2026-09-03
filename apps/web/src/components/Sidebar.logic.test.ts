@@ -1849,3 +1849,60 @@ describe("sortLogicalProjectsForSidebar", () => {
     ).toEqual(["logical-newer", "logical-older"]);
   });
 });
+
+describe("awaiting-parent status", () => {
+  const idle = { hasPendingApprovals: false, hasPendingUserInput: false };
+  const readySession = {
+    threadId: ThreadId.make("thread-child"),
+    status: "ready" as const,
+    providerName: "Codex",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    runtimeMode: DEFAULT_RUNTIME_MODE,
+    activeTurnId: null,
+    lastError: null,
+    updatedAt: "2026-03-09T10:00:00.000Z",
+  };
+
+  it("reads a spawned thread blocked on its parent as awaiting-parent", () => {
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        session: readySession,
+        awaitingParentReplySince: "2026-03-09T10:01:00.000Z",
+      }),
+    ).toBe("awaiting-parent");
+  });
+
+  it("keeps live and failed states above the awaiting-parent claim", () => {
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        session: { ...readySession, status: "running" as const },
+        awaitingParentReplySince: "2026-03-09T10:01:00.000Z",
+      }),
+    ).toBe("working");
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        session: { ...readySession, status: "error" as const },
+        awaitingParentReplySince: "2026-03-09T10:01:00.000Z",
+      }),
+    ).toBe("failed");
+  });
+
+  it("shows the Waiting on Parent pill for a blocked idle child", () => {
+    const pill = resolveThreadStatusPill({
+      thread: {
+        hasActionableProposedPlan: false,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        interactionMode: "default",
+        latestTurn: null,
+        session: readySession,
+        backgroundLiveness: null,
+        awaitingParentReplySince: "2026-03-09T10:01:00.000Z",
+      } as never,
+    });
+    expect(pill).toMatchObject({ label: "Waiting on Parent", pulse: false });
+  });
+});

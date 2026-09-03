@@ -24,6 +24,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -37,6 +38,7 @@ import {
   formatQueuedReportWarning,
   formatReportMessage,
   makeSessionSpawnReactor,
+  parseReportDeliveryMessageId,
   reportNotificationActivity,
   terminalReportStatus,
   terminalReportTitle,
@@ -276,11 +278,18 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
       ),
   } as ProviderService["Service"]);
 
+  // Shells in this harness have no worktree, so the death-notice risk check
+  // never reaches git; dying here catches any test that starts to.
+  const gitWorkflow = GitWorkflowService.GitWorkflowService.of({
+    status: () => Effect.die("git status unused in this harness"),
+  } as unknown as GitWorkflowService.GitWorkflowService["Service"]);
+
   const reactor = yield* makeSessionSpawnReactor.pipe(
     Effect.provideService(OrchestrationEngineService, engine),
     Effect.provideService(ProjectionSnapshotQuery, snapshot),
     Effect.provideService(ProjectionTurnRepository, turns),
     Effect.provideService(ProviderService, provider),
+    Effect.provideService(GitWorkflowService.GitWorkflowService, gitWorkflow),
   );
   yield* reactor.start();
   yield* Effect.yieldNow;
@@ -407,6 +416,51 @@ describe("SessionSpawnReactor queued delivery", () => {
           "queued-delivery.redelivery-limit-reached",
         );
       }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect(
+    "wakes the parent with a wedge notice when the redelivery limit cancels a message",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          const harness = yield* createHarness({
+            status: "ready",
+            queued: [{ ...releasing("limit"), redeliveryCount: 3 }],
+          });
+          // The error activity lands on the wedged child's own thread where
+          // nobody looks; the parent holding the spawn slot gets a message.
+          const turns = harness.commands.filter((command) => command.type === "thread.turn.start");
+          expect(turns).toHaveLength(1);
+          const turn = turns[0];
+          if (turn?.type !== "thread.turn.start") throw new Error("expected a turn start");
+          expect(turn.threadId).toBe(PARENT_ID);
+          expect(turn.message.text).toContain("WEDGED");
+          expect(turn.message.text).toContain("queued-limit");
+          expect(turn.message.text).toContain(CHILD_ID);
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+  );
+
+  it.effect("appends the unconsumed-queue warning when a report outruns waiting messages", () =>
+    Effect.scoped(
+      createHarness({
+        status: "running",
+        live: true,
+        queued: [queued("waiting")],
+        boundaryEvents: [queuedReportPostedEvent()],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const turns = commands.filter((command) => command.type === "thread.turn.start");
+          expect(turns).toHaveLength(1);
+          const turn = turns[0];
+          if (turn?.type !== "thread.turn.start") throw new Error("expected a turn start");
+          expect(turn.message.text).toContain("not consumed before this report was written");
+          expect(turn.message.text).toContain("queued-waiting");
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
     ),
   );
 
@@ -855,6 +909,7 @@ describe("buildTerminalReportSummary", () => {
   it("says the session was stopped and flags the work as unfinished", () => {
     const summary = buildTerminalReportSummary({
       sessionStatus: "stopped",
+      exitReason: "exited",
       lastError: null,
       detail: Option.none(),
     });
@@ -866,6 +921,7 @@ describe("buildTerminalReportSummary", () => {
   it("carries the provider error into the summary", () => {
     const summary = buildTerminalReportSummary({
       sessionStatus: "error",
+      exitReason: "provider_error",
       lastError: "provider exited with code 1",
       detail: Option.none(),
     });
@@ -875,6 +931,7 @@ describe("buildTerminalReportSummary", () => {
   it("reports the last tool activity and assistant message", () => {
     const summary = buildTerminalReportSummary({
       sessionStatus: "stopped",
+      exitReason: "exited",
       lastError: null,
       detail: Option.some(
         threadDetail({
@@ -904,10 +961,100 @@ describe("buildTerminalReportSummary", () => {
   it("is explicit when there is nothing to report rather than silently empty", () => {
     const summary = buildTerminalReportSummary({
       sessionStatus: "error",
+      exitReason: "provider_error",
       lastError: null,
       detail: Option.some(threadDetail({})),
     });
     expect(summary).toContain("No recorded tool activity.");
     expect(summary).toContain("No assistant message was produced.");
   });
+});
+
+const turnStartRequestedEvent = (threadId: ThreadId, messageId: string): OrchestrationEvent =>
+  ({
+    sequence: 1,
+    eventId: EventId.make(`event-turn-requested-${messageId}`),
+    aggregateKind: "thread",
+    aggregateId: threadId,
+    occurredAt: NOW,
+    commandId: CommandId.make(`command-turn-requested-${messageId}`),
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "thread.turn-start-requested",
+    payload: {
+      threadId,
+      messageId: MessageId.make(messageId),
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: NOW,
+    },
+  }) as unknown as OrchestrationEvent;
+
+describe("parseReportDeliveryMessageId", () => {
+  it("recovers the child and report ids from a delivery message id", () => {
+    expect(parseReportDeliveryMessageId("session-report-delivery:child-1:report-9")).toEqual({
+      childThreadId: "child-1",
+      reportId: "report-9",
+    });
+  });
+
+  it("rejects everything else", () => {
+    expect(parseReportDeliveryMessageId("some-random-uuid")).toBeNull();
+    expect(parseReportDeliveryMessageId("session-report-delivery:")).toBeNull();
+    expect(parseReportDeliveryMessageId("session-report-delivery:child-only")).toBeNull();
+    expect(parseReportDeliveryMessageId("session-report-delivery:child-1:")).toBeNull();
+  });
+});
+
+describe("delivery consumption", () => {
+  it.effect("acknowledges a delivered report when the parent turn starts on it", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        boundaryEvents: [
+          turnStartRequestedEvent(PARENT_ID, "session-report-delivery:child-thread:report-42"),
+        ],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const receipts = commands.filter(
+            (
+              command,
+            ): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
+              command.type === "thread.activity.append" &&
+              command.activity.kind === "session-report.read",
+          );
+          expect(receipts).toHaveLength(1);
+          // Byte-identical ids to read_report's receipt, so both
+          // acknowledgement paths converge on one durable record.
+          expect(receipts[0]?.commandId).toBe("session-report-read:parent-thread:report-42");
+          expect(receipts[0]?.activity.id).toBe("session-report-read:parent-thread:report-42");
+          expect(receipts[0]?.activity.payload).toMatchObject({
+            childThreadId: "child-thread",
+            reportId: "report-42",
+            readByThreadId: PARENT_ID,
+          });
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("ignores turn starts on ordinary messages", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        boundaryEvents: [turnStartRequestedEvent(PARENT_ID, "b47ac10b-user-message")],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          expect(
+            commands.filter((command) => command.type === "thread.activity.append"),
+          ).toHaveLength(0);
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
 });

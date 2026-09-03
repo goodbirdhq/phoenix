@@ -194,6 +194,15 @@ function ThreadRouteContent(
     useThreadSelection();
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
+  // Derived per render from the detail's queue rows (kept live by the thread
+  // reducer): which messages the agent has not consumed yet.
+  const pendingMessageIds = useMemo(
+    () =>
+      new Set<string>(
+        (selectedThreadDetail?.queuedTurnStarts ?? []).map((entry) => entry.messageId as string),
+      ),
+    [selectedThreadDetail?.queuedTurnStarts],
+  );
   // "Load earlier turns" header state for windowed (paginated) thread loads.
   const loadEarlierTurns = useMemo(() => {
     if (selectedThread === null || !threadHasOlderTurns(selectedThreadDetailState)) {
@@ -774,6 +783,7 @@ function ThreadRouteContent(
           connectionError={routeConnectionError}
           environmentLabel={selectedEnvironmentConnection?.environmentLabel ?? null}
           selectedThreadFeed={composer.selectedThreadFeed}
+          pendingMessageIds={pendingMessageIds}
           activeWorkStartedAt={composer.activeWorkStartedAt}
           activePendingApproval={requests.activePendingApproval}
           respondingApprovalId={requests.respondingApprovalId}

@@ -94,6 +94,10 @@ export const ProjectionQueuedDeliveryReceipt = Schema.Struct({
   messageId: MessageId,
   state: Schema.Literals(["queued", "releasing", "consumed", "cancelled"]),
   requestedAt: IsoDateTime,
+  // Wedge diagnostics: when the in-flight release began and how many times
+  // delivery has been retried. Null/0 for rows that never entered releasing.
+  releasingAt: Schema.NullOr(IsoDateTime),
+  redeliveryCount: NonNegativeInt,
   consumedByTurnId: Schema.NullOr(TurnId),
   consumedAt: Schema.NullOr(IsoDateTime),
   cancelledAt: Schema.NullOr(IsoDateTime),

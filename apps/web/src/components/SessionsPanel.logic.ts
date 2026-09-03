@@ -12,17 +12,25 @@
  * extra contract.
  */
 import { isActiveSpawnedSession } from "@t3tools/client-runtime/state/threads";
-import type { OrchestrationSessionStatus, OrchestrationThreadShell } from "@t3tools/contracts";
+import { deriveSessionExitReason } from "@t3tools/contracts";
+import type {
+  OrchestrationSessionStatus,
+  OrchestrationThreadShell,
+  SessionExitReason,
+} from "@t3tools/contracts";
 
 export type SessionLifecycle = "active" | "settled";
 
 /**
  * One steady in-flight presentation, matching the Agents panel: a child that
  * is starting, running, or carrying live background work all read as
- * "working". Only attention and settled outcomes differentiate.
+ * "working". Only attention and settled outcomes differentiate — plus
+ * "awaiting-reply", the child's own declaration (via send_to_parent) that it
+ * is blocked until this thread answers it.
  */
 export type SessionActivityState =
   | "needs-you"
+  | "awaiting-reply"
   | "working"
   | "monitoring"
   | "stopping"
@@ -47,6 +55,10 @@ export interface SessionPanelEntry {
   /** Current plan step while a turn runs. Cleared when the turn settles. */
   readonly planStep: string | null;
   readonly lastError: string | null;
+  /** Why the child's session ended, once it has; null while it is alive. */
+  readonly exitReason: SessionExitReason | null;
+  /** Since when the child has been blocked on this thread's answer. */
+  readonly awaitingReplySince: string | null;
   readonly createdAt: string;
   /** Newest of the signals a row's elapsed/`ago` column can key off. */
   readonly lastActivityAt: string;
@@ -59,6 +71,7 @@ export interface SessionPanelModel {
   readonly activeCount: number;
   readonly workingCount: number;
   readonly needsAttentionCount: number;
+  readonly awaitingReplyCount: number;
   readonly settledCount: number;
 }
 
@@ -69,6 +82,7 @@ export const EMPTY_SESSION_PANEL_MODEL: SessionPanelModel = {
   activeCount: 0,
   workingCount: 0,
   needsAttentionCount: 0,
+  awaitingReplyCount: 0,
   settledCount: 0,
 };
 
@@ -94,6 +108,17 @@ function activityOf(
   if (lifecycle === "settled") {
     if (running) return "stopping";
   } else {
+    // The child declared itself blocked on this thread's answer. It outranks
+    // "working" — whatever its process is finishing up, the actionable fact
+    // is that nothing more happens until the reply lands — but never
+    // survives the session's death, which the terminal states report below.
+    if (
+      (shell.awaitingParentReplySince ?? null) !== null &&
+      status !== "error" &&
+      status !== "stopped"
+    ) {
+      return "awaiting-reply";
+    }
     if (running) return "working";
     // Liveness only counts while the child is in play: a settled child's stale
     // flag would spin in the roster forever.
@@ -133,22 +158,41 @@ function lastActivityAt(shell: OrchestrationThreadShell): string {
 
 function toEntry(shell: OrchestrationThreadShell): SessionPanelEntry {
   const lifecycle = lifecycleOf(shell);
+  const session = shell.session;
+  const terminal = session !== null && (session.status === "stopped" || session.status === "error");
   return {
     threadId: shell.id,
     title: shell.title,
     lifecycle,
     activity: activityOf(shell, lifecycle),
-    sessionStatus: shell.session?.status ?? null,
+    sessionStatus: session?.status ?? null,
     model: shell.modelSelection.model,
     providerInstanceId: shell.modelSelection.instanceId ?? null,
     branch: shell.branch,
     worktreePath: shell.worktreePath,
     planStep: shell.planProgress?.step ?? null,
-    lastError: shell.session?.lastError ?? null,
+    lastError: session?.lastError ?? null,
+    exitReason: terminal ? deriveSessionExitReason(session) : null,
+    awaitingReplySince: shell.awaitingParentReplySince ?? null,
     createdAt: shell.createdAt,
     lastActivityAt: lastActivityAt(shell),
   };
 }
+
+/**
+ * Human wording for the typed exit reason. Kept as terse noun phrases so a
+ * dead row's line 2 can lead with the cause and still fit the error detail.
+ */
+export const EXIT_REASON_LABELS: Record<SessionExitReason, string> = {
+  usage_limit: "Quota exhausted",
+  provider_crashed: "Provider crashed",
+  stopped_by_user: "Stopped by you",
+  stopped_by_parent: "Stopped by parent",
+  permission_denied: "Stopped · permission denied",
+  tool_failed: "Stopped · tool failed",
+  provider_error: "Provider error",
+  exited: "Exited",
+};
 
 function byCreatedAtDescending(left: SessionPanelEntry, right: SessionPanelEntry): number {
   const delta = Date.parse(right.createdAt) - Date.parse(left.createdAt);
@@ -172,10 +216,12 @@ export function buildSessionPanelModel(
   const settled: SessionPanelEntry[] = [];
   let workingCount = 0;
   let needsAttentionCount = 0;
+  let awaitingReplyCount = 0;
 
   for (const shell of children) {
     const entry = toEntry(shell);
     if (entry.activity === "needs-you") needsAttentionCount += 1;
+    if (entry.activity === "awaiting-reply") awaitingReplyCount += 1;
     if (entry.activity === "working" || entry.activity === "monitoring") workingCount += 1;
     if (entry.lifecycle === "active") active.push(entry);
     else settled.push(entry);
@@ -191,6 +237,7 @@ export function buildSessionPanelModel(
     activeCount: active.length,
     workingCount,
     needsAttentionCount,
+    awaitingReplyCount,
     settledCount: settled.length,
   };
 }

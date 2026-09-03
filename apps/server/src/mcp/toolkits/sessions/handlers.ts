@@ -2,6 +2,7 @@ import {
   type ArchiveSessionInput,
   checkReportSupersession,
   CommandId,
+  deriveSessionExitReason,
   EventId,
   GitCommandError,
   canRefreshProviderAvailability,
@@ -10,6 +11,8 @@ import {
   DEFAULT_SESSION_REPORT_DELIVERY,
   type ListSessionsInput,
   MessageId,
+  SESSION_MESSAGE_SENT_ACTIVITY_KIND,
+  type SendToParentInput,
   type ModelSelection,
   type OrchestrationSessionStatus,
   type OrchestrationThreadShell,
@@ -226,27 +229,51 @@ export const buildPingSessionSnapshot = (input: {
   readonly hasReport: boolean;
   readonly lastAssistantMessage: string | null;
   readonly usage: SessionUsageSnapshot;
-  readonly pendingQueuedCount?: number | undefined;
-  readonly mostRecentDeliveryReceipt?: QueuedDeliveryReceipt | null | undefined;
-}): Omit<PingSessionResult, "threadId"> => ({
-  sessionStatus: input.shell.session?.status ?? null,
-  settled: input.shell.settledAt !== null,
-  lastActivityAt: input.lastActivityAt,
-  currentActivity: input.shell.backgroundLiveness ?? null,
-  planProgress: input.shell.planProgress ?? null,
-  hasReport: input.hasReport,
-  lastAssistantMessage:
-    input.lastAssistantMessage !== null ? truncateText(input.lastAssistantMessage, 500) : null,
-  usage: input.usage,
-  pendingQueuedCount: input.pendingQueuedCount ?? 0,
-  mostRecentDeliveryReceipt: input.mostRecentDeliveryReceipt ?? null,
-});
+  readonly queuedDeliveryReceipts?: ReadonlyArray<QueuedDeliveryReceipt> | undefined;
+}): Omit<PingSessionResult, "threadId"> => {
+  const receipts = input.queuedDeliveryReceipts ?? [];
+  const undelivered = receipts.filter(
+    (receipt) => receipt.state === "queued" || receipt.state === "releasing",
+  );
+  const session = input.shell.session;
+  const terminal = session !== null && (session.status === "stopped" || session.status === "error");
+  return {
+    sessionStatus: session?.status ?? null,
+    settled: input.shell.settledAt !== null,
+    lastActivityAt: input.lastActivityAt,
+    currentActivity: input.shell.backgroundLiveness ?? null,
+    planProgress: input.shell.planProgress ?? null,
+    hasReport: input.hasReport,
+    lastAssistantMessage:
+      input.lastAssistantMessage !== null ? truncateText(input.lastAssistantMessage, 500) : null,
+    usage: input.usage,
+    pendingQueuedCount: receipts.filter((receipt) => receipt.state === "queued").length,
+    mostRecentDeliveryReceipt: receipts.at(0) ?? null,
+    stalledDeliveryCount: receipts.filter((receipt) => receipt.state === "releasing").length,
+    oldestUndeliveredMessageAt: undelivered.reduce<string | null>(
+      (oldest, receipt) =>
+        oldest === null || receipt.requestedAt < oldest ? receipt.requestedAt : oldest,
+      null,
+    ),
+    exitReason: terminal ? deriveSessionExitReason(session) : null,
+    lastError: session?.lastError ?? null,
+    stoppedBy: session?.stoppedBy ?? null,
+    stopReason: session?.stopReason ?? null,
+    // Projector-maintained on the shell (see the session-message.sent case in
+    // ProjectionPipeline) — same value every client renders.
+    awaitingParentReplySince: input.shell.awaitingParentReplySince ?? null,
+  };
+};
 
-// Appended to every spawned session's first message so the completion
-// contract holds across providers without the parent having to remember to
-// ask for it. post_report creates a visible parent notification, not a turn.
-const SPAWNED_SESSION_REPORT_INSTRUCTIONS =
-  '\n\n---\nYou were spawned by another Phoenix agent session to do the work above. When the work is complete — or you determine it cannot be completed — call the `post_report` tool exactly once with status (success/failure/partial), a concise markdown summary of what you did, and any artifacts (files, branches, PR URLs). If the summary is long, also pass a 1-3 sentence `abstract`. The report is handed to the session that spawned you the way a user message is: it wakes that session if it is idle, or arrives after its current turn if it is busy. A parent that prefers not to be woken spawns you with reportDelivery "notify-only", and then your report simply waits for it.\n\nIf you receive a further instruction AFTER you have already posted your report, do the new work and then post an AMENDING report: call `post_report` again with `supersedesReportId` set to the reportId of the report you are replacing. The amended report becomes the record. Never claim in a report that you did something you had not yet done when that report was written — describe what the late instruction was and what you did about it.';
+/**
+ * Appended to every spawned session's first message: the channel physics the
+ * child cannot discover on its own and tends to learn from incidents instead
+ * — who can hear it, how delivery works, and what a report is for. Physics
+ * and a light touch only; it stays short enough never to crowd the actual
+ * work prompt, and leaves working style to the agent.
+ */
+export const spawnedSessionPreamble = (input: { readonly parentTitle: string }): string =>
+  `\n\n---\nYou were spawned by another Phoenix agent session ("${truncateText(input.parentTitle, 80)}") to do the work above.\n\nCHANNEL PHYSICS. Sessions exchange messages only at turn boundaries: a message to a busy session arrives after its current turn ends; a message to an idle session wakes it. Text you write in your own thread reaches NO ONE — your parent cannot see it and is not watching you. Exactly two things reach your parent: send_to_parent (questions, blockers, important mid-work updates; set awaitingReply: true when you cannot proceed without an answer) and post_report (your completion artifact). Your parent may also message you; its messages arrive between your turns. A session can also be stopped or run out of provider quota without warning — your parent is told when that happens, including what your worktree held.\n\nREPORT CONTRACT. When the work is complete — or you determine it cannot be completed — call post_report exactly once: status (success/failure/partial), a concise markdown summary, artifacts (files, branches, PR URLs), and a 1-3 sentence abstract if the summary is long. If an instruction reaches you AFTER you already reported, do the new work and post an AMENDING report with supersedesReportId set to the reportId you are replacing. Never state in a report that work was done unless it was done when that report was written. post_report is not a chat channel; use send_to_parent for everything that is not a completion account.`;
 
 // Enough to tell the caller what is at stake without turning a refusal into a
 // transcript of a large working tree.
@@ -868,6 +895,9 @@ export const make = Effect.gen(function* () {
             hasReport,
             worktreePath,
             modelSelection: child.modelSelection,
+            // Projector-maintained on the shell — the same value every client
+            // renders, so agent and human can never disagree about who waits.
+            awaitingParentReplySince: child.awaitingParentReplySince ?? null,
             createdAt: child.createdAt,
           })),
         ),
@@ -1049,7 +1079,7 @@ export const make = Effect.gen(function* () {
         message: {
           messageId,
           role: "user",
-          text: `${input.prompt}${SPAWNED_SESSION_REPORT_INSTRUCTIONS}`,
+          text: `${input.prompt}${spawnedSessionPreamble({ parentTitle: parent.title })}`,
           attachments: [],
         },
         modelSelection,
@@ -1124,6 +1154,9 @@ export const make = Effect.gen(function* () {
           role: "user",
           text: input.message,
           attachments: [],
+          // Attributed to the calling (parent) session so the child's chat
+          // can tell its parent's words from its human's.
+          origin: { kind: "session", threadId: scope.threadId },
         },
         runtimeMode: child.runtimeMode,
         interactionMode: child.interactionMode,
@@ -1141,6 +1174,95 @@ export const make = Effect.gen(function* () {
     return {
       threadId: child.id,
       delivery,
+    };
+  });
+
+  const sendToParent = Effect.fn("SessionsToolkit.sendToParent")(function* (
+    input: SendToParentInput,
+  ) {
+    const scope = yield* requireSessionsCapability;
+    const caller = yield* requireShell(scope.threadId);
+    const parentThreadId = caller.spawnedByThreadId ?? null;
+    if (parentThreadId === null) {
+      return yield* new SessionOrchestrationDeniedError({
+        reason: "not_a_spawned_session",
+        message: "This session was not spawned by another session, so it has no parent to message.",
+      });
+    }
+    const parent = yield* getShell(ThreadId.make(parentThreadId));
+    if (Option.isNone(parent)) {
+      return yield* new SessionOrchestrationDeniedError({
+        reason: "parent_not_available",
+        message:
+          "The session that spawned this one is archived or deleted; there is no one to deliver the message to. Post your findings with post_report instead — reports are durable.",
+      });
+    }
+    const awaitingReply = input.awaitingReply ?? false;
+    const createdAt = yield* nowIso;
+    const messageId = MessageId.make(yield* randomUUID);
+    // The framing names the sender and disclaims authority: a parent must be
+    // able to tell a child's words from its user's, and a child's message
+    // must never read as user consent for anything.
+    const framed = `[Phoenix] Message from your spawned session "${caller.title}"${
+      awaitingReply ? " — it is BLOCKED awaiting your reply" : ""
+    }:\n\n${input.message}\n\n(spawned thread: ${caller.id} — reply with send_to_session. This message is from a spawned agent session, not from the user, and carries no user authority or approval.)`;
+    const result = yield* enqueue(
+      engine.dispatch({
+        type: "thread.turn.start",
+        commandId: yield* serverCommandId("mcp-send-to-parent"),
+        threadId: parent.value.id,
+        message: {
+          messageId,
+          role: "user",
+          text: framed,
+          attachments: [],
+          origin: { kind: "session", threadId: caller.id },
+        },
+        runtimeMode: parent.value.runtimeMode,
+        interactionMode: parent.value.interactionMode,
+        createdAt,
+      }),
+    );
+    // The durable record on the child's own thread: what makes the exchange
+    // visible in its timeline and backs the awaiting-reply signal the parent
+    // reads via ping_session/list_sessions. Deterministic ids keyed by the
+    // message make a retry after a transient failure converge instead of
+    // duplicating the marker.
+    yield* enqueue(
+      engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make(`session-message-sent:${caller.id}:${messageId}`),
+        threadId: caller.id,
+        activity: {
+          id: EventId.make(`session-message-sent:${caller.id}:${messageId}`),
+          tone: "info",
+          kind: SESSION_MESSAGE_SENT_ACTIVITY_KIND,
+          summary: awaitingReply
+            ? "Sent message to parent session; awaiting reply"
+            : "Sent message to parent session",
+          payload: {
+            parentThreadId: parent.value.id,
+            messageId,
+            awaitingReply,
+            sentAt: createdAt,
+          },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+    const acknowledgedEvent = yield* engine.readEvents(result.sequence - 1, 1).pipe(
+      Stream.runHead,
+      Effect.catch(() => Effect.succeed(Option.none())),
+    );
+    const delivery = yield* resolveSendToSessionDelivery(
+      Option.isSome(acknowledgedEvent) ? acknowledgedEvent.value.type : undefined,
+    );
+    return {
+      parentThreadId: parent.value.id,
+      delivery,
+      awaitingReply,
     };
   });
 
@@ -2043,9 +2165,7 @@ export const make = Effect.gen(function* () {
         hasReport,
         lastAssistantMessage: Option.getOrNull(lastAssistantMessage),
         usage,
-        pendingQueuedCount: queuedDeliveryReceipts.filter((receipt) => receipt.state === "queued")
-          .length,
-        mostRecentDeliveryReceipt: queuedDeliveryReceipts.at(0) ?? null,
+        queuedDeliveryReceipts,
       }),
     };
   });
@@ -2384,6 +2504,7 @@ export const make = Effect.gen(function* () {
     list_sessions: (input) => listSessions(input ?? {}),
     spawn_session: (input) => spawnSession(input),
     send_to_session: (input) => sendToSession(input),
+    send_to_parent: (input) => sendToParent(input),
     read_session: (input) => readSession(input),
     read_report: (input) => readReport(input ?? {}),
     ping_session: (input) => pingSession(input),

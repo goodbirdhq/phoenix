@@ -8,6 +8,8 @@ import {
   type ProviderAvailability,
   ProviderDriverKind,
   ProviderInstanceId,
+  MessageId,
+  type QueuedDeliveryReceipt,
   READ_REPORT_MAX_CHARS,
   ReadReportInput,
   SESSION_REPORT_INLINE_MAX_CHARS,
@@ -64,6 +66,7 @@ import {
   isSessionBusy,
   make,
   REPORT_NOT_ACCESSIBLE_MESSAGE,
+  spawnedSessionPreamble,
   resolveSendToSessionDelivery,
   resolveSessionCheckout,
   sliceReportBody,
@@ -688,6 +691,13 @@ describe("buildPingSessionSnapshot", () => {
       usage: zeroUsage,
       pendingQueuedCount: 0,
       mostRecentDeliveryReceipt: null,
+      stalledDeliveryCount: 0,
+      oldestUndeliveredMessageAt: null,
+      exitReason: null,
+      lastError: null,
+      stoppedBy: null,
+      stopReason: null,
+      awaitingParentReplySince: null,
     });
   });
 
@@ -2456,6 +2466,220 @@ describe("spawn_session cap (handler)", () => {
 
       expect(error).toBeInstanceOf(SessionOrchestrationDeniedError);
       expect(error).toMatchObject({ reason: "spawn_retention_limit_reached" });
+    }),
+  );
+});
+
+describe("buildPingSessionSnapshot diagnostics", () => {
+  const receipt = (overrides: Partial<QueuedDeliveryReceipt>): QueuedDeliveryReceipt => ({
+    messageId: MessageId.make("m-queued"),
+    state: "queued",
+    requestedAt: now,
+    releasingAt: null,
+    redeliveryCount: 0,
+    consumedByTurnId: null,
+    consumedAt: null,
+    cancelledAt: null,
+    cancelledReason: null,
+    ...overrides,
+  });
+
+  it("splits queued from stalled deliveries and reports the oldest unconsumed message", () => {
+    const result = buildPingSessionSnapshot({
+      shell: baseShell,
+      lastActivityAt: null,
+      hasReport: false,
+      lastAssistantMessage: null,
+      usage: zeroUsage,
+      queuedDeliveryReceipts: [
+        receipt({
+          messageId: MessageId.make("m-stalled"),
+          state: "releasing",
+          requestedAt: "2026-08-12T00:01:00.000Z",
+          releasingAt: "2026-08-12T00:01:30.000Z",
+          redeliveryCount: 2,
+        }),
+        receipt({ requestedAt: "2026-08-12T00:00:30.000Z" }),
+        receipt({
+          messageId: MessageId.make("m-consumed"),
+          state: "consumed",
+          requestedAt: "2026-08-12T00:00:00.000Z",
+        }),
+      ],
+    });
+
+    expect(result.pendingQueuedCount).toBe(1);
+    expect(result.stalledDeliveryCount).toBe(1);
+    // The consumed receipt is not "undelivered": the oldest waiting message
+    // is the queued one, not the consumed one before it.
+    expect(result.oldestUndeliveredMessageAt).toBe("2026-08-12T00:00:30.000Z");
+    expect(result.mostRecentDeliveryReceipt?.redeliveryCount).toBe(2);
+  });
+
+  it("derives a typed exit reason only once the session is terminal", () => {
+    const alive = buildPingSessionSnapshot({
+      shell: baseShell,
+      lastActivityAt: null,
+      hasReport: false,
+      lastAssistantMessage: null,
+      usage: zeroUsage,
+    });
+    expect(alive.exitReason).toBeNull();
+
+    const dead = buildPingSessionSnapshot({
+      shell: {
+        ...baseShell,
+        session: {
+          ...baseShell.session,
+          status: "error",
+          lastError: "usage limit reached",
+          lastErrorKind: "usage-limit",
+        },
+      },
+      lastActivityAt: null,
+      hasReport: false,
+      lastAssistantMessage: null,
+      usage: zeroUsage,
+    });
+    expect(dead.exitReason).toBe("usage_limit");
+    expect(dead.lastError).toBe("usage limit reached");
+  });
+});
+
+describe("spawnedSessionPreamble", () => {
+  it("states the channel physics in every spawn, without dictating working style", () => {
+    const text = spawnedSessionPreamble({ parentTitle: "Refactor the parser" });
+    expect(text).toContain('"Refactor the parser"');
+    expect(text).toContain("send_to_parent");
+    expect(text).toContain("awaitingReply: true");
+    expect(text).toContain("turn boundaries");
+    expect(text).toContain("supersedesReportId");
+    // Mortality is stated as a fact of the channel; the discipline lectures
+    // (commit-and-push cadence, distrust of relayed state) are deliberately
+    // left out — physics only, light touch.
+    expect(text).toContain("without warning");
+    expect(text).not.toContain("Commit and push");
+    expect(text).not.toContain("DISTRUST");
+  });
+});
+
+describe("send_to_parent (handler)", () => {
+  const grandparentThreadId = "grandparent-1" as ThreadId;
+
+  it.effect("refuses a session nothing spawned", () =>
+    Effect.gen(function* () {
+      const error = yield* runHandler((handlers) =>
+        handlers.send_to_parent({ message: "hello?" }),
+      ).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SessionOrchestrationDeniedError);
+      expect(error).toMatchObject({ reason: "not_a_spawned_session" });
+    }),
+  );
+
+  it.effect("refuses when the parent thread no longer resolves", () =>
+    Effect.gen(function* () {
+      const error = yield* runHandler(
+        (handlers) => handlers.send_to_parent({ message: "hello?" }),
+        {
+          getThreadShellById: (id) =>
+            Effect.succeed(
+              id === parentThreadId
+                ? Option.some({ ...parentShell, spawnedByThreadId: grandparentThreadId })
+                : Option.none(),
+            ),
+        },
+      ).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SessionOrchestrationDeniedError);
+      expect(error).toMatchObject({ reason: "parent_not_available" });
+    }),
+  );
+
+  it.effect("delivers a framed message to the parent and records the awaiting-reply marker", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      const result = yield* runHandler(
+        (handlers) =>
+          handlers.send_to_parent({ message: "Which SHA is master?", awaitingReply: true }),
+        {
+          getThreadShellById: (id) =>
+            Effect.succeed(
+              id === parentThreadId
+                ? Option.some({ ...parentShell, spawnedByThreadId: grandparentThreadId })
+                : id === grandparentThreadId
+                  ? Option.some({ ...baseShell, id: grandparentThreadId })
+                  : Option.none(),
+            ),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command);
+              return { sequence: dispatched.length };
+            }),
+          enqueueCommand: (effect) => effect,
+        },
+      );
+
+      expect(result.parentThreadId).toBe(grandparentThreadId);
+      expect(result.awaitingReply).toBe(true);
+
+      const turn = dispatched.find((command) => command.type === "thread.turn.start");
+      if (turn?.type !== "thread.turn.start") throw new Error("expected a parent turn start");
+      expect(turn.threadId).toBe(grandparentThreadId);
+      // Typed attribution: the receiving client renders this as the child
+      // session speaking, never as the human.
+      expect(turn.message.origin).toEqual({ kind: "session", threadId: parentThreadId });
+      expect(turn.message.text).toContain("Which SHA is master?");
+      expect(turn.message.text).toContain('spawned session "Fix the flaky test"');
+      expect(turn.message.text).toContain("BLOCKED awaiting your reply");
+      // Anti-confused-deputy: a child's message can never read as user consent.
+      expect(turn.message.text).toContain("carries no user authority or approval");
+
+      const marker = dispatched.find((command) => command.type === "thread.activity.append");
+      if (marker?.type !== "thread.activity.append") throw new Error("expected the sent marker");
+      expect(marker.threadId).toBe(parentThreadId);
+      expect(marker.activity.kind).toBe("session-message.sent");
+      expect(marker.activity.payload).toMatchObject({
+        parentThreadId: grandparentThreadId,
+        awaitingReply: true,
+      });
+    }),
+  );
+});
+
+describe("ping_session awaiting-reply signal", () => {
+  const sentAt = "2026-08-12T00:10:00.000Z";
+
+  // Set/clear semantics live in the projector (session-message.sent sets the
+  // shell field; the next turn-start clears it) — see ProjectionPipeline
+  // tests. ping_session's job is only to hand the shell's value through.
+  it.effect("passes the shell's awaiting-reply marker through", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler(
+        (handlers) => handlers.ping_session({ threadId: childThreadId }),
+        {
+          getThreadShellById: (id) =>
+            Effect.succeed(
+              id === childThreadId
+                ? Option.some({ ...childShell, awaitingParentReplySince: sentAt })
+                : id === parentThreadId
+                  ? Option.some(parentShell)
+                  : Option.none(),
+            ),
+        },
+      );
+
+      expect(result.awaitingParentReplySince).toBe(sentAt);
+    }),
+  );
+
+  it.effect("reports null when the shell carries no marker", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler((handlers) =>
+        handlers.ping_session({ threadId: childThreadId }),
+      );
+
+      expect(result.awaitingParentReplySince).toBeNull();
     }),
   );
 });

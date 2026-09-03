@@ -12,6 +12,8 @@ import {
   ReadReportResult,
   ReadSessionInput,
   ReadSessionResult,
+  SendToParentInput,
+  SendToParentResult,
   SendToSessionInput,
   SendToSessionResult,
   SESSION_SPAWN_MAX_CHILDREN,
@@ -58,7 +60,7 @@ export const ListSessionsTool = Tool.make("list_sessions", {
   .annotate(Tool.Idempotent, true);
 
 export const SpawnSessionTool = Tool.make("spawn_session", {
-  description: `Spawn a new Phoenix agent session (a new thread) that starts working on the given prompt immediately. Choose provider instance, model, and model options (e.g. reasoning effort) from list_session_providers, or omit them to use this session's own provider with defaults. By default the child gets its own git worktree so it cannot conflict with your working tree. Use gitRef, baseRef, branchName, or checkoutPr to control that worktree's checkout; checkoutPr and gitRef are mutually exclusive. The child appears in the user's sidebar like any other thread. End your prompt with report instructions such as: "When you are done, call post_report with a summary of what you did." — by default the child's report is delivered to this session like a message from the user: if you are idle it starts a turn, and if you are mid-turn it arrives after that turn ends. Pass reportDelivery: "notify-only" instead when you would rather not be woken, in which case the report is only a durable notification you pick up with read_report or read_session when you choose to act. A calling session may have at most ${SESSION_SPAWN_MAX_CHILDREN} active (unsettled) spawned children at once — settle a finished child with settle_session to free a slot, or archive_session to permanently discard one and reclaim its worktree. Independently, at most ${SESSION_SPAWN_MAX_RETAINED_CHILDREN} children total (active + settled) may be retained; archive_session on settled ones reclaims capacity there too.`,
+  description: `Spawn a new Phoenix agent session (a new thread) that starts working on the given prompt immediately. Choose provider instance, model, and model options (e.g. reasoning effort) from list_session_providers, or omit them to use this session's own provider with defaults. By default the child gets its own git worktree so it cannot conflict with your working tree. Use gitRef, baseRef, branchName, or checkoutPr to control that worktree's checkout; checkoutPr and gitRef are mutually exclusive. The child appears in the user's sidebar like any other thread. End your prompt with report instructions such as: "When you are done, call post_report with a summary of what you did." — by default the child's report is delivered to this session like a message from the user: if you are idle it starts a turn, and if you are mid-turn it arrives after that turn ends. Pass reportDelivery: "notify-only" instead when you would rather not be woken, in which case the report is only a durable notification you pick up with read_report or read_session when you choose to act. Two messages ignore that preference: the child can raise its hand mid-work with send_to_parent (its message arrives like a user message, marked as agent-authored), and if the child's session terminates without you stopping it, Phoenix always delivers a death notice with a typed exit reason and the git state of its worktree — silence never means health. A calling session may have at most ${SESSION_SPAWN_MAX_CHILDREN} active (unsettled) spawned children at once — settle a finished child with settle_session to free a slot, or archive_session to permanently discard one and reclaim its worktree. Independently, at most ${SESSION_SPAWN_MAX_RETAINED_CHILDREN} children total (active + settled) may be retained; archive_session on settled ones reclaims capacity there too.`,
   parameters: SpawnSessionInput,
   success: SpawnSessionResult,
   failure: SessionOrchestrationError,
@@ -82,6 +84,19 @@ export const SendToSessionTool = Tool.make("send_to_session", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false);
 
+export const SendToParentTool = Tool.make("send_to_parent", {
+  description:
+    'Send a message to the session that spawned this one. This is the ONLY live channel to your parent: text written in this thread reaches no one, and post_report is a completion artifact, not chat. Delivery works like any session message: an idle parent wakes on it, a busy parent receives it after its current turn ("queued"). Set awaitingReply: true when you cannot proceed without an answer — the parent then sees this session as blocked (awaitingParentReplySince in ping_session/list_sessions) until any new message starts a turn here. Use for questions, blockers, and important mid-work updates; keep routine progress out of it, since every message costs the parent a turn. Fails with not_a_spawned_session when nothing spawned this session, and with parent_not_available when the parent thread is archived or deleted (post_report still works then — reports are durable).',
+  parameters: SendToParentInput,
+  success: SendToParentResult,
+  failure: SessionOrchestrationError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Message parent session")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false);
+
 export const ReadSessionTool = Tool.make("read_session", {
   description:
     "Read the status of a session this session spawned: live/settled state, its latest completion report as a compact envelope (title, status, origin, abstract, size, structured counts), and optionally its trailing messages. Use read_report to fetch a report's full body and full findings/validation. Reports create a durable notification rather than starting your model; use this for on-demand progress checks when you choose to act. messageLimit accepts 0-20 (default 5); each returned message is truncated to 16,384 characters.",
@@ -97,7 +112,7 @@ export const ReadSessionTool = Tool.make("read_session", {
 
 export const PingSessionTool = Tool.make("ping_session", {
   description:
-    "Get a lightweight progress snapshot of a session this session spawned, WITHOUT starting a model turn or interrupting it: session status, whether it has settled, when it last did anything, its current background activity (working/monitoring, from native subagent/workflow/watch-loop work), plan progress if it's mid-plan, whether it has posted a report, pending queued count, its most recent delivery receipt, a snippet of its last assistant message, and a best-effort usage snapshot for budgeting: lastTurnInputTokens/lastTurnOutputTokens (the most recent turn only, NOT a session total, and not comparable across providers since cache-token accounting differs), totalTokens (a provider's own cumulative counter, omitted rather than estimated when not reported), turnCount, elapsedMs since spawn, and lastTurnDurationMs. No cost estimate is included; price tables go stale. Cheap enough to poll; prefer this over read_session for a quick liveness check, and read_session when you want the full report or message history.",
+    "Get a lightweight progress snapshot of a session this session spawned, WITHOUT starting a model turn or interrupting it: session status, whether it has settled, when it last did anything, its current background activity (working/monitoring, from native subagent/workflow/watch-loop work), plan progress if it's mid-plan, whether it has posted a report, a snippet of its last assistant message, and a best-effort usage snapshot for budgeting: lastTurnInputTokens/lastTurnOutputTokens (the most recent turn only, NOT a session total, and not comparable across providers since cache-token accounting differs), totalTokens (a provider's own cumulative counter, omitted rather than estimated when not reported), turnCount, elapsedMs since spawn, and lastTurnDurationMs. No cost estimate is included; price tables go stale. Liveness diagnostics: pendingQueuedCount and the most recent delivery receipt, plus stalledDeliveryCount (deliveries handed over but never consumed by a turn — nonzero and aging means the session is WEDGED, not busy) and oldestUndeliveredMessageAt (how long the oldest unconsumed message has been waiting). awaitingParentReplySince is set while the child has declared itself blocked on your answer via send_to_parent. After the session ends, exitReason gives one typed cause (usage_limit/provider_crashed/stopped_by_user/…) with lastError/stoppedBy/stopReason as the raw detail. Cheap enough to poll; prefer this over read_session for a quick liveness check, and read_session when you want the full report or message history.",
   parameters: PingSessionInput,
   success: PingSessionResult,
   failure: SessionOrchestrationError,
@@ -178,6 +193,7 @@ export const SessionsToolkit = Toolkit.make(
   ListSessionsTool,
   SpawnSessionTool,
   SendToSessionTool,
+  SendToParentTool,
   ReadSessionTool,
   ReadReportTool,
   PingSessionTool,

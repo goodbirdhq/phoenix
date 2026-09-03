@@ -253,6 +253,40 @@ describe("projectActivityPayload", () => {
     });
   });
 
+  it("carries the messaged parent's identity past the result summary", () => {
+    // send_to_parent's target only exists in the result, which summarizing
+    // truncates mid-JSON — same hazard the spawn carry exists for.
+    const sendResult = JSON.stringify({
+      parentThreadId: "parent-thread-1",
+      delivery: "queued",
+      awaitingReply: true,
+      padding: "x".repeat(120),
+    });
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          item: {
+            type: "mcpToolCall",
+            id: "item-msg-1",
+            tool: "send_to_parent",
+            server: "phoenix",
+            status: "completed",
+            arguments: { message: "Which SHA is master?", awaitingReply: true },
+            result: { content: [{ type: "text", text: sendResult }] },
+          },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.sessionMessage).toEqual({
+      direction: "to-parent",
+      threadId: "parent-thread-1",
+      preview: "Which SHA is master?",
+      awaitingReply: true,
+    });
+  });
+
   it("leaves an in-flight spawn without a child id (the row stays 'Spawning session')", () => {
     const projected = projectActivityPayload(
       activity({

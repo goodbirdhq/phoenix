@@ -44,6 +44,11 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   `lastActivityAt`/`currentActivity` fields on `read_session`) is pull-based, read-only visibility
   into a child's progress — `ThreadBackgroundLiveness`, `ThreadPlanProgress`, and the provider
   session directory's `lastSeenAt` — without starting a turn or otherwise touching the child.
+  `ping_session` also carries the liveness diagnostics (`stalledDeliveryCount`,
+  `oldestUndeliveredMessageAt`, `awaitingParentReplySince`) and, once the session is terminal, a
+  typed `exitReason` (`deriveSessionExitReason` in `orchestration.ts` — one precedence order over
+  `lastErrorKind`/`stopReason`/`stoppedBy`/`status`, quota first) with `lastError` and the stop
+  audit as the raw detail.
 - **Delivery modes** — `send_to_session` defaults to `queue`. Busy children persist FIFO queued
   turn starts in the turn projection and release one at each terminal/ready session boundary;
   idle children start immediately. `interrupt` uses the same queue after requesting the existing
@@ -86,29 +91,105 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   A parent fanning out to cheap children it does not need to hear from should spawn them
   `notify-only`.
 
-## Terminal reports
+## Child→parent messages
+
+`send_to_parent` is the upward half of the channel: a spawned session delivers text to the thread
+that spawned it, framed as coming from a named agent session (never the user, and explicitly
+carrying no user authority), through the same `thread.turn.start` path every other message takes —
+an idle parent wakes, a busy parent queues it FIFO. The strictly-downward rule on every other
+mutating tool stands; this is one narrow upward affordance, refused with `not_a_spawned_session`
+for top-level threads and `parent_not_available` when the parent is archived or deleted.
+
+Each send also appends a `session-message.sent` activity to the child's own thread (typed payload
+in `orchestration.ts`), which is both the visible timeline record and the event the awaiting-reply
+signal folds from. The signal itself is a projector-maintained shell field:
+`projection_threads.awaiting_parent_reply_since` (migration 057) is set by the
+`thread.activity-appended` case in `ProjectionPipeline` when the marker declares
+`awaitingReply: true` (latest marker wins — a later non-awaiting send withdraws the claim) and
+cleared by any `thread.turn-start-requested` on the thread, because a new turn means new input
+arrived, which is what the child was waiting for. One owner, every reader: `ping_session` and
+`list_sessions` hand the shell value through, the web sessions panel shows the child as
+"Awaiting reply", and the sidebar/mobile thread rows label it "Waiting on parent". The clients
+also derive the typed exit reason locally (`deriveSessionExitReason` over the shell's session
+audit), so a dead child's row says quota/crash/stop instead of a bare status.
+
+In the chat timeline, all three inter-session verbs get routed rows instead of opaque MCP tool
+calls: `deriveSessionMessageToolActivity` (in `@t3tools/shared/toolActivity`, beside the spawn
+derivation) recognizes `send_to_session`/`send_to_parent` for both clients, and
+`ActivityPayloadProjection` carries the derived identity past result slimming — necessary because
+the up direction's target (`parentThreadId`) only exists in the summarized result. Web renders
+`SessionMessageCtaRow` (MessagesTimeline); mobile keeps its row idiom (rewritten heading, message
+icon, preview) and gains tap-to-open via `ThreadFeedActivity.openThreadId`, which also makes the
+existing spawn row navigable.
+
+Attribution is typed end to end: `OrchestrationMessageOrigin` (`kind: "session" | "phoenix"` plus
+the related threadId) rides the turn.start command, the message-sent event, and
+`projection_thread_messages.origin_json` (migration 058). Every server-side writer declares
+itself — send_to_parent/send_to_session, report deliveries (`session`), death/wedge/interrupt and
+grace-stop notices (`phoenix`) — while the client command schema has no origin field, so a client
+cannot forge agent attribution onto a human message. Clients render origin messages as
+left-aligned routed cards ("From session X" / "Phoenix"), never as the human's bubble; the body
+stays the exact text the model consumed. The thread detail also now carries `queuedTurnStarts`
+(kept live by the client reducer from the queue lifecycle events), which powers per-message
+"queued — delivers after the current turn" markers and the inbox's "waiting for the agent"
+section, so _sent_ and _heard_ are finally distinguishable in the UI.
+
+The channel-physics contract itself is injected into every child's first message
+(`spawnedSessionPreamble` in the toolkit handlers): what wakes whom, that in-thread text reaches
+no one, `send_to_parent` vs `post_report`, and that a session can end without warning. Physics
+only, deliberately: working-style discipline (commit cadence, how much to trust relayed state) is
+left to the agent and the parent's prompt, not dictated by the shell.
+
+## Terminal reports and death notices
 
 A spawned session that dies without calling `post_report` used to leave its parent with nothing:
 `stopped` was not even a notification, and an error notification carried no record of what the
 child had done. So the reactor synthesizes one. When a child's session reaches `stopped` or
 `error` and it has posted no report, the reactor dispatches an ordinary `thread.report.post`
-carrying the termination reason, the last tool activity and assistant message, and an explicit
-"work is likely unfinished" warning. Everything downstream — projection, the user's report card,
-and the parent digest — then behaves exactly as it does for an agent-posted report.
+carrying the termination reason (including the typed `exitReason`), the last tool activity and
+assistant message, and an explicit "work is likely unfinished" warning. Everything downstream —
+projection, the user's report card, and the parent digest — then behaves exactly as it does for
+an agent-posted report.
 
-Two things react to the same terminal `thread.session-set`, and the order is deliberate: the
-delivery-mode queue is cancelled first, so the parent learns its pending messages were dropped
-before the report explaining where the child stopped arrives. They are otherwise independent —
-cancellation is a no-op on an empty queue, and a repeated terminal event re-runs it harmlessly.
+The report is the durable _account of the work_; the **death notice** is the _fact of the death_,
+and they deliberately travel differently. On the same terminal transition the reactor sends the
+parent a message (`formatDeathNotice`) with the typed exit reason, the provider's error text, a
+best-effort git accounting of the worktree (dirty files and unpushed commits, bounded by a 5s
+timeout so a slow status can never delay the news; "could not be inspected" is reported rather
+than read as clean), and where the durable account lives. Three rules keep it honest:
 
-`SessionReport.origin` (`"agent" | "system"`) is what keeps the two honest: a synthesized report
-must never read as the child's own claim that the work is done, so the parent notification says
-Phoenix generated it. Synthesis is once per terminal episode and re-arms when the session comes
-back to life; a thread that already has a report is left alone, because the agent's own account
-wins. The episode is marked only once the report is actually persisted — a terminated session
-emits no further status transition, so marking an episode "handled" on a dispatch that failed
-would strand the parent in silence forever. That in-memory set is only an optimization; the
-persisted `reports` check is what actually prevents duplicates.
+- The notice ignores `reportDelivery` — `notify-only` opts a parent out of report chatter, not out
+  of learning its child died. Silence never means health.
+- It fires even when the child had already reported: an existing report says what the work was,
+  not that the session later died holding it.
+- It is suppressed when the exit reason is `stopped_by_parent` — settle/stop_session must not turn
+  into self-notification, and the synthesized report still lands as the durable record.
+
+To keep one death from double-waking the parent, a system-origin `thread.report-posted` is never
+delivered as a message: the activity/inbox row is written, and the death notice (which names the
+synthesized reportId) is the single wake. Ordering on the terminal event is deliberate: queue
+cancellation first (the parent learns its pending messages were dropped), then the synthesized
+report, then the notice that points at it.
+
+`SessionReport.origin` (`"agent" | "system"`) is what keeps the accounts honest: a synthesized
+report must never read as the child's own claim that the work is done. Synthesis is once per
+terminal episode and re-arms when the session comes back to life. The episode is marked only once
+the report and notice are actually dispatched — a terminated session emits no further status
+transition, so marking an episode "handled" on a dispatch that failed would strand the parent in
+silence forever. That in-memory set is only an optimization; the persisted `reports` check is what
+actually prevents duplicate reports.
+
+## Wedge detection
+
+"Delivered but never consumed" is the wedge signature: a session whose queued message reaches
+`releasing` but never starts a turn is not busy, it is stuck — and it looks identical to busy from
+the outside. The raw receipt now crosses the wire whole (`releasingAt` and `redeliveryCount` on
+`QueuedDeliveryReceipt`), `ping_session` counts stalled releases and dates the oldest unconsumed
+message, and when the recovery sweep's redelivery limit finally cancels a message, the reactor
+messages the parent directly — the error activity alone lands on the wedged child's own thread,
+where nobody who can act on it is looking. A report posted over unconsumed queued messages also
+carries the `formatQueuedReportWarning` line in its delivery, so a parent never mistakes a
+pre-instruction report for an answer.
 
 ## Usage snapshot
 
@@ -469,11 +550,21 @@ matching child, which matters once retention is only capped at 32 instead of 8.
 ## Child-report inbox reads
 
 Posting a report appends a `session-report.posted` activity to the active parent's thread. The web
-inbox is deliberately passive: opening it or navigating to a child emits no command. Only the
-parent's `read_report({ reportId })` for a direct child appends the corresponding
-`session-report.read` activity. Both the activity ID and its command ID are derived from
-`parentThreadId + reportId`, so the orchestration command-receipt table makes concurrent calls and
-event-stream replay return the same receipt rather than write a second consumption event. This
+inbox is deliberately passive: opening it or navigating to a child emits no command. Consumption
+has exactly two writers, and they converge on one receipt:
+
+- the parent's explicit `read_report({ reportId })` for a direct child, and
+- **delivery consumption**: when a parent turn starts on a delivered report message (the reactor
+  minted its message id as `session-report-delivery:<child>:<reportId>`, so the
+  `thread.turn-start-requested` event identifies the report), the reactor appends the same
+  `session-report.read` activity. With queue delivery — the default — the agent receives the full
+  report as its turn input and has no reason to ever call `read_report`; before this path existed,
+  every queue-delivered report sat "unread" forever and the inbox accumulated history instead of
+  showing the unacknowledged set.
+
+Both the activity ID and its command ID are derived from `parentThreadId + reportId`, so the
+orchestration command-receipt table makes concurrent calls, the two acknowledgement paths, and
+event-stream replay all return the same receipt rather than write a second consumption event. This
 keeps consumption event-sourced and avoids materializing the parent's full thread detail just to
 check whether an earlier read exists.
 

@@ -1,4 +1,5 @@
 import {
+  type OrchestrationThread,
   type EnvironmentId,
   type MessageId,
   type ScopedThreadRef,
@@ -117,6 +118,7 @@ import {
   type ParsedPreviewAnnotation,
 } from "~/lib/previewAnnotation";
 import { cn } from "~/lib/utils";
+import { useThreadShell } from "~/state/entities";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
@@ -159,6 +161,8 @@ interface TimelineRowSharedState {
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
   onOpenThread: (threadId: string) => void;
+  /** Messages delivered to this thread's queue that no turn has consumed yet. */
+  pendingDeliveries: ReadonlyMap<string, "queued" | "releasing">;
 }
 
 interface TimelineRowActivityState {
@@ -258,6 +262,8 @@ interface MessagesTimelineProps {
   topFadeEnabled?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
+  /** The thread's undelivered queue, for pending markers on unconsumed messages. */
+  queuedTurnStarts?: OrchestrationThread["queuedTurnStarts"] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +304,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
   loadEarlier = null,
+  queuedTurnStarts = null,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
@@ -529,6 +536,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     };
   }, [timelineViewportElement, rows.length]);
 
+  const pendingDeliveries = useMemo<ReadonlyMap<string, "queued" | "releasing">>(
+    () =>
+      new Map(
+        (queuedTurnStarts ?? []).map((entry) => [
+          entry.messageId as string,
+          entry.releasingAt !== undefined ? ("releasing" as const) : ("queued" as const),
+        ]),
+      ),
+    [queuedTurnStarts],
+  );
+
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
       timestampFormat,
@@ -547,6 +565,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel,
       onOpenAgents,
       onOpenThread,
+      pendingDeliveries,
     }),
     [
       timestampFormat,
@@ -564,6 +583,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel,
       onOpenAgents,
       onOpenThread,
+      pendingDeliveries,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -995,7 +1015,13 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "work-live" ? <LiveWorkEntryTimelineRow row={row} /> : null}
       {row.kind === "work-toggle" ? <WorkGroupToggleTimelineRow row={row} /> : null}
       {row.kind === "turn-fold" ? <TurnFoldTimelineRow row={row} /> : null}
-      {row.kind === "message" && row.message.role === "user" ? <UserTimelineRow row={row} /> : null}
+      {row.kind === "message" && row.message.role === "user" ? (
+        row.message.origin !== undefined ? (
+          <SessionOriginMessageRow row={row} />
+        ) : (
+          <UserTimelineRow row={row} />
+        )
+      ) : null}
       {row.kind === "message" && row.message.role === "assistant" ? (
         <AssistantTimelineRow row={row} />
       ) : null}
@@ -1006,6 +1032,80 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     </div>
   );
 });
+
+/** Small truth line under an unconsumed message: sent is not the same as
+ * heard, and the difference is exactly what the wedge incidents hid. */
+function PendingDeliveryTag({ messageId }: { messageId: string }) {
+  const ctx = use(TimelineRowCtx);
+  const state = ctx.pendingDeliveries.get(messageId);
+  if (state === undefined) return null;
+  return (
+    <span className="text-[11px] text-muted-foreground/80">
+      {state === "releasing"
+        ? "Delivering…"
+        : "Queued — the agent gets this after its current turn"}
+    </span>
+  );
+}
+
+/**
+ * A user-role message another session (or Phoenix itself) authored. Rendered
+ * left-aligned in a bordered card so it can never be mistaken for the
+ * human's own bubble, with a routed header naming the speaker. The body is
+ * the exact text the agent consumed — origin is presentation metadata, never
+ * a rewrite.
+ */
+function SessionOriginMessageRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+  const ctx = use(TimelineRowCtx);
+  const origin = row.message.origin;
+  const linkedShell = useThreadShell(
+    origin?.threadId != null
+      ? ({
+          environmentId: ctx.activeThreadEnvironmentId,
+          threadId: origin.threadId,
+        } as ScopedThreadRef)
+      : null,
+  );
+  if (!origin) return null;
+  const linkedTitle = linkedShell?.title ?? null;
+  const openThreadId = origin.threadId ?? null;
+  const label =
+    origin.kind === "phoenix"
+      ? linkedTitle !== null
+        ? `Phoenix · about ${linkedTitle}`
+        : "Phoenix"
+      : (linkedTitle ?? "Another session");
+
+  return (
+    <div className="group flex flex-col items-start gap-1">
+      <div className="relative max-w-[85%] rounded-2xl border border-border/60 bg-card/60 p-3">
+        {openThreadId !== null ? (
+          <button
+            type="button"
+            onClick={() => ctx.onOpenThread(openThreadId)}
+            className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <BotIcon aria-hidden className="size-3.5 shrink-0" />
+            <span className="min-w-0 truncate">{label}</span>
+            <span className="text-info-foreground">▸</span>
+          </button>
+        ) : (
+          <span className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <BotIcon aria-hidden className="size-3.5 shrink-0" />
+            <span className="min-w-0 truncate">{label}</span>
+          </span>
+        )}
+        <CollapsibleUserMessageBody
+          text={row.message.text}
+          terminalContexts={[]}
+          skills={ctx.skills}
+          markdownCwd={ctx.markdownCwd}
+        />
+      </div>
+      <PendingDeliveryTag messageId={row.message.id} />
+    </div>
+  );
+}
 
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
@@ -1089,6 +1189,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           markdownCwd={ctx.markdownCwd}
         />
       </div>
+      <PendingDeliveryTag messageId={row.message.id} />
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
@@ -2709,6 +2810,87 @@ const SessionSpawnCtaRow = memo(function SessionSpawnCtaRow(props: {
   );
 });
 
+/** Inter-session message rows (`send_to_session` down, `send_to_parent` up):
+ * the other two verbs of the session conversation get the same routed chrome
+ * as spawn, so the whole exchange reads as one system in the timeline. */
+const SessionMessageCtaRow = memo(function SessionMessageCtaRow(props: {
+  workEntry: TimelineWorkEntry;
+}) {
+  const { workEntry } = props;
+  const { onOpenThread } = use(TimelineRowCtx);
+  const message = workEntry.sessionMessage;
+  if (!message) {
+    return null;
+  }
+
+  const failed =
+    workEntry.tone === "error" ||
+    workEntry.toolLifecycleStatus === "failed" ||
+    workEntry.toolLifecycleStatus === "declined" ||
+    workEntry.toolLifecycleStatus === "stopped";
+  const toParent = message.direction === "to-parent";
+  const canOpen = !failed && message.threadId !== undefined;
+  const openThreadId = canOpen ? message.threadId : null;
+  const sending = !failed && !canOpen;
+  const lead = failed
+    ? toParent
+      ? "Failed to message parent"
+      : "Failed to message session"
+    : toParent
+      ? "Messaged parent"
+      : "Messaged session";
+  const trailing = failed
+    ? "failed"
+    : sending
+      ? "sending"
+      : toParent && message.awaitingReply === true
+        ? "✓ sent · awaiting reply"
+        : "✓ sent";
+  const className =
+    "-mx-1 flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px]";
+  const content = (
+    <>
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          failed ? "bg-destructive" : sending ? "bg-info" : "bg-success",
+        )}
+      />
+      <WorkEntryIconSvg name="message-circle" className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate">
+        <span className="font-medium">{lead}</span>
+        {message.preview ? (
+          <span className="text-muted-foreground"> · {message.preview}</span>
+        ) : null}
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
+        <span>{trailing}</span>
+        {canOpen ? <span className="text-info-foreground">Open ▸</span> : null}
+      </span>
+    </>
+  );
+
+  if (!openThreadId) {
+    return (
+      <div role="status" className={className}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpenThread(openThreadId)}
+      aria-label={toParent ? "Open parent session" : "Open messaged session"}
+      className={cn(className, "transition hover:bg-accent/50")}
+    >
+      {content}
+    </button>
+  );
+});
+
 /** Next run in the Schedule's own zone — the answer to "when does this fire?". */
 function formatScheduleNextRun(instant: string | null, timeZone: string): string | null {
   if (!instant) return null;
@@ -2800,6 +2982,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   }
   if (workEntry.spawnedSession) {
     return <SessionSpawnCtaRow workEntry={workEntry} />;
+  }
+  if (workEntry.sessionMessage) {
+    return <SessionMessageCtaRow workEntry={workEntry} />;
   }
   // A failed write changed nothing, so it falls through to the generic row,
   // where the error text is already visible on expand.

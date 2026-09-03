@@ -374,6 +374,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               updatedAt: "2026-02-24T00:00:05.000Z",
             },
           ],
+          queuedTurnStarts: [],
           proposedPlans: [
             {
               id: "plan-1",
@@ -512,6 +513,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinnedAt: "2026-02-24T00:00:01.000Z",
           pinOrderKey: "gm",
           titleRegeneration: null,
+          awaitingParentReplySince: null,
           session: {
             threadId: ThreadId.make("thread-1"),
             status: "running",

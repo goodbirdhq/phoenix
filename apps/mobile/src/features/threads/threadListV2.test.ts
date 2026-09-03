@@ -193,6 +193,30 @@ describe("resolveThreadListV2Status", () => {
       "ready",
     );
   });
+
+  it("reads a spawned thread blocked on its parent as awaiting-parent, under live states", () => {
+    const blocked = makeThread({
+      id: ThreadId.make("t"),
+      title: "t",
+      awaitingParentReplySince: NOW,
+    });
+    expect(resolveThreadListV2Status(blocked)).toBe("awaiting-parent");
+    expect(
+      resolveThreadListV2Status({
+        ...blocked,
+        session: {
+          threadId: ThreadId.make("t"),
+          status: "running",
+          providerName: "Codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: NOW,
+        },
+      }),
+    ).toBe("working");
+  });
 });
 
 describe("resolveThreadListV2SwipeActions", () => {
