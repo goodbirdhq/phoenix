@@ -189,6 +189,32 @@ describe("derivePendingApprovals", () => {
     ]);
   });
 
+  it("keeps legacy unknown requests actionable so they can be dismissed", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "approval-open-unknown",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "approval.requested",
+        summary: "Approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "req-unknown-tool",
+          requestType: "unknown",
+          detail: "glob: apps/server/src/**",
+        },
+      }),
+    ];
+
+    expect(derivePendingApprovals(activities)).toEqual([
+      {
+        requestId: "req-unknown-tool",
+        requestKind: "command",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        detail: "glob: apps/server/src/**",
+      },
+    ]);
+  });
+
   it("clears stale pending approvals when provider reports unknown pending request", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

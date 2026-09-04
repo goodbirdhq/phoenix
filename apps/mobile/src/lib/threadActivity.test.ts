@@ -194,6 +194,52 @@ describe("pending approvals", () => {
 
     expect(derivePendingApprovals([requested, resolved])).toEqual([]);
   });
+
+  it("keeps legacy unknown requests actionable so they can be dismissed", () => {
+    const activity = makeActivity({
+      id: EventId.make("approval-unknown-tool"),
+      kind: "approval.requested",
+      summary: "Approval requested",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      payload: {
+        requestId: "req-unknown-tool",
+        requestType: "unknown",
+        detail: "glob: apps/server/src/**",
+      },
+    });
+
+    expect(derivePendingApprovals([activity])).toEqual([
+      {
+        requestId: "req-unknown-tool",
+        requestKind: "command",
+        createdAt: "2026-08-24T00:00:00.000Z",
+        detail: "glob: apps/server/src/**",
+      },
+    ]);
+  });
+
+  it("derives dynamic tool requests as actionable generic approvals", () => {
+    const activity = makeActivity({
+      id: EventId.make("approval-dynamic-tool"),
+      kind: "approval.requested",
+      summary: "Approval requested",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      payload: {
+        requestId: "req-dynamic-tool",
+        requestType: "dynamic_tool_call",
+        detail: "Search the web",
+      },
+    });
+
+    expect(derivePendingApprovals([activity])).toEqual([
+      {
+        requestId: "req-dynamic-tool",
+        requestKind: "command",
+        createdAt: "2026-08-24T00:00:00.000Z",
+        detail: "Search the web",
+      },
+    ]);
+  });
 });
 
 function makeActivity(

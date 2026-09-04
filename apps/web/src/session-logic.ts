@@ -424,6 +424,11 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
       return "file-change";
     case "mcp_elicitation_approval":
       return "mcp-elicitation";
+    case "unknown":
+      // Older servers classified extensible provider permissions (for
+      // example OpenCode's glob/grep permissions) as unknown. They share the
+      // generic approval response contract and must stay dismissible.
+      return "command";
     default:
       return null;
   }

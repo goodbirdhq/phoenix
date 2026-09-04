@@ -177,6 +177,7 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
   switch (requestType) {
     case "command_execution_approval":
     case "exec_command_approval":
+    case "dynamic_tool_call":
       return "command";
     case "file_read_approval":
       return "file-read";
@@ -185,6 +186,10 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
       return "file-change";
     case "mcp_elicitation_approval":
       return "mcp-elicitation";
+    case "unknown":
+      // Backward compatibility for extensible provider permissions written
+      // by older servers: keep the request visible so the user can respond.
+      return "command";
     default:
       return null;
   }

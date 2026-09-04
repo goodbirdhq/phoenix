@@ -652,6 +652,43 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("keeps unclassified OpenCode permissions actionable", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-generic-permission");
+      runtimeMock.state.subscribedEvents = [
+        {
+          type: "permission.asked",
+          properties: {
+            id: "permission-glob-1",
+            sessionID: openCodeSessionId,
+            permission: "glob",
+            patterns: ["apps/server/src/**"],
+            metadata: {},
+          },
+        },
+      ];
+      const eventFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "request.opened"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "approval-required",
+      });
+
+      const event = yield* Fiber.join(eventFiber).pipe(Effect.timeout("1 second"));
+      yield* adapter.stopSession(threadId);
+      NodeAssert.equal(event._tag, "Some");
+      if (event._tag === "Some" && event.value.type === "request.opened") {
+        NodeAssert.equal(event.value.payload.requestType, "dynamic_tool_call");
+      }
+    }),
+  );
+
   it.effect("clears session state even when cleanup finalizers throw", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
