@@ -11,7 +11,9 @@ import {
   type ScheduleToolActivity,
 } from "@t3tools/shared/scheduleToolActivity";
 import {
+  deriveSessionMessageToolActivity,
   deriveSpawnedSessionToolActivity,
+  type SessionMessageToolActivity,
   type SpawnedSessionToolActivity,
 } from "@t3tools/shared/toolActivity";
 import {
@@ -102,6 +104,8 @@ export interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   /** Dedicated presentation for Phoenix `spawn_session` MCP calls. */
   spawnedSession?: SpawnedSessionToolActivity;
+  /** Dedicated presentation for Phoenix `send_to_session`/`send_to_parent` MCP calls. */
+  sessionMessage?: SessionMessageToolActivity;
   /** Dedicated presentation for Phoenix Schedule write MCP calls. */
   scheduleActivity?: ScheduleToolActivity;
   /** Dedicated presentation for Phoenix `list_session_providers` MCP calls. */
@@ -348,11 +352,13 @@ export function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
 
 /** Tool-like row with neither clear success nor failure (empty, incomplete, in progress, etc.). */
 export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolean {
-  // Spawn CTA rows are never neutral-hidden: their in-progress lifecycle is
-  // exactly when the user needs the route/status affordance most.
+  // Dedicated CTA/receipt rows are never neutral-hidden: their
+  // in-progress lifecycle is exactly when the user needs the route/status
+  // affordance most.
   if (
     entry.agentSpawn !== undefined ||
     entry.spawnedSession !== undefined ||
+    entry.sessionMessage !== undefined ||
     entry.scheduleActivity !== undefined ||
     entry.providerListActivity !== undefined
   ) {
@@ -1036,6 +1042,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const spawnedSession = deriveSpawnedSessionToolActivity(data);
     if (spawnedSession) {
       entry.spawnedSession = spawnedSession;
+    }
+    const sessionMessage = deriveSessionMessageToolActivity(data);
+    if (sessionMessage) {
+      entry.sessionMessage = sessionMessage;
     }
     const scheduleActivity = deriveScheduleToolActivity(data);
     if (scheduleActivity) {

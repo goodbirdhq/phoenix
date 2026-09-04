@@ -24,6 +24,7 @@ import {
 const EMPTY_THREADS: ReadonlyArray<OrchestrationThreadShell> = Object.freeze([]);
 const EMPTY_SCOPED_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_THREAD_INDEX: ReadonlyMap<ThreadId, OrchestrationThreadShell> = new Map();
+const EMPTY_THREAD_TITLES: ReadonlyMap<ThreadId, string> = new Map();
 const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ProjectId,
   ReadonlyArray<ScopedThreadRef>
@@ -63,6 +64,25 @@ export function createEnvironmentThreadShellAtoms(input: {
       return new Map(threads.map((thread) => [thread.id, thread] as const));
     }).pipe(Atom.withLabel(`environment-thread-index:${environmentId}`)),
   );
+
+  const environmentThreadTitlesAtom = Atom.family((environmentId: EnvironmentId) => {
+    let previous: ReadonlyMap<ThreadId, string> = EMPTY_THREAD_TITLES;
+    return Atom.make((get) => {
+      const next = new Map(
+        get(environmentThreadsAtom(environmentId)).map(
+          (thread) => [thread.id, thread.title] as const,
+        ),
+      );
+      if (
+        previous.size === next.size &&
+        [...next].every(([threadId, title]) => previous.get(threadId) === title)
+      ) {
+        return previous;
+      }
+      previous = next.size === 0 ? EMPTY_THREAD_TITLES : next;
+      return previous;
+    }).pipe(Atom.withLabel(`environment-thread-titles:${environmentId}`));
+  });
 
   const environmentThreadRefsAtom = Atom.family((environmentId: EnvironmentId) => {
     let previous: ReadonlyArray<ScopedThreadRef> = [];
@@ -245,6 +265,7 @@ export function createEnvironmentThreadShellAtoms(input: {
   return {
     environmentThreadsAtom,
     environmentThreadIndexAtom,
+    environmentThreadTitlesAtom,
     environmentThreadRefsAtom,
     environmentThreadRefsByProjectAtom,
     threadRefsAtom,

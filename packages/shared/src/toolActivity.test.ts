@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  deriveSessionMessageToolActivity,
   deriveSpawnedSessionToolActivity,
   deriveToolActivityPresentation,
 } from "./toolActivity.ts";
@@ -149,5 +150,96 @@ describe("toolActivity", () => {
     ).toEqual({
       summary: "Read file",
     });
+  });
+});
+
+describe("deriveSessionMessageToolActivity", () => {
+  it("recognizes a downward send with the target in the arguments", () => {
+    expect(
+      deriveSessionMessageToolActivity({
+        item: {
+          type: "mcpToolCall",
+          server: "phoenix",
+          tool: "send_to_session",
+          arguments: {
+            threadId: "child-thread",
+            message: "Focus on the retention ledger first.\nThen the inbox.",
+          },
+        },
+      }),
+    ).toEqual({
+      direction: "to-child",
+      threadId: "child-thread",
+      preview: "Focus on the retention ledger first.",
+    });
+  });
+
+  it("recognizes an upward send, taking the parent id from the result", () => {
+    const input = {
+      toolName: "mcp__phoenix__send_to_parent",
+      input: { message: "Which SHA is master?", awaitingReply: true },
+    };
+    // In flight: no target yet, but the direction and preview already render.
+    expect(deriveSessionMessageToolActivity(input)).toEqual({
+      direction: "to-parent",
+      preview: "Which SHA is master?",
+      awaitingReply: true,
+    });
+    expect(
+      deriveSessionMessageToolActivity({
+        ...input,
+        result: {
+          type: "tool_result",
+          content: JSON.stringify({
+            parentThreadId: "parent-thread",
+            delivery: "queued",
+            awaitingReply: true,
+          }),
+        },
+      }),
+    ).toEqual({
+      direction: "to-parent",
+      threadId: "parent-thread",
+      preview: "Which SHA is master?",
+      awaitingReply: true,
+    });
+  });
+
+  it("prefers the server-side sessionMessage carry over raw payload fields", () => {
+    expect(
+      deriveSessionMessageToolActivity({
+        toolName: "mcp__phoenix__send_to_parent",
+        input: { message: "raw message" },
+        sessionMessage: {
+          direction: "to-parent",
+          threadId: "parent-thread",
+          preview: "carried preview",
+          awaitingReply: false,
+        },
+      }),
+    ).toEqual({
+      direction: "to-parent",
+      threadId: "parent-thread",
+      preview: "carried preview",
+      awaitingReply: false,
+    });
+  });
+
+  it("truncates the preview to one row-sized line", () => {
+    const derived = deriveSessionMessageToolActivity({
+      toolName: "mcp__phoenix__send_to_session",
+      input: { threadId: "child-thread", message: "x".repeat(200) },
+    });
+    expect(derived?.preview).toHaveLength(84);
+    expect(derived?.preview?.endsWith("…")).toBe(true);
+  });
+
+  it("ignores every other MCP tool", () => {
+    expect(
+      deriveSessionMessageToolActivity({
+        toolName: "mcp__phoenix__spawn_session",
+        input: { message: "not a message tool" },
+      }),
+    ).toBeUndefined();
   });
 });

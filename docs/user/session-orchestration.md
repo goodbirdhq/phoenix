@@ -24,10 +24,19 @@ Every session has tools for orchestration alongside its other Phoenix tools:
   under the session that started them — see [Organizing threads](./thread-sidebar.md).
 - **Message, read, and stop** — a session can send follow-ups to sessions it spawned, check their
   progress, and stop them. It cannot touch threads it did not spawn.
+- **Message the parent back** — a spawned session can also raise its hand mid-work: ask a question,
+  flag a blocker, or send an important update to the session that spawned it, without misusing its
+  completion report as a chat channel. The message arrives like any other — waking an idle parent,
+  or after the current turn of a busy one — and is always clearly marked as coming from an agent
+  session, not from you. A child that cannot proceed without an answer can say so, and shows up as
+  blocked-awaiting-reply when its parent checks on it.
 - **Ping without disturbing** — a session can peek at a spawned session's live progress (status,
   current activity, plan step, whether a report has landed, and a best-effort usage snapshot —
   tokens, turn count, elapsed time) without starting a turn or interrupting it, for a cheap check
-  between messages.
+  between messages. The same peek distinguishes busy from stuck: it shows when messages have been
+  delivered to a session that never picks them up (Phoenix retries, then cancels and tells the
+  parent the session looks wedged), and after a session ends it names the reason it ended — quota
+  exhausted, crashed, stopped, and by whom.
 - **Post a report** — when a spawned session finishes, it posts a completion report: a status, a
   summary, and any artifacts (files, branches, PR links). The report shows as a card in the thread,
   and creates a visible report update in the spawning thread — no polling and no surprise agent
@@ -35,10 +44,12 @@ Every session has tools for orchestration alongside its other Phoenix tools:
   or session when it is ready to act. The report also carries the same usage snapshot, captured at
   the moment it was posted, so the spawning session can see what the work cost.
 
-  Opening the report inbox or a child thread does not mark a report as read. An update clears only
-  when the parent agent reads that exact report. Both the report and that read activity stay in the
-  session history. The parent can still read a direct child's report after the child is archived;
-  archived sibling reports are not available through this shortcut.
+  The report inbox shows only what the spawning agent has not yet taken in. An update clears once
+  the agent actually receives the report — in the turn that delivers it, or by reading it
+  explicitly — and never because you opened the inbox or peeked at a child thread. Both the report
+  and that read activity stay in the session history. The parent can still read a direct child's
+  report after the child is archived; archived sibling reports are not available through this
+  shortcut.
 
 - **Settle a session** — once the spawning session is done with a child, it marks it settled so the
   thread stops counting as live work — this is also what frees the spawn slot, once the child's
@@ -55,10 +66,14 @@ Every session has tools for orchestration alongside its other Phoenix tools:
   leave it be) instead if you just want it out of the way for now. Archiving an already-archived
   child is a no-op, not an error, so retrying is always safe.
 
-If a spawned session is stopped or hits a provider error before it reports, Phoenix writes the
-report for it: why it ended, what it was last doing, and a warning that the work is probably
-unfinished. Those reports are labelled as Phoenix-generated, so you and the spawning session can
-always tell them apart from a report the agent actually wrote.
+A spawned session never dies silently. If its process ends for any reason the spawning session did
+not cause — quota exhaustion, a crash, a stop from the UI — the spawning session is told
+immediately: why it ended, and whether its worktree still holds uncommitted or unpushed work that
+exists nowhere else. This happens even for children spawned in quiet notify-only mode; opting out
+of report chatter is not opting out of learning a child died. If the session also never posted a
+report, Phoenix writes one for it: why it ended, what it was last doing, and a warning that the
+work is probably unfinished. Those reports are labelled as Phoenix-generated, so you and the
+spawning session can always tell them apart from a report the agent actually wrote.
 
 Deleting a worktree is permanent. Phoenix refuses if the worktree still holds uncommitted changes
 or commits that exist nowhere else, and tells the session exactly what is at risk; the session has
@@ -79,14 +94,33 @@ Everything a session spawns is also visible to you, not just to the agent that s
 right-hand panel and choose **Sessions** to see that thread's own roster:
 
 - **Active** lists the sessions still in play — what each one is working on, whether it is waiting
-  on you, and its provider, model, and branch.
+  on you, and its provider, model, and branch. A session that asked its spawning session a question
+  and cannot proceed shows as **Awaiting reply**, with how long it has been blocked; a session that
+  died shows why — quota exhausted, crashed, stopped and by whom — not just that it stopped.
 - **Settled** is the history: the sessions that finished, and whether their worktree has been
   reclaimed (a session whose worktree is gone cannot be resumed). Archiving a session removes it
   from this list, as it does from the sidebar.
 
+A blocked session is also visible outside the panel: its own row in the sidebar (and in the mobile
+thread list) is labelled **Waiting on parent** until a reply — from its parent or from you —
+reaches it.
+
 Every row opens that session's chat, so you can drop into a spawned session, read what it did, and
 come back. The panel is per thread — it shows the sessions that thread spawned, not every session
-in the environment. A spawn also leaves a row in the chat itself, which links to the same place.
+in the environment.
+
+Messages between sessions are attributed in the chat, on every platform: a message another
+session sent into a thread renders as its own card naming the speaker ("the parent session, a
+child, or Phoenix itself for death and wedge notices") and routes to that session — it never
+looks like something you typed. A message that has not reached the agent yet — yours or another
+session's — carries a small "queued — delivers after the current turn" marker until the agent
+actually takes it in, and the mailbox lists everything still waiting alongside unread reports.
+
+The conversation between sessions is also visible in the chat itself, on every platform. A spawn
+leaves a "Spawned session" row that links to the child; a message sent to a spawned session leaves
+a "Messaged session" row with a preview of what was said; and a spawned session's question to its
+parent leaves a "Messaged parent" row (marked when it is blocked awaiting the answer). Each row
+routes to the other end of the exchange — on mobile, tap the row to jump into that session.
 
 ## Limits
 

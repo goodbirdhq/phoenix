@@ -277,6 +277,7 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
   useProjects,
+  useEnvironmentThreadTitles,
   useThread,
   useThreadRefs,
   useThreadShell,
@@ -1290,6 +1291,7 @@ function ChatViewContent(props: ChatViewProps) {
     reserveTitleBarControlInset = true,
     forceExpandedMobileComposer = false,
   } = props;
+  const threadTitles = useEnvironmentThreadTitles(environmentId);
   const draftId = routeKind === "draft" ? props.draftId : null;
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
@@ -7137,6 +7139,7 @@ function ChatViewContent(props: ChatViewProps) {
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
                 loadEarlier={loadEarlierTurns}
+                queuedTurnStarts={activeThread.queuedTurnStarts ?? null}
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
@@ -7206,6 +7209,9 @@ function ChatViewContent(props: ChatViewProps) {
                   {isServerThread ? (
                     <SessionReportDigest
                       activities={threadActivities}
+                      queuedTurnStarts={activeThread.queuedTurnStarts ?? null}
+                      messages={activeThread.messages}
+                      threadTitles={threadTitles}
                       onOpenChildThread={(childThreadId) => {
                         void navigate({
                           to: "/$environmentId/$threadId",

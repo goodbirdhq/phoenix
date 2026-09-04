@@ -16,6 +16,7 @@ import {
   OrchestrationSessionStatus,
   ProviderInteractionMode,
   RuntimeMode,
+  SessionExitReason,
   SessionReport,
   SessionReportArtifact,
   SessionReportDelivery,
@@ -180,6 +181,25 @@ export const SendToSessionResult = Schema.Struct({
 });
 export type SendToSessionResult = typeof SendToSessionResult.Type;
 
+export const SendToParentInput = Schema.Struct({
+  message: TrimmedNonEmptyString.check(Schema.isMaxLength(65_536)),
+  // Marks this session as blocked on the parent's answer. Surfaced to the
+  // parent in ping_session/list_sessions as awaitingParentReplySince, and
+  // cleared the moment any new message starts a turn on this session.
+  awaitingReply: Schema.optional(Schema.Boolean),
+});
+export type SendToParentInput = typeof SendToParentInput.Type;
+
+export const SendToParentResult = Schema.Struct({
+  parentThreadId: ThreadId,
+  // Same vocabulary as send_to_session, and the same physics: "immediate"
+  // means the parent was idle and this message started its turn; "queued"
+  // means the parent is mid-turn and receives it at the next turn boundary.
+  delivery: Schema.Literals(["immediate", "queued", "unknown"]),
+  awaitingReply: Schema.Boolean,
+});
+export type SendToParentResult = typeof SendToParentResult.Type;
+
 export const ReadSessionInput = Schema.Struct({
   threadId: ThreadId,
   // How many trailing messages to include. 0 returns status only.
@@ -199,6 +219,14 @@ export const QueuedDeliveryReceipt = Schema.Struct({
   messageId: MessageId,
   state: Schema.Literals(["queued", "releasing", "consumed", "cancelled"]),
   requestedAt: IsoDateTime,
+  // When the release began, for receipts still in "releasing". A release
+  // that has sat here while the session claims to be busy is the wedge
+  // signature: delivered, but no turn ever consumed it.
+  releasingAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  // How many times delivery was retried after a stale release. The server
+  // cancels the message at the redelivery limit, so a rising count is a
+  // wedged child announcing itself before the cancel lands.
+  redeliveryCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   consumedByTurnId: Schema.NullOr(TurnId),
   consumedAt: Schema.NullOr(IsoDateTime),
   cancelledAt: Schema.NullOr(IsoDateTime),
@@ -207,6 +235,7 @@ export const QueuedDeliveryReceipt = Schema.Struct({
       "session_terminal",
       "interrupt_timeout",
       "redelivery_limit_reached",
+      "delivery_stalled",
       "legacy_report_notification",
     ]),
   ),
@@ -381,6 +410,12 @@ export const SessionListEntry = Schema.Struct({
   // remaining option.
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   modelSelection: ModelSelection,
+  // Same signal as ping_session's field: this child is blocked waiting for
+  // an answer from the calling session. The list-level view exists so "which
+  // children are waiting on me" is one call, not one ping per child.
+  awaitingParentReplySince: Schema.NullOr(IsoDateTime).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   createdAt: IsoDateTime,
 });
 export type SessionListEntry = typeof SessionListEntry.Type;
@@ -566,6 +601,37 @@ export const PingSessionResult = Schema.Struct({
   usage: Schema.optional(SessionUsageSnapshot),
   pendingQueuedCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   mostRecentDeliveryReceipt: Schema.NullOr(QueuedDeliveryReceipt).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  // Deliveries stuck in "releasing": handed to the provider but never
+  // consumed by a turn. One of these aging past ~30s while the session
+  // claims to be busy is the wedge signature — the server retries and then
+  // cancels at its redelivery limit, notifying this parent when it does.
+  stalledDeliveryCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  // When the oldest not-yet-consumed message (queued or releasing) was
+  // requested. A human's message rots in the same lane as a parent's, so
+  // this timestamp aging is the "someone is talking to a wall" signal.
+  oldestUndeliveredMessageAt: Schema.NullOr(IsoDateTime).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  // Why the session's episode ended; null while it is alive. One typed
+  // value derived from the stop audit and error kind, so a parent can react
+  // to quota-death differently from a crash without parsing prose.
+  exitReason: Schema.NullOr(SessionExitReason).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  // The provider's own words for the latest error, when it left any.
+  lastError: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  stoppedBy: Schema.NullOr(SessionStoppedBy).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  stopReason: Schema.NullOr(SessionStopReason).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  // Set while the child's newest send_to_parent message declared
+  // awaitingReply and nothing has started a turn on the child since: the
+  // child is blocked on an answer from this session.
+  awaitingParentReplySince: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
 });
@@ -763,6 +829,11 @@ export class SessionOrchestrationDeniedError extends Schema.TaggedErrorClass<Ses
       "capability_unavailable",
       "disabled_in_settings",
       "not_spawned_by_this_session",
+      // send_to_parent from a session nothing spawned: there is no parent.
+      "not_a_spawned_session",
+      // The parent thread is archived or deleted; the message has no
+      // destination that will ever read it.
+      "parent_not_available",
       "report_not_accessible",
       "spawn_limit_reached",
       "spawn_retention_limit_reached",

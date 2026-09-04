@@ -27,7 +27,9 @@ import {
   type ScheduleToolActivity,
 } from "@t3tools/shared/scheduleToolActivity";
 import {
+  deriveSessionMessageToolActivity,
   deriveSpawnedSessionToolActivity,
+  type SessionMessageToolActivity,
   type SpawnedSessionToolActivity,
 } from "@t3tools/shared/toolActivity";
 import {
@@ -94,6 +96,8 @@ export interface ThreadFeedActivity {
   readonly status: "success" | "failure" | "neutral" | null;
   /** Keep navigation/status affordances visible through work and turn folding. */
   readonly alwaysVisible?: boolean;
+  /** Tap route for rows about another thread (spawned child, messaged session/parent). */
+  readonly openThreadId?: string;
 }
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
@@ -116,6 +120,7 @@ interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   toolData?: unknown;
   spawnedSession?: SpawnedSessionToolActivity;
+  sessionMessage?: SessionMessageToolActivity;
   scheduleActivity?: ScheduleToolActivity;
   providerListActivity?: ProviderListToolActivity;
   /** Set on rows that collapsed a run of provider retry notices. */
@@ -475,6 +480,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (spawnedSession) {
       entry.spawnedSession = spawnedSession;
     }
+    const sessionMessage = deriveSessionMessageToolActivity(data);
+    if (sessionMessage) {
+      entry.sessionMessage = sessionMessage;
+    }
     const scheduleActivity = deriveScheduleToolActivity(data);
     if (scheduleActivity) {
       entry.scheduleActivity = scheduleActivity;
@@ -643,6 +652,9 @@ function mergeDerivedWorkLogEntries(
   const spawnedSession = next.spawnedSession
     ? { ...previous.spawnedSession, ...next.spawnedSession }
     : previous.spawnedSession;
+  const sessionMessage = next.sessionMessage
+    ? { ...previous.sessionMessage, ...next.sessionMessage }
+    : previous.sessionMessage;
   const scheduleActivity = next.scheduleActivity ?? previous.scheduleActivity;
   const providerListActivity = next.providerListActivity ?? previous.providerListActivity;
   return {
@@ -659,6 +671,7 @@ function mergeDerivedWorkLogEntries(
     ...(toolLifecycleStatus ? { toolLifecycleStatus } : {}),
     ...(toolData !== undefined ? { toolData } : {}),
     ...(spawnedSession !== undefined ? { spawnedSession } : {}),
+    ...(sessionMessage !== undefined ? { sessionMessage } : {}),
     ...(scheduleActivity !== undefined ? { scheduleActivity } : {}),
     ...(providerListActivity !== undefined ? { providerListActivity } : {}),
   };
@@ -693,7 +706,7 @@ function normalizeCompactToolLabel(value: string): string {
 }
 
 function workLogEntryIsToolLike(entry: WorkLogEntry): boolean {
-  if (entry.spawnedSession) {
+  if (entry.spawnedSession || entry.sessionMessage) {
     return false;
   }
   if (entry.tone === "tool" || entry.tone === "thinking" || entry.tone === "error") {
@@ -775,6 +788,14 @@ function workEntryStatus(entry: WorkLogEntry): ThreadFeedActivity["status"] {
   return "neutral";
 }
 
+/** The thread a row routes to on tap — never a failed call's stale target. */
+function workEntryOpenThreadId(entry: WorkLogEntry): string | undefined {
+  if (workEntryFailed(entry)) {
+    return undefined;
+  }
+  return entry.spawnedSession?.threadId ?? entry.sessionMessage?.threadId;
+}
+
 function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
   if (
     entry.activityKind === "user-input.requested" ||
@@ -787,6 +808,7 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
   }
   if (entry.activityKind === "runtime.warning") return "warning";
   if (entry.spawnedSession) return "agent";
+  if (entry.sessionMessage) return "message";
   if (entry.scheduleActivity) return "calendar";
   if (entry.providerListActivity) return "wrench";
   if (entry.requestKind === "command") return "command";
@@ -871,6 +893,7 @@ function workEntryPreview(
     | "command"
     | "changedFiles"
     | "spawnedSession"
+    | "sessionMessage"
     | "scheduleActivity"
     | "providerListActivity"
   >,
@@ -883,6 +906,7 @@ function workEntryPreview(
     return formatProviderListPreview(workEntry.providerListActivity);
   }
   if (workEntry.spawnedSession) return workEntry.spawnedSession.title;
+  if (workEntry.sessionMessage?.preview) return workEntry.sessionMessage.preview;
   if (workEntry.command) return workEntry.command;
   if (workEntry.detail) return workEntry.detail;
   if ((workEntry.changedFiles?.length ?? 0) === 0) return null;
@@ -925,6 +949,16 @@ function workEntryHeading(workEntry: WorkLogEntry): string {
       return "Failed to spawn session";
     }
     return workEntry.spawnedSession.threadId ? "Spawned session" : "Spawning session";
+  }
+  if (workEntry.sessionMessage) {
+    const toParent = workEntry.sessionMessage.direction === "to-parent";
+    if (workEntryFailed(workEntry)) {
+      return toParent ? "Failed to message parent" : "Failed to message session";
+    }
+    if (toParent && workEntry.sessionMessage.awaitingReply === true) {
+      return "Messaged parent · awaiting reply";
+    }
+    return toParent ? "Messaged parent" : "Messaged session";
   }
   if (!workEntry.toolTitle) {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
@@ -1828,8 +1862,12 @@ export function buildThreadFeed(
               status: workEntryStatus(entry),
               alwaysVisible:
                 entry.spawnedSession !== undefined ||
+                entry.sessionMessage !== undefined ||
                 entry.scheduleActivity !== undefined ||
                 entry.providerListActivity !== undefined,
+              ...(workEntryOpenThreadId(entry) !== undefined
+                ? { openThreadId: workEntryOpenThreadId(entry) }
+                : {}),
             },
           };
         }),

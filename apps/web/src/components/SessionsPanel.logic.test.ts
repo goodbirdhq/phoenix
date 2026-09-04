@@ -151,6 +151,61 @@ describe("buildSessionPanelModel", () => {
     expect(model.active[0]?.lastActivityAt).toBe("2026-08-17T22:38:00.000Z");
   });
 
+  it("reads a child that declared awaitingReply as blocked on this thread", () => {
+    const model = buildSessionPanelModel([
+      shell({
+        id: "a",
+        awaitingParentReplySince: "2026-08-17T22:45:00.000Z",
+        session: { status: "ready" } as never,
+      }),
+    ]);
+
+    expect(model.active[0]?.activity).toBe("awaiting-reply");
+    expect(model.active[0]?.awaitingReplySince).toBe("2026-08-17T22:45:00.000Z");
+    expect(model.awaitingReplyCount).toBe(1);
+  });
+
+  it("lets attention and death outrank an awaiting-reply claim", () => {
+    // Approvals are the harder block (nothing proceeds without the human),
+    // and a dead session is not waiting for anything anymore.
+    const model = buildSessionPanelModel([
+      shell({
+        id: "needs-you",
+        awaitingParentReplySince: "2026-08-17T22:45:00.000Z",
+        hasPendingApprovals: true,
+      }),
+      shell({
+        id: "dead",
+        awaitingParentReplySince: "2026-08-17T22:45:00.000Z",
+        session: { status: "error", lastError: "quota", lastErrorKind: "usage-limit" } as never,
+      }),
+    ]);
+
+    const byId = new Map(model.active.map((entry) => [entry.threadId, entry]));
+    expect(byId.get("needs-you")?.activity).toBe("needs-you");
+    expect(byId.get("dead")?.activity).toBe("error");
+    expect(model.awaitingReplyCount).toBe(0);
+  });
+
+  it("derives a typed exit reason for terminal sessions only", () => {
+    const model = buildSessionPanelModel([
+      shell({
+        id: "quota",
+        session: { status: "error", lastError: "limit hit", lastErrorKind: "usage-limit" } as never,
+      }),
+      shell({
+        id: "stopped",
+        session: { status: "stopped", stoppedBy: "user", lastError: null } as never,
+      }),
+      shell({ id: "alive", session: { status: "running" } as never }),
+    ]);
+
+    const byId = new Map(model.active.map((entry) => [entry.threadId, entry]));
+    expect(byId.get("quota")?.exitReason).toBe("usage_limit");
+    expect(byId.get("stopped")?.exitReason).toBe("stopped_by_user");
+    expect(byId.get("alive")?.exitReason).toBeNull();
+  });
+
   it("returns the shared empty model when nothing was spawned", () => {
     expect(buildSessionPanelModel([]).total).toBe(0);
   });

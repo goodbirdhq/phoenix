@@ -2,7 +2,11 @@ import { EventId, type SessionReportNotificationActivity, ThreadId } from "@t3to
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { SESSION_REPORT_INBOX_PASSIVE_COPY, SessionReportDigest } from "./SessionReportDigest";
+import {
+  derivePendingChats,
+  SESSION_REPORT_INBOX_PASSIVE_COPY,
+  SessionReportDigest,
+} from "./SessionReportDigest";
 
 const reportActivity = {
   id: EventId.make("report-activity"),
@@ -36,13 +40,36 @@ const withReportId = (reportId: string, childThreadId: string) =>
   }) as SessionReportNotificationActivity;
 
 describe("SessionReportDigest", () => {
+  it("names a routed child message from the shared thread-title map", () => {
+    const chats = derivePendingChats(
+      [
+        {
+          messageId: "message-child",
+          mode: "queue",
+          requestedAt: "2026-08-17T00:00:00.000Z",
+        },
+      ] as never,
+      [
+        {
+          id: "message-child",
+          role: "user",
+          text: "Need the SHA",
+          origin: { kind: "session", threadId: "child-thread" },
+        },
+      ] as never,
+      new Map([["child-thread", "Release verifier"]]),
+    );
+
+    expect(chats[0]?.from).toBe("Release verifier");
+  });
+
   it("labels the popover as passive rather than pretending opening it consumes a report", () => {
     const markup = renderToStaticMarkup(
       <SessionReportDigest activities={[reportActivity]} onOpenChildThread={() => undefined} />,
     );
 
     expect(SESSION_REPORT_INBOX_PASSIVE_COPY).toBe(
-      "Opening this inbox or a child thread does not mark a report as read. Only the parent agent's read_report call clears an update.",
+      "Only reports the parent agent has not yet taken in. An update clears once the agent receives the report in a turn or reads it with read_report — opening this inbox or a child thread clears nothing.",
     );
     expect(markup).toContain("Opening this inbox does not mark reports as read.");
   });
@@ -52,7 +79,7 @@ describe("SessionReportDigest", () => {
       <SessionReportDigest activities={[reportActivity]} onOpenChildThread={() => undefined} />,
     );
 
-    expect(markup).toContain("1 child report awaiting parent review");
+    expect(markup).toContain("1 update awaiting this agent");
   });
 
   it("renders nothing when there is no unread report", () => {
@@ -76,7 +103,7 @@ describe("SessionReportDigest", () => {
 
     expect(single).not.toContain(">1</span>");
     expect(many).toContain(">2</span>");
-    expect(many).toContain("2 child reports awaiting parent review");
+    expect(many).toContain("2 updates awaiting this agent");
   });
 
   it("enters with the one-shot animation rather than a looping one", () => {
