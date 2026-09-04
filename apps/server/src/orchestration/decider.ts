@@ -817,6 +817,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const changesProviderInstance =
+        command.modelSelection !== undefined &&
+        command.modelSelection.instanceId !== thread.modelSelection.instanceId;
+      const threadHasStarted =
+        thread.latestTurn !== null || thread.session !== null || thread.messages.length > 0;
+      if (changesProviderInstance && threadHasStarted) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} has started on provider instance ${thread.modelSelection.instanceId}; use thread.migrate to switch to ${command.modelSelection.instanceId}`,
+        });
+      }
       const branch =
         command.branch !== undefined &&
         command.expectedBranch !== undefined &&

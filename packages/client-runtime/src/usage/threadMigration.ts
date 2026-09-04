@@ -1,4 +1,5 @@
 import type {
+  ModelSelection,
   ProviderAvailability,
   ProviderAvailabilityWindow,
   ProviderDriverKind,
@@ -42,6 +43,23 @@ export function resolveThreadBoundInstanceId(input: {
   readonly threadModelSelectionInstanceId: ProviderInstanceId | null | undefined;
 }): ProviderInstanceId | null {
   return input.sessionProviderInstanceId ?? input.threadModelSelectionInstanceId ?? null;
+}
+
+/**
+ * A started thread can cross provider instances only through thread.migrate.
+ * Composer and queued-message snapshots may lag an automatic migration, so a
+ * stale instance selection must follow the durable thread instead of turning
+ * the next send into an implicit account switch.
+ */
+export function resolveNextTurnModelSelection(input: {
+  readonly threadHasStarted: boolean;
+  readonly threadModelSelection: ModelSelection;
+  readonly requestedModelSelection: ModelSelection;
+}): ModelSelection {
+  return input.threadHasStarted &&
+    input.requestedModelSelection.instanceId !== input.threadModelSelection.instanceId
+    ? input.threadModelSelection
+    : input.requestedModelSelection;
 }
 
 export function isProviderUsageLimited(
