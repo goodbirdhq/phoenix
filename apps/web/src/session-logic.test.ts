@@ -19,6 +19,7 @@ import {
   findLatestProposedPlan,
   hasActionableProposedPlan,
   isLatestTurnSettled,
+  workEntryDisplayIndicatesToolFailure,
   workEntryIndicatesToolFailure,
   workEntryIndicatesToolNeutralStatus,
   workEntryIndicatesToolSuccess,
@@ -185,6 +186,32 @@ describe("derivePendingApprovals", () => {
         requestKind: "command",
         createdAt: "2026-02-23T00:00:01.000Z",
         detail: "Search the web",
+      },
+    ]);
+  });
+
+  it("keeps legacy unknown requests actionable so they can be dismissed", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "approval-open-unknown",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "approval.requested",
+        summary: "Approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "req-unknown-tool",
+          requestType: "unknown",
+          detail: "glob: apps/server/src/**",
+        },
+      }),
+    ];
+
+    expect(derivePendingApprovals(activities)).toEqual([
+      {
+        requestId: "req-unknown-tool",
+        requestKind: "command",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        detail: "glob: apps/server/src/**",
       },
     ]);
   });
@@ -764,6 +791,31 @@ describe("workEntryIndicatesToolFailure", () => {
         tone: "tool",
         toolLifecycleStatus: "completed",
         detail: "File not found: C:\\foo\\nonexistent.ts",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not scan partial output while the tool is still running", () => {
+    const running = {
+      ...base,
+      label: "Bash",
+      tone: "tool" as const,
+      toolLifecycleStatus: "inProgress" as const,
+      detail: "grep: missing.txt: No such file or directory",
+    };
+    expect(workEntryIndicatesToolFailure(running)).toBe(false);
+    expect(workEntryDisplayIndicatesToolFailure(running)).toBe(false);
+    expect(workEntryIndicatesToolNeutralStatus(running)).toBe(true);
+  });
+
+  it("still honors an error tone while a tool is running", () => {
+    expect(
+      workEntryIndicatesToolFailure({
+        ...base,
+        label: "Bash",
+        tone: "error",
+        toolLifecycleStatus: "inProgress",
+        detail: "Provider stream aborted",
       }),
     ).toBe(true);
   });
@@ -2436,6 +2488,69 @@ describe("deriveWorkLogEntries schedule writes", () => {
     ]);
 
     expect(entries[0]?.scheduleActivity).toBeUndefined();
+  });
+});
+
+describe("deriveWorkLogEntries provider list", () => {
+  const providerListCarrier = {
+    totalCount: 2,
+    providers: [
+      {
+        instanceId: "claudeAgent",
+        displayName: "Claude A",
+        driver: "claudeAgent",
+        available: true,
+        status: "limited",
+        windows: [{ kind: "weekly", usedPercent: 100 }],
+      },
+      {
+        instanceId: "codex",
+        displayName: "Codex",
+        driver: "codex",
+        available: false,
+        status: "available",
+        windows: [],
+      },
+    ],
+  };
+
+  const providerListActivity = (tool: string, extra: Record<string, unknown> = {}) =>
+    makeActivity({
+      kind: "tool.completed",
+      summary: `phoenix · ${tool}`,
+      payload: {
+        itemType: "mcp_tool_call",
+        data: {
+          item: { type: "mcp_tool_call", server: "phoenix", tool },
+          ...extra,
+        },
+      },
+    });
+
+  it("carries the projected provider list onto the work entry", () => {
+    const entries = deriveWorkLogEntries([
+      providerListActivity("list_session_providers", { providerListActivity: providerListCarrier }),
+    ]);
+
+    expect(entries[0]?.providerListActivity).toEqual(providerListCarrier);
+  });
+
+  it("carries an empty provider list as a zero-state receipt", () => {
+    const entries = deriveWorkLogEntries([
+      providerListActivity("list_session_providers", {
+        providerListActivity: { totalCount: 0, providers: [] },
+      }),
+    ]);
+
+    expect(entries[0]?.providerListActivity).toEqual({ totalCount: 0, providers: [] });
+  });
+
+  it("leaves other session tools as ordinary MCP rows", () => {
+    const entries = deriveWorkLogEntries([
+      providerListActivity("list_sessions", { providerListActivity: providerListCarrier }),
+    ]);
+
+    expect(entries[0]?.providerListActivity).toBeUndefined();
   });
 });
 

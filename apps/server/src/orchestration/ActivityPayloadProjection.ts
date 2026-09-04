@@ -4,8 +4,12 @@ import type {
   OrchestrationThreadDetailSnapshot,
 } from "@t3tools/contracts";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import { deriveProviderListToolActivity } from "@t3tools/shared/providerListToolActivity";
 import { deriveScheduleToolActivity } from "@t3tools/shared/scheduleToolActivity";
-import { deriveSpawnedSessionToolActivity } from "@t3tools/shared/toolActivity";
+import {
+  deriveSessionMessageToolActivity,
+  deriveSpawnedSessionToolActivity,
+} from "@t3tools/shared/toolActivity";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -296,12 +300,40 @@ function projectMcpToolCallData(data: Record<string, unknown>): Record<string, u
     projectedData.spawnedSession = spawnedSession;
   }
 
+  // send_to_session / send_to_parent get the same carve-out: their chat rows
+  // link to the other end of the exchange, and the up direction's target
+  // (parentThreadId) lives only in the result that summarizing destroys.
+  const sessionMessage = deriveSessionMessageToolActivity(data);
+  if (sessionMessage !== undefined) {
+    if (sessionMessage.threadId !== undefined) {
+      projectedData.sessionMessage = sessionMessage;
+    }
+    const projectedItem = asRecord(projectedData.item);
+    const argumentsRecord = asRecord(projectedItem?.arguments);
+    if (projectedItem && argumentsRecord && "message" in argumentsRecord) {
+      const { message: _message, ...safeArguments } = argumentsRecord;
+      projectedItem.arguments = safeArguments;
+    }
+    const inputRecord = asRecord(projectedData.input);
+    if (inputRecord && "message" in inputRecord) {
+      const { message: _message, ...safeInput } = inputRecord;
+      projectedData.input = safeInput;
+    }
+  }
+
   // Same problem, same remedy: a Schedule write's card names the Schedule, its
   // state, and its cadence in plain language, all of which live in the result
   // that summarizing reduces to 84 characters.
   const scheduleActivity = deriveScheduleToolActivity(data);
   if (scheduleActivity !== undefined) {
     projectedData.scheduleActivity = scheduleActivity;
+  }
+
+  // list_session_providers dumps every instance plus its full model catalog.
+  // Summarizing truncates it, so carry the snapshot card fields separately.
+  const providerListActivity = deriveProviderListToolActivity(data);
+  if (providerListActivity !== undefined) {
+    projectedData.providerListActivity = providerListActivity;
   }
 
   const changedFiles: string[] = [];

@@ -13,6 +13,7 @@ import type {
   ScopedProjectRef,
   ScopedThreadRef,
   ServerConfig,
+  ThreadId,
 } from "@t3tools/contracts";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
@@ -81,6 +82,12 @@ export function useServerConfigs(): ReadonlyMap<EnvironmentId, ServerConfig> {
 
 export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.threadShellsAtom);
+}
+
+export function useEnvironmentThreadTitles(
+  environmentId: EnvironmentId,
+): ReadonlyMap<ThreadId, string> {
+  return useAtomValue(environmentThreadShells.environmentThreadTitlesAtom(environmentId));
 }
 
 export function useAllEnvironmentShellsBootstrapped(): boolean {

@@ -1294,3 +1294,108 @@ describe("thread.migrated", () => {
     expect(result.thread.updatedAt).toBe("2026-04-01T02:00:00.000Z");
   });
 });
+
+describe("queued delivery lifecycle", () => {
+  const queuedEvent = (messageId: string, type: string, extra: Record<string, unknown> = {}) =>
+    ({
+      ...baseEventFields,
+      sequence: 10,
+      aggregateKind: "thread",
+      aggregateId: baseThread.id,
+      occurredAt: "2026-04-01T01:00:00.000Z",
+      type,
+      payload: {
+        threadId: baseThread.id,
+        messageId: MessageId.make(messageId),
+        mode: "queue",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: "2026-04-01T01:00:00.000Z",
+        ...extra,
+      },
+    }) as never;
+
+  it("tracks a message from queued through releasing to consumed", () => {
+    const queued = applyThreadDetailEvent(
+      baseThread,
+      queuedEvent("m-1", "thread.turn-start-queued"),
+    );
+    if (queued.kind !== "updated") throw new Error("expected update");
+    expect(queued.thread.queuedTurnStarts).toEqual([
+      { messageId: MessageId.make("m-1"), mode: "queue", requestedAt: "2026-04-01T01:00:00.000Z" },
+    ]);
+
+    const releasing = applyThreadDetailEvent(
+      queued.thread,
+      queuedEvent("m-1", "thread.turn-start-requested", { queuedDelivery: true }),
+    );
+    if (releasing.kind !== "updated") throw new Error("expected update");
+    expect(releasing.thread.queuedTurnStarts?.[0]?.releasingAt).toBe("2026-04-01T01:00:00.000Z");
+
+    const consumed = applyThreadDetailEvent(
+      releasing.thread,
+      queuedEvent("m-1", "thread.turn-start-consumed", {
+        turnId: TurnId.make("turn-1"),
+        consumedAt: "2026-04-01T01:00:01.000Z",
+      }),
+    );
+    if (consumed.kind !== "updated") throw new Error("expected update");
+    expect(consumed.thread.queuedTurnStarts).toEqual([]);
+  });
+
+  it("re-queues a stale release and clears the entry on cancellation", () => {
+    const queued = applyThreadDetailEvent(
+      baseThread,
+      queuedEvent("m-2", "thread.turn-start-queued"),
+    );
+    if (queued.kind !== "updated") throw new Error("expected update");
+    const releasing = applyThreadDetailEvent(
+      queued.thread,
+      queuedEvent("m-2", "thread.turn-start-requested", { queuedDelivery: true }),
+    );
+    if (releasing.kind !== "updated") throw new Error("expected update");
+    const requeued = applyThreadDetailEvent(
+      releasing.thread,
+      queuedEvent("m-2", "thread.turn-start-requeued"),
+    );
+    if (requeued.kind !== "updated") throw new Error("expected update");
+    expect(requeued.thread.queuedTurnStarts?.[0]?.releasingAt).toBeUndefined();
+
+    const cancelled = applyThreadDetailEvent(
+      requeued.thread,
+      queuedEvent("m-2", "thread.turn-start-cancelled", {
+        reason: "session_terminal",
+        cancelledAt: "2026-04-01T01:00:02.000Z",
+      }),
+    );
+    if (cancelled.kind !== "updated") throw new Error("expected update");
+    expect(cancelled.thread.queuedTurnStarts).toEqual([]);
+  });
+
+  it("carries a message's origin into the thread state", () => {
+    const result = applyThreadDetailEvent(baseThread, {
+      ...baseEventFields,
+      sequence: 11,
+      aggregateKind: "thread",
+      aggregateId: baseThread.id,
+      occurredAt: "2026-04-01T01:00:00.000Z",
+      type: "thread.message-sent",
+      payload: {
+        threadId: baseThread.id,
+        messageId: MessageId.make("m-origin"),
+        role: "user",
+        text: "Which SHA?",
+        origin: { kind: "session", threadId: ThreadId.make("child-1") },
+        turnId: null,
+        streaming: false,
+        createdAt: "2026-04-01T01:00:00.000Z",
+        updatedAt: "2026-04-01T01:00:00.000Z",
+      },
+    } as never);
+    if (result.kind !== "updated") throw new Error("expected update");
+    expect(result.thread.messages[0]?.origin).toEqual({
+      kind: "session",
+      threadId: ThreadId.make("child-1"),
+    });
+  });
+});

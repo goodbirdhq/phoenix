@@ -42,6 +42,7 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           last_completed_operation,
           grace_stop_deadline_at,
           grace_stop_episode_id,
+          episode_started_at,
           queued_delivery_message_id,
           updated_at
         )
@@ -61,6 +62,7 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           ${row.lastCompletedOperation},
           ${row.graceStopDeadlineAt},
           ${row.graceStopEpisodeId},
+          ${row.episodeStartedAt},
           ${row.queuedDeliveryMessageId},
           ${row.updatedAt}
         )
@@ -80,6 +82,7 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           last_completed_operation = excluded.last_completed_operation,
           grace_stop_deadline_at = excluded.grace_stop_deadline_at,
           grace_stop_episode_id = excluded.grace_stop_episode_id,
+          episode_started_at = excluded.episode_started_at,
           queued_delivery_message_id = excluded.queued_delivery_message_id,
           updated_at = excluded.updated_at
       `,
@@ -106,6 +109,7 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           last_completed_operation AS "lastCompletedOperation",
           grace_stop_deadline_at AS "graceStopDeadlineAt",
           grace_stop_episode_id AS "graceStopEpisodeId",
+          episode_started_at AS "episodeStartedAt",
           queued_delivery_message_id AS "queuedDeliveryMessageId",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions

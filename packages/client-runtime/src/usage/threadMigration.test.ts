@@ -11,6 +11,7 @@ import {
   deriveMigrationModeAvailability,
   findFailedTurnUserMessage,
   rankMigrationTargets,
+  resolveNextTurnModelSelection,
   resolveThreadBoundInstanceId,
   isProviderUsageLimitedForModel,
   modelUsageLimitWindows,
@@ -26,6 +27,32 @@ const availability = (usedPercent: number): ProviderAvailability => ({
 });
 
 describe("thread migration derivations", () => {
+  it("ignores a stale cross-account selection after a thread has migrated", () => {
+    const threadModelSelection = {
+      instanceId: ProviderInstanceId.make("claude-primary"),
+      model: "claude-fable-5",
+    };
+    const staleComposerSelection = {
+      instanceId: ProviderInstanceId.make("claude-spare"),
+      model: "claude-fable-5",
+    };
+
+    expect(
+      resolveNextTurnModelSelection({
+        threadHasStarted: true,
+        threadModelSelection,
+        requestedModelSelection: staleComposerSelection,
+      }),
+    ).toBe(threadModelSelection);
+    expect(
+      resolveNextTurnModelSelection({
+        threadHasStarted: false,
+        threadModelSelection,
+        requestedModelSelection: staleComposerSelection,
+      }),
+    ).toBe(staleComposerSelection);
+  });
+
   it("binds to the live session before the persisted picker selection", () => {
     expect(
       resolveThreadBoundInstanceId({

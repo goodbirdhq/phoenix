@@ -8,11 +8,17 @@ import {
   isWorktreeSetupActivity,
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
+  deriveProviderListToolActivity,
+  type ProviderListToolActivity,
+} from "@t3tools/shared/providerListToolActivity";
+import {
   deriveScheduleToolActivity,
   type ScheduleToolActivity,
 } from "@t3tools/shared/scheduleToolActivity";
 import {
+  deriveSessionMessageToolActivity,
   deriveSpawnedSessionToolActivity,
+  type SessionMessageToolActivity,
   type SpawnedSessionToolActivity,
 } from "@t3tools/shared/toolActivity";
 import {
@@ -104,8 +110,12 @@ export interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   /** Dedicated presentation for Phoenix `spawn_session` MCP calls. */
   spawnedSession?: SpawnedSessionToolActivity;
+  /** Dedicated presentation for Phoenix `send_to_session`/`send_to_parent` MCP calls. */
+  sessionMessage?: SessionMessageToolActivity;
   /** Dedicated presentation for Phoenix Schedule write MCP calls. */
   scheduleActivity?: ScheduleToolActivity;
+  /** Dedicated presentation for Phoenix `list_session_providers` MCP calls. */
+  providerListActivity?: ProviderListToolActivity;
   /**
    * Present on rows that collapsed a run of provider retry notices. The row
    * label is derived at render time, where the turn's live state decides
@@ -291,6 +301,13 @@ function workEntryIndicatesToolFailureFromOutput(
   if (!workLogEntryIsToolLike(entry)) {
     return false;
   }
+  // Partial output is untrustworthy: a running tool's stream often carries
+  // failure-looking lines ("No such file or directory", "exit code 1" inside
+  // printed logs) that its completed result clears. Scan the text only once
+  // the lifecycle has settled, or when the provider reports no lifecycle.
+  if (ls === "inProgress") {
+    return false;
+  }
   const parts: string[] = [];
   if (entry.detail) {
     parts.push(entry.detail);
@@ -352,9 +369,16 @@ export function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
 
 /** Tool-like row with neither clear success nor failure (empty, incomplete, in progress, etc.). */
 export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolean {
-  // Spawn CTA rows are never neutral-hidden: their in-progress lifecycle is
-  // exactly when the user needs the route/status affordance most.
-  if (entry.agentSpawn !== undefined || entry.spawnedSession !== undefined) {
+  // Dedicated CTA/receipt rows are never neutral-hidden: their
+  // in-progress lifecycle is exactly when the user needs the route/status
+  // affordance most.
+  if (
+    entry.agentSpawn !== undefined ||
+    entry.spawnedSession !== undefined ||
+    entry.sessionMessage !== undefined ||
+    entry.scheduleActivity !== undefined ||
+    entry.providerListActivity !== undefined
+  ) {
     return false;
   }
   if (!workLogEntryIsToolLike(entry)) {
@@ -441,6 +465,11 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
       return "file-change";
     case "mcp_elicitation_approval":
       return "mcp-elicitation";
+    case "unknown":
+      // Older servers classified extensible provider permissions (for
+      // example OpenCode's glob/grep permissions) as unknown. They share the
+      // generic approval response contract and must stay dismissible.
+      return "command";
     default:
       return null;
   }
@@ -1037,6 +1066,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (spawnedSession) {
       entry.spawnedSession = spawnedSession;
     }
+    const sessionMessage = deriveSessionMessageToolActivity(data);
+    if (sessionMessage) {
+      entry.sessionMessage = sessionMessage;
+    }
     const scheduleActivity = deriveScheduleToolActivity(data);
     if (scheduleActivity) {
       entry.scheduleActivity = scheduleActivity;
@@ -1044,6 +1077,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const toolData = typeof data?.toolName === "string" ? (data.item ?? data) : data?.item;
     if (toolData !== undefined) {
       entry.toolData = toolData;
+    }
+    const providerListActivity = deriveProviderListToolActivity(data);
+    if (providerListActivity) {
+      entry.providerListActivity = providerListActivity;
     }
   }
   if (itemType) {
@@ -1346,6 +1383,8 @@ function mergeDerivedWorkLogEntries(
   const spawnedSession = next.spawnedSession
     ? { ...previous.spawnedSession, ...next.spawnedSession }
     : previous.spawnedSession;
+  const scheduleActivity = next.scheduleActivity ?? previous.scheduleActivity;
+  const providerListActivity = next.providerListActivity ?? previous.providerListActivity;
   return {
     ...previous,
     ...next,
@@ -1362,6 +1401,8 @@ function mergeDerivedWorkLogEntries(
     ...(toolLifecycleStatus !== undefined ? { toolLifecycleStatus } : {}),
     ...(toolData !== undefined ? { toolData } : {}),
     ...(spawnedSession !== undefined ? { spawnedSession } : {}),
+    ...(scheduleActivity !== undefined ? { scheduleActivity } : {}),
+    ...(providerListActivity !== undefined ? { providerListActivity } : {}),
   };
 }
 

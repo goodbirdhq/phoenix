@@ -783,6 +783,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const changesProviderInstance =
+        command.modelSelection !== undefined &&
+        command.modelSelection.instanceId !== thread.modelSelection.instanceId;
+      const threadHasStarted =
+        thread.latestTurn !== null || thread.session !== null || thread.messages.length > 0;
+      if (changesProviderInstance && threadHasStarted) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} has started on provider instance ${thread.modelSelection.instanceId}; use thread.migrate to switch to ${command.modelSelection.instanceId}`,
+        });
+      }
       const branch =
         command.branch !== undefined &&
         command.expectedBranch !== undefined &&
@@ -1011,6 +1022,24 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
         });
       }
+      const linkedActivityThread = command.linkedActivity
+        ? yield* requireThread({
+            readModel,
+            command,
+            threadId: command.linkedActivity.threadId,
+          })
+        : null;
+      if (
+        linkedActivityThread !== null &&
+        (command.message.origin?.kind !== "session" ||
+          command.message.origin.threadId !== linkedActivityThread.id ||
+          linkedActivityThread.spawnedByThreadId !== targetThread.id)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Linked sender activity must belong to a child of target thread '${targetThread.id}'.`,
+        });
+      }
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1025,6 +1054,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           role: "user",
           text: command.message.text,
           attachments: command.message.attachments,
+          ...(command.message.origin !== undefined ? { origin: command.message.origin } : {}),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -1051,9 +1081,26 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: targetThread.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
           ...(command.graceStopNotice === true ? { graceStopNotice: true } : {}),
+          ...(command.message.origin !== undefined ? { origin: command.message.origin } : {}),
           createdAt: command.createdAt,
         },
       };
+      const linkedActivityEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      if (command.linkedActivity !== undefined) {
+        linkedActivityEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.linkedActivity.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: command.linkedActivity.threadId,
+            activity: command.linkedActivity.activity,
+          },
+        });
+      }
       // Real activity resets ANY override: it wakes an explicitly settled
       // thread, and it clears a keep-active pin back to neutral so the
       // thread can auto-settle again after this burst of work goes stale.
@@ -1116,7 +1163,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         };
         if (deliveryMode === "queue") {
-          return [...lifecycleResetEvents, userMessageEvent, queuedEvent];
+          return [...lifecycleResetEvents, ...linkedActivityEvents, userMessageEvent, queuedEvent];
         }
         const interruptEvent: Omit<OrchestrationEvent, "sequence"> = {
           ...(yield* withEventBase({
@@ -1136,9 +1183,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             createdAt: command.createdAt,
           },
         };
-        return [...lifecycleResetEvents, userMessageEvent, interruptEvent, queuedEvent];
+        return [
+          ...lifecycleResetEvents,
+          ...linkedActivityEvents,
+          userMessageEvent,
+          interruptEvent,
+          queuedEvent,
+        ];
       }
-      return [...lifecycleResetEvents, userMessageEvent, turnStartRequestedEvent];
+      return [
+        ...lifecycleResetEvents,
+        ...linkedActivityEvents,
+        userMessageEvent,
+        turnStartRequestedEvent,
+      ];
     }
 
     case "thread.turn.start.queued": {
@@ -1156,6 +1214,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Queued turn start '${command.messageId}' does not exist on thread '${command.threadId}'.`,
         });
       }
+      const queuedMessage = targetThread.messages.find(
+        (message) => message.id === command.messageId,
+      );
       const eventBase = yield* withEventBase({
         aggregateKind: "thread",
         aggregateId: command.threadId,
@@ -1177,6 +1238,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           messageId: command.messageId,
+          ...(queuedMessage?.origin !== undefined ? { origin: queuedMessage.origin } : {}),
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
           queuedDelivery: true,

@@ -14,12 +14,22 @@ import type {
 } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import {
+  deriveProviderListToolActivity,
+  formatProviderListHeading,
+  formatProviderListPreview,
+  formatProviderListReadyLabel,
+  formatProviderListWindows,
+  type ProviderListToolActivity,
+} from "@t3tools/shared/providerListToolActivity";
+import {
   deriveScheduleToolActivity,
   SCHEDULE_ACTION_LABELS,
   type ScheduleToolActivity,
 } from "@t3tools/shared/scheduleToolActivity";
 import {
+  deriveSessionMessageToolActivity,
   deriveSpawnedSessionToolActivity,
+  type SessionMessageToolActivity,
   type SpawnedSessionToolActivity,
 } from "@t3tools/shared/toolActivity";
 import {
@@ -102,6 +112,8 @@ export interface ThreadFeedActivity {
   readonly live?: boolean;
   /** Keep navigation/status affordances visible through work and turn folding. */
   readonly alwaysVisible?: boolean;
+  /** Tap route for rows about another thread (spawned child, messaged session/parent). */
+  readonly openThreadId?: string;
 }
 
 type WorkLogToolLifecycleStatus = "inProgress" | "completed" | "failed" | "declined" | "stopped";
@@ -126,7 +138,9 @@ export interface WorkLogEntry {
   agentSpawn?: boolean;
   toolData?: unknown;
   spawnedSession?: SpawnedSessionToolActivity;
+  sessionMessage?: SessionMessageToolActivity;
   scheduleActivity?: ScheduleToolActivity;
+  providerListActivity?: ProviderListToolActivity;
   /** Set on rows that collapsed a run of provider retry notices. */
   providerRetry?: ProviderRetryGroup & { readonly followedByActivity: boolean };
 }
@@ -195,6 +209,7 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
   switch (requestType) {
     case "command_execution_approval":
     case "exec_command_approval":
+    case "dynamic_tool_call":
       return "command";
     case "file_read_approval":
       return "file-read";
@@ -203,6 +218,10 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
       return "file-change";
     case "mcp_elicitation_approval":
       return "mcp-elicitation";
+    case "unknown":
+      // Backward compatibility for extensible provider permissions written
+      // by older servers: keep the request visible so the user can respond.
+      return "command";
     default:
       return null;
   }
@@ -511,6 +530,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (spawnedSession) {
       entry.spawnedSession = spawnedSession;
     }
+    const sessionMessage = deriveSessionMessageToolActivity(data);
+    if (sessionMessage) {
+      entry.sessionMessage = sessionMessage;
+    }
     const scheduleActivity = deriveScheduleToolActivity(data);
     if (scheduleActivity) {
       entry.scheduleActivity = scheduleActivity;
@@ -518,6 +541,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const toolData = typeof data?.toolName === "string" ? (data.item ?? data) : data?.item;
     if (toolData !== undefined) {
       entry.toolData = toolData;
+    }
+    const providerListActivity = deriveProviderListToolActivity(data);
+    if (providerListActivity) {
+      entry.providerListActivity = providerListActivity;
     }
   }
   if (itemType) {
@@ -727,6 +754,11 @@ function mergeDerivedWorkLogEntries(
   const spawnedSession = next.spawnedSession
     ? { ...previous.spawnedSession, ...next.spawnedSession }
     : previous.spawnedSession;
+  const sessionMessage = next.sessionMessage
+    ? { ...previous.sessionMessage, ...next.sessionMessage }
+    : previous.sessionMessage;
+  const scheduleActivity = next.scheduleActivity ?? previous.scheduleActivity;
+  const providerListActivity = next.providerListActivity ?? previous.providerListActivity;
   return {
     ...previous,
     ...next,
@@ -745,6 +777,9 @@ function mergeDerivedWorkLogEntries(
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolData !== undefined ? { toolData } : {}),
     ...(spawnedSession !== undefined ? { spawnedSession } : {}),
+    ...(sessionMessage !== undefined ? { sessionMessage } : {}),
+    ...(scheduleActivity !== undefined ? { scheduleActivity } : {}),
+    ...(providerListActivity !== undefined ? { providerListActivity } : {}),
   };
 }
 
@@ -779,7 +814,7 @@ function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | un
 }
 
 function workLogEntryIsToolLike(entry: WorkLogEntry): boolean {
-  if (entry.spawnedSession) {
+  if (entry.spawnedSession || entry.sessionMessage) {
     return false;
   }
   if (entry.tone === "tool" || entry.tone === "thinking" || entry.tone === "error") {
@@ -824,6 +859,12 @@ function workEntryIndicatesToolFailure(entry: WorkLogEntry): boolean {
   if (!workLogEntryIsToolLike(entry)) {
     return false;
   }
+  // Partial output is untrustworthy: a running tool's stream often carries
+  // failure-looking lines that its completed result clears. Scan the text
+  // only once the lifecycle has settled, or when no lifecycle is reported.
+  if (entry.toolLifecycleStatus === "inProgress") {
+    return false;
+  }
   return toolDetailTextLooksLikeFailure([entry.detail, entry.command].filter(Boolean).join("\n"));
 }
 
@@ -855,6 +896,14 @@ function workEntryStatus(entry: WorkLogEntry): ThreadFeedActivity["status"] {
   return "neutral";
 }
 
+/** The thread a row routes to on tap — never a failed call's stale target. */
+function workEntryOpenThreadId(entry: WorkLogEntry): string | undefined {
+  if (workEntryFailed(entry)) {
+    return undefined;
+  }
+  return entry.spawnedSession?.threadId ?? entry.sessionMessage?.threadId;
+}
+
 function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
   if (
     entry.sourceActivityKind === "user-input.requested" ||
@@ -863,7 +912,13 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
     return "message";
   }
   if (entry.sourceActivityKind === "runtime.warning") return "warning";
+  if (entry.providerRetry) {
+    return entry.providerRetry.exhausted ? "alert" : "refresh";
+  }
+  if (entry.spawnedSession) return "agent";
+  if (entry.sessionMessage) return "message";
   if (entry.scheduleActivity) return "calendar";
+  if (entry.providerListActivity) return "wrench";
   if (entry.requestKind === "command") return "command";
   if (entry.requestKind === "file-read") return "eye";
   if (entry.requestKind === "file-change") return "edit";
@@ -888,8 +943,23 @@ function buildWorkEntryExpandedBody(entry: WorkLogEntry): string | null {
     if (trimmed && (entry.command || !blocks.includes(trimmed))) blocks.push(trimmed);
   };
 
+  if (entry.providerListActivity) {
+    appendBlock(
+      entry.providerListActivity.providers
+        .map((provider) => {
+          const ready = formatProviderListReadyLabel(provider.available);
+          const windows = formatProviderListWindows(provider.windows);
+          const quota = provider.status === "limited" && windows.length === 0 ? "limited" : windows;
+          const suffix = quota ? ` · ${quota}` : "";
+          return `${provider.displayName} (${provider.driver}) — ${ready}${suffix}`;
+        })
+        .join("\n"),
+    );
+  }
   if (entry.itemType === "mcp_tool_call" && entry.toolData !== undefined) {
-    appendBlock(`MCP call\n${JSON.stringify(entry.toolData, null, 2)}`);
+    if (!entry.providerListActivity) {
+      appendBlock(`MCP call\n${JSON.stringify(entry.toolData, null, 2)}`);
+    }
   }
   appendBlock(entry.rawCommand ?? entry.command);
   appendBlock(entry.detail);
@@ -902,6 +972,7 @@ function buildWorkEntryExpandedBody(entry: WorkLogEntry): string | null {
 
 function workEntryHasExpandedBody(entry: WorkLogEntry): boolean {
   return (
+    entry.providerListActivity !== undefined ||
     (entry.itemType === "mcp_tool_call" && entry.toolData !== undefined) ||
     Boolean((entry.rawCommand ?? entry.command)?.trim()) ||
     Boolean(entry.detail?.trim()) ||
@@ -924,14 +995,24 @@ function memoizeValue<T>(build: () => T): () => T {
 function workEntryPreview(
   workEntry: Pick<
     WorkLogEntry,
-    "detail" | "command" | "changedFiles" | "spawnedSession" | "scheduleActivity"
+    | "detail"
+    | "command"
+    | "changedFiles"
+    | "spawnedSession"
+    | "sessionMessage"
+    | "scheduleActivity"
+    | "providerListActivity"
   >,
 ): string | null {
   if (workEntry.scheduleActivity) {
     const { name, cadence, timeZone } = workEntry.scheduleActivity;
     return [name, cadence, timeZone].filter(Boolean).join(" · ");
   }
+  if (workEntry.providerListActivity) {
+    return formatProviderListPreview(workEntry.providerListActivity);
+  }
   if (workEntry.spawnedSession) return workEntry.spawnedSession.title;
+  if (workEntry.sessionMessage?.preview) return workEntry.sessionMessage.preview;
   if (workEntry.command) return workEntry.command;
   if (workEntry.detail) return workEntry.detail;
   if ((workEntry.changedFiles?.length ?? 0) === 0) return null;
@@ -962,6 +1043,25 @@ function workEntryFailed(workEntry: WorkLogEntry): boolean {
 function workEntryHeading(workEntry: WorkLogEntry): string {
   if (workEntry.scheduleActivity && !workEntryFailed(workEntry)) {
     return SCHEDULE_ACTION_LABELS[workEntry.scheduleActivity.action];
+  }
+  if (workEntry.providerListActivity && !workEntryFailed(workEntry)) {
+    return formatProviderListHeading(workEntry.providerListActivity);
+  }
+  if (workEntry.spawnedSession) {
+    if (workEntryFailed(workEntry)) {
+      return "Failed to spawn session";
+    }
+    return workEntry.spawnedSession.threadId ? "Spawned session" : "Spawning session";
+  }
+  if (workEntry.sessionMessage) {
+    const toParent = workEntry.sessionMessage.direction === "to-parent";
+    if (workEntryFailed(workEntry)) {
+      return toParent ? "Failed to message parent" : "Failed to message session";
+    }
+    if (toParent && workEntry.sessionMessage.awaitingReply === true) {
+      return "Messaged parent · awaiting reply";
+    }
+    return toParent ? "Messaged parent" : "Messaged session";
   }
   const presentation = resolveWorkEntryToolPresentation(workEntry);
   if (presentation) return presentation.displayName;
@@ -1996,7 +2096,13 @@ export function buildThreadFeed(
               ...(entry.toolLifecycleStatus ? { lifecycleStatus: entry.toolLifecycleStatus } : {}),
               workEntry: entry,
               alwaysVisible:
-                entry.spawnedSession !== undefined || entry.scheduleActivity !== undefined,
+                entry.spawnedSession !== undefined ||
+                entry.sessionMessage !== undefined ||
+                entry.scheduleActivity !== undefined ||
+                entry.providerListActivity !== undefined,
+              ...(workEntryOpenThreadId(entry) !== undefined
+                ? { openThreadId: workEntryOpenThreadId(entry) }
+                : {}),
             },
           };
         }),

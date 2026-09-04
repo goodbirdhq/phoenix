@@ -194,6 +194,52 @@ describe("pending approvals", () => {
 
     expect(derivePendingApprovals([requested, resolved])).toEqual([]);
   });
+
+  it("keeps legacy unknown requests actionable so they can be dismissed", () => {
+    const activity = makeActivity({
+      id: EventId.make("approval-unknown-tool"),
+      kind: "approval.requested",
+      summary: "Approval requested",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      payload: {
+        requestId: "req-unknown-tool",
+        requestType: "unknown",
+        detail: "glob: apps/server/src/**",
+      },
+    });
+
+    expect(derivePendingApprovals([activity])).toEqual([
+      {
+        requestId: "req-unknown-tool",
+        requestKind: "command",
+        createdAt: "2026-08-24T00:00:00.000Z",
+        detail: "glob: apps/server/src/**",
+      },
+    ]);
+  });
+
+  it("derives dynamic tool requests as actionable generic approvals", () => {
+    const activity = makeActivity({
+      id: EventId.make("approval-dynamic-tool"),
+      kind: "approval.requested",
+      summary: "Approval requested",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      payload: {
+        requestId: "req-dynamic-tool",
+        requestType: "dynamic_tool_call",
+        detail: "Search the web",
+      },
+    });
+
+    expect(derivePendingApprovals([activity])).toEqual([
+      {
+        requestId: "req-dynamic-tool",
+        requestKind: "command",
+        createdAt: "2026-08-24T00:00:00.000Z",
+        detail: "Search the web",
+      },
+    ]);
+  });
 });
 
 function makeActivity(
@@ -1598,7 +1644,47 @@ describe("buildThreadFeed", () => {
     });
   });
 
-  it("keeps expanded work in one group with stable row identities", () => {
+  it("treats failure-looking partial output as neutral while the tool is still running", () => {
+    const turnId = TurnId.make("turn-running-partial");
+    const thread = makeThread({
+      id: ThreadId.make("thread-running-partial"),
+      projectId: ProjectId.make("project-1"),
+      title: "Streaming work",
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      activities: [
+        makeActivity({
+          id: EventId.make("tool-streaming"),
+          kind: "tool.updated",
+          tone: "tool",
+          summary: "Run command",
+          createdAt: "2026-04-01T00:00:05.000Z",
+          turnId,
+          payload: {
+            title: "Run command",
+            itemType: "command_execution",
+            detail: "zsh: command not found: nope",
+            status: "inProgress",
+          },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    expect(feed[0]).toMatchObject({
+      type: "activity-group",
+      activities: [{ status: "neutral" }],
+    });
+    expect(deriveThreadFeedPresentation(feed, thread.latestTurn, new Set())).toEqual([]);
+  });
+
+  it("models work-log overflow as list rows", () => {
     const activity = (
       id: string,
       createdAt: string,
@@ -2078,6 +2164,112 @@ describe("buildThreadFeed schedule writes", () => {
 
     expect(activity?.summary).not.toBe("Created schedule");
     expect(activity?.icon).not.toBe("calendar");
+    expect(activity?.alwaysVisible).not.toBe(true);
+  });
+});
+
+describe("buildThreadFeed provider list", () => {
+  const providerListCarrier = {
+    totalCount: 2,
+    providers: [
+      {
+        instanceId: "claudeAgent",
+        displayName: "Claude A",
+        driver: "claudeAgent",
+        available: true,
+        status: "limited",
+        windows: [
+          { kind: "primary", label: "Session", usedPercent: 12 },
+          { kind: "weekly", label: "Weekly", usedPercent: 100 },
+        ],
+      },
+      {
+        instanceId: "codex",
+        displayName: "Codex",
+        driver: "codex",
+        available: false,
+        status: "available",
+        windows: [],
+      },
+    ],
+  };
+
+  const threadWith = (tool: string) =>
+    makeThread({
+      id: ThreadId.make("thread-1"),
+      projectId: ProjectId.make("project-1"),
+      title: "Working",
+      activities: [
+        makeActivity({
+          id: EventId.make(`providers-${tool}`),
+          kind: "tool.completed",
+          summary: `phoenix · ${tool}`,
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: {
+            itemType: "mcp_tool_call",
+            data: {
+              item: { type: "mcp_tool_call", server: "phoenix", tool },
+              providerListActivity: providerListCarrier,
+            },
+          },
+        }),
+      ],
+    });
+
+  const activityOf = (tool: string) => {
+    for (const entry of buildThreadFeed(threadWith(tool))) {
+      if (entry.type === "activity-group") return entry.activities[0] ?? null;
+    }
+    return null;
+  };
+
+  it("rewrites the heading without calling quota 'available'", () => {
+    const activity = activityOf("list_session_providers");
+
+    expect(activity?.summary).toBe("Providers · 1 ready · 1 limited");
+    expect(activity?.detail).toBe("1/2 ready · Claude A, Codex");
+    expect(activity?.icon).toBe("wrench");
+    expect(activity?.alwaysVisible).toBe(true);
+  });
+
+  it("shows none configured for an empty success", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-1"),
+      projectId: ProjectId.make("project-1"),
+      title: "Working",
+      activities: [
+        makeActivity({
+          id: EventId.make("providers-empty"),
+          kind: "tool.completed",
+          summary: "phoenix · list_session_providers",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: {
+            itemType: "mcp_tool_call",
+            data: {
+              item: {
+                type: "mcp_tool_call",
+                server: "phoenix",
+                tool: "list_session_providers",
+              },
+              providerListActivity: { totalCount: 0, providers: [] },
+            },
+          },
+        }),
+      ],
+    });
+    let activity = null;
+    for (const entry of buildThreadFeed(thread)) {
+      if (entry.type === "activity-group") activity = entry.activities[0] ?? null;
+    }
+    expect(activity?.summary).toBe("Providers · none configured");
+    expect(activity?.detail).toBe("none configured");
+    expect(activity?.alwaysVisible).toBe(true);
+  });
+
+  it("leaves other session tools as ordinary MCP rows", () => {
+    const activity = activityOf("list_sessions");
+
+    expect(activity?.summary).not.toBe("Providers · 1 ready · 1 limited");
     expect(activity?.alwaysVisible).not.toBe(true);
   });
 });

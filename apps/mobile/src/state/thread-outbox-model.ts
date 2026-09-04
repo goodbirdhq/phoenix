@@ -4,6 +4,7 @@ import {
   fileAttachmentTooLargeMessage,
 } from "@t3tools/client-runtime/state/attachments";
 import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
+import { resolveNextTurnModelSelection } from "@t3tools/client-runtime/usage/thread-migration";
 import {
   CommandId,
   EnvironmentId,
@@ -93,9 +94,15 @@ export interface ThreadSettingsSnapshot {
 export function resolveQueuedThreadSettings(
   message: QueuedThreadMessage,
   thread: ThreadSettingsSnapshot,
+  threadHasStarted = false,
 ): ThreadSettingsSnapshot {
+  const requestedModelSelection = message.modelSelection ?? thread.modelSelection;
   return {
-    modelSelection: message.modelSelection ?? thread.modelSelection,
+    modelSelection: resolveNextTurnModelSelection({
+      threadHasStarted,
+      threadModelSelection: thread.modelSelection,
+      requestedModelSelection,
+    }),
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,
     interactionMode: message.interactionMode ?? thread.interactionMode,
   };

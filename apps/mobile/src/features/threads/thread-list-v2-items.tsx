@@ -52,6 +52,10 @@ const STATUS_LABEL_BY_STATUS: Partial<
 > = {
   approval: { label: "Approval", className: "text-adaptive-amber-700-300" },
   input: { label: "Input", className: "text-adaptive-indigo-600-300" },
+  "awaiting-parent": {
+    label: "Waiting on parent",
+    className: "text-adaptive-indigo-600-300",
+  },
   working: { label: "Working", className: "text-adaptive-sky-600-400" },
   failed: { label: "Failed", className: "text-adaptive-red-700-300" },
 };

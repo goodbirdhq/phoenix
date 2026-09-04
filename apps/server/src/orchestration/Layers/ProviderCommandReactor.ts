@@ -655,6 +655,13 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         });
       }
       const preferredProvider: ProviderDriverKind = desiredDriverKind;
+      const startsNewEpisode =
+        thread.session === null ||
+        thread.session.status === "stopped" ||
+        thread.session.status === "error";
+      const episodeStartedAt = startsNewEpisode
+        ? createdAt
+        : (thread.session.episodeStartedAt ?? thread.session.updatedAt);
       if (options?.pendingTurnStart === true && thread.session?.status !== "running") {
         yield* setThreadSession({
           threadId,
@@ -666,19 +673,20 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             runtimeMode: desiredRuntimeMode,
             activeTurnId: null,
             lastError: null,
-            stoppedBy: thread.session?.stoppedBy ?? null,
-            stopRequestedAt: thread.session?.stopRequestedAt ?? null,
-            stopReason: thread.session?.stopReason ?? null,
-            interruptedToolCall: thread.session?.interruptedToolCall ?? false,
+            stoppedBy: startsNewEpisode ? null : (thread.session?.stoppedBy ?? null),
+            stopRequestedAt: startsNewEpisode ? null : (thread.session?.stopRequestedAt ?? null),
+            stopReason: startsNewEpisode ? null : (thread.session?.stopReason ?? null),
+            interruptedToolCall: startsNewEpisode
+              ? false
+              : (thread.session?.interruptedToolCall ?? false),
             lastCompletedOperation: thread.session?.lastCompletedOperation ?? null,
-            graceStopDeadlineAt:
-              thread.session?.status === "stopped"
-                ? null
-                : (thread.session?.graceStopDeadlineAt ?? null),
-            graceStopEpisodeId:
-              thread.session?.status === "stopped"
-                ? null
-                : (thread.session?.graceStopEpisodeId ?? null),
+            graceStopDeadlineAt: startsNewEpisode
+              ? null
+              : (thread.session?.graceStopDeadlineAt ?? null),
+            graceStopEpisodeId: startsNewEpisode
+              ? null
+              : (thread.session?.graceStopEpisodeId ?? null),
+            episodeStartedAt,
             queuedDeliveryMessageId: options?.queuedDeliveryMessageId ?? null,
             updatedAt: createdAt,
           },
@@ -802,19 +810,20 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
               // Provider turn ids are not orchestration turn ids.
               activeTurnId: null,
               lastError: session.lastError ?? null,
-              stoppedBy: thread.session?.stoppedBy ?? null,
-              stopRequestedAt: thread.session?.stopRequestedAt ?? null,
-              stopReason: thread.session?.stopReason ?? null,
-              interruptedToolCall: thread.session?.interruptedToolCall ?? false,
+              stoppedBy: startsNewEpisode ? null : (thread.session?.stoppedBy ?? null),
+              stopRequestedAt: startsNewEpisode ? null : (thread.session?.stopRequestedAt ?? null),
+              stopReason: startsNewEpisode ? null : (thread.session?.stopReason ?? null),
+              interruptedToolCall: startsNewEpisode
+                ? false
+                : (thread.session?.interruptedToolCall ?? false),
               lastCompletedOperation: thread.session?.lastCompletedOperation ?? null,
-              graceStopDeadlineAt:
-                thread.session?.status === "stopped"
-                  ? null
-                  : (thread.session?.graceStopDeadlineAt ?? null),
-              graceStopEpisodeId:
-                thread.session?.status === "stopped"
-                  ? null
-                  : (thread.session?.graceStopEpisodeId ?? null),
+              graceStopDeadlineAt: startsNewEpisode
+                ? null
+                : (thread.session?.graceStopDeadlineAt ?? null),
+              graceStopEpisodeId: startsNewEpisode
+                ? null
+                : (thread.session?.graceStopEpisodeId ?? null),
+              episodeStartedAt,
               queuedDeliveryMessageId:
                 options?.queuedDeliveryMessageId ?? thread.session?.queuedDeliveryMessageId ?? null,
               updatedAt: session.updatedAt,
@@ -1782,6 +1791,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           role: "user",
           text: `A parent session requested that you stop. Finish the current tool call if one is in progress, then stop working.${partialReportInstruction}`,
           attachments: [],
+          // Phoenix relaying the parent's stop request — not the human, and
+          // not the parent speaking in its own words.
+          origin: { kind: "phoenix", threadId: thread.spawnedByThreadId ?? null },
         },
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,

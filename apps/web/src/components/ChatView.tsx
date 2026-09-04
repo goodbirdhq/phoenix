@@ -29,6 +29,7 @@ import {
 import { type EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import { type CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
+import { resolveNextTurnModelSelection } from "@t3tools/client-runtime/usage/thread-migration";
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import {
   codexFeedbackMessage,
@@ -289,6 +290,7 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
   useProjects,
+  useEnvironmentThreadTitles,
   useThread,
   useThreadRefs,
   useThreadShell,
@@ -1327,6 +1329,7 @@ function ChatViewContent(props: ChatViewProps) {
     reserveTitleBarControlInset = true,
     forceExpandedMobileComposer = false,
   } = props;
+  const threadTitles = useEnvironmentThreadTitles(environmentId);
   const draftId = routeKind === "draft" ? props.draftId : null;
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
@@ -1460,6 +1463,12 @@ function ChatViewContent(props: ChatViewProps) {
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
+  const composerModelSelection = useComposerDraftStore((store) => {
+    const draft = store.getComposerDraft(composerDraftTarget);
+    return draft?.activeProvider
+      ? (draft.modelSelectionByProvider[draft.activeProvider] ?? null)
+      : null;
+  });
   const composerHasUnsentContent = useComposerDraftStore((store) =>
     composerDraftHasUserContent(store.getComposerDraft(composerDraftTarget)),
   );
@@ -1485,6 +1494,21 @@ function ChatViewContent(props: ChatViewProps) {
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
+
+  useEffect(() => {
+    if (!activeServerThread || !composerModelSelection || !threadHasStarted(activeServerThread)) {
+      return;
+    }
+    const reconciled = resolveNextTurnModelSelection({
+      threadHasStarted: true,
+      threadModelSelection: activeServerThread.modelSelection,
+      requestedModelSelection: composerModelSelection,
+    });
+    if (reconciled.instanceId === composerModelSelection.instanceId) {
+      return;
+    }
+    setComposerDraftModelSelection(routeThreadRef, reconciled, { replaceOptions: true });
+  }, [activeServerThread, composerModelSelection, routeThreadRef, setComposerDraftModelSelection]);
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
@@ -4083,6 +4107,7 @@ function ChatViewContent(props: ChatViewProps) {
       const metadataUpdate = resolveThreadMetadataUpdateForNextTurn({
         currentModelSelection: serverThread.modelSelection,
         ...(input.modelSelection ? { nextModelSelection: input.modelSelection } : {}),
+        threadHasStarted: threadHasStarted(serverThread),
         currentBranch: serverThread.branch,
         ...(input.branch ? { nextBranch: input.branch } : {}),
       });
@@ -5747,6 +5772,11 @@ function ChatViewContent(props: ChatViewProps) {
       directAnnotation?.image !== undefined &&
       !annotationImageAlreadyAttached &&
       sendContextImages.length + composerFiles.length < PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
+    const nextTurnModelSelection = resolveNextTurnModelSelection({
+      threadHasStarted: isServerThread && threadHasStarted(activeThread),
+      threadModelSelection: activeThread.modelSelection,
+      requestedModelSelection: ctxSelectedModelSelection,
+    });
     const composerImages =
       directAnnotation?.image && annotationImageAppended
         ? [...sendContextImages, directAnnotation.image]
@@ -6205,9 +6235,9 @@ function ChatViewContent(props: ChatViewProps) {
     }
     const title = truncate(titleSeed);
     const threadCreateModelSelection = createModelSelection(
-      ctxSelectedModelSelection.instanceId,
+      nextTurnModelSelection.instanceId,
       ctxSelectedModel || activeProject.defaultModelSelection?.model || DEFAULT_MODEL,
-      ctxSelectedModelSelection.options,
+      nextTurnModelSelection.options,
     );
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
@@ -6229,7 +6259,7 @@ function ChatViewContent(props: ChatViewProps) {
       const settingsResult = await persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
-        ...(ctxSelectedModel ? { modelSelection: ctxSelectedModelSelection } : {}),
+        ...(ctxSelectedModel ? { modelSelection: nextTurnModelSelection } : {}),
         ...(localCheckoutBranchMismatch
           ? { branch: localCheckoutBranchMismatch.currentBranch }
           : {}),
@@ -6302,7 +6332,7 @@ function ChatViewContent(props: ChatViewProps) {
             text: outgoingMessageText,
             attachments: turnAttachmentsResult.value,
           },
-          modelSelection: ctxSelectedModelSelection,
+          modelSelection: nextTurnModelSelection,
           titleSeed: title,
           runtimeMode,
           interactionMode,
@@ -6652,6 +6682,11 @@ function ChatViewContent(props: ChatViewProps) {
         selectedPromptEffort: ctxSelectedPromptEffort,
         selectedModelSelection: ctxSelectedModelSelection,
       } = sendCtx;
+      const nextTurnModelSelection = resolveNextTurnModelSelection({
+        threadHasStarted: threadHasStarted(activeThread),
+        threadModelSelection: activeThread.modelSelection,
+        requestedModelSelection: ctxSelectedModelSelection,
+      });
 
       const threadIdForSend = activeThread.id;
       const messageIdForSend = newMessageId();
@@ -6686,7 +6721,7 @@ function ChatViewContent(props: ChatViewProps) {
       const settingsResult = await persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
-        modelSelection: ctxSelectedModelSelection,
+        modelSelection: nextTurnModelSelection,
         ...(localCheckoutBranchMismatch
           ? { branch: localCheckoutBranchMismatch.currentBranch }
           : {}),
@@ -6714,7 +6749,7 @@ function ChatViewContent(props: ChatViewProps) {
               text: outgoingMessageText,
               attachments: [],
             },
-            modelSelection: ctxSelectedModelSelection,
+            modelSelection: nextTurnModelSelection,
             titleSeed: activeThread.title,
             runtimeMode,
             interactionMode: nextInteractionMode,
@@ -7490,6 +7525,7 @@ function ChatViewContent(props: ChatViewProps) {
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
                 loadEarlier={loadEarlierTurns}
+                queuedTurnStarts={activeThread.queuedTurnStarts ?? null}
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
@@ -7565,6 +7601,9 @@ function ChatViewContent(props: ChatViewProps) {
                     {isServerThread ? (
                       <SessionReportDigest
                         activities={threadActivities}
+                        queuedTurnStarts={activeThread.queuedTurnStarts ?? null}
+                        messages={activeThread.messages}
+                        threadTitles={threadTitles}
                         onOpenChildThread={(childThreadId) => {
                           void navigate({
                             to: "/$environmentId/$threadId",

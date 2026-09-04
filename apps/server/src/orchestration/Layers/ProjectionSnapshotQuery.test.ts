@@ -91,6 +91,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           has_actionable_proposed_plan,
           pinned_at,
           pin_order_key,
+          awaiting_parent_reply_since,
           created_at,
           updated_at,
           deleted_at
@@ -112,6 +113,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           0,
           '2026-02-24T00:00:01.000Z',
           'gm',
+          '2026-02-24T00:00:01.500Z',
           '2026-02-24T00:00:02.000Z',
           '2026-02-24T00:00:03.000Z',
           NULL
@@ -363,6 +365,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinnedAt: "2026-02-24T00:00:01.000Z",
           pinOrderKey: "gm",
           titleRegeneration: null,
+          awaitingParentReplySince: "2026-02-24T00:00:01.500Z",
           deletedAt: null,
           messages: [
             {
@@ -375,6 +378,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               updatedAt: "2026-02-24T00:00:05.000Z",
             },
           ],
+          queuedTurnStarts: [],
           proposedPlans: [
             {
               id: "plan-1",
@@ -436,6 +440,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             lastCompletedOperation: null,
             graceStopDeadlineAt: null,
             graceStopEpisodeId: null,
+            episodeStartedAt: null,
             queuedDeliveryMessageId: null,
             updatedAt: "2026-02-24T00:00:07.000Z",
           },
@@ -513,6 +518,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinnedAt: "2026-02-24T00:00:01.000Z",
           pinOrderKey: "gm",
           titleRegeneration: null,
+          awaitingParentReplySince: "2026-02-24T00:00:01.500Z",
           session: {
             threadId: ThreadId.make("thread-1"),
             status: "running",
@@ -527,6 +533,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             lastCompletedOperation: null,
             graceStopDeadlineAt: null,
             graceStopEpisodeId: null,
+            episodeStartedAt: null,
             queuedDeliveryMessageId: null,
             updatedAt: "2026-02-24T00:00:07.000Z",
           },
@@ -615,6 +622,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
         ]);
       }
+      const commandReadModel = yield* snapshotQuery.getCommandReadModel();
+      assert.equal(
+        commandReadModel.threads[0]?.awaitingParentReplySince,
+        "2026-02-24T00:00:01.500Z",
+      );
     }),
   );
 

@@ -5,6 +5,7 @@ import { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 export type ThreadStatusKind =
   | "pending-approval"
   | "awaiting-input"
+  | "awaiting-parent"
   | "working"
   | "connecting"
   | "error"
@@ -94,6 +95,20 @@ export function resolveThreadStatus(
       textClassName: "text-adaptive-rose-700-300",
       iconColor: "#ff453a",
       iconBackground: "rgba(255,69,58,0.22)",
+      pulse: false,
+    };
+  }
+
+  // A spawned thread blocked on its parent session's answer. Indigo like
+  // Awaiting Input: both mean "stopped until someone replies".
+  if ((thread.awaitingParentReplySince ?? null) !== null && thread.session?.status !== "stopped") {
+    return {
+      kind: "awaiting-parent",
+      label: "Waiting on Parent",
+      pillClassName: "bg-indigo-500/12 dark:bg-indigo-500/16",
+      textClassName: "text-indigo-700 dark:text-indigo-300",
+      iconColor: "#5e5ce6",
+      iconBackground: "rgba(94,92,230,0.22)",
       pulse: false,
     };
   }

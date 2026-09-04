@@ -3,7 +3,7 @@ import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
 import { MaskedView } from "@expo/ui/community/masked-view";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
-import { useIsFocused } from "@react-navigation/native";
+import { useIsFocused, useNavigation } from "@react-navigation/native";
 import {
   memo,
   useCallback,
@@ -382,6 +382,7 @@ interface ThreadWorkLogProps {
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
   readonly scrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
   readonly iconSubtleColor: ColorValue;
+  readonly environmentId: string;
   readonly onCopyRow: (rowId: string, value: string) => void;
   readonly onToggleRow: (rowId: string, anchorKey: string) => void;
   readonly renderImage: MarkdownImageRenderer;
@@ -396,6 +397,7 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
         anchorKey={props.anchorKey}
         copied={props.copiedRowId === row.id}
         expanded={props.expandedRows[row.id] ?? false}
+        environmentId={props.environmentId}
         iconSubtleColor={props.iconSubtleColor}
         onCopyRow={props.onCopyRow}
         onToggleRow={props.onToggleRow}
@@ -667,6 +669,7 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
   },
 ) {
   const { row, expanded } = props;
+  const navigation = useNavigation();
   const canExpand = row.canExpand;
   const fullDetail = expanded ? row.getFullDetail() : null;
   const viewedImagePath = workEntryViewedImagePath(row.workEntry);
@@ -686,14 +689,26 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
       {...(isFreshRow(row.createdAt) ? { entering: FadeIn.duration(200) } : {})}
     >
       <Pressable
-        accessibilityRole={canExpand ? "button" : undefined}
+        accessibilityRole={canExpand || row.openThreadId ? "button" : undefined}
         accessibilityLabel={failed ? `${previewText}, tool call failed` : previewText}
         accessibilityHint={
-          canExpand ? "Double tap to show full details. Long press to copy." : "Long press to copy."
+          row.openThreadId
+            ? "Double tap to open the session. Long press to copy."
+            : canExpand
+              ? "Double tap to show full details. Long press to copy."
+              : "Long press to copy."
         }
         accessibilityState={canExpand ? { expanded } : undefined}
         hitSlop={4}
         onPress={() => {
+          if (row.openThreadId) {
+            void Haptics.selectionAsync();
+            navigation.navigate("Thread", {
+              environmentId: props.environmentId,
+              threadId: row.openThreadId,
+            });
+            return;
+          }
           if (canExpand) {
             void Haptics.selectionAsync();
             props.onToggleRow(row.id, props.anchorKey);

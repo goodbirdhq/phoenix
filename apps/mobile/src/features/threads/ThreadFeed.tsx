@@ -8,10 +8,13 @@ import type {
   ChatImageAttachment,
   EnvironmentId,
   MessageId,
+  OrchestrationMessage,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
+import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
+import { useEnvironmentThreadTitles } from "../../state/entities";
 import {
   codexArtifactTemplatePresentationLabel,
   type CodexArtifactTemplate,
@@ -245,6 +248,8 @@ export interface ThreadFeedProps {
     readonly loading: boolean;
     readonly onLoadEarlier: () => void;
   } | null;
+  /** Messages delivered to this thread's queue that no turn has consumed yet. */
+  readonly pendingDeliveries?: ReadonlyMap<string, "queued" | "releasing">;
 }
 
 function MessageAttachmentImage(props: {
@@ -1459,6 +1464,93 @@ function useMarkdownStyles(
   ]);
 }
 
+/** "Sent" is not "heard": a queued message waits for the agent's current
+ * turn to end, and this line is the only honest place that says so. */
+function PendingDeliveryNote(props: { readonly state: "queued" | "releasing" | undefined }) {
+  if (props.state === undefined) return null;
+  return (
+    <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+      {props.state === "releasing" ? "Delivering…" : "Queued — delivers after the current turn"}
+    </Text>
+  );
+}
+
+/**
+ * A user-role message another session (or Phoenix) authored. Left-aligned in
+ * a bordered card so it can never read as the human's own bubble, with a
+ * tappable header naming — and routing to — the speaker. The body is the
+ * exact text the agent consumed.
+ */
+function SessionOriginUserMessage(props: {
+  readonly message: OrchestrationMessage;
+  readonly environmentId: EnvironmentId;
+  readonly markdownStyles: MarkdownStyleSets;
+  readonly reviewCommentColors: ReviewCommentColors;
+  readonly skills: ThreadFeedProps["skills"];
+  readonly linkHandlers: MarkdownLinkHandlers;
+  readonly renderImage: MarkdownImageRenderer;
+  readonly deliveryState: "queued" | "releasing" | undefined;
+  readonly threadTitles: ReadonlyMap<string, string>;
+  readonly maxWidth: number;
+}) {
+  const navigation = useNavigation();
+  const origin = props.message.origin;
+  if (!origin) return null;
+  const linkedTitle =
+    origin.threadId == null ? null : (props.threadTitles.get(origin.threadId) ?? null);
+  const label =
+    origin.kind === "phoenix"
+      ? linkedTitle !== null
+        ? `Phoenix · about ${linkedTitle}`
+        : "Phoenix"
+      : (linkedTitle ?? "Another session");
+  const openThreadId = origin.threadId ?? null;
+
+  return (
+    <View className="mb-5 items-start">
+      <View
+        className="min-w-0 gap-2 rounded-[20px] border border-neutral-300 px-3.5 py-2.5 dark:border-neutral-700"
+        style={{ maxWidth: props.maxWidth }}
+      >
+        <Pressable
+          disabled={openThreadId === null}
+          accessibilityRole={openThreadId === null ? undefined : "button"}
+          accessibilityLabel={`Open ${label}`}
+          hitSlop={4}
+          onPress={() => {
+            if (openThreadId === null) return;
+            navigation.navigate("Thread", {
+              environmentId: String(props.environmentId),
+              threadId: String(openThreadId),
+            });
+          }}
+          className="flex-row items-center gap-1"
+        >
+          <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+            {label}
+            {openThreadId !== null ? " ›" : ""}
+          </Text>
+        </Pressable>
+        {props.message.text.trim().length > 0 ? (
+          <UserMessageContent
+            text={props.message.text}
+            markdownStyles={props.markdownStyles.assistant}
+            reviewCommentColors={props.reviewCommentColors}
+            skills={props.skills}
+            linkHandlers={props.linkHandlers}
+            renderImage={props.renderImage}
+          />
+        ) : null}
+      </View>
+      <View className="mt-1 items-start pl-0.5">
+        <PendingDeliveryNote state={props.deliveryState} />
+      </View>
+    </View>
+  );
+}
+
+const EMPTY_PENDING_DELIVERIES: ReadonlyMap<string, "queued" | "releasing"> = new Map();
+
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
   props: Pick<ThreadFeedProps, "environmentId" | "onUseArtifactTemplate" | "skills"> & {
@@ -1483,6 +1575,8 @@ function renderFeedEntry(
     readonly reviewCommentColors: ReviewCommentColors;
     readonly reviewCommentBubbleWidth: number;
     readonly userBubbleMaxWidth: number;
+    readonly pendingDeliveries: ReadonlyMap<string, "queued" | "releasing">;
+    readonly threadTitles: ReadonlyMap<string, string>;
   },
 ) {
   const entry = info.item;
@@ -1558,6 +1652,22 @@ function renderFeedEntry(
       !message.streaming;
 
     if (isUser) {
+      if (message.origin !== undefined) {
+        return (
+          <SessionOriginUserMessage
+            message={message}
+            environmentId={props.environmentId}
+            markdownStyles={props.markdownStyles}
+            reviewCommentColors={props.reviewCommentColors}
+            skills={props.skills}
+            linkHandlers={props.markdownLinkHandlers}
+            renderImage={props.renderMarkdownImage}
+            deliveryState={props.pendingDeliveries.get(message.id)}
+            threadTitles={props.threadTitles}
+            maxWidth={props.userBubbleMaxWidth}
+          />
+        );
+      }
       const enterAnimated = isFreshTimestamp(message.createdAt);
       return (
         <Animated.View
@@ -1609,7 +1719,8 @@ function renderFeedEntry(
               );
             })}
           </View>
-          <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
+          <View className="mt-1 flex-row items-center justify-end gap-2 pr-0.5">
+            <PendingDeliveryNote state={props.pendingDeliveries.get(message.id)} />
             <Text className="font-t3-medium text-xs tabular-nums text-adaptive-neutral-600-400">
               {timestampLabel}
             </Text>
@@ -1701,6 +1812,7 @@ function renderFeedEntry(
       rowSizing={props.workRowSizing}
       scrollPositions={props.workGroupScrollPositions}
       iconSubtleColor={iconSubtleColor}
+      environmentId={String(props.environmentId)}
       onCopyRow={props.onCopyWorkRow}
       onToggleRow={props.onToggleWorkRow}
       renderImage={props.renderViewedImage}
@@ -1979,6 +2091,7 @@ function ThreadFeedPlaceholder(props: {
 }
 
 export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+  const threadTitles = useEnvironmentThreadTitles(props.environmentId);
   const navigation = useNavigation();
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const disclosureSettleFrameRef = useRef<number | null>(null);
@@ -2707,6 +2820,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [expandedWorkRows, workRowSizing.fixedRowHeight],
   );
 
+  const pendingDeliveries = props.pendingDeliveries ?? EMPTY_PENDING_DELIVERIES;
+
   // Disclosures can mount existing offscreen rows as well as new work rows.
   // Fade those in after movement; never retain removed rows over replacements.
   const renderItem = useCallback(
@@ -2741,6 +2856,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             userBubbleMaxWidth,
             skills: props.skills,
             onUseArtifactTemplate: props.onUseArtifactTemplate,
+            pendingDeliveries,
+            threadTitles,
           })}
         </ThreadMediaVisibility>
       </Animated.View>
@@ -2769,8 +2886,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.environmentId,
       props.onUseArtifactTemplate,
       props.skills,
+      pendingDeliveries,
       renderMarkdownImage,
       renderViewedImage,
+      threadTitles,
     ],
   );
 

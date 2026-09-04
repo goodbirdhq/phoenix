@@ -1,5 +1,6 @@
 import {
   ChatAttachment,
+  OrchestrationMessageOrigin,
   CheckpointRef,
   IsoDateTime,
   MessageId,
@@ -95,6 +96,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    origin: Schema.NullOr(Schema.fromJsonString(OrchestrationMessageOrigin)),
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
@@ -380,6 +382,7 @@ function mapSessionRow(
     lastCompletedOperation: row.lastCompletedOperation,
     graceStopDeadlineAt: row.graceStopDeadlineAt,
     graceStopEpisodeId: row.graceStopEpisodeId,
+    episodeStartedAt: row.episodeStartedAt,
     queuedDeliveryMessageId: row.queuedDeliveryMessageId,
     updatedAt: row.updatedAt,
   };
@@ -553,6 +556,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          awaiting_parent_reply_since AS "awaitingParentReplySince",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -593,6 +597,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          awaiting_parent_reply_since AS "awaitingParentReplySince",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -635,6 +640,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          awaiting_parent_reply_since AS "awaitingParentReplySince",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -655,6 +661,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          origin_json AS "origin",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -758,6 +765,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_completed_operation AS "lastCompletedOperation",
           grace_stop_deadline_at AS "graceStopDeadlineAt",
           grace_stop_episode_id AS "graceStopEpisodeId",
+          episode_started_at AS "episodeStartedAt",
           queued_delivery_message_id AS "queuedDeliveryMessageId",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
@@ -788,6 +796,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.last_completed_operation AS "lastCompletedOperation",
           sessions.grace_stop_deadline_at AS "graceStopDeadlineAt",
           sessions.grace_stop_episode_id AS "graceStopEpisodeId",
+          sessions.episode_started_at AS "episodeStartedAt",
           sessions.queued_delivery_message_id AS "queuedDeliveryMessageId",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
@@ -822,6 +831,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.last_completed_operation AS "lastCompletedOperation",
           sessions.grace_stop_deadline_at AS "graceStopDeadlineAt",
           sessions.grace_stop_episode_id AS "graceStopEpisodeId",
+          sessions.episode_started_at AS "episodeStartedAt",
           sessions.queued_delivery_message_id AS "queuedDeliveryMessageId",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
@@ -890,6 +900,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           requested_at AS "requestedAt"
         FROM projection_turns
         WHERE state IN ('queued', 'interrupting', 'releasing')
+          AND pending_message_id IS NOT NULL
+        ORDER BY requested_at ASC, row_id ASC
+      `,
+  });
+
+  const listQueuedTurnStartRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionQueuedTurnStartDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          pending_message_id AS "messageId",
+          CASE WHEN state = 'interrupting' THEN 'interrupt' ELSE 'queue' END AS mode,
+          CASE WHEN state = 'releasing' THEN releasing_at ELSE NULL END AS "releasingAt",
+          requested_at AS "requestedAt"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND state IN ('queued', 'interrupting', 'releasing')
           AND pending_message_id IS NOT NULL
         ORDER BY requested_at ASC, row_id ASC
       `,
@@ -1169,6 +1198,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          awaiting_parent_reply_since AS "awaitingParentReplySince",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -1190,6 +1220,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          origin_json AS "origin",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -1205,7 +1236,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     execute: ({ threadId, messageId }) =>
       sql`
         SELECT message_id AS "messageId", thread_id AS "threadId", turn_id AS "turnId", role, text,
-          attachments_json AS "attachments", is_streaming AS "isStreaming", created_at AS "createdAt",
+          attachments_json AS "attachments", origin_json AS "origin",
+          is_streaming AS "isStreaming", created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
         WHERE thread_id = ${threadId} AND message_id = ${messageId}
@@ -1495,6 +1527,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_completed_operation AS "lastCompletedOperation",
           grace_stop_deadline_at AS "graceStopDeadlineAt",
           grace_stop_episode_id AS "graceStopEpisodeId",
+          episode_started_at AS "episodeStartedAt",
           queued_delivery_message_id AS "queuedDeliveryMessageId",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
@@ -1656,6 +1689,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          origin_json AS "origin",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -2020,6 +2054,14 @@ pending_approval_requests AS (
               ),
             ),
           ),
+          listQueuedTurnStartRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listQueuedTurnStarts:query",
+                "ProjectionSnapshotQuery.getSnapshot:listQueuedTurnStarts:decodeRows",
+              ),
+            ),
+          ),
         ]),
       )
       .pipe(
@@ -2035,6 +2077,7 @@ pending_approval_requests AS (
             checkpointRows,
             latestTurnRows,
             stateRows,
+            queuedTurnStartRows,
           ]) =>
             Effect.gen(function* () {
               const messagesByThread = new Map<string, Array<OrchestrationMessage>>();
@@ -2064,6 +2107,7 @@ pending_approval_requests AS (
                   role: row.role,
                   text: row.text,
                   ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+                  ...(row.origin !== null ? { origin: row.origin } : {}),
                   turnId: row.turnId,
                   streaming: row.isStreaming === 1,
                   createdAt: row.createdAt,
@@ -2181,6 +2225,7 @@ pending_approval_requests AS (
                   lastCompletedOperation: row.lastCompletedOperation,
                   graceStopDeadlineAt: row.graceStopDeadlineAt,
                   graceStopEpisodeId: row.graceStopEpisodeId,
+                  episodeStartedAt: row.episodeStartedAt,
                   queuedDeliveryMessageId: row.queuedDeliveryMessageId,
                   updatedAt: row.updatedAt,
                 });
@@ -2204,6 +2249,21 @@ pending_approval_requests AS (
                 updatedAt: row.updatedAt,
                 deletedAt: row.deletedAt,
               }));
+
+              const snapshotQueuedByThread = new Map<
+                string,
+                Array<NonNullable<OrchestrationThread["queuedTurnStarts"]>[number]>
+              >();
+              for (const row of queuedTurnStartRows) {
+                const rows = snapshotQueuedByThread.get(row.threadId) ?? [];
+                rows.push({
+                  messageId: row.messageId,
+                  mode: row.mode,
+                  requestedAt: row.requestedAt,
+                  ...(row.releasingAt !== null ? { releasingAt: row.releasingAt } : {}),
+                });
+                snapshotQueuedByThread.set(row.threadId, rows);
+              }
 
               const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) => ({
                 id: row.threadId,
@@ -2231,8 +2291,10 @@ pending_approval_requests AS (
                 pinnedAt: row.pinnedAt,
                 pinOrderKey: row.pinOrderKey ?? null,
                 titleRegeneration: mapTitleRegeneration(row),
+                awaitingParentReplySince: row.awaitingParentReplySince,
                 deletedAt: row.deletedAt,
                 messages: messagesByThread.get(row.threadId) ?? [],
+                queuedTurnStarts: snapshotQueuedByThread.get(row.threadId) ?? [],
                 proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
                 reports: reportsByThread.get(row.threadId) ?? [],
                 activities: activitiesByThread.get(row.threadId) ?? [],
@@ -2495,6 +2557,7 @@ pending_approval_requests AS (
                   pinnedAt: row.pinnedAt,
                   pinOrderKey: row.pinOrderKey ?? null,
                   titleRegeneration: mapTitleRegeneration(row),
+                  awaitingParentReplySince: row.awaitingParentReplySince,
                   deletedAt: row.deletedAt,
                   messages: [],
                   queuedTurnStarts: queuedTurnStartsByThread.get(row.threadId) ?? [],
@@ -2644,6 +2707,7 @@ pending_approval_requests AS (
                       hasPendingApprovals: row.pendingApprovalCount > 0,
                       hasPendingUserInput: row.pendingUserInputCount > 0,
                       hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                      awaitingParentReplySince: row.awaitingParentReplySince ?? null,
                       backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                         row.threadId,
                       ),
@@ -2795,6 +2859,7 @@ pending_approval_requests AS (
                   hasPendingApprovals: row.pendingApprovalCount > 0,
                   hasPendingUserInput: row.pendingUserInputCount > 0,
                   hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                  awaitingParentReplySince: row.awaitingParentReplySince ?? null,
                   backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                     row.threadId,
                   ),
@@ -3096,6 +3161,7 @@ pending_approval_requests AS (
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
         hasActionableProposedPlan: threadRow.value.hasActionableProposedPlan > 0,
+        awaitingParentReplySince: threadRow.value.awaitingParentReplySince ?? null,
         backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
           threadRow.value.threadId,
         ),
@@ -3247,6 +3313,7 @@ pending_approval_requests AS (
         checkpointRows,
         latestTurnRow,
         sessionRow,
+        queuedTurnStartRows,
       ] = yield* Effect.all([
         getActiveThreadRowById({ threadId }).pipe(
           Effect.mapError(
@@ -3308,6 +3375,17 @@ pending_approval_requests AS (
             ),
           ),
         ),
+        // Undelivered queue state travels with the detail so clients can mark
+        // messages the agent has not consumed yet; the reducer keeps it live
+        // from the turn-start-queued/requested/consumed/cancelled events.
+        listQueuedTurnStartRowsByThread({ threadId }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getThreadDetailById:listQueuedTurnStarts:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:listQueuedTurnStarts:decodeRows",
+            ),
+          ),
+        ),
       ]);
 
       if (Option.isNone(threadRow)) {
@@ -3340,6 +3418,7 @@ pending_approval_requests AS (
         pinnedAt: threadRow.value.pinnedAt,
         pinOrderKey: threadRow.value.pinOrderKey ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
+        awaitingParentReplySince: threadRow.value.awaitingParentReplySince,
         deletedAt: null,
         messages: messageRows.map((row) => {
           const message = {
@@ -3350,12 +3429,19 @@ pending_approval_requests AS (
             streaming: row.isStreaming === 1,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
+            ...(row.origin !== null ? { origin: row.origin } : {}),
           };
           if (row.attachments !== null) {
             return Object.assign(message, { attachments: row.attachments });
           }
           return message;
         }),
+        queuedTurnStarts: queuedTurnStartRows.map((row) => ({
+          messageId: row.messageId,
+          mode: row.mode,
+          requestedAt: row.requestedAt,
+          ...(row.releasingAt !== null ? { releasingAt: row.releasingAt } : {}),
+        })),
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
         reports: reportRows.map(mapReportRow),
         activities,

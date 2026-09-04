@@ -471,11 +471,32 @@ export const SessionReport = Schema.Struct({
 }).check(structuredReportFieldsWithinSizeCap);
 export type SessionReport = typeof SessionReport.Type;
 
+/**
+ * Who authored a user-role message, when it was not the human.
+ *
+ * `"session"` is another agent session speaking through the orchestration
+ * toolkit (send_to_parent, send_to_session, a delivered child report);
+ * `"phoenix"` is the server itself (death notices, wedge alarms, stop
+ * notices). `threadId` is the session the message is from or about, so
+ * clients can resolve its title and route to it. Presentation metadata only:
+ * the message text is what the model consumed and is never rewritten —
+ * origin lets a human tell the speakers apart without the clients sniffing
+ * "[Phoenix]" prefixes out of prose. Absent on every human-authored message.
+ */
+export const OrchestrationMessageOrigin = Schema.Struct({
+  kind: Schema.Literals(["session", "phoenix"]),
+  threadId: Schema.optional(Schema.NullOr(ThreadId)),
+});
+export type OrchestrationMessageOrigin = typeof OrchestrationMessageOrigin.Type;
+
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  // Optional so every message persisted before origins existed keeps
+  // decoding; absent means the human wrote it.
+  origin: Schema.optional(OrchestrationMessageOrigin),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
@@ -527,6 +548,58 @@ export type SessionStopReason = typeof SessionStopReason.Type;
 export const SessionStoppedBy = Schema.Literals(["user", "parent", "system"]);
 export type SessionStoppedBy = typeof SessionStoppedBy.Type;
 
+/**
+ * Why a spawned session's episode ended, as one typed value.
+ *
+ * The session row already records the raw ingredients (`status`,
+ * `stopReason`, `stoppedBy`, `lastErrorKind`) but they answer different
+ * questions asked by different writers, and every reader was left running
+ * the same precedence dance over them. This is that dance, run once: quota
+ * exhaustion first (the one cause with a typed error kind, and the one a
+ * parent reacts to differently — the account is dead, not the work), then
+ * the stop audit, then the coarse status.
+ */
+export const SessionExitReason = Schema.Literals([
+  "usage_limit",
+  "provider_crashed",
+  "stopped_by_user",
+  "stopped_by_parent",
+  "permission_denied",
+  "tool_failed",
+  // The session hit a provider error with no more specific typed cause.
+  "provider_error",
+  // The provider process ended without any recorded stop request or error:
+  // it exited on its own (clean shutdown, external kill, or a crash the
+  // provider reported as a plain exit).
+  "exited",
+]);
+export type SessionExitReason = typeof SessionExitReason.Type;
+
+export const deriveSessionExitReason = (
+  session: Pick<OrchestrationSession, "status" | "stopReason" | "stoppedBy" | "lastErrorKind">,
+): SessionExitReason => {
+  if (session.lastErrorKind === "usage-limit") return "usage_limit";
+  switch (session.stopReason) {
+    case "provider_crashed":
+      return "provider_crashed";
+    case "user_stopped":
+      return "stopped_by_user";
+    case "parent_stopped":
+      return "stopped_by_parent";
+    case "permission_denied":
+      return "permission_denied";
+    case "tool_failed":
+      return "tool_failed";
+    default:
+      break;
+  }
+  // The stop audit can carry an actor without a reason (a bare
+  // thread.session.stop): attribute to the actor rather than "exited".
+  if (session.stoppedBy === "user") return "stopped_by_user";
+  if (session.stoppedBy === "parent") return "stopped_by_parent";
+  return session.status === "error" ? "provider_error" : "exited";
+};
+
 export const OrchestrationSession = Schema.Struct({
   threadId: ThreadId,
   status: OrchestrationSessionStatus,
@@ -548,6 +621,13 @@ export const OrchestrationSession = Schema.Struct({
   // an old deadline from stopping a session that was subsequently restarted.
   graceStopDeadlineAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   graceStopEpisodeId: Schema.optional(Schema.NullOr(EventId)),
+  // Stable boundary for the current provider-session episode. A new value is
+  // written when a stopped/error session is started again, while ordinary
+  // status updates preserve it. Terminal reporting uses this to distinguish
+  // an old report from one produced during the episode that just ended.
+  episodeStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   // Correlates a provider turn start to the queued message that released it.
   // Optional/defaulted so historical session events continue to replay.
   queuedDeliveryMessageId: Schema.optional(Schema.NullOr(MessageId)).pipe(
@@ -656,6 +736,38 @@ export const SessionReportReadActivity = Schema.Struct({
 export type SessionReportReadActivity = typeof SessionReportReadActivity.Type;
 
 export const isSessionReportReadActivity = Schema.is(SessionReportReadActivity);
+
+// Durable record, on the CHILD's thread, that it sent its parent a message
+// through send_to_parent. The message itself lives on the parent thread (it
+// arrives there as a user-role message); this activity is what makes the
+// child's side of the exchange visible in its own timeline, and it is the
+// backing store for the awaiting-reply signal: a child is "awaiting" while
+// its newest sent message says so and nothing has started a turn on the
+// child since (any new turn means new input arrived, which is what the
+// child was waiting for).
+export const SessionMessageSentPayload = Schema.Struct({
+  parentThreadId: ThreadId,
+  messageId: MessageId,
+  awaitingReply: Schema.Boolean,
+  sentAt: IsoDateTime,
+});
+export type SessionMessageSentPayload = typeof SessionMessageSentPayload.Type;
+
+export const SESSION_MESSAGE_SENT_ACTIVITY_KIND = "session-message.sent";
+
+export const SessionMessageSentActivity = Schema.Struct({
+  id: EventId,
+  tone: Schema.Literal("info"),
+  kind: Schema.Literal(SESSION_MESSAGE_SENT_ACTIVITY_KIND),
+  summary: TrimmedNonEmptyString,
+  payload: SessionMessageSentPayload,
+  turnId: Schema.Null,
+  sequence: Schema.optional(NonNegativeInt),
+  createdAt: IsoDateTime,
+});
+export type SessionMessageSentActivity = typeof SessionMessageSentActivity.Type;
+
+export const isSessionMessageSentActivity = Schema.is(SessionMessageSentActivity);
 
 // ── Thread migration ─────────────────────────────────────────────────
 /**
@@ -815,6 +927,9 @@ export const OrchestrationThread = Schema.Struct({
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  // Kept in the command-side read model as well as the shell projection so
+  // replay and live command decisions observe the same durable fold.
+  awaitingParentReplySince: Schema.optional(Schema.NullOr(IsoDateTime)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -875,6 +990,12 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   session: Schema.NullOr(OrchestrationSession),
+  // Set while this (spawned) thread's newest send_to_parent message declared
+  // awaitingReply and no turn has started here since: the child is blocked on
+  // its parent's answer. Maintained by the projector from the durable
+  // session-message.sent activity, cleared by the next turn start. Optional
+  // so payloads from pre-feature servers still decode.
+  awaitingParentReplySince: Schema.optional(Schema.NullOr(IsoDateTime)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
@@ -1320,6 +1441,10 @@ export const ThreadTurnStartCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
+    // Set only by server-side writers (session toolkit, reactors). The
+    // client command schema deliberately has no origin field, so a client
+    // cannot forge agent attribution onto a human message.
+    origin: Schema.optional(OrchestrationMessageOrigin),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -1331,6 +1456,15 @@ export const ThreadTurnStartCommand = Schema.Struct({
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   graceStopNotice: Schema.optional(Schema.Boolean),
   deliveryMode: Schema.optional(Schema.Literals(["queue", "interrupt"])),
+  // Server-only companion activity committed atomically with the turn start.
+  // Used by send_to_parent so delivery and the child's awaiting-reply marker
+  // cannot be separated by a process failure. The client schema omits it.
+  linkedActivity: Schema.optional(
+    Schema.Struct({
+      threadId: ThreadId,
+      activity: OrchestrationThreadActivity,
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -1492,6 +1626,7 @@ const ThreadQueuedTurnCancelCommand = Schema.Struct({
     "session_terminal",
     "interrupt_timeout",
     "redelivery_limit_reached",
+    "delivery_stalled",
     "legacy_report_notification",
   ]),
   createdAt: IsoDateTime,
@@ -1827,6 +1962,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  origin: Schema.optional(OrchestrationMessageOrigin),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
@@ -1836,6 +1972,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  origin: Schema.optional(OrchestrationMessageOrigin),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -1869,6 +2006,7 @@ export const ThreadTurnStartCancelledPayload = Schema.Struct({
     "session_terminal",
     "interrupt_timeout",
     "redelivery_limit_reached",
+    "delivery_stalled",
     "legacy_report_notification",
   ]),
   createdAt: IsoDateTime,

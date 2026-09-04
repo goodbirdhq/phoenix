@@ -150,6 +150,35 @@ describe("thread outbox", () => {
     ).toBe(false);
   });
 
+  it("delivers a stale cross-account message on the thread's migrated account", () => {
+    const currentModelSelection = {
+      instanceId: ProviderInstanceId.make("claude-primary"),
+      model: "claude-fable-5",
+    };
+    const message = {
+      ...queuedMessage({
+        messageId: "message-after-failover",
+        createdAt: "2026-09-03T10:25:06.393Z",
+      }),
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("claude-spare"),
+        model: "claude-fable-5",
+      },
+    } satisfies QueuedThreadMessage;
+
+    expect(
+      resolveQueuedThreadSettings(
+        message,
+        {
+          modelSelection: currentModelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        },
+        true,
+      ).modelSelection,
+    ).toEqual(currentModelSelection);
+  });
+
   it("backs off queued delivery retries and caps them at sixteen seconds", () => {
     expect([1, 2, 3, 4, 5, 6].map(threadOutboxRetryDelayMs)).toEqual([
       1_000, 2_000, 4_000, 8_000, 16_000, 16_000,

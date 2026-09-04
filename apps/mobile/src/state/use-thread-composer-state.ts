@@ -14,6 +14,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import { resolveNextTurnModelSelection } from "@t3tools/client-runtime/usage/thread-migration";
 import {
   codexFeedbackMessage,
   parseCodexFeedbackCommand,
@@ -146,6 +147,21 @@ export function useThreadComposerState() {
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
   const interactionMode = selectedDraft?.interactionMode ?? selectedThread?.interactionMode ?? null;
+
+  useEffect(() => {
+    if (!selectedThreadKey || !selectedThread || !selectedDraft?.modelSelection) {
+      return;
+    }
+    const reconciled = resolveNextTurnModelSelection({
+      threadHasStarted: selectedThread.latestTurn !== null || selectedThread.session !== null,
+      threadModelSelection: selectedThread.modelSelection,
+      requestedModelSelection: selectedDraft.modelSelection,
+    });
+    if (reconciled.instanceId === selectedDraft.modelSelection.instanceId) {
+      return;
+    }
+    updateComposerDraftSettings(selectedThreadKey, { modelSelection: reconciled });
+  }, [selectedDraft?.modelSelection, selectedThread, selectedThreadKey]);
 
   const selectedThreadSessionActivity = useMemo(() => {
     const selectedThread = selectedThreadDetail ?? selectedThreadShell;
@@ -285,7 +301,11 @@ export function useThreadComposerState() {
       commandId: CommandId.make(metadata.commandId),
       text,
       attachments,
-      modelSelection: draft.modelSelection ?? thread.modelSelection,
+      modelSelection: resolveNextTurnModelSelection({
+        threadHasStarted: thread.latestTurn !== null || thread.session !== null,
+        threadModelSelection: thread.modelSelection,
+        requestedModelSelection: draft.modelSelection ?? thread.modelSelection,
+      }),
       runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
       interactionMode: draft.interactionMode ?? thread.interactionMode,
       createdAt: metadata.createdAt,

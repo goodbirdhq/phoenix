@@ -44,7 +44,8 @@ function workEntryIsSpawnCta(entry: WorkLogEntry): boolean {
   return (
     entry.agentSpawn !== undefined ||
     entry.spawnedSession !== undefined ||
-    entry.scheduleActivity !== undefined
+    entry.scheduleActivity !== undefined ||
+    entry.providerListActivity !== undefined
   );
 }
 

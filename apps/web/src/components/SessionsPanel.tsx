@@ -21,17 +21,20 @@ import { memo, useMemo } from "react";
 import { cn } from "~/lib/utils";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { useSpawnedThreadShells } from "~/state/threads";
-import { formatRelativeTimeLabel } from "~/timestampFormat";
+import { formatElapsedDurationLabel, formatRelativeTimeLabel } from "~/timestampFormat";
 
 import type {
   SessionActivityState,
   SessionPanelEntry,
   SessionPanelModel,
 } from "./SessionsPanel.logic";
-import { buildSessionPanelModel } from "./SessionsPanel.logic";
+import { buildSessionPanelModel, EXIT_REASON_LABELS } from "./SessionsPanel.logic";
 
 const ACTIVITY_VISUALS: Record<SessionActivityState, { dotClass: string; label: string }> = {
   "needs-you": { dotClass: "bg-warning", label: "Needs you" },
+  // The child asked and is blocked until this thread answers. Warning-toned
+  // like needs-you: either way, the roster is pointing at a stalled child.
+  "awaiting-reply": { dotClass: "bg-warning", label: "Awaiting reply" },
   working: { dotClass: "bg-info", label: "Working" },
   monitoring: { dotClass: "bg-info", label: "Monitoring" },
   stopping: { dotClass: "bg-muted-foreground/60", label: "Stopping" },
@@ -61,8 +64,21 @@ function dotClassFor(entry: SessionPanelEntry): string {
  * failed row, because it explains a red row at a glance.
  */
 function activityText(entry: SessionPanelEntry): string {
+  // A dead session leads with WHY it died — quota, crash, a stop — because
+  // that decides what to do next (re-route vs retry vs nothing). The raw
+  // provider error follows when there is one.
+  if (entry.activity === "error" && entry.exitReason !== null) {
+    const reason = EXIT_REASON_LABELS[entry.exitReason];
+    return entry.lastError ? `${reason} · ${entry.lastError}` : reason;
+  }
   if (entry.activity === "error" && entry.lastError) return entry.lastError;
   if (entry.lifecycle === "active") {
+    if (entry.activity === "awaiting-reply" && entry.awaitingReplySince !== null) {
+      return `Blocked · awaiting your reply for ${formatElapsedDurationLabel(entry.awaitingReplySince)}`;
+    }
+    if (entry.activity === "stopped" && entry.exitReason !== null) {
+      return EXIT_REASON_LABELS[entry.exitReason];
+    }
     return entry.planStep ?? ACTIVITY_VISUALS[entry.activity].label;
   }
   // A reclaimed worktree is the thing to say about a settled session: without
@@ -124,7 +140,7 @@ const SessionRow = memo(function SessionRow({
           "col-start-2 col-end-4 row-start-2 block truncate text-xs",
           entry.activity === "error"
             ? "text-destructive-foreground"
-            : entry.activity === "needs-you"
+            : entry.activity === "needs-you" || entry.activity === "awaiting-reply"
               ? "text-warning-foreground"
               : "text-muted-foreground",
         )}
@@ -230,6 +246,11 @@ export function SessionsPanel({
         <span className="flex items-center gap-2">
           {model.needsAttentionCount > 0 ? (
             <span className="text-warning-foreground">● {model.needsAttentionCount} needs you</span>
+          ) : null}
+          {model.awaitingReplyCount > 0 ? (
+            <span className="text-warning-foreground">
+              ● {model.awaitingReplyCount} awaiting reply
+            </span>
           ) : null}
           {model.workingCount > 0 ? (
             <span className="text-info-foreground">● {model.workingCount} working</span>

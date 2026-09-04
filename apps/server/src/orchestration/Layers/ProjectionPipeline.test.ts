@@ -2831,6 +2831,280 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("persists a message's origin and preserves it across later upserts", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+      const base = {
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-origin"),
+        causationEventId: null,
+        metadata: {},
+      } as const;
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.make("evt-origin-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-origin"),
+        occurredAt: "2026-02-26T14:00:00.000Z",
+        commandId: CommandId.make("cmd-origin-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-origin-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-origin"),
+          title: "Project Origin",
+          workspaceRoot: "/tmp/project-origin",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-02-26T14:00:00.000Z",
+          updatedAt: "2026-02-26T14:00:00.000Z",
+        },
+      });
+      yield* appendAndProject({
+        ...base,
+        type: "thread.created",
+        eventId: EventId.make("evt-origin-thread"),
+        occurredAt: "2026-02-26T14:00:01.000Z",
+        commandId: CommandId.make("cmd-origin-thread"),
+        correlationId: CorrelationId.make("cmd-origin-thread"),
+        payload: {
+          threadId: ThreadId.make("thread-origin"),
+          projectId: ProjectId.make("project-origin"),
+          title: "Thread Origin",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-02-26T14:00:01.000Z",
+          updatedAt: "2026-02-26T14:00:01.000Z",
+        },
+      });
+      yield* appendAndProject({
+        ...base,
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-origin-message"),
+        occurredAt: "2026-02-26T14:00:02.000Z",
+        commandId: CommandId.make("cmd-origin-message"),
+        correlationId: CorrelationId.make("cmd-origin-message"),
+        payload: {
+          threadId: ThreadId.make("thread-origin"),
+          messageId: MessageId.make("message-origin-1"),
+          role: "user",
+          text: "Which SHA is master?",
+          origin: { kind: "session", threadId: ThreadId.make("thread-origin-child") },
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-02-26T14:00:02.000Z",
+          updatedAt: "2026-02-26T14:00:02.000Z",
+        },
+      });
+      // A later upsert without origin (the shape streaming updates take)
+      // must not erase the attribution.
+      yield* appendAndProject({
+        ...base,
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-origin-message-2"),
+        occurredAt: "2026-02-26T14:00:03.000Z",
+        commandId: CommandId.make("cmd-origin-message-2"),
+        correlationId: CorrelationId.make("cmd-origin-message-2"),
+        payload: {
+          threadId: ThreadId.make("thread-origin"),
+          messageId: MessageId.make("message-origin-1"),
+          role: "user",
+          text: "Which SHA is master? (edited)",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-02-26T14:00:02.000Z",
+          updatedAt: "2026-02-26T14:00:03.000Z",
+        },
+      });
+
+      const rows = yield* sql<{ readonly originJson: string | null }>`
+        SELECT origin_json AS "originJson"
+        FROM projection_thread_messages
+        WHERE message_id = 'message-origin-1'
+      `;
+      assert.deepEqual(
+        rows.map((row) => (row.originJson === null ? null : JSON.parse(row.originJson))),
+        [{ kind: "session", threadId: "thread-origin-child" }],
+      );
+    }),
+  );
+
+  it.effect("sets and clears the awaiting-parent-reply marker on the thread row", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+      const awaitingSince = () =>
+        sql<{ readonly awaitingParentReplySince: string | null }>`
+          SELECT awaiting_parent_reply_since AS "awaitingParentReplySince"
+          FROM projection_threads
+          WHERE thread_id = 'thread-awaiting-reply'
+        `;
+      const base = {
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-awaiting-reply"),
+        causationEventId: null,
+        metadata: {},
+      } as const;
+      const sentMarker = (input: {
+        readonly suffix: string;
+        readonly awaitingReply: boolean;
+        readonly sentAt: string;
+      }) =>
+        appendAndProject({
+          ...base,
+          type: "thread.activity-appended",
+          eventId: EventId.make(`evt-awaiting-${input.suffix}`),
+          occurredAt: input.sentAt,
+          commandId: CommandId.make(`cmd-awaiting-${input.suffix}`),
+          correlationId: CorrelationId.make(`cmd-awaiting-${input.suffix}`),
+          payload: {
+            threadId: ThreadId.make("thread-awaiting-reply"),
+            activity: {
+              id: EventId.make(`activity-awaiting-${input.suffix}`),
+              tone: "info",
+              kind: "session-message.sent",
+              summary: "Sent message to parent session",
+              payload: {
+                parentThreadId: ThreadId.make("thread-awaiting-parent"),
+                messageId: MessageId.make(`message-awaiting-${input.suffix}`),
+                awaitingReply: input.awaitingReply,
+                sentAt: input.sentAt,
+              },
+              turnId: null,
+              createdAt: input.sentAt,
+            },
+          },
+        });
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.make("evt-awaiting-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-awaiting-reply"),
+        occurredAt: "2026-02-26T13:00:00.000Z",
+        commandId: CommandId.make("cmd-awaiting-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-awaiting-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-awaiting-reply"),
+          title: "Project Awaiting Reply",
+          workspaceRoot: "/tmp/project-awaiting-reply",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-02-26T13:00:00.000Z",
+          updatedAt: "2026-02-26T13:00:00.000Z",
+        },
+      });
+      yield* appendAndProject({
+        ...base,
+        type: "thread.created",
+        eventId: EventId.make("evt-awaiting-thread"),
+        occurredAt: "2026-02-26T13:00:01.000Z",
+        commandId: CommandId.make("cmd-awaiting-thread"),
+        correlationId: CorrelationId.make("cmd-awaiting-thread"),
+        payload: {
+          threadId: ThreadId.make("thread-awaiting-reply"),
+          projectId: ProjectId.make("project-awaiting-reply"),
+          title: "Thread Awaiting Reply",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          spawnedByThreadId: ThreadId.make("thread-awaiting-parent"),
+          createdAt: "2026-02-26T13:00:01.000Z",
+          updatedAt: "2026-02-26T13:00:01.000Z",
+        },
+      });
+
+      // An awaitingReply marker sets the column to its sentAt.
+      yield* sentMarker({
+        suffix: "ask",
+        awaitingReply: true,
+        sentAt: "2026-02-26T13:00:02.000Z",
+      });
+      assert.deepEqual(yield* awaitingSince(), [
+        { awaitingParentReplySince: "2026-02-26T13:00:02.000Z" },
+      ]);
+
+      // A descendant/system turn is unrelated to the parent's reply and must
+      // not clear the marker.
+      yield* appendAndProject({
+        ...base,
+        type: "thread.turn-start-requested",
+        eventId: EventId.make("evt-awaiting-turn"),
+        occurredAt: "2026-02-26T13:00:03.000Z",
+        commandId: CommandId.make("cmd-awaiting-turn"),
+        correlationId: CorrelationId.make("cmd-awaiting-turn"),
+        payload: {
+          threadId: ThreadId.make("thread-awaiting-reply"),
+          messageId: MessageId.make("message-awaiting-turn"),
+          origin: { kind: "session", threadId: ThreadId.make("thread-awaiting-descendant") },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          createdAt: "2026-02-26T13:00:03.000Z",
+        },
+      });
+      assert.deepEqual(yield* awaitingSince(), [
+        { awaitingParentReplySince: "2026-02-26T13:00:02.000Z" },
+      ]);
+
+      // A routed message from the parent owns the reply and clears it.
+      yield* appendAndProject({
+        ...base,
+        type: "thread.turn-start-requested",
+        eventId: EventId.make("evt-awaiting-parent-turn"),
+        occurredAt: "2026-02-26T13:00:03.500Z",
+        commandId: CommandId.make("cmd-awaiting-parent-turn"),
+        correlationId: CorrelationId.make("cmd-awaiting-parent-turn"),
+        payload: {
+          threadId: ThreadId.make("thread-awaiting-reply"),
+          messageId: MessageId.make("message-awaiting-parent-turn"),
+          origin: { kind: "session", threadId: ThreadId.make("thread-awaiting-parent") },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          createdAt: "2026-02-26T13:00:03.500Z",
+        },
+      });
+      assert.deepEqual(yield* awaitingSince(), [{ awaitingParentReplySince: null }]);
+
+      // Latest marker wins: a later non-awaiting send withdraws the claim.
+      yield* sentMarker({
+        suffix: "ask-again",
+        awaitingReply: true,
+        sentAt: "2026-02-26T13:00:04.000Z",
+      });
+      yield* sentMarker({
+        suffix: "update",
+        awaitingReply: false,
+        sentAt: "2026-02-26T13:00:05.000Z",
+      });
+      assert.deepEqual(yield* awaitingSince(), [{ awaitingParentReplySince: null }]);
+    }),
+  );
+
   it.effect("ignores non-stale provider approval response failures", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;

@@ -61,6 +61,99 @@ export function deriveSpawnedSessionToolActivity(
   };
 }
 
+export interface SessionMessageToolActivity {
+  /** Which way the message went: down to a spawned child, or up to the parent. */
+  readonly direction: "to-child" | "to-parent";
+  /** The other end of the exchange — the thread the row links to. */
+  readonly threadId?: string | undefined;
+  /** First line of the message, pre-truncated for a one-line row. */
+  readonly preview?: string | undefined;
+  /** to-parent only: the sender declared itself blocked on the answer. */
+  readonly awaitingReply?: boolean | undefined;
+}
+
+function sessionMessageDirection(
+  data: Record<string, unknown>,
+  item: Record<string, unknown>,
+): SessionMessageToolActivity["direction"] | undefined {
+  const server = asTrimmedString(item.server)?.toLowerCase();
+  const itemTool = asTrimmedString(item.tool)?.toLowerCase();
+  const name = asTrimmedString(data.toolName)?.toLowerCase();
+  if (
+    (server === "phoenix" && itemTool === "send_to_session") ||
+    name === "mcp__phoenix__send_to_session"
+  ) {
+    return "to-child";
+  }
+  if (
+    (server === "phoenix" && itemTool === "send_to_parent") ||
+    name === "mcp__phoenix__send_to_parent"
+  ) {
+    return "to-parent";
+  }
+  return undefined;
+}
+
+function firstLinePreview(value: unknown): string | undefined {
+  const text = asTrimmedString(value);
+  if (!text) {
+    return undefined;
+  }
+  const line = text.split(/\r?\n/u, 1)[0]?.replace(/\s+/g, " ").trim();
+  if (!line) {
+    return undefined;
+  }
+  return line.length <= 84 ? line : `${line.slice(0, 83).trimEnd()}…`;
+}
+
+/**
+ * Recognizes Phoenix's inter-session messaging MCP calls (`send_to_session`
+ * down to a spawned child, `send_to_parent` up to the spawner) so both go
+ * to a routed chat row instead of an opaque tool call — the same treatment
+ * `spawn_session` gets, for the same reason: these three verbs are the whole
+ * conversation between sessions.
+ *
+ * Reads `data.sessionMessage` first (the server-side slimming carry — see
+ * ActivityPayloadProjection): the down direction's target lives in the tool
+ * *arguments*, which survive slimming, but the up direction's target
+ * (`parentThreadId`) only exists in the summarized result.
+ */
+export function deriveSessionMessageToolActivity(
+  value: unknown,
+): SessionMessageToolActivity | undefined {
+  const data = asRecord(value);
+  if (!data) {
+    return undefined;
+  }
+  const item = asRecord(data.item);
+  const direction = sessionMessageDirection(data, item ?? {});
+  if (!direction) {
+    return undefined;
+  }
+
+  const projected = asRecord(data.sessionMessage);
+  const input = asRecord(item?.arguments) ?? asRecord(item?.input) ?? asRecord(data.input);
+  const threadId =
+    asTrimmedString(projected?.threadId) ??
+    (direction === "to-child"
+      ? asTrimmedString(input?.threadId)
+      : asTrimmedString(
+          findResultRecord(item?.result ?? data.result, "parentThreadId")?.parentThreadId,
+        ));
+  const preview = asTrimmedString(projected?.preview) ?? firstLinePreview(input?.message);
+  const awaitingReply =
+    direction === "to-parent"
+      ? (projected?.awaitingReply ?? input?.awaitingReply) === true
+      : undefined;
+
+  return {
+    direction,
+    ...(threadId ? { threadId } : {}),
+    ...(preview ? { preview } : {}),
+    ...(awaitingReply !== undefined ? { awaitingReply } : {}),
+  };
+}
+
 function normalizeCommandValue(value: unknown): string | undefined {
   const direct = asTrimmedString(value);
   if (direct) {

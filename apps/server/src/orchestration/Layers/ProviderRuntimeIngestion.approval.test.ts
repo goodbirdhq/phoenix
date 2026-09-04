@@ -67,4 +67,30 @@ describe("runtimeEventToActivities approval details", () => {
       },
     });
   });
+
+  it("classifies extensible provider permissions as generic approvals", () => {
+    const event = {
+      type: "request.opened",
+      eventId: EventId.make("evt-generic-approval"),
+      provider: ProviderDriverKind.make("opencode"),
+      createdAt: "2026-09-04T00:00:00.000Z",
+      threadId: ThreadId.make("thread-1"),
+      requestId: RuntimeRequestId.make("approval-glob"),
+      payload: {
+        requestType: "dynamic_tool_call",
+        detail: "apps/server/src/**",
+      },
+    } satisfies ProviderRuntimeEvent;
+
+    const [activity] = runtimeEventToActivities(event);
+
+    expect(activity).toMatchObject({
+      kind: "approval.requested",
+      payload: {
+        requestId: "approval-glob",
+        requestKind: "command",
+        requestType: "dynamic_tool_call",
+      },
+    });
+  });
 });
