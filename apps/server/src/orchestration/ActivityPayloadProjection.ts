@@ -3,6 +3,7 @@ import type {
   OrchestrationThreadActivity,
   OrchestrationThreadDetailSnapshot,
 } from "@t3tools/contracts";
+import { deriveProviderListToolActivity } from "@t3tools/shared/providerListToolActivity";
 import { deriveScheduleToolActivity } from "@t3tools/shared/scheduleToolActivity";
 import { deriveSpawnedSessionToolActivity } from "@t3tools/shared/toolActivity";
 
@@ -279,6 +280,13 @@ function projectMcpToolCallData(data: Record<string, unknown>): Record<string, u
   const scheduleActivity = deriveScheduleToolActivity(data);
   if (scheduleActivity !== undefined) {
     projectedData.scheduleActivity = scheduleActivity;
+  }
+
+  // list_session_providers dumps every instance plus its full model catalog.
+  // Summarizing truncates it, so carry the snapshot card fields separately.
+  const providerListActivity = deriveProviderListToolActivity(data);
+  if (providerListActivity !== undefined) {
+    projectedData.providerListActivity = providerListActivity;
   }
 
   const changedFiles: string[] = [];
