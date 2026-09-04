@@ -13,7 +13,6 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
-import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
 import { useEnvironmentThreadTitles } from "../../state/entities";
 import {
   codexArtifactTemplatePresentationLabel,
@@ -1469,7 +1468,7 @@ function useMarkdownStyles(
 function PendingDeliveryNote(props: { readonly state: "queued" | "releasing" | undefined }) {
   if (props.state === undefined) return null;
   return (
-    <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+    <Text className="font-t3-medium text-xs text-adaptive-neutral-600-400">
       {props.state === "releasing" ? "Delivering…" : "Queued — delivers after the current turn"}
     </Text>
   );
@@ -1509,7 +1508,7 @@ function SessionOriginUserMessage(props: {
   return (
     <View className="mb-5 items-start">
       <View
-        className="min-w-0 gap-2 rounded-[20px] border border-neutral-300 px-3.5 py-2.5 dark:border-neutral-700"
+        className="min-w-0 gap-2 rounded-[20px] border border-adaptive-neutral-300-a60-white-a12 px-3.5 py-2.5"
         style={{ maxWidth: props.maxWidth }}
       >
         <Pressable
@@ -1526,7 +1525,7 @@ function SessionOriginUserMessage(props: {
           }}
           className="flex-row items-center gap-1"
         >
-          <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+          <Text className="font-t3-medium text-xs text-adaptive-neutral-600-400">
             {label}
             {openThreadId !== null ? " ›" : ""}
           </Text>

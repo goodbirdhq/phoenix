@@ -105,8 +105,8 @@ export function resolveThreadStatus(
     return {
       kind: "awaiting-parent",
       label: "Waiting on Parent",
-      pillClassName: "bg-indigo-500/12 dark:bg-indigo-500/16",
-      textClassName: "text-indigo-700 dark:text-indigo-300",
+      pillClassName: "bg-adaptive-indigo-500-a12-a16",
+      textClassName: "text-adaptive-indigo-700-300",
       iconColor: "#5e5ce6",
       iconBackground: "rgba(94,92,230,0.22)",
       pulse: false,
