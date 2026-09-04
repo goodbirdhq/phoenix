@@ -390,11 +390,11 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     // delivery caught mid-release: the repository's cancel transition accepts
     // releasing rows, and leaving one behind pins the stalled count and the
     // client's queued marker forever. (Interrupt-mode rows surface here as
-    // "interrupting" until the replacement turn is accepted.)
+    // "queued"; the repository normalizes that internal state.)
     const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
       (entry) =>
         entry.threadId === input.threadId &&
-        (entry.state === "queued" || entry.state === "interrupting" || entry.state === "releasing"),
+        (entry.state === "queued" || entry.state === "releasing"),
     );
     yield* Effect.forEach(
       queued,
@@ -677,11 +677,9 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   let deathNoticeWorker!: DrainableWorker<DeathNoticeInput>;
 
   const processTerminalSession = Effect.fn("SessionSpawnReactor.processTerminalSession")(
-    function* (input: {
-      readonly threadId: ThreadId;
-      readonly session: OrchestrationSession & { readonly status: "stopped" | "error" };
-    }) {
+    function* (input: { readonly threadId: ThreadId; readonly session: OrchestrationSession }) {
       const { threadId, session } = input;
+      if (!isTerminalStatus(session.status)) return;
       // Three reactions to the same terminal episode, in this order on
       // purpose. Cancelling the queue first tells the parent its pending
       // work was dropped; the synthesized report (when the child never
@@ -1199,18 +1197,28 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     // its asynchronous death notice lands. Revisit every spawned terminal
     // shell once at startup; deterministic report and notice command ids make
     // already-completed episodes no-ops while repairing that crash window.
-    const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
-    yield* Effect.forEach(
-      shellSnapshot.threads,
-      (thread) => {
-        const session = thread.session;
-        return thread.spawnedByThreadId !== null &&
-          session !== null &&
-          isTerminalStatus(session.status)
-          ? processInputSafely({ type: "recover", threadId: thread.id })
-          : Effect.void;
-      },
-      { concurrency: 1 },
+    yield* snapshotQuery.getShellSnapshot().pipe(
+      Effect.flatMap((shellSnapshot) =>
+        Effect.forEach(
+          shellSnapshot.threads,
+          (thread) => {
+            const session = thread.session;
+            return thread.spawnedByThreadId !== null &&
+              session !== null &&
+              isTerminalStatus(session.status)
+              ? processInputSafely({ type: "recover", threadId: thread.id })
+              : Effect.void;
+          },
+          { concurrency: 1 },
+        ),
+      ),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("session spawn reactor failed to recover terminal sessions", {
+              cause: Cause.pretty(cause),
+            }),
+      ),
     );
     yield* forkParked(
       Effect.sleep(RECOVERY_INTERVAL).pipe(Effect.andThen(enqueueRecovery()), Effect.forever),

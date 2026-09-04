@@ -113,7 +113,6 @@ const releasing = (suffix: string, releasingAt = STALE): ProjectionQueuedTurnSta
 
 const interrupting = (suffix: string): ProjectionQueuedTurnStart => ({
   ...queued(suffix, "interrupt"),
-  state: "interrupting",
 });
 
 const sessionSetEvent = (shell: OrchestrationThreadShell): OrchestrationEvent => ({
