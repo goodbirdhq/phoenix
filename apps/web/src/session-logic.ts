@@ -285,6 +285,13 @@ function workEntryIndicatesToolFailureFromOutput(
   if (!workLogEntryIsToolLike(entry)) {
     return false;
   }
+  // Partial output is untrustworthy: a running tool's stream often carries
+  // failure-looking lines ("No such file or directory", "exit code 1" inside
+  // printed logs) that its completed result clears. Scan the text only once
+  // the lifecycle has settled, or when the provider reports no lifecycle.
+  if (ls === "inProgress") {
+    return false;
+  }
   const parts: string[] = [];
   if (entry.detail) {
     parts.push(entry.detail);

@@ -721,6 +721,12 @@ function workEntryIndicatesToolFailure(entry: WorkLogEntry): boolean {
   if (!workLogEntryIsToolLike(entry)) {
     return false;
   }
+  // Partial output is untrustworthy: a running tool's stream often carries
+  // failure-looking lines that its completed result clears. Scan the text
+  // only once the lifecycle has settled, or when no lifecycle is reported.
+  if (entry.toolLifecycleStatus === "inProgress") {
+    return false;
+  }
   return toolDetailTextLooksLikeFailure([entry.detail, entry.command].filter(Boolean).join("\n"));
 }
 

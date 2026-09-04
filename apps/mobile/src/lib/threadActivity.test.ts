@@ -1061,6 +1061,46 @@ describe("buildThreadFeed", () => {
     });
   });
 
+  it("treats failure-looking partial output as neutral while the tool is still running", () => {
+    const turnId = TurnId.make("turn-running-partial");
+    const thread = makeThread({
+      id: ThreadId.make("thread-running-partial"),
+      projectId: ProjectId.make("project-1"),
+      title: "Streaming work",
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      activities: [
+        makeActivity({
+          id: EventId.make("tool-streaming"),
+          kind: "tool.updated",
+          tone: "tool",
+          summary: "Run command",
+          createdAt: "2026-04-01T00:00:05.000Z",
+          turnId,
+          payload: {
+            title: "Run command",
+            itemType: "command_execution",
+            detail: "zsh: command not found: nope",
+            status: "inProgress",
+          },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    expect(feed[0]).toMatchObject({
+      type: "activity-group",
+      activities: [{ status: "neutral" }],
+    });
+    expect(deriveThreadFeedPresentation(feed, thread.latestTurn, new Set())).toEqual([]);
+  });
+
   it("appends active work as a normal timeline row", () => {
     const startedAt = "2026-04-01T00:00:01.000Z";
     const presented = deriveThreadFeedPresentation([], null, new Set(), new Set(), startedAt);
