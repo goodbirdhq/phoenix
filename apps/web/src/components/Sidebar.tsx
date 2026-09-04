@@ -1545,7 +1545,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         {/* The label alone is the live region: a role="status"
                             wrapper around the ticking duration would make
                             screen readers announce every second. */}
-                        <span role="status">{topStatus.label}</span>
+                        <span
+                          role="status"
+                          className={status === "working" ? "sr-only" : undefined}
+                        >
+                          {topStatus.label}
+                        </span>
                         {status === "working" ? (
                           <span aria-hidden>
                             <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
@@ -1590,7 +1595,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           }
                         >
                           <CheckIcon className="size-3.5" />
-                          Settle
                         </TooltipTrigger>
                         <TooltipPopup>Settle thread</TooltipPopup>
                       </Tooltip>
