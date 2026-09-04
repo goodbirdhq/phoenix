@@ -67,6 +67,9 @@ export const READ_REPORT_MAX_CHARS = 16_384;
 
 const BoundedText = (maxLength: number) => Schema.String.check(Schema.isMaxLength(maxLength));
 
+const SPAWN_RUNTIME_MODE_DESCRIPTION =
+  "Permission mode for the child. Omit this field to inherit the calling thread's runtime mode. Only set it when the user explicitly requests a more supervised child; a child can never be more permissive than its parent.";
+
 export const SpawnSessionInput = Schema.Struct({
   // Provider instance slug from list_session_providers (e.g. "claudeAgent",
   // "codex_personal"). Omit to reuse the calling thread's provider instance.
@@ -99,9 +102,9 @@ export const SpawnSessionInput = Schema.Struct({
   // Fetch origin's pull-request head and create the worktree at that commit.
   // This cannot be combined with gitRef.
   checkoutPr: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
-  // Permission mode for the child. Never allowed to exceed the calling
-  // thread's own mode.
-  runtimeMode: Schema.optional(RuntimeMode),
+  runtimeMode: Schema.optional(
+    RuntimeMode.annotate({ description: SPAWN_RUNTIME_MODE_DESCRIPTION }),
+  ).annotate({ description: SPAWN_RUNTIME_MODE_DESCRIPTION }),
   interactionMode: Schema.optional(ProviderInteractionMode),
   // Whether this child's completion report wakes the calling session.
   // "queue" (default) delivers it like a human message; "notify-only" leaves
