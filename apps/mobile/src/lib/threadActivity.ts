@@ -14,6 +14,14 @@ import type {
 } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import {
+  deriveProviderListToolActivity,
+  formatProviderListHeading,
+  formatProviderListPreview,
+  formatProviderListReadyLabel,
+  formatProviderListWindows,
+  type ProviderListToolActivity,
+} from "@t3tools/shared/providerListToolActivity";
+import {
   deriveScheduleToolActivity,
   SCHEDULE_ACTION_LABELS,
   type ScheduleToolActivity,
@@ -114,6 +122,7 @@ interface WorkLogEntry {
   spawnedSession?: SpawnedSessionToolActivity;
   sessionMessage?: SessionMessageToolActivity;
   scheduleActivity?: ScheduleToolActivity;
+  providerListActivity?: ProviderListToolActivity;
   /** Set on rows that collapsed a run of provider retry notices. */
   providerRetry?: ProviderRetryGroup & { readonly followedByActivity: boolean };
 }
@@ -479,6 +488,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (scheduleActivity) {
       entry.scheduleActivity = scheduleActivity;
     }
+    const providerListActivity = deriveProviderListToolActivity(data);
+    if (providerListActivity) {
+      entry.providerListActivity = providerListActivity;
+    }
     if (data?.item !== undefined) {
       entry.toolData = data.item;
     }
@@ -642,6 +655,8 @@ function mergeDerivedWorkLogEntries(
   const sessionMessage = next.sessionMessage
     ? { ...previous.sessionMessage, ...next.sessionMessage }
     : previous.sessionMessage;
+  const scheduleActivity = next.scheduleActivity ?? previous.scheduleActivity;
+  const providerListActivity = next.providerListActivity ?? previous.providerListActivity;
   return {
     ...previous,
     ...next,
@@ -657,6 +672,8 @@ function mergeDerivedWorkLogEntries(
     ...(toolData !== undefined ? { toolData } : {}),
     ...(spawnedSession !== undefined ? { spawnedSession } : {}),
     ...(sessionMessage !== undefined ? { sessionMessage } : {}),
+    ...(scheduleActivity !== undefined ? { scheduleActivity } : {}),
+    ...(providerListActivity !== undefined ? { providerListActivity } : {}),
   };
 }
 
@@ -793,6 +810,7 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
   if (entry.spawnedSession) return "agent";
   if (entry.sessionMessage) return "message";
   if (entry.scheduleActivity) return "calendar";
+  if (entry.providerListActivity) return "wrench";
   if (entry.requestKind === "command") return "command";
   if (entry.requestKind === "file-read") return "eye";
   if (entry.requestKind === "file-change") return "edit";
@@ -819,8 +837,23 @@ function buildWorkEntryExpandedBody(entry: WorkLogEntry): string | null {
     }
   };
 
+  if (entry.providerListActivity) {
+    appendUniqueBlock(
+      entry.providerListActivity.providers
+        .map((provider) => {
+          const ready = formatProviderListReadyLabel(provider.available);
+          const windows = formatProviderListWindows(provider.windows);
+          const quota = provider.status === "limited" && windows.length === 0 ? "limited" : windows;
+          const suffix = quota ? ` · ${quota}` : "";
+          return `${provider.displayName} (${provider.driver}) — ${ready}${suffix}`;
+        })
+        .join("\n"),
+    );
+  }
   if (entry.itemType === "mcp_tool_call" && entry.toolData !== undefined) {
-    appendUniqueBlock(`MCP call\n${JSON.stringify(entry.toolData, null, 2)}`);
+    if (!entry.providerListActivity) {
+      appendUniqueBlock(`MCP call\n${JSON.stringify(entry.toolData, null, 2)}`);
+    }
   }
   appendUniqueBlock(entry.rawCommand ?? entry.command);
   appendUniqueBlock(entry.detail);
@@ -833,6 +866,7 @@ function buildWorkEntryExpandedBody(entry: WorkLogEntry): string | null {
 
 function workEntryHasExpandedBody(entry: WorkLogEntry): boolean {
   return (
+    entry.providerListActivity !== undefined ||
     (entry.itemType === "mcp_tool_call" && entry.toolData !== undefined) ||
     Boolean((entry.rawCommand ?? entry.command)?.trim()) ||
     Boolean(entry.detail?.trim()) ||
@@ -855,12 +889,21 @@ function memoizeValue<T>(build: () => T): () => T {
 function workEntryPreview(
   workEntry: Pick<
     WorkLogEntry,
-    "detail" | "command" | "changedFiles" | "spawnedSession" | "sessionMessage" | "scheduleActivity"
+    | "detail"
+    | "command"
+    | "changedFiles"
+    | "spawnedSession"
+    | "sessionMessage"
+    | "scheduleActivity"
+    | "providerListActivity"
   >,
 ): string | null {
   if (workEntry.scheduleActivity) {
     const { name, cadence, timeZone } = workEntry.scheduleActivity;
     return [name, cadence, timeZone].filter(Boolean).join(" · ");
+  }
+  if (workEntry.providerListActivity) {
+    return formatProviderListPreview(workEntry.providerListActivity);
   }
   if (workEntry.spawnedSession) return workEntry.spawnedSession.title;
   if (workEntry.sessionMessage?.preview) return workEntry.sessionMessage.preview;
@@ -897,6 +940,9 @@ function workEntryHeading(workEntry: WorkLogEntry): string {
   // spawn_session gets, and the same information web's card carries.
   if (workEntry.scheduleActivity && !workEntryFailed(workEntry)) {
     return SCHEDULE_ACTION_LABELS[workEntry.scheduleActivity.action];
+  }
+  if (workEntry.providerListActivity && !workEntryFailed(workEntry)) {
+    return formatProviderListHeading(workEntry.providerListActivity);
   }
   if (workEntry.spawnedSession) {
     if (workEntryFailed(workEntry)) {
@@ -1817,7 +1863,8 @@ export function buildThreadFeed(
               alwaysVisible:
                 entry.spawnedSession !== undefined ||
                 entry.sessionMessage !== undefined ||
-                entry.scheduleActivity !== undefined,
+                entry.scheduleActivity !== undefined ||
+                entry.providerListActivity !== undefined,
               ...(workEntryOpenThreadId(entry) !== undefined
                 ? { openThreadId: workEntryOpenThreadId(entry) }
                 : {}),

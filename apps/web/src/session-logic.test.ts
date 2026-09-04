@@ -2528,6 +2528,69 @@ describe("deriveWorkLogEntries schedule writes", () => {
   });
 });
 
+describe("deriveWorkLogEntries provider list", () => {
+  const providerListCarrier = {
+    totalCount: 2,
+    providers: [
+      {
+        instanceId: "claudeAgent",
+        displayName: "Claude A",
+        driver: "claudeAgent",
+        available: true,
+        status: "limited",
+        windows: [{ kind: "weekly", usedPercent: 100 }],
+      },
+      {
+        instanceId: "codex",
+        displayName: "Codex",
+        driver: "codex",
+        available: false,
+        status: "available",
+        windows: [],
+      },
+    ],
+  };
+
+  const providerListActivity = (tool: string, extra: Record<string, unknown> = {}) =>
+    makeActivity({
+      kind: "tool.completed",
+      summary: `phoenix · ${tool}`,
+      payload: {
+        itemType: "mcp_tool_call",
+        data: {
+          item: { type: "mcp_tool_call", server: "phoenix", tool },
+          ...extra,
+        },
+      },
+    });
+
+  it("carries the projected provider list onto the work entry", () => {
+    const entries = deriveWorkLogEntries([
+      providerListActivity("list_session_providers", { providerListActivity: providerListCarrier }),
+    ]);
+
+    expect(entries[0]?.providerListActivity).toEqual(providerListCarrier);
+  });
+
+  it("carries an empty provider list as a zero-state receipt", () => {
+    const entries = deriveWorkLogEntries([
+      providerListActivity("list_session_providers", {
+        providerListActivity: { totalCount: 0, providers: [] },
+      }),
+    ]);
+
+    expect(entries[0]?.providerListActivity).toEqual({ totalCount: 0, providers: [] });
+  });
+
+  it("leaves other session tools as ordinary MCP rows", () => {
+    const entries = deriveWorkLogEntries([
+      providerListActivity("list_sessions", { providerListActivity: providerListCarrier }),
+    ]);
+
+    expect(entries[0]?.providerListActivity).toBeUndefined();
+  });
+});
+
 describe("session activity performance", () => {
   it("reuses entries for unchanged activities", () => {
     const activities = ["status", "diff", "log"].map((command, index) =>
