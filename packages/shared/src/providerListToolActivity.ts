@@ -123,7 +123,12 @@ function collectActivity(
     if (entry) providers.push(entry);
     if (providers.length >= PROVIDER_LIST_MAX_PROVIDERS) break;
   }
-  if (providers.length === 0) return undefined;
+  if (providers.length === 0) {
+    if (rawProviders.length === 0) {
+      return { providers: [], totalCount: asTotalCount(totalHint, 0) };
+    }
+    return undefined;
+  }
   return {
     providers,
     totalCount: asTotalCount(totalHint, Math.max(providers.length, rawProviders.length)),
@@ -198,6 +203,7 @@ export function providerListSummaryTone(
 }
 
 export function formatProviderListHeading(activity: ProviderListToolActivity): string {
+  if (activity.providers.length === 0) return "Providers · none configured";
   const ready = activity.providers.filter((provider) => provider.available).length;
   const limited = activity.providers.filter((provider) => provider.status === "limited").length;
   const shown = activity.providers.length;
@@ -213,6 +219,7 @@ export function formatProviderListHeading(activity: ProviderListToolActivity): s
 }
 
 export function formatProviderListPreview(activity: ProviderListToolActivity): string {
+  if (activity.providers.length === 0) return "none configured";
   const names = activity.providers.map((provider) => provider.displayName).join(", ");
   const ready = activity.providers.filter((provider) => provider.available).length;
   const shown = activity.providers.length;

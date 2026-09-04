@@ -225,11 +225,17 @@ describe("deriveProviderListToolActivity", () => {
     ).toBeUndefined();
   });
 
-  it("returns nothing when providers is missing or empty", () => {
+  it("returns nothing when providers is missing", () => {
     expect(deriveProviderListToolActivity(mcpCall("list_session_providers", {}))).toBeUndefined();
+  });
+
+  it("keeps an empty success as a zero-state card", () => {
     expect(
       deriveProviderListToolActivity(mcpCall("list_session_providers", { providers: [] })),
-    ).toBeUndefined();
+    ).toEqual({
+      providers: [],
+      totalCount: 0,
+    });
   });
 
   it("strips model catalog from the carrier", () => {
@@ -303,6 +309,13 @@ describe("provider list copy", () => {
     expect(formatProviderListHeading(activity)).toBe("Providers · 1 ready · 1 limited");
     expect(providerListSummaryTone(activity)).toBe("warning");
     expect(formatProviderListPreview(activity)).toBe("1/2 ready · Claude A, Codex");
+  });
+
+  it("names a successful empty list instead of looking like a failed tool call", () => {
+    const empty = { totalCount: 0, providers: [] };
+    expect(formatProviderListHeading(empty)).toBe("Providers · none configured");
+    expect(formatProviderListPreview(empty)).toBe("none configured");
+    expect(providerListSummaryTone(empty)).toBe("neutral");
   });
 
   it("admits when the card is showing a truncated subset", () => {

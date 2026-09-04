@@ -1291,6 +1291,40 @@ describe("buildThreadFeed provider list", () => {
     expect(activity?.alwaysVisible).toBe(true);
   });
 
+  it("shows none configured for an empty success", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-1"),
+      projectId: ProjectId.make("project-1"),
+      title: "Working",
+      activities: [
+        makeActivity({
+          id: EventId.make("providers-empty"),
+          kind: "tool.completed",
+          summary: "phoenix · list_session_providers",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: {
+            itemType: "mcp_tool_call",
+            data: {
+              item: {
+                type: "mcp_tool_call",
+                server: "phoenix",
+                tool: "list_session_providers",
+              },
+              providerListActivity: { totalCount: 0, providers: [] },
+            },
+          },
+        }),
+      ],
+    });
+    let activity = null;
+    for (const entry of buildThreadFeed(thread)) {
+      if (entry.type === "activity-group") activity = entry.activities[0] ?? null;
+    }
+    expect(activity?.summary).toBe("Providers · none configured");
+    expect(activity?.detail).toBe("none configured");
+    expect(activity?.alwaysVisible).toBe(true);
+  });
+
   it("leaves other session tools as ordinary MCP rows", () => {
     const activity = activityOf("list_sessions");
 

@@ -2546,6 +2546,16 @@ describe("deriveWorkLogEntries provider list", () => {
     expect(entries[0]?.providerListActivity).toEqual(providerListCarrier);
   });
 
+  it("carries an empty provider list as a zero-state receipt", () => {
+    const entries = deriveWorkLogEntries([
+      providerListActivity("list_session_providers", {
+        providerListActivity: { totalCount: 0, providers: [] },
+      }),
+    ]);
+
+    expect(entries[0]?.providerListActivity).toEqual({ totalCount: 0, providers: [] });
+  });
+
   it("leaves other session tools as ordinary MCP rows", () => {
     const entries = deriveWorkLogEntries([
       providerListActivity("list_sessions", { providerListActivity: providerListCarrier }),

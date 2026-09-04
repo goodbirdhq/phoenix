@@ -2832,36 +2832,41 @@ const ProviderListRow = memo(function ProviderListRow(props: { workEntry: Timeli
           snapshot
         </span>
       </div>
-      <ul className="mt-2 space-y-1.5">
-        {activity.providers.map((provider) => {
-          const ready = formatProviderListReadyLabel(provider.available);
-          const windows = formatProviderListWindows(provider.windows);
-          const quota = provider.status === "limited" && windows.length === 0 ? "limited" : windows;
-          const dot =
-            provider.status === "limited"
-              ? "bg-warning"
-              : provider.status === "available"
-                ? "bg-success"
-                : "bg-muted-foreground";
-          return (
-            <li key={provider.instanceId} className="flex items-center gap-2 text-[12px]">
-              <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dot)} />
-              <span className="min-w-0 truncate font-medium">{provider.displayName}</span>
-              <span className="hidden truncate text-muted-foreground sm:inline">
-                · {provider.driver}
-              </span>
-              <span className="ml-auto flex min-w-0 shrink items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
-                <span className={cn(provider.available ? "text-success" : "text-muted-foreground")}>
-                  {ready}
+      {activity.providers.length > 0 ? (
+        <ul className="mt-2 space-y-1.5">
+          {activity.providers.map((provider) => {
+            const ready = formatProviderListReadyLabel(provider.available);
+            const windows = formatProviderListWindows(provider.windows);
+            const quota =
+              provider.status === "limited" && windows.length === 0 ? "limited" : windows;
+            const dot =
+              provider.status === "limited"
+                ? "bg-warning"
+                : provider.status === "available"
+                  ? "bg-success"
+                  : "bg-muted-foreground";
+            return (
+              <li key={provider.instanceId} className="flex items-center gap-2 text-[12px]">
+                <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dot)} />
+                <span className="min-w-0 truncate font-medium">{provider.displayName}</span>
+                <span className="hidden truncate text-muted-foreground sm:inline">
+                  · {provider.driver}
                 </span>
-                {quota ? (
-                  <span className="hidden min-w-0 truncate tabular-nums sm:inline">{quota}</span>
-                ) : null}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+                <span className="ml-auto flex min-w-0 shrink items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
+                  <span
+                    className={cn(provider.available ? "text-success" : "text-muted-foreground")}
+                  >
+                    {ready}
+                  </span>
+                  {quota ? (
+                    <span className="hidden min-w-0 truncate tabular-nums sm:inline">{quota}</span>
+                  ) : null}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
     </div>
   );
 });

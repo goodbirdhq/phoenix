@@ -422,6 +422,12 @@ describe("list_session_providers carrier survival", () => {
     expect(JSON.stringify(projected.payload).includes("opus")).toBe(false);
   });
 
+  it("carries an empty success so the card can show none configured", () => {
+    const projected = projectActivityPayload(listCall({ providers: [] }));
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.providerListActivity).toEqual({ providers: [], totalCount: 0 });
+  });
+
   it("adds no carrier for a failed call or a different tool", () => {
     const failed = projectActivityPayload(listCall({ error: "unavailable" }));
     const other = projectActivityPayload(
