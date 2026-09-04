@@ -15,6 +15,10 @@ import type {
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import {
   deriveProviderListToolActivity,
+  formatProviderListHeading,
+  formatProviderListPreview,
+  formatProviderListReadyLabel,
+  formatProviderListWindows,
   type ProviderListToolActivity,
 } from "@t3tools/shared/providerListToolActivity";
 import {
@@ -808,16 +812,18 @@ function buildWorkEntryExpandedBody(entry: WorkLogEntry): string | null {
   if (entry.providerListActivity) {
     appendUniqueBlock(
       entry.providerListActivity.providers
-        .map((p) => {
-          const usage = p.windows[0] ? ` ${p.windows[0].usedPercent}% used` : "";
-          return `${p.displayName} (${p.driver}) — ${p.available ? "available" : p.status}${usage}`;
+        .map((provider) => {
+          const ready = formatProviderListReadyLabel(provider.available);
+          const windows = formatProviderListWindows(provider.windows);
+          const quota = provider.status === "limited" && windows.length === 0 ? "limited" : windows;
+          const suffix = quota ? ` · ${quota}` : "";
+          return `${provider.displayName} (${provider.driver}) — ${ready}${suffix}`;
         })
         .join("\n"),
     );
   }
   if (entry.itemType === "mcp_tool_call" && entry.toolData !== undefined) {
-    // Providers and schedule receipts already have a snapshot preview; keep the raw MCP dump only for generic calls.
-    if (!entry.providerListActivity && !entry.scheduleActivity) {
+    if (!entry.providerListActivity) {
       appendUniqueBlock(`MCP call\n${JSON.stringify(entry.toolData, null, 2)}`);
     }
   }
@@ -868,9 +874,7 @@ function workEntryPreview(
     return [name, cadence, timeZone].filter(Boolean).join(" · ");
   }
   if (workEntry.providerListActivity) {
-    const names = workEntry.providerListActivity.providers.map((p) => p.displayName).join(", ");
-    const avail = workEntry.providerListActivity.providers.filter((p) => p.available).length;
-    return `${avail}/${workEntry.providerListActivity.providers.length} available · ${names}`;
+    return formatProviderListPreview(workEntry.providerListActivity);
   }
   if (workEntry.spawnedSession) return workEntry.spawnedSession.title;
   if (workEntry.command) return workEntry.command;
@@ -908,9 +912,7 @@ function workEntryHeading(workEntry: WorkLogEntry): string {
     return SCHEDULE_ACTION_LABELS[workEntry.scheduleActivity.action];
   }
   if (workEntry.providerListActivity && !workEntryFailed(workEntry)) {
-    const total = workEntry.providerListActivity.providers.length;
-    const avail = workEntry.providerListActivity.providers.filter((p) => p.available).length;
-    return total === 1 ? "Providers · 1 provider" : `Providers · ${avail} of ${total} available`;
+    return formatProviderListHeading(workEntry.providerListActivity);
   }
   if (workEntry.spawnedSession) {
     if (workEntryFailed(workEntry)) {

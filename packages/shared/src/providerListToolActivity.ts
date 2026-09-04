@@ -1,5 +1,8 @@
 import { asRecord, asTrimmedString, parseJsonRecord } from "./toolActivityPayload.ts";
 
+export const PROVIDER_LIST_MAX_PROVIDERS = 8;
+export const PROVIDER_LIST_MAX_WINDOWS = 4;
+
 function isPhoenixProviderListTool(
   data: Record<string, unknown>,
   item: Record<string, unknown>,
@@ -11,24 +14,37 @@ function isPhoenixProviderListTool(
   return flattened === "mcp__phoenix__list_session_providers";
 }
 
+export interface ProviderListWindow {
+  readonly kind: string;
+  readonly label?: string;
+  readonly usedPercent: number;
+}
+
 export interface ProviderListEntry {
   readonly instanceId: string;
   readonly displayName: string;
   readonly driver: string;
+  /** Whether this instance can currently start a session. */
   readonly available: boolean;
+  /** Quota telemetry for this instance — independent of spawnability. */
   readonly status: "available" | "limited" | "unknown";
-  readonly windows: ReadonlyArray<{
-    readonly kind: string;
-    readonly usedPercent: number;
-  }>;
+  readonly windows: ReadonlyArray<ProviderListWindow>;
 }
 
 export interface ProviderListToolActivity {
   readonly providers: ReadonlyArray<ProviderListEntry>;
+  /** Count of providers in the tool result, before the card cap. */
+  readonly totalCount: number;
 }
 
 function asStatus(value: unknown): ProviderListEntry["status"] | undefined {
   return value === "available" || value === "limited" || value === "unknown" ? value : undefined;
+}
+
+function asFinitePercent(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  if (value < 0 || value > 100) return undefined;
+  return value;
 }
 
 function deriveEntry(raw: unknown): ProviderListEntry | undefined {
@@ -43,20 +59,20 @@ function deriveEntry(raw: unknown): ProviderListEntry | undefined {
   const availability = asRecord(record.availability);
   const status = asStatus(availability?.status) ?? asStatus(record.status) ?? "unknown";
   const rawWindowsSource = Array.isArray(availability?.windows)
-    ? (availability?.windows as unknown[])
+    ? (availability.windows as unknown[])
     : Array.isArray(record.windows)
       ? (record.windows as unknown[])
       : [];
-  const windows: Array<{ kind: string; usedPercent: number }> = [];
+  const windows: ProviderListWindow[] = [];
   for (const w of rawWindowsSource) {
     const wr = asRecord(w);
     if (!wr) continue;
     const kind = asTrimmedString(wr.kind);
-    const usedPercent = typeof wr.usedPercent === "number" ? wr.usedPercent : undefined;
+    const usedPercent = asFinitePercent(wr.usedPercent);
     if (!kind || usedPercent === undefined) continue;
-    if (usedPercent < 0 || usedPercent > 100 || !Number.isFinite(usedPercent)) continue;
-    windows.push({ kind, usedPercent });
-    if (windows.length >= 4) break;
+    const label = asTrimmedString(wr.label);
+    windows.push(label ? { kind, label, usedPercent } : { kind, usedPercent });
+    if (windows.length >= PROVIDER_LIST_MAX_WINDOWS) break;
   }
   return {
     instanceId,
@@ -90,6 +106,30 @@ function findProvidersRecord(value: unknown): Record<string, unknown> | undefine
   return undefined;
 }
 
+function asTotalCount(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value) && value >= fallback) {
+    return Math.floor(value);
+  }
+  return fallback;
+}
+
+function collectActivity(
+  rawProviders: unknown[],
+  totalHint: unknown,
+): ProviderListToolActivity | undefined {
+  const providers: ProviderListEntry[] = [];
+  for (const raw of rawProviders) {
+    const entry = deriveEntry(raw);
+    if (entry) providers.push(entry);
+    if (providers.length >= PROVIDER_LIST_MAX_PROVIDERS) break;
+  }
+  if (providers.length === 0) return undefined;
+  return {
+    providers,
+    totalCount: asTotalCount(totalHint, Math.max(providers.length, rawProviders.length)),
+  };
+}
+
 /**
  * Recognizes Phoenix's list_session_providers MCP call and reduces it to the
  * handful of fields a chat card renders.
@@ -113,28 +153,70 @@ export function deriveProviderListToolActivity(
     const rawProviders = Array.isArray(projected.providers)
       ? (projected.providers as unknown[])
       : undefined;
-    if (rawProviders && rawProviders.length > 0) {
-      const providers: ProviderListEntry[] = [];
-      for (const raw of rawProviders) {
-        const entry = deriveEntry(raw);
-        if (entry) providers.push(entry);
-        if (providers.length >= 8) break;
-      }
-      if (providers.length > 0) return { providers };
+    if (rawProviders !== undefined) {
+      return collectActivity(rawProviders, projected.totalCount);
     }
-    // Projected carrier present but empty/invalid -> treat as no card (failed/in-progress).
-    if (rawProviders !== undefined) return undefined;
   }
 
   const resultRecord = findProvidersRecord(item?.result ?? data.result);
   if (!resultRecord) return undefined;
-  const rawProviders = resultRecord.providers as unknown[];
-  const providers: ProviderListEntry[] = [];
-  for (const raw of rawProviders) {
-    const entry = deriveEntry(raw);
-    if (entry) providers.push(entry);
-    if (providers.length >= 8) break;
+  return collectActivity(
+    resultRecord.providers as unknown[],
+    (resultRecord.providers as unknown[]).length,
+  );
+}
+
+function formatPercent(value: number): string {
+  return `${Number.isInteger(value) ? value : Math.round(value)}%`;
+}
+
+export function formatProviderListWindows(windows: ReadonlyArray<ProviderListWindow>): string {
+  return windows
+    .map((window) => `${window.label ?? window.kind} ${formatPercent(window.usedPercent)}`)
+    .join(" · ");
+}
+
+export function formatProviderListReadyLabel(available: boolean): "ready" | "offline" {
+  return available ? "ready" : "offline";
+}
+
+export function formatProviderListQuotaLabel(
+  status: ProviderListEntry["status"],
+): "ok" | "limited" | "unknown" {
+  if (status === "limited") return "limited";
+  if (status === "available") return "ok";
+  return "unknown";
+}
+
+/** Header summary tone: quota-limited wins over spawnable-ready. */
+export function providerListSummaryTone(
+  activity: ProviderListToolActivity,
+): "success" | "warning" | "neutral" {
+  if (activity.providers.some((provider) => provider.status === "limited")) return "warning";
+  if (activity.providers.some((provider) => provider.available)) return "success";
+  return "neutral";
+}
+
+export function formatProviderListHeading(activity: ProviderListToolActivity): string {
+  const ready = activity.providers.filter((provider) => provider.available).length;
+  const limited = activity.providers.filter((provider) => provider.status === "limited").length;
+  const shown = activity.providers.length;
+  const parts: string[] = [];
+  if (activity.totalCount > shown) {
+    parts.push(`showing ${shown} of ${activity.totalCount}`);
   }
-  if (providers.length === 0) return undefined;
-  return { providers };
+  parts.push(ready === 1 ? "1 ready" : `${ready} ready`);
+  if (limited > 0) {
+    parts.push(limited === 1 ? "1 limited" : `${limited} limited`);
+  }
+  return `Providers · ${parts.join(" · ")}`;
+}
+
+export function formatProviderListPreview(activity: ProviderListToolActivity): string {
+  const names = activity.providers.map((provider) => provider.displayName).join(", ");
+  const ready = activity.providers.filter((provider) => provider.available).length;
+  const shown = activity.providers.length;
+  const count =
+    activity.totalCount > shown ? `${ready} ready of ${shown} shown` : `${ready}/${shown} ready`;
+  return names.length > 0 ? `${count} · ${names}` : count;
 }

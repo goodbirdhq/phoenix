@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { deriveProviderListToolActivity } from "./providerListToolActivity.ts";
+import {
+  deriveProviderListToolActivity,
+  formatProviderListHeading,
+  formatProviderListPreview,
+  formatProviderListReadyLabel,
+  formatProviderListWindows,
+  providerListSummaryTone,
+} from "./providerListToolActivity.ts";
 
 const providersResult = {
   providers: [
@@ -39,6 +46,7 @@ describe("deriveProviderListToolActivity", () => {
     expect(
       deriveProviderListToolActivity(mcpCall("list_session_providers", providersResult)),
     ).toEqual({
+      totalCount: 2,
       providers: [
         {
           instanceId: "claudeAgent",
@@ -103,6 +111,7 @@ describe("deriveProviderListToolActivity", () => {
           result: "Cr…",
         },
         providerListActivity: {
+          totalCount: 1,
           providers: [
             {
               instanceId: "from-carrier",
@@ -116,6 +125,7 @@ describe("deriveProviderListToolActivity", () => {
         },
       }),
     ).toEqual({
+      totalCount: 1,
       providers: [
         {
           instanceId: "from-carrier",
@@ -127,6 +137,57 @@ describe("deriveProviderListToolActivity", () => {
         },
       ],
     });
+  });
+
+  it("keeps spawnability and quota status independent", () => {
+    const carrier = deriveProviderListToolActivity(
+      mcpCall("list_session_providers", {
+        providers: [
+          {
+            instanceId: "ready-but-limited",
+            driver: "claudeAgent",
+            displayName: "Claude A",
+            available: true,
+            availability: {
+              status: "limited",
+              windows: [
+                { kind: "primary", label: "Session", usedPercent: 12 },
+                { kind: "weekly", label: "Weekly", usedPercent: 100 },
+              ],
+            },
+          },
+          {
+            instanceId: "offline-ok-quota",
+            driver: "codex",
+            displayName: "Codex",
+            available: false,
+            availability: { status: "available", windows: [] },
+          },
+        ],
+      }),
+    );
+
+    expect(carrier?.providers).toEqual([
+      {
+        instanceId: "ready-but-limited",
+        displayName: "Claude A",
+        driver: "claudeAgent",
+        available: true,
+        status: "limited",
+        windows: [
+          { kind: "primary", label: "Session", usedPercent: 12 },
+          { kind: "weekly", label: "Weekly", usedPercent: 100 },
+        ],
+      },
+      {
+        instanceId: "offline-ok-quota",
+        displayName: "Codex",
+        driver: "codex",
+        available: false,
+        status: "available",
+        windows: [],
+      },
+    ]);
   });
 
   it("ignores other tools and other servers", () => {
@@ -181,7 +242,7 @@ describe("deriveProviderListToolActivity", () => {
     }
   });
 
-  it("caps at 8 providers and 4 windows", () => {
+  it("caps shown providers at 8 and records the true total", () => {
     const big = {
       providers: Array.from({ length: 20 }, (_, i) => ({
         instanceId: `p-${i}`,
@@ -197,6 +258,66 @@ describe("deriveProviderListToolActivity", () => {
     };
     const carrier = deriveProviderListToolActivity(mcpCall("list_session_providers", big));
     expect(carrier?.providers.length).toBe(8);
+    expect(carrier?.totalCount).toBe(20);
     expect(carrier?.providers[0]?.windows.length).toBe(4);
+  });
+});
+
+describe("provider list copy", () => {
+  it("names every bounded window instead of only the first", () => {
+    expect(
+      formatProviderListWindows([
+        { kind: "primary", label: "Session", usedPercent: 12 },
+        { kind: "weekly", usedPercent: 100 },
+      ]),
+    ).toBe("Session 12% · weekly 100%");
+  });
+
+  it("separates spawnability from quota in labels", () => {
+    expect(formatProviderListReadyLabel(true)).toBe("ready");
+    expect(formatProviderListReadyLabel(false)).toBe("offline");
+  });
+
+  it("does not let a spawnable instance hide limited quota in the heading", () => {
+    const activity = {
+      totalCount: 2,
+      providers: [
+        {
+          instanceId: "a",
+          displayName: "Claude A",
+          driver: "claudeAgent",
+          available: true,
+          status: "limited" as const,
+          windows: [{ kind: "weekly", usedPercent: 100 }],
+        },
+        {
+          instanceId: "b",
+          displayName: "Codex",
+          driver: "codex",
+          available: false,
+          status: "available" as const,
+          windows: [],
+        },
+      ],
+    };
+    expect(formatProviderListHeading(activity)).toBe("Providers · 1 ready · 1 limited");
+    expect(providerListSummaryTone(activity)).toBe("warning");
+    expect(formatProviderListPreview(activity)).toBe("1/2 ready · Claude A, Codex");
+  });
+
+  it("admits when the card is showing a truncated subset", () => {
+    const activity = {
+      totalCount: 12,
+      providers: Array.from({ length: 8 }, (_, i) => ({
+        instanceId: `p-${i}`,
+        displayName: `P ${i}`,
+        driver: "test",
+        available: true,
+        status: "available" as const,
+        windows: [],
+      })),
+    };
+    expect(formatProviderListHeading(activity)).toBe("Providers · showing 8 of 12 · 8 ready");
+    expect(formatProviderListPreview(activity).startsWith("8 ready of 8 shown")).toBe(true);
   });
 });

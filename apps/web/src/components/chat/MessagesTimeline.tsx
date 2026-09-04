@@ -73,6 +73,12 @@ import {
   ZapIcon,
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
+import {
+  formatProviderListHeading,
+  formatProviderListReadyLabel,
+  formatProviderListWindows,
+  providerListSummaryTone,
+} from "@t3tools/shared/providerListToolActivity";
 import { SCHEDULE_ACTION_LABELS } from "@t3tools/shared/scheduleToolActivity";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -2797,16 +2803,9 @@ const ScheduleWriteRow = memo(function ScheduleWriteRow(props: { workEntry: Time
 const ProviderListRow = memo(function ProviderListRow(props: { workEntry: TimelineWorkEntry }) {
   const activity = props.workEntry.providerListActivity;
   if (!activity) return null;
-  const providers = activity.providers;
-  const availableCount = providers.filter((p) => p.available).length;
-  const total = providers.length;
-  const hasAvailable = availableCount > 0;
-  const hasLimited = providers.some((p) => p.status === "limited");
-  const showCount = total === 1 ? `${total} provider` : `${total} providers`;
-  const subtitle =
-    availableCount === total && hasAvailable
-      ? `${showCount} · all available`
-      : `${availableCount} available of ${showCount}`;
+  const tone = providerListSummaryTone(activity);
+  const heading = formatProviderListHeading(activity);
+  const [lead, ...rest] = heading.split(" · ");
 
   return (
     <div className="-mx-1 rounded-md border border-border/60 bg-card/50 px-2.5 py-2">
@@ -2815,28 +2814,35 @@ const ProviderListRow = memo(function ProviderListRow(props: { workEntry: Timeli
           aria-hidden
           className={cn(
             "size-1.5 shrink-0 rounded-full",
-            hasAvailable ? "bg-success" : hasLimited ? "bg-warning" : "bg-muted-foreground",
+            tone === "success"
+              ? "bg-success"
+              : tone === "warning"
+                ? "bg-warning"
+                : "bg-muted-foreground",
           )}
         />
         <WrenchIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <span className="min-w-0 truncate">
-          <span className="font-medium">Providers</span>
-          <span className="text-muted-foreground"> · {subtitle}</span>
+          <span className="font-medium">{lead}</span>
+          {rest.length > 0 ? (
+            <span className="text-muted-foreground"> · {rest.join(" · ")}</span>
+          ) : null}
         </span>
         <span className="ml-auto shrink-0 font-mono text-[.7rem] text-muted-foreground">
           snapshot
         </span>
       </div>
       <ul className="mt-2 space-y-1.5">
-        {providers.map((provider) => {
+        {activity.providers.map((provider) => {
+          const ready = formatProviderListReadyLabel(provider.available);
+          const windows = formatProviderListWindows(provider.windows);
+          const quota = provider.status === "limited" && windows.length === 0 ? "limited" : windows;
           const dot =
-            provider.status === "available"
-              ? "bg-success"
-              : provider.status === "limited"
-                ? "bg-warning"
+            provider.status === "limited"
+              ? "bg-warning"
+              : provider.status === "available"
+                ? "bg-success"
                 : "bg-muted-foreground";
-          const primary = provider.windows[0];
-          const usage = primary ? `${primary.usedPercent}%` : null;
           return (
             <li key={provider.instanceId} className="flex items-center gap-2 text-[12px]">
               <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dot)} />
@@ -2844,15 +2850,13 @@ const ProviderListRow = memo(function ProviderListRow(props: { workEntry: Timeli
               <span className="hidden truncate text-muted-foreground sm:inline">
                 · {provider.driver}
               </span>
-              <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
+              <span className="ml-auto flex min-w-0 shrink items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
                 <span className={cn(provider.available ? "text-success" : "text-muted-foreground")}>
-                  {provider.available
-                    ? "available"
-                    : provider.status === "limited"
-                      ? "limited"
-                      : "unavailable"}
+                  {ready}
                 </span>
-                {usage ? <span className="tabular-nums">{usage} used</span> : null}
+                {quota ? (
+                  <span className="hidden min-w-0 truncate tabular-nums sm:inline">{quota}</span>
+                ) : null}
               </span>
             </li>
           );

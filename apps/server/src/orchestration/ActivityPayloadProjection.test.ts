@@ -356,3 +356,91 @@ describe("Schedule write carrier survival", () => {
     }
   });
 });
+
+describe("list_session_providers carrier survival", () => {
+  const providersResult = {
+    providers: [
+      {
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
+        displayName: "Claude A",
+        available: true,
+        availability: {
+          status: "limited",
+          source: "claude_agent_sdk",
+          windows: [
+            { kind: "primary", label: "Session", usedPercent: 12 },
+            { kind: "weekly", label: "Weekly", usedPercent: 100 },
+          ],
+        },
+        models: [
+          { id: "opus", displayName: "Opus", isDefault: true },
+          { id: "sonnet", displayName: "Sonnet", isDefault: false },
+        ],
+      },
+    ],
+  };
+
+  const listCall = (result: unknown) =>
+    activity({
+      itemType: "mcp_tool_call",
+      data: {
+        item: { type: "mcp_tool_call", server: "phoenix", tool: "list_session_providers", result },
+      },
+    });
+
+  it("carries the snapshot fields past the result summary", () => {
+    const projected = projectActivityPayload(listCall(providersResult));
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+
+    expect((data.item as Record<string, unknown>).result).not.toEqual(providersResult);
+    expect(data.providerListActivity).toEqual({
+      totalCount: 1,
+      providers: [
+        {
+          instanceId: "claudeAgent",
+          displayName: "Claude A",
+          driver: "claudeAgent",
+          available: true,
+          status: "limited",
+          windows: [
+            { kind: "primary", label: "Session", usedPercent: 12 },
+            { kind: "weekly", label: "Weekly", usedPercent: 100 },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not put the model catalog on the wire", () => {
+    const projected = projectActivityPayload(listCall(providersResult));
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    const carrier = data.providerListActivity as Record<string, unknown>;
+    const first = (carrier.providers as Array<Record<string, unknown>>)[0];
+
+    expect(first?.models).toBeUndefined();
+    expect(JSON.stringify(projected.payload).includes("opus")).toBe(false);
+  });
+
+  it("adds no carrier for a failed call or a different tool", () => {
+    const failed = projectActivityPayload(listCall({ error: "unavailable" }));
+    const other = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          item: {
+            type: "mcp_tool_call",
+            server: "phoenix",
+            tool: "spawn_session",
+            result: providersResult,
+          },
+        },
+      }),
+    );
+
+    for (const projected of [failed, other]) {
+      const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+      expect(data.providerListActivity).toBeUndefined();
+    }
+  });
+});
