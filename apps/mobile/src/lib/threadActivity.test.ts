@@ -194,6 +194,52 @@ describe("pending approvals", () => {
 
     expect(derivePendingApprovals([requested, resolved])).toEqual([]);
   });
+
+  it("keeps legacy unknown requests actionable so they can be dismissed", () => {
+    const activity = makeActivity({
+      id: EventId.make("approval-unknown-tool"),
+      kind: "approval.requested",
+      summary: "Approval requested",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      payload: {
+        requestId: "req-unknown-tool",
+        requestType: "unknown",
+        detail: "glob: apps/server/src/**",
+      },
+    });
+
+    expect(derivePendingApprovals([activity])).toEqual([
+      {
+        requestId: "req-unknown-tool",
+        requestKind: "command",
+        createdAt: "2026-08-24T00:00:00.000Z",
+        detail: "glob: apps/server/src/**",
+      },
+    ]);
+  });
+
+  it("derives dynamic tool requests as actionable generic approvals", () => {
+    const activity = makeActivity({
+      id: EventId.make("approval-dynamic-tool"),
+      kind: "approval.requested",
+      summary: "Approval requested",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      payload: {
+        requestId: "req-dynamic-tool",
+        requestType: "dynamic_tool_call",
+        detail: "Search the web",
+      },
+    });
+
+    expect(derivePendingApprovals([activity])).toEqual([
+      {
+        requestId: "req-dynamic-tool",
+        requestKind: "command",
+        createdAt: "2026-08-24T00:00:00.000Z",
+        detail: "Search the web",
+      },
+    ]);
+  });
 });
 
 function makeActivity(
@@ -1013,6 +1059,46 @@ describe("buildThreadFeed", () => {
       type: "activity-group",
       activities: [{ status: "failure" }],
     });
+  });
+
+  it("treats failure-looking partial output as neutral while the tool is still running", () => {
+    const turnId = TurnId.make("turn-running-partial");
+    const thread = makeThread({
+      id: ThreadId.make("thread-running-partial"),
+      projectId: ProjectId.make("project-1"),
+      title: "Streaming work",
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      activities: [
+        makeActivity({
+          id: EventId.make("tool-streaming"),
+          kind: "tool.updated",
+          tone: "tool",
+          summary: "Run command",
+          createdAt: "2026-04-01T00:00:05.000Z",
+          turnId,
+          payload: {
+            title: "Run command",
+            itemType: "command_execution",
+            detail: "zsh: command not found: nope",
+            status: "inProgress",
+          },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    expect(feed[0]).toMatchObject({
+      type: "activity-group",
+      activities: [{ status: "neutral" }],
+    });
+    expect(deriveThreadFeedPresentation(feed, thread.latestTurn, new Set())).toEqual([]);
   });
 
   it("appends active work as a normal timeline row", () => {

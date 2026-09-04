@@ -9,6 +9,9 @@ import {
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { Tool } from "effect/unstable/ai";
+
+import { SpawnSessionTool } from "./tools.ts";
 
 const decodeReadSessionInput = Schema.decodeUnknownEffect(ReadSessionInput);
 const decodePostReportInput = Schema.decodeUnknownEffect(PostReportInput);
@@ -168,3 +171,12 @@ it.effect("post_report rejects a combined structured payload over the size cap",
     })),
   }).pipe(Effect.flip),
 );
+
+it("tells agents to omit runtimeMode when the child should inherit it", () => {
+  const schema = Tool.getJsonSchema(SpawnSessionTool) as {
+    readonly properties?: Readonly<Record<string, { readonly description?: string } | undefined>>;
+  };
+
+  assert.match(schema.properties?.runtimeMode?.description ?? "", /Omit/);
+  assert.match(schema.properties?.runtimeMode?.description ?? "", /inherit/);
+});

@@ -289,6 +289,13 @@ function workEntryIndicatesToolFailureFromOutput(
   if (!workLogEntryIsToolLike(entry)) {
     return false;
   }
+  // Partial output is untrustworthy: a running tool's stream often carries
+  // failure-looking lines ("No such file or directory", "exit code 1" inside
+  // printed logs) that its completed result clears. Scan the text only once
+  // the lifecycle has settled, or when the provider reports no lifecycle.
+  if (ls === "inProgress") {
+    return false;
+  }
   const parts: string[] = [];
   if (entry.detail) {
     parts.push(entry.detail);
@@ -433,6 +440,11 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
       return "file-change";
     case "mcp_elicitation_approval":
       return "mcp-elicitation";
+    case "unknown":
+      // Older servers classified extensible provider permissions (for
+      // example OpenCode's glob/grep permissions) as unknown. They share the
+      // generic approval response contract and must stay dismissible.
+      return "command";
     default:
       return null;
   }

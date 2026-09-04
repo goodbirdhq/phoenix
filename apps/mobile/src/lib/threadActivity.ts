@@ -182,6 +182,7 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
   switch (requestType) {
     case "command_execution_approval":
     case "exec_command_approval":
+    case "dynamic_tool_call":
       return "command";
     case "file_read_approval":
       return "file-read";
@@ -190,6 +191,10 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
       return "file-change";
     case "mcp_elicitation_approval":
       return "mcp-elicitation";
+    case "unknown":
+      // Backward compatibility for extensible provider permissions written
+      // by older servers: keep the request visible so the user can respond.
+      return "command";
     default:
       return null;
   }
@@ -727,6 +732,12 @@ function workEntryIndicatesToolFailure(entry: WorkLogEntry): boolean {
     return true;
   }
   if (!workLogEntryIsToolLike(entry)) {
+    return false;
+  }
+  // Partial output is untrustworthy: a running tool's stream often carries
+  // failure-looking lines that its completed result clears. Scan the text
+  // only once the lifecycle has settled, or when no lifecycle is reported.
+  if (entry.toolLifecycleStatus === "inProgress") {
     return false;
   }
   return toolDetailTextLooksLikeFailure([entry.detail, entry.command].filter(Boolean).join("\n"));

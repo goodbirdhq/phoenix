@@ -345,6 +345,20 @@ describe("resolveThreadMetadataUpdateForNextTurn", () => {
       }),
     ).toBeNull();
   });
+
+  it("does not turn a stale composer account into a metadata switch", () => {
+    expect(
+      resolveThreadMetadataUpdateForNextTurn({
+        currentModelSelection: modelSelection,
+        nextModelSelection: {
+          instanceId: ProviderInstanceId.make("codex-spare"),
+          model: "gpt-5.4",
+        },
+        currentBranch: "feature/current",
+        threadHasStarted: true,
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("buildThreadTurnInterruptInput", () => {

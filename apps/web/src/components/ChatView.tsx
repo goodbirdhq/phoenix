@@ -28,6 +28,7 @@ import {
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
+import { resolveNextTurnModelSelection } from "@t3tools/client-runtime/usage/thread-migration";
 import {
   changeRequestAutoSettles,
   effectiveSettled,
@@ -1406,6 +1407,12 @@ function ChatViewContent(props: ChatViewProps) {
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
+  const composerModelSelection = useComposerDraftStore((store) => {
+    const draft = store.getComposerDraft(composerDraftTarget);
+    return draft?.activeProvider
+      ? (draft.modelSelectionByProvider[draft.activeProvider] ?? null)
+      : null;
+  });
   const composerHasUnsentContent = useComposerDraftStore((store) =>
     composerDraftHasUserContent(store.getComposerDraft(composerDraftTarget)),
   );
@@ -1426,6 +1433,21 @@ function ChatViewContent(props: ChatViewProps) {
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
+
+  useEffect(() => {
+    if (!activeServerThread || !composerModelSelection || !threadHasStarted(activeServerThread)) {
+      return;
+    }
+    const reconciled = resolveNextTurnModelSelection({
+      threadHasStarted: true,
+      threadModelSelection: activeServerThread.modelSelection,
+      requestedModelSelection: composerModelSelection,
+    });
+    if (reconciled.instanceId === composerModelSelection.instanceId) {
+      return;
+    }
+    setComposerDraftModelSelection(routeThreadRef, reconciled, { replaceOptions: true });
+  }, [activeServerThread, composerModelSelection, routeThreadRef, setComposerDraftModelSelection]);
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
@@ -3920,6 +3942,7 @@ function ChatViewContent(props: ChatViewProps) {
       const metadataUpdate = resolveThreadMetadataUpdateForNextTurn({
         currentModelSelection: serverThread.modelSelection,
         ...(input.modelSelection ? { nextModelSelection: input.modelSelection } : {}),
+        threadHasStarted: threadHasStarted(serverThread),
         currentBranch: serverThread.branch,
         ...(input.branch ? { nextBranch: input.branch } : {}),
       });
@@ -5465,6 +5488,11 @@ function ChatViewContent(props: ChatViewProps) {
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
     } = sendCtx;
+    const nextTurnModelSelection = resolveNextTurnModelSelection({
+      threadHasStarted: isServerThread && threadHasStarted(activeThread),
+      threadModelSelection: activeThread.modelSelection,
+      requestedModelSelection: ctxSelectedModelSelection,
+    });
     const composerImages =
       directAnnotation?.image &&
       !sendContextImages.some((image) => image.id === directAnnotation.image?.id)
@@ -5848,9 +5876,9 @@ function ChatViewContent(props: ChatViewProps) {
     }
     const title = truncate(titleSeed);
     const threadCreateModelSelection = createModelSelection(
-      ctxSelectedModelSelection.instanceId,
+      nextTurnModelSelection.instanceId,
       ctxSelectedModel || activeProject.defaultModelSelection?.model || DEFAULT_MODEL,
-      ctxSelectedModelSelection.options,
+      nextTurnModelSelection.options,
     );
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
@@ -5872,7 +5900,7 @@ function ChatViewContent(props: ChatViewProps) {
       const settingsResult = await persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
-        ...(ctxSelectedModel ? { modelSelection: ctxSelectedModelSelection } : {}),
+        ...(ctxSelectedModel ? { modelSelection: nextTurnModelSelection } : {}),
         ...(localCheckoutBranchMismatch
           ? { branch: localCheckoutBranchMismatch.currentBranch }
           : {}),
@@ -5939,7 +5967,7 @@ function ChatViewContent(props: ChatViewProps) {
             text: outgoingMessageText,
             attachments: turnAttachmentsResult.value,
           },
-          modelSelection: ctxSelectedModelSelection,
+          modelSelection: nextTurnModelSelection,
           titleSeed: title,
           runtimeMode,
           interactionMode,
@@ -6286,6 +6314,11 @@ function ChatViewContent(props: ChatViewProps) {
         selectedPromptEffort: ctxSelectedPromptEffort,
         selectedModelSelection: ctxSelectedModelSelection,
       } = sendCtx;
+      const nextTurnModelSelection = resolveNextTurnModelSelection({
+        threadHasStarted: threadHasStarted(activeThread),
+        threadModelSelection: activeThread.modelSelection,
+        requestedModelSelection: ctxSelectedModelSelection,
+      });
 
       const threadIdForSend = activeThread.id;
       const messageIdForSend = newMessageId();
@@ -6320,7 +6353,7 @@ function ChatViewContent(props: ChatViewProps) {
       const settingsResult = await persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
-        modelSelection: ctxSelectedModelSelection,
+        modelSelection: nextTurnModelSelection,
         ...(localCheckoutBranchMismatch
           ? { branch: localCheckoutBranchMismatch.currentBranch }
           : {}),
@@ -6348,7 +6381,7 @@ function ChatViewContent(props: ChatViewProps) {
               text: outgoingMessageText,
               attachments: [],
             },
-            modelSelection: ctxSelectedModelSelection,
+            modelSelection: nextTurnModelSelection,
             titleSeed: activeThread.title,
             runtimeMode,
             interactionMode: nextInteractionMode,

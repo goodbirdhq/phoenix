@@ -9,6 +9,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import { resolveNextTurnModelSelection } from "@t3tools/client-runtime/usage/thread-migration";
 import { type ChatMessage, type SessionPhase, type Thread, type ThreadShell } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
@@ -121,6 +122,7 @@ export function startNewThreadForProject(
 export function resolveThreadMetadataUpdateForNextTurn(input: {
   currentModelSelection: ModelSelection;
   nextModelSelection?: ModelSelection;
+  threadHasStarted?: boolean;
   currentBranch: string | null;
   nextBranch?: string;
 }): {
@@ -128,7 +130,13 @@ export function resolveThreadMetadataUpdateForNextTurn(input: {
   branch?: string;
   worktreePath?: null;
 } | null {
-  const nextModelSelection = input.nextModelSelection;
+  const nextModelSelection = input.nextModelSelection
+    ? resolveNextTurnModelSelection({
+        threadHasStarted: input.threadHasStarted === true,
+        threadModelSelection: input.currentModelSelection,
+        requestedModelSelection: input.nextModelSelection,
+      })
+    : undefined;
   const modelSelectionChanged =
     nextModelSelection !== undefined &&
     (nextModelSelection.model !== input.currentModelSelection.model ||

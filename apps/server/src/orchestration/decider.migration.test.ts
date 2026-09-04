@@ -72,6 +72,92 @@ function migrateCommand(overrides: Record<string, unknown> = {}) {
 }
 
 it.layer(NodeServices.layer)("thread migration decider", (it) => {
+  it.effect("rejects a metadata account switch after a thread has started", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-stale-composer-account-switch"),
+          threadId: THREAD_ID,
+          modelSelection: {
+            instanceId: TARGET,
+            model: "claude-opus-5",
+          },
+        },
+        readModel: makeReadModel({
+          latestTurn: {
+            turnId: TurnId.make("turn-limited"),
+            state: "error",
+            requestedAt: NOW,
+            startedAt: NOW,
+            completedAt: NOW,
+            assistantMessageId: null,
+          },
+        }),
+      }).pipe(Effect.flip);
+
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      if (error._tag === "OrchestrationCommandInvariantError") {
+        expect(error.detail).toContain("thread.migrate");
+      }
+    }),
+  );
+
+  it.effect("allows choosing an account through metadata before the first turn", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-draft-account-selection"),
+          threadId: THREAD_ID,
+          modelSelection: {
+            instanceId: TARGET,
+            model: "claude-opus-5",
+          },
+        },
+        readModel: makeReadModel(),
+      });
+
+      expect(event).toMatchObject({
+        type: "thread.meta-updated",
+        payload: { modelSelection: { instanceId: TARGET } },
+      });
+    }),
+  );
+
+  it.effect("allows a started thread to change models within its current instance", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-same-account-model-selection"),
+          threadId: THREAD_ID,
+          modelSelection: {
+            instanceId: ORIGIN,
+            model: "claude-fable-5",
+          },
+        },
+        readModel: makeReadModel({
+          latestTurn: {
+            turnId: TurnId.make("turn-completed"),
+            state: "completed",
+            requestedAt: NOW,
+            startedAt: NOW,
+            completedAt: NOW,
+            assistantMessageId: null,
+          },
+        }),
+      });
+
+      expect(event).toMatchObject({
+        type: "thread.meta-updated",
+        payload: {
+          modelSelection: { instanceId: ORIGIN, model: "claude-fable-5" },
+        },
+      });
+    }),
+  );
+
   it.effect("rebinds the thread to the target instance and records the move", () =>
     Effect.gen(function* () {
       const decided = yield* decideOrchestrationCommand({
