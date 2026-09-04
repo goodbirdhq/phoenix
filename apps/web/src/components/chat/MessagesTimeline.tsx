@@ -2788,6 +2788,80 @@ const ScheduleWriteRow = memo(function ScheduleWriteRow(props: { workEntry: Time
   );
 });
 
+/**
+ * `list_session_providers` used to dump a fat JSON blob (then slimming cut it
+ * to 84 chars). Like Schedule writes, it gets a snapshot receipt: one row that
+ * survives grouping and shows the availability that mattered at call time.
+ * Models and full quota history stay in Usage/Settings.
+ */
+const ProviderListRow = memo(function ProviderListRow(props: { workEntry: TimelineWorkEntry }) {
+  const activity = props.workEntry.providerListActivity;
+  if (!activity) return null;
+  const providers = activity.providers;
+  const availableCount = providers.filter((p) => p.available).length;
+  const total = providers.length;
+  const hasAvailable = availableCount > 0;
+  const hasLimited = providers.some((p) => p.status === "limited");
+  const showCount = total === 1 ? `${total} provider` : `${total} providers`;
+  const subtitle =
+    availableCount === total && hasAvailable
+      ? `${showCount} · all available`
+      : `${availableCount} available of ${showCount}`;
+
+  return (
+    <div className="-mx-1 rounded-md border border-border/60 bg-card/50 px-2.5 py-2">
+      <div className="flex items-center gap-2 text-[13px]">
+        <span
+          aria-hidden
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            hasAvailable ? "bg-success" : hasLimited ? "bg-warning" : "bg-muted-foreground",
+          )}
+        />
+        <WrenchIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="min-w-0 truncate">
+          <span className="font-medium">Providers</span>
+          <span className="text-muted-foreground"> · {subtitle}</span>
+        </span>
+        <span className="ml-auto shrink-0 font-mono text-[.7rem] text-muted-foreground">
+          snapshot
+        </span>
+      </div>
+      <ul className="mt-2 space-y-1.5">
+        {providers.map((provider) => {
+          const dot =
+            provider.status === "available"
+              ? "bg-success"
+              : provider.status === "limited"
+                ? "bg-warning"
+                : "bg-muted-foreground";
+          const primary = provider.windows[0];
+          const usage = primary ? `${primary.usedPercent}%` : null;
+          return (
+            <li key={provider.instanceId} className="flex items-center gap-2 text-[12px]">
+              <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dot)} />
+              <span className="min-w-0 truncate font-medium">{provider.displayName}</span>
+              <span className="hidden truncate text-muted-foreground sm:inline">
+                · {provider.driver}
+              </span>
+              <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
+                <span className={cn(provider.available ? "text-success" : "text-muted-foreground")}>
+                  {provider.available
+                    ? "available"
+                    : provider.status === "limited"
+                      ? "limited"
+                      : "unavailable"}
+                </span>
+                {usage ? <span className="tabular-nums">{usage} used</span> : null}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+});
+
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
@@ -2805,6 +2879,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // where the error text is already visible on expand.
   if (workEntry.scheduleActivity && !isFailedWorkEntry(workEntry)) {
     return <ScheduleWriteRow workEntry={workEntry} />;
+  }
+  if (workEntry.providerListActivity && !isFailedWorkEntry(workEntry)) {
+    return <ProviderListRow workEntry={workEntry} />;
   }
   return (
     <PlainWorkEntryRow

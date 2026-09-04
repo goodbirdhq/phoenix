@@ -87,6 +87,10 @@
       "types": "./src/scheduleToolActivity.ts",
       "import": "./src/scheduleToolActivity.ts"
     },
+    "./providerListToolActivity": {
+      "types": "./src/providerListToolActivity.ts",
+      "import": "./src/providerListToolActivity.ts"
+    },
     "./scheduleCadence": {
       "types": "./src/scheduleCadence.ts",
       "import": "./src/scheduleCadence.ts"
