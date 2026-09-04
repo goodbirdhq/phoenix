@@ -106,6 +106,7 @@ export const ProjectionQueuedDeliveryReceipt = Schema.Struct({
       "session_terminal",
       "interrupt_timeout",
       "redelivery_limit_reached",
+      "delivery_stalled",
       "legacy_report_notification",
     ]),
   ),
@@ -132,6 +133,7 @@ export const CancelProjectionQueuedTurnInput = Schema.Struct({
     "session_terminal",
     "interrupt_timeout",
     "redelivery_limit_reached",
+    "delivery_stalled",
     "legacy_report_notification",
   ]),
   cancelledAt: IsoDateTime,
@@ -155,6 +157,13 @@ export const ListQueuedDeliveryReceiptsInput = Schema.Struct({
   threadId: ThreadId,
   limit: NonNegativeInt,
 });
+export const ProjectionQueuedDeliveryDiagnostics = Schema.Struct({
+  pendingQueuedCount: NonNegativeInt,
+  stalledDeliveryCount: NonNegativeInt,
+  oldestUndeliveredMessageAt: Schema.NullOr(IsoDateTime),
+});
+export const GetQueuedDeliveryDiagnosticsInput = Schema.Struct({ threadId: ThreadId });
+export type ProjectionQueuedDeliveryDiagnostics = typeof ProjectionQueuedDeliveryDiagnostics.Type;
 export type ListProjectionTurnsByThreadInput = typeof ListProjectionTurnsByThreadInput.Type;
 
 export const GetProjectionTurnByTurnIdInput = Schema.Struct({
@@ -242,6 +251,10 @@ export interface ProjectionTurnRepositoryShape {
   readonly listQueuedDeliveryReceipts: (
     input: typeof ListQueuedDeliveryReceiptsInput.Type,
   ) => Effect.Effect<ReadonlyArray<ProjectionQueuedDeliveryReceipt>, ProjectionRepositoryError>;
+
+  readonly getQueuedDeliveryDiagnostics: (
+    input: typeof GetQueuedDeliveryDiagnosticsInput.Type,
+  ) => Effect.Effect<ProjectionQueuedDeliveryDiagnostics, ProjectionRepositoryError>;
 
   /**
    * Lists all projection rows for a thread, including pending placeholders, with checkpoint rows ordered before non-checkpoint rows.

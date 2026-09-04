@@ -15,7 +15,7 @@ import { SymbolView } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useNavigation } from "@react-navigation/native";
 
-import { useThreadShell } from "../../state/entities";
+import { useEnvironmentThreadTitles } from "../../state/entities";
 import {
   memo,
   useCallback,
@@ -183,7 +183,7 @@ export interface ThreadFeedProps {
     readonly onLoadEarlier: () => void;
   } | null;
   /** Messages delivered to this thread's queue that no turn has consumed yet. */
-  readonly pendingMessageIds?: ReadonlySet<string>;
+  readonly pendingDeliveries?: ReadonlyMap<string, "queued" | "releasing">;
 }
 
 function MessageAttachmentImage(props: {
@@ -984,11 +984,11 @@ function useMarkdownStyles(
 
 /** "Sent" is not "heard": a queued message waits for the agent's current
  * turn to end, and this line is the only honest place that says so. */
-function PendingDeliveryNote(props: { readonly pending: boolean }) {
-  if (!props.pending) return null;
+function PendingDeliveryNote(props: { readonly state: "queued" | "releasing" | undefined }) {
+  if (props.state === undefined) return null;
   return (
     <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
-      Queued — delivers after the current turn
+      {props.state === "releasing" ? "Delivering…" : "Queued — delivers after the current turn"}
     </Text>
   );
 }
@@ -1007,18 +1007,15 @@ function SessionOriginUserMessage(props: {
   readonly skills: ThreadFeedProps["skills"];
   readonly onLinkPress: (href: string) => void;
   readonly renderImage: MarkdownImageRenderer;
-  readonly pending: boolean;
+  readonly deliveryState: "queued" | "releasing" | undefined;
+  readonly threadTitles: ReadonlyMap<string, string>;
   readonly maxWidth: number;
 }) {
   const navigation = useNavigation();
   const origin = props.message.origin;
-  const linkedShell = useThreadShell(
-    origin?.threadId != null
-      ? { environmentId: props.environmentId, threadId: origin.threadId }
-      : null,
-  );
   if (!origin) return null;
-  const linkedTitle = linkedShell?.title ?? null;
+  const linkedTitle =
+    origin.threadId == null ? null : (props.threadTitles.get(origin.threadId) ?? null);
   const label =
     origin.kind === "phoenix"
       ? linkedTitle !== null
@@ -1064,13 +1061,13 @@ function SessionOriginUserMessage(props: {
         ) : null}
       </View>
       <View className="mt-1 items-start pl-0.5">
-        <PendingDeliveryNote pending={props.pending} />
+        <PendingDeliveryNote state={props.deliveryState} />
       </View>
     </View>
   );
 }
 
-const EMPTY_PENDING_MESSAGE_IDS: ReadonlySet<string> = new Set();
+const EMPTY_PENDING_DELIVERIES: ReadonlyMap<string, "queued" | "releasing"> = new Map();
 
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
@@ -1092,7 +1089,8 @@ function renderFeedEntry(
     readonly reviewCommentColors: ReviewCommentColors;
     readonly reviewCommentBubbleWidth: number;
     readonly userBubbleMaxWidth: number;
-    readonly pendingMessageIds: ReadonlySet<string>;
+    readonly pendingDeliveries: ReadonlyMap<string, "queued" | "releasing">;
+    readonly threadTitles: ReadonlyMap<string, string>;
   },
 ) {
   const entry = info.item;
@@ -1170,7 +1168,8 @@ function renderFeedEntry(
             skills={props.skills}
             onLinkPress={props.onMarkdownLinkPress}
             renderImage={props.renderMarkdownImage}
-            pending={props.pendingMessageIds.has(message.id)}
+            deliveryState={props.pendingDeliveries.get(message.id)}
+            threadTitles={props.threadTitles}
             maxWidth={props.userBubbleMaxWidth}
           />
         );
@@ -1216,7 +1215,7 @@ function renderFeedEntry(
             })}
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-2 pr-0.5">
-            <PendingDeliveryNote pending={props.pendingMessageIds.has(message.id)} />
+            <PendingDeliveryNote state={props.pendingDeliveries.get(message.id)} />
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
             </Text>
@@ -1604,6 +1603,7 @@ function ThreadFeedPlaceholder(props: {
 }
 
 export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+  const threadTitles = useEnvironmentThreadTitles(props.environmentId);
   const navigation = useNavigation();
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const foldSettleFrameRef = useRef<number | null>(null);
@@ -2128,7 +2128,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [expandedWorkRows, workingRowHeight, appearance.baseFontSize],
   );
 
-  const pendingMessageIds = props.pendingMessageIds ?? EMPTY_PENDING_MESSAGE_IDS;
+  const pendingDeliveries = props.pendingDeliveries ?? EMPTY_PENDING_DELIVERIES;
 
   const renderItem = useCallback(
     (info: { item: ThreadFeedEntry; index: number }) =>
@@ -2152,7 +2152,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         reviewCommentBubbleWidth,
         userBubbleMaxWidth,
         skills: props.skills,
-        pendingMessageIds,
+        pendingDeliveries,
+        threadTitles,
       }),
     [
       copiedRowId,
@@ -2173,7 +2174,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onToggleWorkRow,
       props.environmentId,
       props.skills,
+      pendingDeliveries,
       renderMarkdownImage,
+      threadTitles,
     ],
   );
 

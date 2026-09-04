@@ -2,7 +2,11 @@ import { EventId, type SessionReportNotificationActivity, ThreadId } from "@t3to
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { SESSION_REPORT_INBOX_PASSIVE_COPY, SessionReportDigest } from "./SessionReportDigest";
+import {
+  derivePendingChats,
+  SESSION_REPORT_INBOX_PASSIVE_COPY,
+  SessionReportDigest,
+} from "./SessionReportDigest";
 
 const reportActivity = {
   id: EventId.make("report-activity"),
@@ -36,6 +40,29 @@ const withReportId = (reportId: string, childThreadId: string) =>
   }) as SessionReportNotificationActivity;
 
 describe("SessionReportDigest", () => {
+  it("names a routed child message from the shared thread-title map", () => {
+    const chats = derivePendingChats(
+      [
+        {
+          messageId: "message-child",
+          mode: "queue",
+          requestedAt: "2026-08-17T00:00:00.000Z",
+        },
+      ] as never,
+      [
+        {
+          id: "message-child",
+          role: "user",
+          text: "Need the SHA",
+          origin: { kind: "session", threadId: "child-thread" },
+        },
+      ] as never,
+      new Map([["child-thread", "Release verifier"]]),
+    );
+
+    expect(chats[0]?.from).toBe("Release verifier");
+  });
+
   it("labels the popover as passive rather than pretending opening it consumes a report", () => {
     const markup = renderToStaticMarkup(
       <SessionReportDigest activities={[reportActivity]} onOpenChildThread={() => undefined} />,

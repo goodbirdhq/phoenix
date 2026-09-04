@@ -216,6 +216,21 @@ describe("resolveThreadListV2Status", () => {
         },
       }),
     ).toBe("working");
+    expect(
+      resolveThreadListV2Status({
+        ...blocked,
+        session: {
+          threadId: ThreadId.make("t"),
+          status: "stopped",
+          providerName: "Codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: NOW,
+        },
+      }),
+    ).not.toBe("awaiting-parent");
   });
 });
 

@@ -582,6 +582,13 @@ export const OrchestrationSession = Schema.Struct({
   // an old deadline from stopping a session that was subsequently restarted.
   graceStopDeadlineAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   graceStopEpisodeId: Schema.optional(Schema.NullOr(EventId)),
+  // Stable boundary for the current provider-session episode. A new value is
+  // written when a stopped/error session is started again, while ordinary
+  // status updates preserve it. Terminal reporting uses this to distinguish
+  // an old report from one produced during the episode that just ended.
+  episodeStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   // Correlates a provider turn start to the queued message that released it.
   // Optional/defaulted so historical session events continue to replay.
   queuedDeliveryMessageId: Schema.optional(Schema.NullOr(MessageId)).pipe(
@@ -881,6 +888,9 @@ export const OrchestrationThread = Schema.Struct({
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  // Kept in the command-side read model as well as the shell projection so
+  // replay and live command decisions observe the same durable fold.
+  awaitingParentReplySince: Schema.optional(Schema.NullOr(IsoDateTime)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -1392,6 +1402,15 @@ export const ThreadTurnStartCommand = Schema.Struct({
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   graceStopNotice: Schema.optional(Schema.Boolean),
   deliveryMode: Schema.optional(Schema.Literals(["queue", "interrupt"])),
+  // Server-only companion activity committed atomically with the turn start.
+  // Used by send_to_parent so delivery and the child's awaiting-reply marker
+  // cannot be separated by a process failure. The client schema omits it.
+  linkedActivity: Schema.optional(
+    Schema.Struct({
+      threadId: ThreadId,
+      activity: OrchestrationThreadActivity,
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -1553,6 +1572,7 @@ const ThreadQueuedTurnCancelCommand = Schema.Struct({
     "session_terminal",
     "interrupt_timeout",
     "redelivery_limit_reached",
+    "delivery_stalled",
     "legacy_report_notification",
   ]),
   createdAt: IsoDateTime,
@@ -1897,6 +1917,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  origin: Schema.optional(OrchestrationMessageOrigin),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -1930,6 +1951,7 @@ export const ThreadTurnStartCancelledPayload = Schema.Struct({
     "session_terminal",
     "interrupt_timeout",
     "redelivery_limit_reached",
+    "delivery_stalled",
     "legacy_report_notification",
   ]),
   createdAt: IsoDateTime,

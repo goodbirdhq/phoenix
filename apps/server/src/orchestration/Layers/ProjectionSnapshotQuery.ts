@@ -358,6 +358,7 @@ function mapSessionRow(
     lastCompletedOperation: row.lastCompletedOperation,
     graceStopDeadlineAt: row.graceStopDeadlineAt,
     graceStopEpisodeId: row.graceStopEpisodeId,
+    episodeStartedAt: row.episodeStartedAt,
     queuedDeliveryMessageId: row.queuedDeliveryMessageId,
     updatedAt: row.updatedAt,
   };
@@ -725,6 +726,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_completed_operation AS "lastCompletedOperation",
           grace_stop_deadline_at AS "graceStopDeadlineAt",
           grace_stop_episode_id AS "graceStopEpisodeId",
+          episode_started_at AS "episodeStartedAt",
           queued_delivery_message_id AS "queuedDeliveryMessageId",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
@@ -755,6 +757,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.last_completed_operation AS "lastCompletedOperation",
           sessions.grace_stop_deadline_at AS "graceStopDeadlineAt",
           sessions.grace_stop_episode_id AS "graceStopEpisodeId",
+          sessions.episode_started_at AS "episodeStartedAt",
           sessions.queued_delivery_message_id AS "queuedDeliveryMessageId",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
@@ -789,6 +792,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.last_completed_operation AS "lastCompletedOperation",
           sessions.grace_stop_deadline_at AS "graceStopDeadlineAt",
           sessions.grace_stop_episode_id AS "graceStopEpisodeId",
+          sessions.episode_started_at AS "episodeStartedAt",
           sessions.queued_delivery_message_id AS "queuedDeliveryMessageId",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
@@ -1390,6 +1394,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_completed_operation AS "lastCompletedOperation",
           grace_stop_deadline_at AS "graceStopDeadlineAt",
           grace_stop_episode_id AS "graceStopEpisodeId",
+          episode_started_at AS "episodeStartedAt",
           queued_delivery_message_id AS "queuedDeliveryMessageId",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
@@ -2030,6 +2035,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   lastCompletedOperation: row.lastCompletedOperation,
                   graceStopDeadlineAt: row.graceStopDeadlineAt,
                   graceStopEpisodeId: row.graceStopEpisodeId,
+                  episodeStartedAt: row.episodeStartedAt,
                   queuedDeliveryMessageId: row.queuedDeliveryMessageId,
                   updatedAt: row.updatedAt,
                 });

@@ -23,6 +23,8 @@ export const SESSION_REPORT_INBOX_PASSIVE_COPY =
  * the `session-inbox-exit` keyframe so the element is not torn out mid-flight.
  */
 const EXIT_ANIMATION_MS = 180;
+const EMPTY_MESSAGES: ReadonlyArray<OrchestrationMessage> = [];
+const EMPTY_THREAD_TITLES: ReadonlyMap<string, string> = new Map();
 
 type IconPhase = "hidden" | "visible" | "leaving";
 
@@ -47,6 +49,7 @@ const messagePreview = (text: string): string => {
 export const derivePendingChats = (
   queuedTurnStarts: OrchestrationThread["queuedTurnStarts"] | null | undefined,
   messages: ReadonlyArray<OrchestrationMessage>,
+  threadTitles: ReadonlyMap<string, string> = EMPTY_THREAD_TITLES,
 ): ReadonlyArray<PendingChatEntry> => {
   if (queuedTurnStarts === null || queuedTurnStarts === undefined) return [];
   const byId = new Map(messages.map((message) => [message.id as string, message]));
@@ -56,7 +59,13 @@ export const derivePendingChats = (
     return {
       messageId: entry.messageId,
       from:
-        origin === undefined ? "You" : origin.kind === "phoenix" ? "Phoenix" : "Another session",
+        origin === undefined
+          ? "You"
+          : origin.kind === "phoenix"
+            ? "Phoenix"
+            : origin.threadId == null
+              ? "Another session"
+              : (threadTitles.get(origin.threadId) ?? "Another session"),
       preview: message !== undefined ? messagePreview(message.text) : "Queued message",
       requestedAt: entry.requestedAt,
     };
@@ -66,12 +75,14 @@ export const derivePendingChats = (
 export function SessionReportDigest({
   activities,
   queuedTurnStarts = null,
-  messages = [],
+  messages = EMPTY_MESSAGES,
+  threadTitles = EMPTY_THREAD_TITLES,
   onOpenChildThread,
 }: {
   readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
   readonly queuedTurnStarts?: OrchestrationThread["queuedTurnStarts"] | null;
   readonly messages?: ReadonlyArray<OrchestrationMessage>;
+  readonly threadTitles?: ReadonlyMap<string, string>;
   readonly onOpenChildThread: (threadId: ThreadId) => void;
 }) {
   const notifications = useMemo(() => deriveSessionReportNotifications(activities), [activities]);
@@ -82,8 +93,8 @@ export function SessionReportDigest({
     [notifications],
   );
   const pendingChats = useMemo(
-    () => derivePendingChats(queuedTurnStarts, messages),
-    [queuedTurnStarts, messages],
+    () => derivePendingChats(queuedTurnStarts, messages, threadTitles),
+    [queuedTurnStarts, messages, threadTitles],
   );
 
   const count = notifications.length + pendingChats.length;

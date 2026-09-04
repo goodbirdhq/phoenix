@@ -1888,6 +1888,13 @@ describe("awaiting-parent status", () => {
         awaitingParentReplySince: "2026-03-09T10:01:00.000Z",
       }),
     ).toBe("failed");
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        session: { ...readySession, status: "stopped" as const },
+        awaitingParentReplySince: "2026-03-09T10:01:00.000Z",
+      }),
+    ).not.toBe("awaiting-parent");
   });
 
   it("shows the Waiting on Parent pill for a blocked idle child", () => {

@@ -280,8 +280,21 @@ function projectMcpToolCallData(data: Record<string, unknown>): Record<string, u
   // link to the other end of the exchange, and the up direction's target
   // (parentThreadId) lives only in the result that summarizing destroys.
   const sessionMessage = deriveSessionMessageToolActivity(data);
-  if (sessionMessage?.threadId !== undefined) {
-    projectedData.sessionMessage = sessionMessage;
+  if (sessionMessage !== undefined) {
+    if (sessionMessage.threadId !== undefined) {
+      projectedData.sessionMessage = sessionMessage;
+    }
+    const projectedItem = asRecord(projectedData.item);
+    const argumentsRecord = asRecord(projectedItem?.arguments);
+    if (projectedItem && argumentsRecord && "message" in argumentsRecord) {
+      const { message: _message, ...safeArguments } = argumentsRecord;
+      projectedItem.arguments = safeArguments;
+    }
+    const inputRecord = asRecord(projectedData.input);
+    if (inputRecord && "message" in inputRecord) {
+      const { message: _message, ...safeInput } = inputRecord;
+      projectedData.input = safeInput;
+    }
   }
 
   // Same problem, same remedy: a Schedule write's card names the Schedule, its

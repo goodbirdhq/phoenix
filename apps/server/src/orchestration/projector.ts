@@ -9,6 +9,7 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  isSessionMessageSentActivity,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -591,6 +592,7 @@ export function projectEvent(
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
+            ...(payload.origin !== undefined ? { origin: payload.origin } : {}),
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
           },
@@ -612,6 +614,11 @@ export function projectEvent(
                     streaming: message.streaming,
                     updatedAt: message.updatedAt,
                     turnId: message.turnId,
+                    ...(message.origin !== undefined
+                      ? { origin: message.origin }
+                      : entry.origin !== undefined
+                        ? { origin: entry.origin }
+                        : {}),
                     ...(message.attachments !== undefined
                       ? { attachments: message.attachments }
                       : {}),
@@ -654,6 +661,10 @@ export function projectEvent(
     case "thread.turn-start-requested": {
       const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
       if (!thread) return Effect.succeed(nextBase);
+      const isReply =
+        event.payload.origin === undefined ||
+        (event.payload.origin.kind === "session" &&
+          event.payload.origin.threadId === thread.spawnedByThreadId);
       return Effect.succeed({
         ...nextBase,
         threads: updateThread(nextBase.threads, event.payload.threadId, {
@@ -670,6 +681,7 @@ export function projectEvent(
               : (thread.queuedTurnStarts ?? []).filter(
                   (entry) => entry.messageId !== event.payload.messageId,
                 ),
+          awaitingParentReplySince: isReply ? null : thread.awaitingParentReplySince,
           updatedAt: event.occurredAt,
         }),
       });
@@ -968,11 +980,17 @@ export function projectEvent(
               payload.activity,
             ].toSorted(compareThreadActivities),
           );
+          const awaitingParentReplySince = isSessionMessageSentActivity(payload.activity)
+            ? payload.activity.payload.awaitingReply
+              ? payload.activity.payload.sentAt
+              : null
+            : thread.awaitingParentReplySince;
 
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
+              awaitingParentReplySince,
               updatedAt: event.occurredAt,
             }),
           };

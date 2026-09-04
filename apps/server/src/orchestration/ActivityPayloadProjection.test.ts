@@ -285,6 +285,46 @@ describe("projectActivityPayload", () => {
       preview: "Which SHA is master?",
       awaitingReply: true,
     });
+    expect((data.item as Record<string, unknown>).arguments).toEqual({ awaitingReply: true });
+  });
+
+  it("removes the full inter-session body from Claude-shaped activity input", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          toolName: "mcp__phoenix__send_to_session",
+          input: { threadId: "child-thread-1", message: "x".repeat(65_536), mode: "queue" },
+          result: {
+            type: "tool_result",
+            tool_use_id: "toolu_send",
+            content: JSON.stringify({ threadId: "child-thread-1", delivery: "queued" }),
+          },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.input).toEqual({ threadId: "child-thread-1", mode: "queue" });
+    expect((data.sessionMessage as { preview: string }).preview.length).toBeLessThanOrEqual(84);
+  });
+
+  it("removes an in-flight send_to_parent body before its parent id is known", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          item: {
+            type: "mcpToolCall",
+            tool: "send_to_parent",
+            server: "phoenix",
+            status: "inProgress",
+            arguments: { message: "private body", awaitingReply: true },
+          },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect((data.item as Record<string, unknown>).arguments).toEqual({ awaitingReply: true });
   });
 
   it("leaves an in-flight spawn without a child id (the row stays 'Spawning session')", () => {

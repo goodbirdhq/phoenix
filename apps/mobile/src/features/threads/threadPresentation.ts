@@ -112,7 +112,7 @@ export function resolveThreadStatus(
 
   // A spawned thread blocked on its parent session's answer. Indigo like
   // Awaiting Input: both mean "stopped until someone replies".
-  if ((thread.awaitingParentReplySince ?? null) !== null) {
+  if ((thread.awaitingParentReplySince ?? null) !== null && thread.session?.status !== "stopped") {
     return {
       kind: "awaiting-parent",
       label: "Waiting on Parent",

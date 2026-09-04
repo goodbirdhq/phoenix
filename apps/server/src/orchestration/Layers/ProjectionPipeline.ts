@@ -947,15 +947,17 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
-          // Any turn start means new input reached this thread — exactly what
-          // an awaiting-reply child was waiting for, whoever it came from.
-          // Only threads actually holding the marker pay for an upsert here.
           if (
             Option.isNone(existingRow) ||
             (existingRow.value.awaitingParentReplySince ?? null) === null
           ) {
             return;
           }
+          const isReply =
+            event.payload.origin === undefined ||
+            (event.payload.origin.kind === "session" &&
+              event.payload.origin.threadId === existingRow.value.spawnedByThreadId);
+          if (!isReply) return;
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             awaitingParentReplySince: null,
@@ -1306,6 +1308,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         lastCompletedOperation: event.payload.session.lastCompletedOperation ?? null,
         graceStopDeadlineAt: event.payload.session.graceStopDeadlineAt ?? null,
         graceStopEpisodeId: event.payload.session.graceStopEpisodeId ?? null,
+        episodeStartedAt: event.payload.session.episodeStartedAt ?? null,
         queuedDeliveryMessageId: event.payload.session.queuedDeliveryMessageId ?? null,
         updatedAt: event.payload.session.updatedAt,
       });

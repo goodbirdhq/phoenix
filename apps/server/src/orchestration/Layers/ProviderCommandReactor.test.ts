@@ -2094,6 +2094,62 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
   });
 
+  it("clears stop audit when a stopped thread starts a new provider episode", async () => {
+    const harness = await createHarness();
+    const stoppedAt = "2026-01-01T00:00:00.000Z";
+    const restartedAt = "2026-01-02T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-parent-stopped"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          stoppedBy: "parent",
+          stopReason: "parent_stopped",
+          stopRequestedAt: stoppedAt,
+          updatedAt: stoppedAt,
+        },
+        createdAt: stoppedAt,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-restart-parent-stopped"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-restart-parent-stopped"),
+          role: "user",
+          text: "continue",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: restartedAt,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    );
+    expect(thread?.session).toMatchObject({
+      episodeStartedAt: restartedAt,
+      stoppedBy: null,
+      stopReason: null,
+      stopRequestedAt: null,
+    });
+  });
+
   effectIt.effect(
     "rejects a cross-driver selection persisted via thread.meta.update when the next turn carries no selection",
     () =>

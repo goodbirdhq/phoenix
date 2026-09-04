@@ -183,7 +183,7 @@ export function resolveThreadListV2Status(
   }
   // A spawned thread blocked on its parent session's answer — mirrors the
   // web sidebar's "awaiting-parent" ranking (under live states, above ready).
-  if ((thread.awaitingParentReplySince ?? null) !== null) {
+  if ((thread.awaitingParentReplySince ?? null) !== null && thread.session?.status !== "stopped") {
     return "awaiting-parent";
   }
   return "ready";

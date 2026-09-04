@@ -232,6 +232,7 @@ export const QueuedDeliveryReceipt = Schema.Struct({
       "session_terminal",
       "interrupt_timeout",
       "redelivery_limit_reached",
+      "delivery_stalled",
       "legacy_report_notification",
     ]),
   ),

@@ -15,12 +15,14 @@ import {
   DeleteProjectionQueuedTurnStartInput,
   DeleteProjectionTurnsByThreadInput,
   GetProjectionPendingTurnStartInput,
+  GetQueuedDeliveryDiagnosticsInput,
   GetProjectionTurnByTurnIdInput,
   ListProjectionTurnsByThreadInput,
   ListQueuedDeliveryReceiptsInput,
   MarkProjectionQueuedTurnReleasingInput,
   ProjectionPendingTurnStart,
   ProjectionQueuedDeliveryReceipt,
+  ProjectionQueuedDeliveryDiagnostics,
   ProjectionQueuedTurnStart,
   ProjectionTurn,
   RequeueProjectionQueuedTurnInput,
@@ -311,6 +313,23 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const getQueuedDeliveryDiagnosticsRow = SqlSchema.findOne({
+    Request: GetQueuedDeliveryDiagnosticsInput,
+    Result: ProjectionQueuedDeliveryDiagnostics,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          COUNT(*) FILTER (WHERE state IN ('queued', 'interrupting')) AS "pendingQueuedCount",
+          COUNT(*) FILTER (WHERE state = 'releasing') AS "stalledDeliveryCount",
+          MIN(requested_at) FILTER (
+            WHERE state IN ('queued', 'interrupting', 'releasing')
+          ) AS "oldestUndeliveredMessageAt"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND pending_message_id IS NOT NULL
+      `,
+  });
+
   const listProjectionTurnsByThread = SqlSchema.findAll({
     Request: ListProjectionTurnsByThreadInput,
     Result: ProjectionTurnDbRowSchema,
@@ -502,6 +521,14 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       ),
     );
 
+  const getQueuedDeliveryDiagnostics: ProjectionTurnRepositoryShape["getQueuedDeliveryDiagnostics"] =
+    (input) =>
+      getQueuedDeliveryDiagnosticsRow(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionTurnRepository.getQueuedDeliveryDiagnostics:query"),
+        ),
+      );
+
   const listByThreadId: ProjectionTurnRepositoryShape["listByThreadId"] = (input) =>
     listProjectionTurnsByThread(input).pipe(
       Effect.mapError(
@@ -556,6 +583,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     deleteQueuedTurnStart,
     listQueuedTurnStarts,
     listQueuedDeliveryReceipts,
+    getQueuedDeliveryDiagnostics,
     listByThreadId,
     getByTurnId,
     clearCheckpointTurnConflict,

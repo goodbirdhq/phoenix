@@ -55,6 +55,15 @@ type WorkerInput =
       readonly threadId: ThreadId;
       readonly messageId: MessageId;
     };
+type DeathNoticeInput = {
+  readonly threadId: ThreadId;
+  readonly shell: OrchestrationThreadShell;
+  readonly exitReason: SessionExitReason;
+  readonly lastError: string | null;
+  readonly synthesizedReportId: string | null;
+  readonly hadAgentReport: boolean;
+  readonly episodeKey: string;
+};
 
 // A session in one of these states is done producing work for this episode.
 // "interrupted" is deliberately absent: an interrupt parks a turn, the session
@@ -70,6 +79,7 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const INTERRUPT_FALLBACK_TIMEOUT = Duration.seconds(30);
 const RECOVERY_INTERVAL = Duration.seconds(30);
 const RELEASING_RECOVERY_AGE = Duration.seconds(30);
+const LIVE_RELEASING_MAX_AGE = Duration.minutes(2);
 const MAX_QUEUED_TURN_REDELIVERIES = 3;
 
 const truncate = (text: string, maxLength: number) =>
@@ -350,7 +360,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   // A session can bounce through terminal states repeatedly (retries,
   // restarts). Synthesize at most one terminal report per episode; a later
   // healthy state re-arms.
-  const terminalReportedThreads = new Set<string>();
+  const terminalReportedThreads = new Map<string, string>();
   const releaseNextQueuedTurn = Effect.fn("SessionSpawnReactor.releaseNextQueuedTurn")(function* (
     threadId: ThreadId,
   ) {
@@ -373,10 +383,13 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       | "session_terminal"
       | "interrupt_timeout"
       | "redelivery_limit_reached"
+      | "delivery_stalled"
       | "legacy_report_notification";
   }) {
     const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
-      (entry) => entry.threadId === input.threadId && entry.state === "queued",
+      (entry) =>
+        entry.threadId === input.threadId &&
+        (entry.state === "queued" || entry.state === "interrupting" || entry.state === "releasing"),
     );
     yield* Effect.forEach(
       queued,
@@ -396,49 +409,58 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     return queued.length;
   });
 
-  const cancelRedeliveryLimitReached = Effect.fn(
-    "SessionSpawnReactor.cancelRedeliveryLimitReached",
-  )(function* (input: { readonly threadId: ThreadId; readonly messageId: MessageId }) {
-    const createdAt = yield* nowIso;
-    yield* engine.dispatch({
-      type: "thread.turn.queue.cancel",
-      commandId: yield* serverCommandId("queued-turn-redelivery-limit-cancel"),
-      threadId: input.threadId,
-      messageId: input.messageId,
-      reason: "redelivery_limit_reached",
-      createdAt,
-    });
-    yield* engine.dispatch({
-      type: "thread.activity.append",
-      commandId: yield* serverCommandId("queued-turn-redelivery-limit-note"),
-      threadId: input.threadId,
-      activity: {
-        id: EventId.make(yield* randomUUID),
-        tone: "error",
-        kind: "queued-delivery.redelivery-limit-reached",
-        summary: "A queued message was cancelled after repeated delivery failures.",
-        payload: {
-          messageId: input.messageId,
-          redeliveryCount: MAX_QUEUED_TURN_REDELIVERIES,
-        },
-        turnId: null,
+  const wedgedThreadsNotified = new Set<string>();
+  const cancelWedgedDelivery = Effect.fn("SessionSpawnReactor.cancelWedgedDelivery")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly messageId: MessageId;
+      readonly reason: "redelivery_limit_reached" | "delivery_stalled";
+      readonly redeliveryCount: number;
+    }) {
+      const createdAt = yield* nowIso;
+      yield* engine.dispatch({
+        type: "thread.turn.queue.cancel",
+        commandId: yield* serverCommandId("queued-turn-wedge-cancel"),
+        threadId: input.threadId,
+        messageId: input.messageId,
+        reason: input.reason,
         createdAt,
-      },
-      createdAt,
-    });
-    // The error activity above lands on the (probably wedged) child's own
-    // thread, where nobody who can act on it is looking. The parent is the
-    // one holding the spawn slot, so it gets told directly — this is the
-    // "delivered but never consumed" signature surfacing instead of rotting.
-    const child = yield* snapshotQuery.getThreadShellById(input.threadId);
-    const childTitle = Option.isSome(child) ? child.value.title : input.threadId;
-    yield* notifyParent({
-      origin: { kind: "phoenix", threadId: input.threadId },
-      childThreadId: input.threadId,
-      text: `[Phoenix] Spawned session "${childTitle}" appears WEDGED: a message queued for it was delivered ${MAX_QUEUED_TURN_REDELIVERIES} times but never started a turn, and has now been cancelled (messageId ${input.messageId}). The session accepts deliveries without consuming them, so further send_to_session calls will likely rot the same way. Consider stop_session followed by a fresh send_to_session to restart it, or spawn a replacement.\n\n(spawned thread: ${input.threadId})`,
-      commandTag: "queued-turn-redelivery-limit-notify",
-    });
-  });
+      });
+      yield* engine.dispatch({
+        type: "thread.activity.append",
+        commandId: yield* serverCommandId("queued-turn-wedge-note"),
+        threadId: input.threadId,
+        activity: {
+          id: EventId.make(yield* randomUUID),
+          tone: "error",
+          kind: "queued-delivery.wedged",
+          summary: "A queued message was cancelled after delivery stalled.",
+          payload: {
+            messageId: input.messageId,
+            redeliveryCount: input.redeliveryCount,
+            reason: input.reason,
+          },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      });
+      // The error activity above lands on the (probably wedged) child's own
+      // thread, where nobody who can act on it is looking. The parent is the
+      // one holding the spawn slot, so it gets told directly — this is the
+      // "delivered but never consumed" signature surfacing instead of rotting.
+      if (wedgedThreadsNotified.has(input.threadId)) return;
+      const child = yield* snapshotQuery.getThreadShellById(input.threadId);
+      const childTitle = Option.isSome(child) ? child.value.title : input.threadId;
+      yield* notifyParent({
+        origin: { kind: "phoenix", threadId: input.threadId },
+        childThreadId: input.threadId,
+        text: `[Phoenix] Spawned session "${childTitle}" appears WEDGED: a queued message entered delivery but never started a turn, and has now been cancelled (messageId ${input.messageId}, retries ${input.redeliveryCount}). Further send_to_session calls may stall the same way. Consider stop_session followed by a fresh send_to_session to restart it, or spawn a replacement.\n\n(spawned thread: ${input.threadId})`,
+        commandTag: "queued-turn-wedge-notify",
+      });
+      wedgedThreadsNotified.add(input.threadId);
+    },
+  );
 
   const cancelTerminalQueue = Effect.fn("SessionSpawnReactor.cancelTerminalQueue")(function* (
     threadId: ThreadId,
@@ -546,13 +568,27 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       if (Option.isNone(detail) || (detail.value.spawnedByThreadId ?? null) === null) {
         return { isSpawnedChild: false, hadAgentReport: false, reportId: null } as const;
       }
-      // The agent already had its say; a synthesized report would only muddy
-      // which one the parent should believe. This persisted check — not the
-      // in-memory episode set — is the real guard against duplicates. The
-      // death notice still goes out either way: an existing report says what
-      // the work was, not that the session later died holding it.
-      if (detail.value.reports.length > 0) {
+      const episodeStartedAt = input.session.episodeStartedAt ?? null;
+      const episodeReports =
+        episodeStartedAt === null
+          ? detail.value.reports
+          : detail.value.reports.filter((report) => report.createdAt >= episodeStartedAt);
+      // Historical reports belong to earlier provider episodes. Only an agent
+      // report written after this episode began can stand in for its account.
+      if (episodeReports.some((report) => report.origin !== "system")) {
         return { isSpawnedChild: true, hadAgentReport: true, reportId: null } as const;
+      }
+
+      // A prior partial attempt may have persisted the synthesized report but
+      // failed before notifying the parent. Reuse it so the notice retains the
+      // report-delivery correlation instead of manufacturing another account.
+      const existingSystemReport = episodeReports.find((report) => report.origin === "system");
+      if (existingSystemReport !== undefined) {
+        return {
+          isSpawnedChild: true,
+          hadAgentReport: false,
+          reportId: existingSystemReport.reportId,
+        } as const;
       }
 
       const createdAt = yield* nowIso;
@@ -563,11 +599,12 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         createdAt: detail.value.createdAt,
         latestTurn: detail.value.latestTurn,
       });
-      const reportId = yield* randomUUID;
+      const episodeKey = episodeStartedAt ?? input.session.updatedAt;
+      const reportId = `session-terminal-report:${input.threadId}:${episodeKey}`;
       yield* engine
         .dispatch({
           type: "thread.report.post",
-          commandId: yield* serverCommandId("spawn-terminal-report"),
+          commandId: CommandId.make(`session-terminal-report:${input.threadId}:${episodeKey}`),
           threadId: input.threadId,
           reportId,
           status: terminalReportStatus(input.sessionStatus),
@@ -605,6 +642,35 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     },
   );
 
+  const processDeathNotice = Effect.fn("SessionSpawnReactor.processDeathNotice")(function* (
+    input: DeathNoticeInput,
+  ) {
+    yield* notifyParent({
+      origin: { kind: "phoenix", threadId: input.threadId },
+      childThreadId: input.threadId,
+      text: formatDeathNotice({
+        childTitle: input.shell.title,
+        childThreadId: input.threadId,
+        exitReason: input.exitReason,
+        lastError: input.lastError,
+        worktree: yield* resolveTerminalWorktreeRisk(input.shell),
+        synthesizedReportId: input.synthesizedReportId,
+        hadAgentReport: input.hadAgentReport,
+      }),
+      commandTag: "session-death-notice",
+      commandId: CommandId.make(`session-death-notice:${input.threadId}:${input.episodeKey}`),
+      messageId:
+        input.synthesizedReportId !== null
+          ? MessageId.make(
+              `${SESSION_REPORT_DELIVERY_MESSAGE_PREFIX}${input.threadId}:${input.synthesizedReportId}`,
+            )
+          : MessageId.make(`session-death-notice:${input.threadId}:${input.episodeKey}`),
+    }).pipe(Effect.retry({ times: 2, schedule: Schedule.exponential(100) }));
+    terminalReportedThreads.set(input.threadId, input.episodeKey);
+  });
+
+  let deathNoticeWorker!: DrainableWorker<DeathNoticeInput>;
+
   const processEvent = Effect.fn("SessionSpawnReactor.processEvent")(function* (
     event: WatchedEvent,
   ) {
@@ -619,6 +685,33 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       // on one durable record instead of double-counting.
       const delivery = parseReportDeliveryMessageId(event.payload.messageId);
       if (delivery === null) return;
+      // `origin` is server-only on a turn start; the client command schema
+      // strips it. Requiring Phoenix attribution proves this id came from the
+      // report-delivery path rather than a paired client choosing the prefix.
+      if (
+        event.payload.origin?.kind !== "phoenix" ||
+        event.payload.origin.threadId !== delivery.childThreadId
+      ) {
+        yield* Effect.logWarning("ignored untrusted session report delivery receipt", {
+          parentThreadId: event.payload.threadId,
+          childThreadId: delivery.childThreadId,
+          reportId: delivery.reportId,
+        });
+        return;
+      }
+      const child = yield* snapshotQuery.getThreadDetailById(ThreadId.make(delivery.childThreadId));
+      if (
+        Option.isNone(child) ||
+        child.value.spawnedByThreadId !== event.payload.threadId ||
+        !child.value.reports.some((report) => report.reportId === delivery.reportId)
+      ) {
+        yield* Effect.logWarning("ignored invalid session report delivery receipt", {
+          parentThreadId: event.payload.threadId,
+          childThreadId: delivery.childThreadId,
+          reportId: delivery.reportId,
+        });
+        return;
+      }
       const readAt = yield* nowIso;
       yield* engine.dispatch({
         type: "thread.activity.append",
@@ -743,6 +836,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       session.status === "ready" ||
       session.status === "interrupted"
     ) {
+      wedgedThreadsNotified.delete(threadId);
       yield* releaseNextQueuedTurn(threadId);
     }
     if (isTerminalStatus(session.status)) {
@@ -754,7 +848,8 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       // and where that account lives. The notice comes last so it can name
       // the synthesized report it points at.
       yield* cancelTerminalQueue(threadId, session.status);
-      if (terminalReportedThreads.has(threadId)) return;
+      const episodeKey = session.episodeStartedAt ?? session.updatedAt;
+      if (terminalReportedThreads.get(threadId) === episodeKey) return;
       const exitReason = deriveSessionExitReason(session);
       const outcome = yield* synthesizeTerminalReport({
         threadId,
@@ -774,39 +869,18 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         // "notify-only" opts out of report chatter, not out of learning the
         // child died. It is the one message that must always land — see
         // formatDeathNotice.
-        yield* notifyParent({
-          origin: { kind: "phoenix", threadId },
-          childThreadId: threadId,
-          text: formatDeathNotice({
-            childTitle: shell.value.title,
-            childThreadId: threadId,
-            exitReason,
-            lastError: session.lastError ?? null,
-            worktree: yield* resolveTerminalWorktreeRisk(shell.value),
-            synthesizedReportId: outcome.reportId,
-            hadAgentReport: outcome.hadAgentReport,
-          }),
-          commandTag: "session-death-notice",
-          // The notice IS the synthesized report's delivery — it carries the
-          // reason and points at the reportId — so it borrows the delivery
-          // message-id shape: the parent turn that consumes it acknowledges
-          // the report through the same turn-start-requested path, instead
-          // of the epitaph sitting "unread" in the inbox forever.
-          ...(outcome.reportId !== null
-            ? {
-                messageId: MessageId.make(
-                  `${SESSION_REPORT_DELIVERY_MESSAGE_PREFIX}${threadId}:${outcome.reportId}`,
-                ),
-              }
-            : {}),
-        }).pipe(Effect.retry({ times: 2, schedule: Schedule.exponential(100) }));
+        yield* deathNoticeWorker.enqueue({
+          threadId,
+          shell: shell.value,
+          exitReason,
+          lastError: session.lastError ?? null,
+          synthesizedReportId: outcome.reportId,
+          hadAgentReport: outcome.hadAgentReport,
+          episodeKey,
+        });
+      } else {
+        terminalReportedThreads.set(threadId, episodeKey);
       }
-      // Marked only once the report and notice are actually dispatched.
-      // Marking up front would let a failed dispatch — which
-      // processInputSafely swallows — brand the episode "handled" with
-      // nothing stored, and a stopped session has no later transition to
-      // re-arm the guard.
-      terminalReportedThreads.add(threadId);
       return;
     }
     if (
@@ -814,6 +888,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       session.status === "running" ||
       session.status === "ready"
     ) {
+      wedgedThreadsNotified.delete(threadId);
       terminalReportedThreads.delete(threadId);
     }
   });
@@ -890,6 +965,11 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
           milliseconds: -Duration.toMillis(RELEASING_RECOVERY_AGE),
         }),
       );
+      const liveStaleBefore = DateTime.formatIso(
+        DateTime.add(yield* DateTime.now, {
+          milliseconds: -Duration.toMillis(LIVE_RELEASING_MAX_AGE),
+        }),
+      );
       const shell = yield* snapshotQuery.getThreadShellById(input.threadId);
       if (Option.isNone(shell)) return;
       const session = shell.value.session;
@@ -909,6 +989,24 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         session.status === "ready" ||
         session.status === "interrupted" ||
         ((session.status === "starting" || session.status === "running") && !live && stale);
+      if (live && (session?.status === "starting" || session?.status === "running")) {
+        yield* Effect.forEach(
+          queuedForThread.filter(
+            (entry) =>
+              entry.state === "releasing" &&
+              entry.releasingAt !== null &&
+              entry.releasingAt <= liveStaleBefore,
+          ),
+          (entry) =>
+            cancelWedgedDelivery({
+              threadId: input.threadId,
+              messageId: entry.messageId,
+              reason: "delivery_stalled",
+              redeliveryCount: entry.redeliveryCount,
+            }),
+          { concurrency: 1 },
+        );
+      }
       if (canRecoverReleasing) {
         yield* Effect.forEach(
           queuedForThread.filter(
@@ -920,9 +1018,11 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
           (entry) =>
             Effect.gen(function* () {
               if (entry.redeliveryCount >= MAX_QUEUED_TURN_REDELIVERIES) {
-                yield* cancelRedeliveryLimitReached({
+                yield* cancelWedgedDelivery({
                   threadId: input.threadId,
                   messageId: entry.messageId,
+                  reason: "redelivery_limit_reached",
+                  redeliveryCount: entry.redeliveryCount,
                 });
                 return;
               }
@@ -1017,6 +1117,18 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       }),
     );
 
+  deathNoticeWorker = yield* makeDrainableWorker<DeathNoticeInput, never, never>((input) =>
+    processDeathNotice(input).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("session death notice failed", {
+              threadId: input.threadId,
+              cause: Cause.pretty(cause),
+            }),
+      ),
+    ),
+  );
   worker = yield* makeDrainableWorker(processInputSafely);
 
   const start: SessionSpawnReactorShape["start"] = Effect.fn("start")(function* () {
@@ -1068,7 +1180,10 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
 
   return {
     start,
-    drain: worker.drain,
+    // Drain the event worker first: it is the producer for the notice worker.
+    // Running both drains concurrently could observe an empty notice queue
+    // just before the final terminal event enqueues its notice.
+    drain: worker.drain.pipe(Effect.andThen(deathNoticeWorker.drain)),
   } satisfies SessionSpawnReactorShape;
 });
 

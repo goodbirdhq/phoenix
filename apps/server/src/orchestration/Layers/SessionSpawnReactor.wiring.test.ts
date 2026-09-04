@@ -163,6 +163,13 @@ const runReactor = (events: ReadonlyArray<OrchestrationEvent>, options: HarnessO
             activities: [],
             reports: Array.from({ length: options.existingReports ?? 0 }, (_unused, index) => ({
               reportId: `existing-${index}`,
+              threadId: CHILD_THREAD_ID,
+              status: "success" as const,
+              title: "Existing report",
+              summary: "Existing report body.",
+              artifacts: [],
+              origin: "agent" as const,
+              createdAt: CREATED_AT,
             })),
           } as unknown as OrchestrationThread),
         ),
@@ -226,6 +233,19 @@ it.live("leaves a child that already reported alone", () =>
     const result = yield* runReactor([sessionSetEvent("stopped", 1)], { existingReports: 1 });
 
     expect(result.reportDispatches).toEqual([]);
+  }),
+);
+
+it.live("does not let a report from an earlier episode suppress terminal synthesis", () =>
+  Effect.gen(function* () {
+    const result = yield* runReactor(
+      [sessionSetEvent("error", 1, { episodeStartedAt: "2026-02-01T00:00:00.000Z" })],
+      { existingReports: 1 },
+    );
+
+    expect(result.reportDispatches).toEqual([CHILD_THREAD_ID]);
+    expect(result.parentMessages).toHaveLength(1);
+    expect(result.parentMessages[0]?.text).not.toContain("already posted a report");
   }),
 );
 

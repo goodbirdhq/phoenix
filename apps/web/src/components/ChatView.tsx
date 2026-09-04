@@ -276,6 +276,7 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
   useProjects,
+  useEnvironmentThreadTitles,
   useThread,
   useThreadRefs,
   useThreadShell,
@@ -1289,6 +1290,7 @@ function ChatViewContent(props: ChatViewProps) {
     reserveTitleBarControlInset = true,
     forceExpandedMobileComposer = false,
   } = props;
+  const threadTitles = useEnvironmentThreadTitles(environmentId);
   const draftId = routeKind === "draft" ? props.draftId : null;
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
@@ -7176,6 +7178,7 @@ function ChatViewContent(props: ChatViewProps) {
                       activities={threadActivities}
                       queuedTurnStarts={activeThread.queuedTurnStarts ?? null}
                       messages={activeThread.messages}
+                      threadTitles={threadTitles}
                       onOpenChildThread={(childThreadId) => {
                         void navigate({
                           to: "/$environmentId/$threadId",

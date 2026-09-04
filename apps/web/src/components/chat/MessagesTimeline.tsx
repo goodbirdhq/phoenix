@@ -118,7 +118,7 @@ import {
   type ParsedPreviewAnnotation,
 } from "~/lib/previewAnnotation";
 import { cn } from "~/lib/utils";
-import { useThreadShell } from "~/state/entities";
+import { useEnvironmentThreadTitles } from "~/state/entities";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
@@ -161,8 +161,7 @@ interface TimelineRowSharedState {
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
   onOpenThread: (threadId: string) => void;
-  /** Messages delivered to this thread's queue that no turn has consumed yet. */
-  pendingDeliveries: ReadonlyMap<string, "queued" | "releasing">;
+  threadTitles: ReadonlyMap<string, string>;
 }
 
 interface TimelineRowActivityState {
@@ -176,6 +175,9 @@ interface TimelineRowActivityState {
 
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
+const TimelinePendingDeliveryCtx = createContext<ReadonlyMap<string, "queued" | "releasing">>(
+  new Map(),
+);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
 const TIMELINE_LIST_FADE_HEADER = <div className="h-10 sm:h-12" />;
 
@@ -306,6 +308,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   loadEarlier = null,
   queuedTurnStarts = null,
 }: MessagesTimelineProps) {
+  const threadTitles = useEnvironmentThreadTitles(activeThreadEnvironmentId);
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
@@ -565,7 +568,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel,
       onOpenAgents,
       onOpenThread,
-      pendingDeliveries,
+      threadTitles,
     }),
     [
       timestampFormat,
@@ -583,7 +586,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel,
       onOpenAgents,
       onOpenThread,
-      pendingDeliveries,
+      threadTitles,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -621,60 +624,62 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   return (
     <TimelineRowCtx value={sharedState}>
-      <TimelineRowActivityCtx value={activityState}>
-        <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
-          <LegendList<MessagesTimelineRow>
-            ref={listRef}
-            data={rows}
-            keyExtractor={keyExtractor}
-            getItemType={getItemType}
-            renderItem={renderItem}
-            estimatedItemSize={90}
-            initialScrollAtEnd
-            {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            contentInsetEndAdjustment={contentInsetEndAdjustment}
-            maintainScrollAtEnd={
-              anchoredEndSpace || !liveFollowEnabled || disclosureToggleSettling
-                ? false
-                : TIMELINE_MAINTAIN_SCROLL_AT_END
-            }
-            maintainVisibleContentPosition={maintainVisibleContentPosition}
-            onScroll={handleScroll}
-            className={cn(
-              "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
-              topFadeEnabled && "topbar-scroll-fade",
-            )}
-            ListHeaderComponent={
-              loadEarlier !== null ? (
-                <TimelineLoadEarlierHeader
-                  loading={loadEarlier.loading}
-                  onLoadEarlier={loadEarlier.onLoadEarlier}
-                  fade={topFadeEnabled}
-                />
-              ) : topFadeEnabled ? (
-                TIMELINE_LIST_FADE_HEADER
-              ) : (
-                TIMELINE_LIST_HEADER
-              )
-            }
-            ListFooterComponent={TIMELINE_LIST_FOOTER}
-          />
-          <TimelineMinimap
-            items={minimapItems}
-            hasPersistentGutter={minimapHasPersistentGutter}
-            hitStripWidth={minimapHitStripWidth}
-            stripMap={minimapStripMap}
-            onSelect={(item) => {
-              onManualNavigation();
-              void listRef.current?.scrollToIndex({
-                index: item.rowIndex,
-                animated: true,
-                viewOffset: 24,
-              });
-            }}
-          />
-        </div>
-      </TimelineRowActivityCtx>
+      <TimelinePendingDeliveryCtx value={pendingDeliveries}>
+        <TimelineRowActivityCtx value={activityState}>
+          <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
+            <LegendList<MessagesTimelineRow>
+              ref={listRef}
+              data={rows}
+              keyExtractor={keyExtractor}
+              getItemType={getItemType}
+              renderItem={renderItem}
+              estimatedItemSize={90}
+              initialScrollAtEnd
+              {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+              contentInsetEndAdjustment={contentInsetEndAdjustment}
+              maintainScrollAtEnd={
+                anchoredEndSpace || !liveFollowEnabled || disclosureToggleSettling
+                  ? false
+                  : TIMELINE_MAINTAIN_SCROLL_AT_END
+              }
+              maintainVisibleContentPosition={maintainVisibleContentPosition}
+              onScroll={handleScroll}
+              className={cn(
+                "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
+                topFadeEnabled && "topbar-scroll-fade",
+              )}
+              ListHeaderComponent={
+                loadEarlier !== null ? (
+                  <TimelineLoadEarlierHeader
+                    loading={loadEarlier.loading}
+                    onLoadEarlier={loadEarlier.onLoadEarlier}
+                    fade={topFadeEnabled}
+                  />
+                ) : topFadeEnabled ? (
+                  TIMELINE_LIST_FADE_HEADER
+                ) : (
+                  TIMELINE_LIST_HEADER
+                )
+              }
+              ListFooterComponent={TIMELINE_LIST_FOOTER}
+            />
+            <TimelineMinimap
+              items={minimapItems}
+              hasPersistentGutter={minimapHasPersistentGutter}
+              hitStripWidth={minimapHitStripWidth}
+              stripMap={minimapStripMap}
+              onSelect={(item) => {
+                onManualNavigation();
+                void listRef.current?.scrollToIndex({
+                  index: item.rowIndex,
+                  animated: true,
+                  viewOffset: 24,
+                });
+              }}
+            />
+          </div>
+        </TimelineRowActivityCtx>
+      </TimelinePendingDeliveryCtx>
     </TimelineRowCtx>
   );
 });
@@ -1036,8 +1041,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 /** Small truth line under an unconsumed message: sent is not the same as
  * heard, and the difference is exactly what the wedge incidents hid. */
 function PendingDeliveryTag({ messageId }: { messageId: string }) {
-  const ctx = use(TimelineRowCtx);
-  const state = ctx.pendingDeliveries.get(messageId);
+  const state = use(TimelinePendingDeliveryCtx).get(messageId);
   if (state === undefined) return null;
   return (
     <span className="text-[11px] text-muted-foreground/80">
@@ -1058,16 +1062,9 @@ function PendingDeliveryTag({ messageId }: { messageId: string }) {
 function SessionOriginMessageRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const origin = row.message.origin;
-  const linkedShell = useThreadShell(
-    origin?.threadId != null
-      ? ({
-          environmentId: ctx.activeThreadEnvironmentId,
-          threadId: origin.threadId,
-        } as ScopedThreadRef)
-      : null,
-  );
   if (!origin) return null;
-  const linkedTitle = linkedShell?.title ?? null;
+  const linkedTitle =
+    origin.threadId == null ? null : (ctx.threadTitles.get(origin.threadId) ?? null);
   const openThreadId = origin.threadId ?? null;
   const label =
     origin.kind === "phoenix"

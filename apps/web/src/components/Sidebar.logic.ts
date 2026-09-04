@@ -509,7 +509,7 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   // Ranked under the live states above (a running turn is still the truth of
   // "what is happening now") but above background liveness: waiting is the
   // actionable fact once the turn has ended.
-  if ((thread.awaitingParentReplySince ?? null) !== null) {
+  if ((thread.awaitingParentReplySince ?? null) !== null && thread.session?.status !== "stopped") {
     return "awaiting-parent";
   }
   // Background work outlives the turn: fleets read as working; monitoring
@@ -822,7 +822,11 @@ export function resolveThreadStatusPill(input: {
   // A spawned thread blocked on its parent's answer. Indigo like Awaiting
   // Input — both mean "stopped until someone replies", they just name a
   // different someone.
-  if ((thread.awaitingParentReplySince ?? null) !== null && thread.session?.status !== "error") {
+  if (
+    (thread.awaitingParentReplySince ?? null) !== null &&
+    thread.session?.status !== "error" &&
+    thread.session?.status !== "stopped"
+  ) {
     return {
       label: "Waiting on Parent",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",

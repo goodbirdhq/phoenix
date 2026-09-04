@@ -1,5 +1,7 @@
 import {
   CommandId,
+  EventId,
+  MessageId,
   type OrchestrationCommand,
   ProjectId,
   ProviderInstanceId,
@@ -58,6 +60,72 @@ const readModel: OrchestrationReadModel = {
 };
 
 it.layer(NodeServices.layer)("report decider", (it) => {
+  it.effect("emits send-to-parent delivery and sender marker in one event batch", () =>
+    Effect.gen(function* () {
+      const childThreadId = ThreadId.make("child-thread");
+      const model = {
+        ...readModel,
+        threads: [
+          readModel.threads[0]!,
+          {
+            ...readModel.threads[0]!,
+            id: childThreadId,
+            title: "Child",
+            spawnedByThreadId: ThreadId.make("thread-1"),
+          },
+        ],
+      } satisfies OrchestrationReadModel;
+      const activity = {
+        id: EventId.make("session-message-sent:child-thread:message-parent"),
+        tone: "info" as const,
+        kind: "session-message.sent" as const,
+        summary: "Sent message to parent session; awaiting reply",
+        payload: {
+          parentThreadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("message-parent"),
+          awaitingReply: true,
+          sentAt: POSTED_AT,
+        },
+        turnId: null,
+        createdAt: POSTED_AT,
+      };
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-send-parent"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: MessageId.make("message-parent"),
+            role: "user",
+            text: "Need the SHA",
+            attachments: [],
+            origin: { kind: "session", threadId: childThreadId },
+          },
+          linkedActivity: { threadId: childThreadId, activity },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: POSTED_AT,
+        },
+        readModel: model,
+      });
+
+      expect(Array.isArray(result)).toBe(true);
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.activity-appended",
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
+      expect(events[0]?.type === "thread.activity-appended" && events[0].payload.activity).toEqual(
+        activity,
+      );
+      expect(events[2]?.type === "thread.turn-start-requested" && events[2].payload.origin).toEqual(
+        { kind: "session", threadId: childThreadId },
+      );
+    }),
+  );
+
   it.effect("emits thread.report-posted for a posted report", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({

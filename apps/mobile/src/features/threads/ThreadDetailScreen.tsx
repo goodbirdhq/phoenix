@@ -93,7 +93,7 @@ export interface ThreadDetailScreenProps {
   readonly environmentLabel: string | null;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
   /** Messages delivered to this thread's queue that no turn has consumed yet. */
-  readonly pendingMessageIds?: ReadonlySet<string>;
+  readonly pendingDeliveries?: ReadonlyMap<string, "queued" | "releasing">;
   readonly activeWorkStartedAt: string | null;
   readonly activePendingApproval: PendingApproval | null;
   readonly respondingApprovalId: ApprovalRequestId | null;
@@ -624,7 +624,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             threadId={props.selectedThread.id}
             workspaceRoot={props.threadCwd}
             feed={props.selectedThreadFeed}
-            pendingMessageIds={props.pendingMessageIds}
+            pendingDeliveries={props.pendingDeliveries}
             contentPresentation={props.contentPresentation}
             agentLabel={agentLabel}
             latestTurn={props.selectedThread.latestTurn}

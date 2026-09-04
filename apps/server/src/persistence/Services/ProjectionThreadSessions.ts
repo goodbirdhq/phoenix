@@ -42,6 +42,7 @@ export const ProjectionThreadSession = Schema.Struct({
   lastCompletedOperation: Schema.NullOr(Schema.String),
   graceStopDeadlineAt: Schema.NullOr(IsoDateTime),
   graceStopEpisodeId: Schema.NullOr(EventId),
+  episodeStartedAt: Schema.NullOr(IsoDateTime),
   queuedDeliveryMessageId: Schema.NullOr(MessageId),
   updatedAt: IsoDateTime,
 });

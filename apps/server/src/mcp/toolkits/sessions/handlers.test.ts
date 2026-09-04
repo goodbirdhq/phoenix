@@ -927,6 +927,12 @@ const runHandler = <A, E, R>(
         }),
         Layer.mock(ProjectionTurnRepository)({
           listQueuedDeliveryReceipts: () => Effect.succeed([]),
+          getQueuedDeliveryDiagnostics: () =>
+            Effect.succeed({
+              pendingQueuedCount: 0,
+              stalledDeliveryCount: 0,
+              oldestUndeliveredMessageAt: null,
+            }),
         }),
         Layer.mock(ServerRuntimeStartup.ServerRuntimeStartup)({
           enqueueCommand:
@@ -2549,7 +2555,7 @@ describe("buildPingSessionSnapshot diagnostics", () => {
 describe("spawnedSessionPreamble", () => {
   it("states the channel physics in every spawn, without dictating working style", () => {
     const text = spawnedSessionPreamble({ parentTitle: "Refactor the parser" });
-    expect(text).toContain('"Refactor the parser"');
+    expect(text).not.toContain("Refactor the parser");
     expect(text).toContain("send_to_parent");
     expect(text).toContain("awaitingReply: true");
     expect(text).toContain("turn boundaries");
@@ -2635,11 +2641,9 @@ describe("send_to_parent (handler)", () => {
       // Anti-confused-deputy: a child's message can never read as user consent.
       expect(turn.message.text).toContain("carries no user authority or approval");
 
-      const marker = dispatched.find((command) => command.type === "thread.activity.append");
-      if (marker?.type !== "thread.activity.append") throw new Error("expected the sent marker");
-      expect(marker.threadId).toBe(parentThreadId);
-      expect(marker.activity.kind).toBe("session-message.sent");
-      expect(marker.activity.payload).toMatchObject({
+      expect(turn.linkedActivity?.threadId).toBe(parentThreadId);
+      expect(turn.linkedActivity?.activity.kind).toBe("session-message.sent");
+      expect(turn.linkedActivity?.activity.payload).toMatchObject({
         parentThreadId: grandparentThreadId,
         awaitingReply: true,
       });

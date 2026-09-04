@@ -40,6 +40,92 @@ function makeEvent(input: {
 }
 
 describe("orchestration projector", () => {
+  effectIt.effect("keeps routed origin and awaiting-parent folds in replay parity", () =>
+    Effect.gen(function* () {
+      const createdAt = "2026-03-03T10:00:00.000Z";
+      let model = yield* projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "child-thread",
+          occurredAt: createdAt,
+          commandId: "cmd-create-child",
+          payload: {
+            threadId: "child-thread",
+            projectId: "project-1",
+            title: "Child",
+            modelSelection: { instanceId: "codex", model: "gpt-5.6" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            spawnedByThreadId: "parent-thread",
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      );
+      model = yield* projectEvent(
+        model,
+        makeEvent({
+          sequence: 2,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "child-thread",
+          occurredAt: createdAt,
+          commandId: "cmd-message-origin",
+          payload: {
+            threadId: "child-thread",
+            messageId: "message-origin",
+            role: "user",
+            text: "from parent",
+            origin: { kind: "session", threadId: "parent-thread" },
+            turnId: null,
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      );
+      model = yield* projectEvent(
+        model,
+        makeEvent({
+          sequence: 3,
+          type: "thread.activity-appended",
+          aggregateKind: "thread",
+          aggregateId: "child-thread",
+          occurredAt: createdAt,
+          commandId: "cmd-awaiting",
+          payload: {
+            threadId: "child-thread",
+            activity: {
+              id: "activity-awaiting",
+              tone: "info",
+              kind: "session-message.sent",
+              summary: "Sent to parent",
+              payload: {
+                parentThreadId: "parent-thread",
+                messageId: "message-to-parent",
+                awaitingReply: true,
+                sentAt: createdAt,
+              },
+              turnId: null,
+              createdAt,
+            },
+          },
+        }),
+      );
+
+      expect(model.threads[0]?.messages[0]?.origin).toEqual({
+        kind: "session",
+        threadId: "parent-thread",
+      });
+      expect(model.threads[0]?.awaitingParentReplySince).toBe(createdAt);
+    }),
+  );
+
   effectIt.effect("retains an unread child report after more than 500 unrelated activities", () =>
     Effect.gen(function* () {
       const createdAt = "2026-03-01T10:00:00.000Z";

@@ -100,14 +100,15 @@ an idle parent wakes, a busy parent queues it FIFO. The strictly-downward rule o
 mutating tool stands; this is one narrow upward affordance, refused with `not_a_spawned_session`
 for top-level threads and `parent_not_available` when the parent is archived or deleted.
 
-Each send also appends a `session-message.sent` activity to the child's own thread (typed payload
-in `orchestration.ts`), which is both the visible timeline record and the event the awaiting-reply
-signal folds from. The signal itself is a projector-maintained shell field:
+The parent delivery and the child's `session-message.sent` activity are emitted by one durable
+`thread.turn.start` command, so neither half can land without the other. The activity is both the
+visible timeline record and the event the awaiting-reply signal folds from. The signal itself is a
+projector-maintained shell field:
 `projection_threads.awaiting_parent_reply_since` (migration 057) is set by the
 `thread.activity-appended` case in `ProjectionPipeline` when the marker declares
 `awaitingReply: true` (latest marker wins — a later non-awaiting send withdraws the claim) and
-cleared by any `thread.turn-start-requested` on the thread, because a new turn means new input
-arrived, which is what the child was waiting for. One owner, every reader: `ping_session` and
+cleared by a human message or a message from that child's parent. Unrelated system and descendant
+session messages do not masquerade as the awaited reply. One owner, every reader: `ping_session` and
 `list_sessions` hand the shell value through, the web sessions panel shows the child as
 "Awaiting reply", and the sidebar/mobile thread rows label it "Waiting on parent". The clients
 also derive the typed exit reason locally (`deriveSessionExitReason` over the shell's session
@@ -125,14 +126,14 @@ existing spawn row navigable.
 Attribution is typed end to end: `OrchestrationMessageOrigin` (`kind: "session" | "phoenix"` plus
 the related threadId) rides the turn.start command, the message-sent event, and
 `projection_thread_messages.origin_json` (migration 058). Every server-side writer declares
-itself — send_to_parent/send_to_session, report deliveries (`session`), death/wedge/interrupt and
+itself — send*to_parent/send_to_session, report deliveries (`session`), death/wedge/interrupt and
 grace-stop notices (`phoenix`) — while the client command schema has no origin field, so a client
 cannot forge agent attribution onto a human message. Clients render origin messages as
 left-aligned routed cards ("From session X" / "Phoenix"), never as the human's bubble; the body
 stays the exact text the model consumed. The thread detail also now carries `queuedTurnStarts`
 (kept live by the client reducer from the queue lifecycle events), which powers per-message
 "queued — delivers after the current turn" markers and the inbox's "waiting for the agent"
-section, so _sent_ and _heard_ are finally distinguishable in the UI.
+section, so \_sent* and _heard_ are finally distinguishable in the UI.
 
 The channel-physics contract itself is injected into every child's first message
 (`spawnedSessionPreamble` in the toolkit handlers): what wakes whom, that in-thread text reaches
@@ -173,11 +174,13 @@ report, then the notice that points at it.
 
 `SessionReport.origin` (`"agent" | "system"`) is what keeps the accounts honest: a synthesized
 report must never read as the child's own claim that the work is done. Synthesis is once per
-terminal episode and re-arms when the session comes back to life. The episode is marked only once
+terminal episode and re-arms when the session comes back to life. `episode_started_at` (migration 059) scopes report lookup and deterministic report/notice identifiers to the current episode, so a
+historical report cannot suppress or misdescribe a later crash. Stop audit is cleared when a new
+episode starts. The episode is marked only once
 the report and notice are actually dispatched — a terminated session emits no further status
 transition, so marking an episode "handled" on a dispatch that failed would strand the parent in
-silence forever. That in-memory set is only an optimization; the persisted `reports` check is what
-actually prevents duplicate reports.
+silence forever. That in-memory set is only an optimization; deterministic episode-scoped report
+and delivery identifiers make retries converge after restart.
 
 ## Wedge detection
 
@@ -185,8 +188,10 @@ actually prevents duplicate reports.
 `releasing` but never starts a turn is not busy, it is stuck — and it looks identical to busy from
 the outside. The raw receipt now crosses the wire whole (`releasingAt` and `redeliveryCount` on
 `QueuedDeliveryReceipt`), `ping_session` counts stalled releases and dates the oldest unconsumed
-message, and when the recovery sweep's redelivery limit finally cancels a message, the reactor
-messages the parent directly — the error activity alone lands on the wedged child's own thread,
+message. A stale release with no live binding is retried up to the redelivery limit; a release that
+remains stale while its provider binding is still live is cancelled after two minutes rather than
+risk sending duplicate provider work. Either cancellation sends one deduplicated notice per child
+to the parent — the error activity alone lands on the wedged child's own thread,
 where nobody who can act on it is looking. A report posted over unconsumed queued messages also
 carries the `formatQueuedReportWarning` line in its delivery, so a parent never mistakes a
 pre-instruction report for an answer.
@@ -601,6 +606,6 @@ cleanup in this slice: deleted/archived-thread cleanup and a bounded receipt-ret
 the next persistence follow-up. The global recovery scan should also become thread-indexed;
 terminal session transitions are handled by this delivery workflow.
 
-The web client currently renders the queued user message but does not surface a queued-delivery
-indicator because its reducer intentionally ignores the new event. That affordance is a separate
-web-app follow-up; the server contract and delivery behavior do not depend on it.
+Web and mobile render queued and releasing delivery markers from the same receipt state. Both
+resolve routed-session titles from one environment-level title map instead of mounting a live shell
+subscription for every historical message.

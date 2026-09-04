@@ -2475,7 +2475,8 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         { awaitingParentReplySince: "2026-02-26T13:00:02.000Z" },
       ]);
 
-      // Any turn start clears it: new input is what the child was waiting for.
+      // A descendant/system turn is unrelated to the parent's reply and must
+      // not clear the marker.
       yield* appendAndProject({
         ...base,
         type: "thread.turn-start-requested",
@@ -2486,9 +2487,31 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         payload: {
           threadId: ThreadId.make("thread-awaiting-reply"),
           messageId: MessageId.make("message-awaiting-turn"),
+          origin: { kind: "session", threadId: ThreadId.make("thread-awaiting-descendant") },
           runtimeMode: "approval-required",
           interactionMode: "default",
           createdAt: "2026-02-26T13:00:03.000Z",
+        },
+      });
+      assert.deepEqual(yield* awaitingSince(), [
+        { awaitingParentReplySince: "2026-02-26T13:00:02.000Z" },
+      ]);
+
+      // A routed message from the parent owns the reply and clears it.
+      yield* appendAndProject({
+        ...base,
+        type: "thread.turn-start-requested",
+        eventId: EventId.make("evt-awaiting-parent-turn"),
+        occurredAt: "2026-02-26T13:00:03.500Z",
+        commandId: CommandId.make("cmd-awaiting-parent-turn"),
+        correlationId: CorrelationId.make("cmd-awaiting-parent-turn"),
+        payload: {
+          threadId: ThreadId.make("thread-awaiting-reply"),
+          messageId: MessageId.make("message-awaiting-parent-turn"),
+          origin: { kind: "session", threadId: ThreadId.make("thread-awaiting-parent") },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          createdAt: "2026-02-26T13:00:03.500Z",
         },
       });
       assert.deepEqual(yield* awaitingSince(), [{ awaitingParentReplySince: null }]);

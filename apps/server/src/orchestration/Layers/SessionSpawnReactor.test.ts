@@ -111,6 +111,11 @@ const releasing = (suffix: string, releasingAt = STALE): ProjectionQueuedTurnSta
   releasingAt,
 });
 
+const interrupting = (suffix: string): ProjectionQueuedTurnStart => ({
+  ...queued(suffix, "interrupt"),
+  state: "interrupting",
+});
+
 const sessionSetEvent = (shell: OrchestrationThreadShell): OrchestrationEvent => ({
   sequence: 1,
   eventId: EventId.make(`event-${shell.session?.status ?? "none"}`),
@@ -168,6 +173,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
     Record<string, { readonly text: string; readonly createdAt: string }>
   >;
   readonly reportDelivery?: OrchestrationThreadShell["reportDelivery"];
+  readonly reports?: OrchestrationThread["reports"];
 }) {
   const commands = yield* Ref.make<Array<OrchestrationCommand>>([]);
   const queuedRows = input.queuedRowsRef ?? (yield* Ref.make([...input.queued]));
@@ -233,6 +239,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
             Effect.map((shell) =>
               Option.some({
                 ...shell,
+                reports: input.reports ?? [],
                 messages:
                   input.queuedMessageText === undefined
                     ? []
@@ -357,16 +364,23 @@ describe("SessionSpawnReactor queued delivery", () => {
     ),
   );
 
-  it.effect("cancels queued rows but preserves releasing rows at a terminal boundary", () =>
+  it.effect("cancels every undelivered row at a terminal boundary", () =>
     Effect.scoped(
-      createHarness({ status: "stopped", queued: [queued("cancel"), releasing("in-flight")] }).pipe(
+      createHarness({
+        status: "stopped",
+        queued: [queued("cancel"), interrupting("interrupting"), releasing("in-flight")],
+      }).pipe(
         Effect.map(({ commands, queuedRows }) => {
           const cancelled = commands.filter(
             (command) => command.type === "thread.turn.queue.cancel",
           );
-          expect(cancelled).toHaveLength(1);
-          expect(cancelled[0]?.messageId).toBe(MessageId.make("queued-cancel"));
-          expect(queuedRows).toEqual([releasing("in-flight")]);
+          expect(cancelled).toHaveLength(3);
+          expect(cancelled.map((command) => command.messageId)).toEqual([
+            MessageId.make("queued-cancel"),
+            MessageId.make("queued-interrupting"),
+            MessageId.make("queued-in-flight"),
+          ]);
+          expect(queuedRows).toEqual([]);
         }),
         Effect.provide(NodeServices.layer),
       ),
@@ -413,7 +427,7 @@ describe("SessionSpawnReactor queued delivery", () => {
         );
         expect(notes).toHaveLength(1);
         expect(notes[0]?.type === "thread.activity.append" && notes[0].activity.kind).toBe(
-          "queued-delivery.redelivery-limit-reached",
+          "queued-delivery.wedged",
         );
       }).pipe(Effect.provide(NodeServices.layer)),
     ),
@@ -543,6 +557,47 @@ describe("SessionSpawnReactor queued delivery", () => {
         expect(commands.some((command) => command.type === "thread.session.set")).toBe(false);
         expect(commands.some((command) => command.type === "thread.turn.start.queued")).toBe(false);
         expect(queuedRows).toHaveLength(1);
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("cancels and reports a stale release even while its provider binding stays live", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const { commands, queuedRows } = yield* createHarness({
+          status: "running",
+          queued: [releasing("live-wedge")],
+          updatedAt: STALE,
+          live: true,
+        });
+        const cancellation = commands.find(
+          (command) => command.type === "thread.turn.queue.cancel",
+        );
+        expect(cancellation?.type === "thread.turn.queue.cancel" && cancellation.reason).toBe(
+          "delivery_stalled",
+        );
+        expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(1);
+        expect(queuedRows).toEqual([]);
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("wakes the parent once when several messages hit the wedge limit together", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const { commands } = yield* createHarness({
+          status: "ready",
+          queued: [
+            { ...releasing("limit-one"), redeliveryCount: 3 },
+            { ...releasing("limit-two"), redeliveryCount: 3 },
+          ],
+        });
+        expect(
+          commands.filter((command) => command.type === "thread.turn.queue.cancel"),
+        ).toHaveLength(2);
+        expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(1);
       }).pipe(Effect.provide(NodeServices.layer)),
     ),
   );
@@ -970,7 +1025,11 @@ describe("buildTerminalReportSummary", () => {
   });
 });
 
-const turnStartRequestedEvent = (threadId: ThreadId, messageId: string): OrchestrationEvent =>
+const turnStartRequestedEvent = (
+  threadId: ThreadId,
+  messageId: string,
+  origin?: { readonly kind: "phoenix"; readonly threadId: ThreadId },
+): OrchestrationEvent =>
   ({
     sequence: 1,
     eventId: EventId.make(`event-turn-requested-${messageId}`),
@@ -987,6 +1046,7 @@ const turnStartRequestedEvent = (threadId: ThreadId, messageId: string): Orchest
       messageId: MessageId.make(messageId),
       runtimeMode: "full-access",
       interactionMode: "default",
+      ...(origin !== undefined ? { origin } : {}),
       createdAt: NOW,
     },
   }) as unknown as OrchestrationEvent;
@@ -1014,7 +1074,22 @@ describe("delivery consumption", () => {
         status: "ready",
         queued: [],
         boundaryEvents: [
-          turnStartRequestedEvent(PARENT_ID, "session-report-delivery:child-thread:report-42"),
+          turnStartRequestedEvent(PARENT_ID, "session-report-delivery:child-thread:report-42", {
+            kind: "phoenix",
+            threadId: CHILD_ID,
+          }),
+        ],
+        reports: [
+          {
+            reportId: "report-42",
+            threadId: CHILD_ID,
+            status: "success",
+            title: "Done",
+            summary: "Done.",
+            artifacts: [],
+            origin: "agent",
+            createdAt: NOW,
+          },
         ],
       }).pipe(
         Effect.map(({ commands }) => {
@@ -1035,6 +1110,29 @@ describe("delivery consumption", () => {
             reportId: "report-42",
             readByThreadId: PARENT_ID,
           });
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("ignores a report-delivery-shaped message id when the report does not exist", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        boundaryEvents: [
+          turnStartRequestedEvent(PARENT_ID, "session-report-delivery:child-thread:forged-report"),
+        ],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          expect(
+            commands.filter(
+              (command) =>
+                command.type === "thread.activity.append" &&
+                command.activity.kind === "session-report.read",
+            ),
+          ).toEqual([]);
         }),
         Effect.provide(NodeServices.layer),
       ),

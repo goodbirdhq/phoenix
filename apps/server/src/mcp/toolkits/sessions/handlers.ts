@@ -69,7 +69,10 @@ import {
   ProjectionThreadReportRepository,
 } from "../../../persistence/Services/ProjectionThreadReports.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
-import { ProjectionTurnRepository } from "../../../persistence/Services/ProjectionTurns.ts";
+import {
+  type ProjectionQueuedDeliveryDiagnostics,
+  ProjectionTurnRepository,
+} from "../../../persistence/Services/ProjectionTurns.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "../../../provider/Services/ProviderService.ts";
 import * as ServerRuntimeStartup from "../../../serverRuntimeStartup.ts";
@@ -230,6 +233,7 @@ export const buildPingSessionSnapshot = (input: {
   readonly lastAssistantMessage: string | null;
   readonly usage: SessionUsageSnapshot;
   readonly queuedDeliveryReceipts?: ReadonlyArray<QueuedDeliveryReceipt> | undefined;
+  readonly queuedDeliveryDiagnostics?: ProjectionQueuedDeliveryDiagnostics | undefined;
 }): Omit<PingSessionResult, "threadId"> => {
   const receipts = input.queuedDeliveryReceipts ?? [];
   const undelivered = receipts.filter(
@@ -247,14 +251,20 @@ export const buildPingSessionSnapshot = (input: {
     lastAssistantMessage:
       input.lastAssistantMessage !== null ? truncateText(input.lastAssistantMessage, 500) : null,
     usage: input.usage,
-    pendingQueuedCount: receipts.filter((receipt) => receipt.state === "queued").length,
+    pendingQueuedCount:
+      input.queuedDeliveryDiagnostics?.pendingQueuedCount ??
+      receipts.filter((receipt) => receipt.state === "queued").length,
     mostRecentDeliveryReceipt: receipts.at(0) ?? null,
-    stalledDeliveryCount: receipts.filter((receipt) => receipt.state === "releasing").length,
-    oldestUndeliveredMessageAt: undelivered.reduce<string | null>(
-      (oldest, receipt) =>
-        oldest === null || receipt.requestedAt < oldest ? receipt.requestedAt : oldest,
-      null,
-    ),
+    stalledDeliveryCount:
+      input.queuedDeliveryDiagnostics?.stalledDeliveryCount ??
+      receipts.filter((receipt) => receipt.state === "releasing").length,
+    oldestUndeliveredMessageAt:
+      input.queuedDeliveryDiagnostics?.oldestUndeliveredMessageAt ??
+      undelivered.reduce<string | null>(
+        (oldest, receipt) =>
+          oldest === null || receipt.requestedAt < oldest ? receipt.requestedAt : oldest,
+        null,
+      ),
     exitReason: terminal ? deriveSessionExitReason(session) : null,
     lastError: session?.lastError ?? null,
     stoppedBy: session?.stoppedBy ?? null,
@@ -272,8 +282,8 @@ export const buildPingSessionSnapshot = (input: {
  * and a light touch only; it stays short enough never to crowd the actual
  * work prompt, and leaves working style to the agent.
  */
-export const spawnedSessionPreamble = (input: { readonly parentTitle: string }): string =>
-  `\n\n---\nYou were spawned by another Phoenix agent session ("${truncateText(input.parentTitle, 80)}") to do the work above.\n\nCHANNEL PHYSICS. Sessions exchange messages only at turn boundaries: a message to a busy session arrives after its current turn ends; a message to an idle session wakes it. Text you write in your own thread reaches NO ONE — your parent cannot see it and is not watching you. Exactly two things reach your parent: send_to_parent (questions, blockers, important mid-work updates; set awaitingReply: true when you cannot proceed without an answer) and post_report (your completion artifact). Your parent may also message you; its messages arrive between your turns. A session can also be stopped or run out of provider quota without warning — your parent is told when that happens, including what your worktree held.\n\nREPORT CONTRACT. When the work is complete — or you determine it cannot be completed — call post_report exactly once: status (success/failure/partial), a concise markdown summary, artifacts (files, branches, PR URLs), and a 1-3 sentence abstract if the summary is long. If an instruction reaches you AFTER you already reported, do the new work and post an AMENDING report with supersedesReportId set to the reportId you are replacing. Never state in a report that work was done unless it was done when that report was written. post_report is not a chat channel; use send_to_parent for everything that is not a completion account.`;
+export const spawnedSessionPreamble = (_input?: { readonly parentTitle: string }): string =>
+  `\n\n---\nYou were spawned by another Phoenix agent session to do the work above.\n\nCHANNEL PHYSICS. Sessions exchange messages only at turn boundaries: a message to a busy session arrives after its current turn ends; a message to an idle session wakes it. Text you write in your own thread reaches NO ONE — your parent cannot see it and is not watching you. Exactly two things reach your parent: send_to_parent (questions, blockers, important mid-work updates; set awaitingReply: true when you cannot proceed without an answer) and post_report (your completion artifact). Your parent may also message you; its messages arrive between your turns. A session can also be stopped or run out of provider quota without warning — your parent is told when that happens, including what your worktree held.\n\nREPORT CONTRACT. When the work is complete — or you determine it cannot be completed — call post_report exactly once: status (success/failure/partial), a concise markdown summary, artifacts (files, branches, PR URLs), and a 1-3 sentence abstract if the summary is long. If an instruction reaches you AFTER you already reported, do the new work and post an AMENDING report with supersedesReportId set to the reportId you are replacing. Never state in a report that work was done unless it was done when that report was written. post_report is not a chat channel; use send_to_parent for everything that is not a completion account.`;
 
 // Enough to tell the caller what is at stake without turning a refusal into a
 // transcript of a large working tree.
@@ -621,6 +631,18 @@ export const make = Effect.gen(function* () {
       Effect.catch((cause) =>
         Effect.logWarning("queued delivery receipt lookup failed", { threadId, cause }).pipe(
           Effect.as([] as ReadonlyArray<QueuedDeliveryReceipt>),
+        ),
+      ),
+    );
+  const getQueuedDeliveryDiagnostics = (threadId: ThreadId) =>
+    projectionTurnRepository.getQueuedDeliveryDiagnostics({ threadId }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("queued delivery diagnostics lookup failed", { threadId, cause }).pipe(
+          Effect.as({
+            pendingQueuedCount: 0,
+            stalledDeliveryCount: 0,
+            oldestUndeliveredMessageAt: null,
+          } satisfies ProjectionQueuedDeliveryDiagnostics),
         ),
       ),
     );
@@ -1079,7 +1101,7 @@ export const make = Effect.gen(function* () {
         message: {
           messageId,
           role: "user",
-          text: `${input.prompt}${spawnedSessionPreamble({ parentTitle: parent.title })}`,
+          text: `${input.prompt}${spawnedSessionPreamble()}`,
           attachments: [],
         },
         modelSelection,
@@ -1220,34 +1242,24 @@ export const make = Effect.gen(function* () {
         },
         runtimeMode: parent.value.runtimeMode,
         interactionMode: parent.value.interactionMode,
-        createdAt,
-      }),
-    );
-    // The durable record on the child's own thread: what makes the exchange
-    // visible in its timeline and backs the awaiting-reply signal the parent
-    // reads via ping_session/list_sessions. Deterministic ids keyed by the
-    // message make a retry after a transient failure converge instead of
-    // duplicating the marker.
-    yield* enqueue(
-      engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.make(`session-message-sent:${caller.id}:${messageId}`),
-        threadId: caller.id,
-        activity: {
-          id: EventId.make(`session-message-sent:${caller.id}:${messageId}`),
-          tone: "info",
-          kind: SESSION_MESSAGE_SENT_ACTIVITY_KIND,
-          summary: awaitingReply
-            ? "Sent message to parent session; awaiting reply"
-            : "Sent message to parent session",
-          payload: {
-            parentThreadId: parent.value.id,
-            messageId,
-            awaitingReply,
-            sentAt: createdAt,
+        linkedActivity: {
+          threadId: caller.id,
+          activity: {
+            id: EventId.make(`session-message-sent:${caller.id}:${messageId}`),
+            tone: "info",
+            kind: SESSION_MESSAGE_SENT_ACTIVITY_KIND,
+            summary: awaitingReply
+              ? "Sent message to parent session; awaiting reply"
+              : "Sent message to parent session",
+            payload: {
+              parentThreadId: parent.value.id,
+              messageId,
+              awaitingReply,
+              sentAt: createdAt,
+            },
+            turnId: null,
+            createdAt,
           },
-          turnId: null,
-          createdAt,
         },
         createdAt,
       }),
@@ -2156,7 +2168,8 @@ export const make = Effect.gen(function* () {
       createdAt: child.createdAt,
       latestTurn: child.latestTurn,
     });
-    const queuedDeliveryReceipts = yield* getQueuedDeliveryReceipts(child.id);
+    const queuedDeliveryReceipts = (yield* getQueuedDeliveryReceipts(child.id)).slice(0, 1);
+    const queuedDeliveryDiagnostics = yield* getQueuedDeliveryDiagnostics(child.id);
     return {
       threadId: child.id,
       ...buildPingSessionSnapshot({
@@ -2166,6 +2179,7 @@ export const make = Effect.gen(function* () {
         lastAssistantMessage: Option.getOrNull(lastAssistantMessage),
         usage,
         queuedDeliveryReceipts,
+        queuedDeliveryDiagnostics,
       }),
     };
   });
