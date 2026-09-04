@@ -2101,6 +2101,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 pinnedAt: row.pinnedAt,
                 pinOrderKey: row.pinOrderKey ?? null,
                 titleRegeneration: mapTitleRegeneration(row),
+                awaitingParentReplySince: row.awaitingParentReplySince,
                 deletedAt: row.deletedAt,
                 messages: messagesByThread.get(row.threadId) ?? [],
                 queuedTurnStarts: snapshotQueuedByThread.get(row.threadId) ?? [],
@@ -2366,6 +2367,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   pinnedAt: row.pinnedAt,
                   pinOrderKey: row.pinOrderKey ?? null,
                   titleRegeneration: mapTitleRegeneration(row),
+                  awaitingParentReplySince: row.awaitingParentReplySince,
                   deletedAt: row.deletedAt,
                   messages: [],
                   queuedTurnStarts: queuedTurnStartsByThread.get(row.threadId) ?? [],
@@ -3117,6 +3119,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         pinnedAt: threadRow.value.pinnedAt,
         pinOrderKey: threadRow.value.pinOrderKey ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
+        awaitingParentReplySince: threadRow.value.awaitingParentReplySince,
         deletedAt: null,
         messages: messageRows.map((row) => {
           const message = {

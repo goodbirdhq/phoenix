@@ -386,6 +386,11 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       | "delivery_stalled"
       | "legacy_report_notification";
   }) {
+    // A terminal session cancels everything still owed to it, including a
+    // delivery caught mid-release: the repository's cancel transition accepts
+    // releasing rows, and leaving one behind pins the stalled count and the
+    // client's queued marker forever. (Interrupt-mode rows surface here as
+    // "interrupting" until the replacement turn is accepted.)
     const queued = (yield* projectionTurnRepository.listQueuedTurnStarts).filter(
       (entry) =>
         entry.threadId === input.threadId &&
@@ -671,6 +676,56 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
 
   let deathNoticeWorker!: DrainableWorker<DeathNoticeInput>;
 
+  const processTerminalSession = Effect.fn("SessionSpawnReactor.processTerminalSession")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly session: OrchestrationSession & { readonly status: "stopped" | "error" };
+    }) {
+      const { threadId, session } = input;
+      // Three reactions to the same terminal episode, in this order on
+      // purpose. Cancelling the queue first tells the parent its pending
+      // work was dropped; the synthesized report (when the child never
+      // reported) preserves the durable account; the death notice then
+      // wakes the parent with the exit reason, the worktree's git state,
+      // and where that account lives. Deterministic command ids make this
+      // safe both for event replay and startup recovery after a crash.
+      yield* cancelTerminalQueue(threadId, session.status);
+      const episodeKey = session.episodeStartedAt ?? session.updatedAt;
+      if (terminalReportedThreads.get(threadId) === episodeKey) return;
+      const exitReason = deriveSessionExitReason(session);
+      const outcome = yield* synthesizeTerminalReport({
+        threadId,
+        sessionStatus: session.status,
+        exitReason,
+        lastError: session.lastError ?? null,
+        session,
+      });
+      if (!outcome.isSpawnedChild) return;
+      const shell = yield* snapshotQuery.getThreadShellById(threadId);
+      // A parent-initiated stop (stop_session, settle, archive) is the one
+      // death the parent cannot be surprised by — it caused it. Waking it
+      // with a notice would turn every settle into a self-notification. The
+      // synthesized report above still preserves the durable record.
+      if (Option.isSome(shell) && exitReason !== "stopped_by_parent") {
+        // Unlike report delivery, the death notice ignores reportDelivery:
+        // "notify-only" opts out of report chatter, not out of learning the
+        // child died. It is the one message that must always land — see
+        // formatDeathNotice.
+        yield* deathNoticeWorker.enqueue({
+          threadId,
+          shell: shell.value,
+          exitReason,
+          lastError: session.lastError ?? null,
+          synthesizedReportId: outcome.reportId,
+          hadAgentReport: outcome.hadAgentReport,
+          episodeKey,
+        });
+      } else {
+        terminalReportedThreads.set(threadId, episodeKey);
+      }
+    },
+  );
+
   const processEvent = Effect.fn("SessionSpawnReactor.processEvent")(function* (
     event: WatchedEvent,
   ) {
@@ -685,27 +740,33 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       // on one durable record instead of double-counting.
       const delivery = parseReportDeliveryMessageId(event.payload.messageId);
       if (delivery === null) return;
-      // `origin` is server-only on a turn start; the client command schema
-      // strips it. Requiring Phoenix attribution proves this id came from the
-      // report-delivery path rather than a paired client choosing the prefix.
+      const child = yield* snapshotQuery.getThreadDetailById(ThreadId.make(delivery.childThreadId));
+      const report = Option.isSome(child)
+        ? child.value.reports.find((candidate) => candidate.reportId === delivery.reportId)
+        : undefined;
       if (
-        event.payload.origin?.kind !== "phoenix" ||
-        event.payload.origin.threadId !== delivery.childThreadId
+        Option.isNone(child) ||
+        child.value.spawnedByThreadId !== event.payload.threadId ||
+        !report
       ) {
-        yield* Effect.logWarning("ignored untrusted session report delivery receipt", {
+        yield* Effect.logWarning("ignored invalid session report delivery receipt", {
           parentThreadId: event.payload.threadId,
           childThreadId: delivery.childThreadId,
           reportId: delivery.reportId,
         });
         return;
       }
-      const child = yield* snapshotQuery.getThreadDetailById(ThreadId.make(delivery.childThreadId));
+      // `origin` is server-only on a turn start; the client command schema
+      // strips it. Agent reports arrive as the child session speaking, while
+      // Phoenix-authored terminal reports arrive through a Phoenix death
+      // notice. Match the persisted report's author so both legitimate paths
+      // are accepted without trusting a client-chosen message-id prefix.
+      const expectedOriginKind = report.origin === "system" ? "phoenix" : "session";
       if (
-        Option.isNone(child) ||
-        child.value.spawnedByThreadId !== event.payload.threadId ||
-        !child.value.reports.some((report) => report.reportId === delivery.reportId)
+        event.payload.origin?.kind !== expectedOriginKind ||
+        event.payload.origin.threadId !== delivery.childThreadId
       ) {
-        yield* Effect.logWarning("ignored invalid session report delivery receipt", {
+        yield* Effect.logWarning("ignored untrusted session report delivery receipt", {
           parentThreadId: event.payload.threadId,
           childThreadId: delivery.childThreadId,
           reportId: delivery.reportId,
@@ -840,47 +901,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       yield* releaseNextQueuedTurn(threadId);
     }
     if (isTerminalStatus(session.status)) {
-      // Three reactions to the same terminal event, in this order on
-      // purpose. Cancelling the queue first tells the parent its pending
-      // work was dropped; the synthesized report (when the child never
-      // reported) preserves the durable account; the death notice then
-      // wakes the parent with the exit reason, the worktree's git state,
-      // and where that account lives. The notice comes last so it can name
-      // the synthesized report it points at.
-      yield* cancelTerminalQueue(threadId, session.status);
-      const episodeKey = session.episodeStartedAt ?? session.updatedAt;
-      if (terminalReportedThreads.get(threadId) === episodeKey) return;
-      const exitReason = deriveSessionExitReason(session);
-      const outcome = yield* synthesizeTerminalReport({
-        threadId,
-        sessionStatus: session.status,
-        exitReason,
-        lastError: session.lastError ?? null,
-        session,
-      });
-      if (!outcome.isSpawnedChild) return;
-      const shell = yield* snapshotQuery.getThreadShellById(threadId);
-      // A parent-initiated stop (stop_session, settle, archive) is the one
-      // death the parent cannot be surprised by — it caused it. Waking it
-      // with a notice would turn every settle into a self-notification. The
-      // synthesized report above still preserves the durable record.
-      if (Option.isSome(shell) && exitReason !== "stopped_by_parent") {
-        // Unlike report delivery, the death notice ignores reportDelivery:
-        // "notify-only" opts out of report chatter, not out of learning the
-        // child died. It is the one message that must always land — see
-        // formatDeathNotice.
-        yield* deathNoticeWorker.enqueue({
-          threadId,
-          shell: shell.value,
-          exitReason,
-          lastError: session.lastError ?? null,
-          synthesizedReportId: outcome.reportId,
-          hadAgentReport: outcome.hadAgentReport,
-          episodeKey,
-        });
-      } else {
-        terminalReportedThreads.set(threadId, episodeKey);
-      }
+      yield* processTerminalSession({ threadId, session });
       return;
     }
     if (
@@ -973,6 +994,10 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       const shell = yield* snapshotQuery.getThreadShellById(input.threadId);
       if (Option.isNone(shell)) return;
       const session = shell.value.session;
+      if (session !== null && isTerminalStatus(session.status)) {
+        yield* processTerminalSession({ threadId: input.threadId, session });
+        return;
+      }
       const live = (yield* providerService.listSessions()).some(
         (entry) => entry.threadId === input.threadId,
       );
@@ -1052,10 +1077,6 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
           createdAt: yield* nowIso,
         });
         yield* releaseNextQueuedTurn(input.threadId);
-        return;
-      }
-      if (session?.status === "stopped" || session?.status === "error") {
-        yield* cancelTerminalQueue(input.threadId, session.status);
         return;
       }
       if (
@@ -1173,6 +1194,24 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       ),
     );
     yield* enqueueRecovery();
+    // Queue rows are not the only durable evidence that work remains. A
+    // process can stop after persisting a terminal session/report but before
+    // its asynchronous death notice lands. Revisit every spawned terminal
+    // shell once at startup; deterministic report and notice command ids make
+    // already-completed episodes no-ops while repairing that crash window.
+    const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+    yield* Effect.forEach(
+      shellSnapshot.threads,
+      (thread) => {
+        const session = thread.session;
+        return thread.spawnedByThreadId !== null &&
+          session !== null &&
+          isTerminalStatus(session.status)
+          ? processInputSafely({ type: "recover", threadId: thread.id })
+          : Effect.void;
+      },
+      { concurrency: 1 },
+    );
     yield* forkParked(
       Effect.sleep(RECOVERY_INTERVAL).pipe(Effect.andThen(enqueueRecovery()), Effect.forever),
     );

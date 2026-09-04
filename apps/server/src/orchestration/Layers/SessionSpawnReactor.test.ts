@@ -174,6 +174,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   >;
   readonly reportDelivery?: OrchestrationThreadShell["reportDelivery"];
   readonly reports?: OrchestrationThread["reports"];
+  readonly recoverTerminalAtStartup?: boolean;
 }) {
   const commands = yield* Ref.make<Array<OrchestrationCommand>>([]);
   const queuedRows = input.queuedRowsRef ?? (yield* Ref.make([...input.queued]));
@@ -227,6 +228,15 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
     latestSequence: Effect.sync(() => sequence),
   });
   const snapshot = ProjectionSnapshotQuery.of({
+    getShellSnapshot: () =>
+      Ref.get(childShell).pipe(
+        Effect.map((child) => ({
+          snapshotSequence: 0,
+          projects: [],
+          threads: input.recoverTerminalAtStartup === true ? [child] : [],
+          updatedAt: NOW,
+        })),
+      ),
     getThreadShellById: (threadId: string) =>
       threadId === CHILD_ID
         ? Ref.get(childShell).pipe(Effect.map(Option.some))
@@ -240,6 +250,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
               Option.some({
                 ...shell,
                 reports: input.reports ?? [],
+                activities: [],
                 messages:
                   input.queuedMessageText === undefined
                     ? []
@@ -272,6 +283,8 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
               })
             : Option.none();
       }),
+    getLatestUsageActivity: () => Effect.succeed(Option.none()),
+    getThreadTurnCount: () => Effect.succeed(null),
   } as unknown as ProjectionSnapshotQuery["Service"]);
   const turns = ProjectionTurnRepository.of({
     listQueuedTurnStarts: Ref.get(queuedRows),
@@ -381,6 +394,28 @@ describe("SessionSpawnReactor queued delivery", () => {
             MessageId.make("queued-in-flight"),
           ]);
           expect(queuedRows).toEqual([]);
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("recovers a terminal child notice after a fresh reactor starts", () =>
+    Effect.scoped(
+      createHarness({
+        status: "error",
+        queued: [],
+        recoverTerminalAtStartup: true,
+      }).pipe(
+        Effect.map(({ commands }) => {
+          expect(commands).toContainEqual(expect.objectContaining({ type: "thread.report.post" }));
+          expect(
+            commands.some(
+              (command) =>
+                command.type === "thread.turn.start" &&
+                command.commandId === "session-death-notice:child-thread:2026-01-01T00:00:00.000Z",
+            ),
+          ).toBe(true);
         }),
         Effect.provide(NodeServices.layer),
       ),
@@ -1028,7 +1063,7 @@ describe("buildTerminalReportSummary", () => {
 const turnStartRequestedEvent = (
   threadId: ThreadId,
   messageId: string,
-  origin?: { readonly kind: "phoenix"; readonly threadId: ThreadId },
+  origin?: { readonly kind: "phoenix" | "session"; readonly threadId: ThreadId },
 ): OrchestrationEvent =>
   ({
     sequence: 1,
@@ -1075,7 +1110,7 @@ describe("delivery consumption", () => {
         queued: [],
         boundaryEvents: [
           turnStartRequestedEvent(PARENT_ID, "session-report-delivery:child-thread:report-42", {
-            kind: "phoenix",
+            kind: "session",
             threadId: CHILD_ID,
           }),
         ],
@@ -1110,6 +1145,44 @@ describe("delivery consumption", () => {
             reportId: "report-42",
             readByThreadId: PARENT_ID,
           });
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("acknowledges a Phoenix death notice carrying a synthesized report", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        boundaryEvents: [
+          turnStartRequestedEvent(PARENT_ID, "session-report-delivery:child-thread:report-system", {
+            kind: "phoenix",
+            threadId: CHILD_ID,
+          }),
+        ],
+        reports: [
+          {
+            reportId: "report-system",
+            threadId: CHILD_ID,
+            status: "partial",
+            title: "Session ended",
+            summary: "Phoenix synthesized this report.",
+            artifacts: [],
+            origin: "system",
+            createdAt: NOW,
+          },
+        ],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          expect(
+            commands.filter(
+              (command) =>
+                command.type === "thread.activity.append" &&
+                command.activity.kind === "session-report.read",
+            ),
+          ).toHaveLength(1);
         }),
         Effect.provide(NodeServices.layer),
       ),

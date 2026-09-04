@@ -181,6 +181,9 @@ the report and notice are actually dispatched — a terminated session emits no 
 transition, so marking an episode "handled" on a dispatch that failed would strand the parent in
 silence forever. That in-memory set is only an optimization; deterministic episode-scoped report
 and delivery identifiers make retries converge after restart.
+At reactor startup, Phoenix scans spawned terminal shells as well as queued-delivery rows and
+replays this terminal workflow. That closes the crash window between persisting the terminal
+session/report and enqueueing its asynchronous death notice.
 
 ## Wedge detection
 
@@ -566,6 +569,11 @@ has exactly two writers, and they converge on one receipt:
   report as its turn input and has no reason to ever call `read_report`; before this path existed,
   every queue-delivered report sat "unread" forever and the inbox accumulated history instead of
   showing the unacknowledged set.
+
+The automatic writer also verifies the server-only message origin against the persisted report:
+agent reports must arrive as the child session, while a synthesized report carried by a death
+notice must arrive as Phoenix. In both cases the child must belong to the receiving parent. A
+paired client therefore cannot forge a read by choosing the delivery-shaped message id.
 
 Both the activity ID and its command ID are derived from `parentThreadId + reportId`, so the
 orchestration command-receipt table makes concurrent calls, the two acknowledgement paths, and
