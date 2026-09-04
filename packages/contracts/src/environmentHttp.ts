@@ -502,6 +502,7 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
     Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
   ),
   beforeCursor: Schema.optional(TrimmedNonEmptyString),
+  acceptsNonImageAttachments: Schema.optional(Schema.Literal("true")),
 };
 
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")

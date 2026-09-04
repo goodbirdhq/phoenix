@@ -624,7 +624,7 @@ function dropSupersededToolUpdatedActivities(
   });
 }
 
-type ThreadStreamClientCapabilities = {
+export type ThreadStreamClientCapabilities = {
   readonly acceptsNonImageAttachments?: boolean;
 };
 

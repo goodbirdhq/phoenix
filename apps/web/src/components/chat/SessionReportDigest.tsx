@@ -12,7 +12,7 @@ import {
   deriveSessionReportInboxChildren,
   deriveSessionReportNotifications,
   visibleSessionReportInboxChildren,
-} from "../../lib/sessionReportNotifications";
+} from "@t3tools/client-runtime/session-report-notifications";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 export const SESSION_REPORT_INBOX_PASSIVE_COPY =

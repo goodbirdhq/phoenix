@@ -214,7 +214,6 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               onPress={props.onOpenEnvironments}
               brand={
                 <View className="flex-row items-center gap-2">
-                  {/* Mirrors the desktop SidebarBrand. */}
                   <RNText className="text-[21px] font-t3-medium tracking-[-0.5px] text-foreground">
                     Phoenix
                   </RNText>

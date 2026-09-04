@@ -67,6 +67,10 @@
       "types": "./src/providerSkills.ts",
       "default": "./src/providerSkills.ts"
     },
+    "./session-report-notifications": {
+      "types": "./src/sessionReportNotifications.ts",
+      "default": "./src/sessionReportNotifications.ts"
+    },
     "./voice-input": {
       "types": "./src/voice-input/index.ts",
       "default": "./src/voice-input/index.ts"

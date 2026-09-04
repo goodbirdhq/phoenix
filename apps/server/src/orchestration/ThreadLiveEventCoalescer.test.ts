@@ -86,6 +86,21 @@ function makeMessage(sequence: number): OrchestrationEvent {
   };
 }
 
+function makeFileMessage(sequence: number): OrchestrationEvent {
+  const event = makeMessage(sequence);
+  if (event.type !== "thread.message-sent") return event;
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      attachments: [
+        { type: "image", id: "image-1", name: "image.png", mimeType: "image/png", sizeBytes: 1 },
+        { type: "file", id: "file-1", name: "notes.txt", mimeType: "text/plain", sizeBytes: 1 },
+      ],
+    },
+  };
+}
+
 describe("ThreadLiveEventCoalescer", () => {
   it("coalesces only calls with a stable toolCallId", () => {
     const events = [
@@ -167,5 +182,22 @@ describe("ThreadLiveEventCoalescer", () => {
         ).toEqual([3, "synchronized"]);
       }),
     ).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("projects attachments once for the subscribing client's capabilities", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const coalescer = yield* makeThreadLiveEventCoalescer({
+          projectionCapabilities: { acceptsNonImageAttachments: false },
+        } as never);
+        yield* coalescer.offerAndWait({ kind: "event", event: makeFileMessage(20) });
+        const [item] = Array.from(yield* coalescer.takeAll);
+
+        expect(item?.kind === "event" ? item.event : null).toMatchObject({
+          type: "thread.message-sent",
+          payload: { attachments: [{ type: "image" }] },
+        });
+      }),
+    ),
   );
 });

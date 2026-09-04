@@ -8,7 +8,10 @@ import * as Queue from "effect/Queue";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
-import { projectActivityEvent } from "./ActivityPayloadProjection.ts";
+import {
+  projectActivityEvent,
+  type ThreadStreamClientCapabilities,
+} from "./ActivityPayloadProjection.ts";
 
 const COALESCE_WINDOW = Duration.millis(50);
 const MAX_PENDING_UPDATES = 512;
@@ -89,7 +92,10 @@ export function coalesceLiveToolUpdatedEvents(
 }
 
 export const makeThreadLiveEventCoalescer = Effect.fn("makeThreadLiveEventCoalescer")(
-  function* (options?: { readonly coalesceWindow?: Duration.Input }) {
+  function* (options?: {
+    readonly coalesceWindow?: Duration.Input;
+    readonly projectionCapabilities?: ThreadStreamClientCapabilities;
+  }) {
     const output = yield* Queue.unbounded<OrchestrationThreadStreamItem>();
     const input = yield* Queue.unbounded<{
       readonly value: ThreadLiveInput;
@@ -122,7 +128,7 @@ export const makeThreadLiveEventCoalescer = Effect.fn("makeThreadLiveEventCoales
         output,
         coalesceLiveToolUpdatedEvents(events).map((event) => ({
           kind: "event" as const,
-          event: projectActivityEvent(event),
+          event: projectActivityEvent(event, options?.projectionCapabilities),
         })),
       );
     });
