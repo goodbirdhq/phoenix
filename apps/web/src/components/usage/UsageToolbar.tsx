@@ -1,6 +1,5 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { RefreshCwIcon } from "lucide-react";
-import { Button } from "../ui/button";
+import { UsageRefreshButton } from "./UsageRefreshButton";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import type { UsageChartMetric } from "@t3tools/client-runtime/usage/chart-series";
@@ -94,15 +93,7 @@ export function UsageToolbar({
           Tokens
         </Toggle>
       </ToggleGroup>
-      <Button
-        size="icon-sm"
-        variant="outline"
-        onClick={onRefresh}
-        aria-label="Refresh usage"
-        aria-busy={refreshing || undefined}
-      >
-        <RefreshCwIcon className="size-3.5" />
-      </Button>
+      <UsageRefreshButton label="Refresh usage" refreshing={refreshing} onRefresh={onRefresh} />
     </div>
   );
 }

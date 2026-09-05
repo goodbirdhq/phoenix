@@ -99,8 +99,9 @@ export function capacityRefreshSettlementStep(input: {
   return input.baseQueryWaiting ? "wait-base" : "complete";
 }
 
-export function staleCapacityTargets(
+export function capacityRefreshTargets(
   environments: readonly CapacityRefreshEnvironment[],
+  mode: "stale" | "all" = "stale",
 ): readonly CapacityRefreshTarget[] {
   const targets: CapacityRefreshTarget[] = [];
   for (const environment of environments) {
@@ -112,6 +113,7 @@ export function staleCapacityTargets(
       if (!canRefreshProviderAvailability(provider)) continue;
       const availability = availabilityByInstance.get(provider.instanceId);
       if (
+        mode === "all" ||
         availability === undefined ||
         availability.observedAt === undefined ||
         availability.status === "unknown" ||

@@ -16,7 +16,7 @@ import {
   refreshProviderCapacity,
   resolveAvailabilityEntries,
   selectHistoricalUsageEnvironments,
-  staleCapacityTargets,
+  capacityRefreshTargets,
   type UsageRefreshPorts,
 } from "./usage.logic";
 
@@ -178,11 +178,16 @@ describe("Usage refresh orchestration", () => {
         skills: [],
         availabilityRefreshSupported: true,
       }) as ServerProvider;
-    const result = staleCapacityTargets([
+    const environments = [
       {
         environmentId,
         isPending: false,
-        serverProviders: [provider("missing"), provider("fresh"), provider("stale")],
+        serverProviders: [
+          provider("missing"),
+          provider("fresh"),
+          provider("stale"),
+          { ...provider("disabled"), enabled: false },
+        ],
         providers: [
           {
             instanceId: ProviderInstanceId.make("fresh"),
@@ -206,8 +211,14 @@ describe("Usage refresh orchestration", () => {
           },
         ],
       },
-    ]);
+    ] satisfies Parameters<typeof capacityRefreshTargets>[0];
+    const result = capacityRefreshTargets(environments);
 
+    expect(capacityRefreshTargets(environments, "all").map((target) => target.instanceId)).toEqual([
+      "missing",
+      "fresh",
+      "stale",
+    ]);
     expect(result).toEqual([
       { environmentId: "studio", instanceId: "missing" },
       { environmentId: "studio", instanceId: "stale" },

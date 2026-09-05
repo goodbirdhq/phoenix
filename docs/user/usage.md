@@ -11,8 +11,7 @@ completed-turn record will not appear. Each configured Grok instance’s environ
 Use **Past 24h** for an hourly chart covering the exact rolling 24-hour period. The **7 days**,
 **30 days**, and **90 days** ranges use daily resolution. Cost and token toggles update both the
 headline and chart. Historical activity starts with **All environments** selected; choose one
-environment to inspect only its totals, chart, and breakdown. Refreshing activity rescans the
-selected date range independently from subscription capacity.
+environment to inspect only its totals, chart, and breakdown. Refresh usage rescans the selected date range and checks eligible accounts’ current limits. The button shows Checking while requests run and Checked when they finish; any unavailable readings remain labelled.
 
 ## Accounts and environments
 
@@ -30,7 +29,7 @@ Provider history without a matching Phoenix conversation appears as an **Unlinke
 
 Account Overview pages show the limits the provider reports. Claude can show a current-session allowance and multiple weekly pools. Codex keeps its main allowance and Spark separate. OpenCode is shown as pay as you go when a balance or budget is not reported; Grok shows an unavailable state until it reports limits. Historical API estimates do not represent subscription fees or an account balance.
 
-Hover over Usage in the sidebar to see a compact account summary. A current session limit replaces that account's bars with its limit/reset message. The summary has no controls; click the Usage button to open the page. Limits remain separate from historical usage and have their own refresh action.
+Hover over Usage in the sidebar to see a compact account summary. A current session limit replaces that account's bars with its limit/reset message. The summary has no controls; click the Usage button to open the page. Limits also have their own refresh action. The account panel, sidebar and hover summary share refreshed readings. If a provider cannot confirm its limits, the compact bars retain its last reported values with a Last known label; these are not treated as current session locks.
 
 Overview charts switch between providers, configured accounts and environments. Shared history that cannot be assigned to one account remains labelled Shared / unassigned. Models and Projects show their own cost/token trends. All trends use curved lines and subtle areas.
 

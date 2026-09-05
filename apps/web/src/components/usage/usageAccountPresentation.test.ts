@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ProviderAvailability } from "@t3tools/contracts";
-import { blockedSessionWindow, primaryUsageWindow } from "@t3tools/client-runtime/usage/quotas";
+import {
+  blockedSessionWindow,
+  lastKnownUsageWindow,
+  primaryUsageWindow,
+} from "@t3tools/client-runtime/usage/quotas";
 
 const availability = (windows: ProviderAvailability["windows"]): ProviderAvailability => ({
   status: "available",
@@ -71,4 +75,18 @@ it("prioritizes a reached session limit but does not mistake weekly or Spark exh
       stale: { reason: "refresh_failed", attemptedAt: "2026-09-01T00:00:00.000Z" },
     }),
   ).toBeUndefined();
+});
+
+it("retains a failed reading for labelled last-known bars without claiming a session lock", () => {
+  const reading: ProviderAvailability = {
+    ...availability([
+      { kind: "weekly", usedPercent: 40 },
+      { kind: "session", usedPercent: 100 },
+    ]),
+    status: "unknown",
+  };
+  expect(lastKnownUsageWindow("claude", reading)?.usedPercent).toBe(40);
+  expect(primaryUsageWindow("claude", reading)).toBeUndefined();
+  expect(blockedSessionWindow("claude", reading)).toBeUndefined();
+  expect(lastKnownUsageWindow("grok", { ...reading, source: "unsupported" })).toBeUndefined();
 });

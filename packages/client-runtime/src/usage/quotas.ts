@@ -11,6 +11,15 @@ export function primaryUsageWindow(
     availability.status === "unknown"
   )
     return undefined;
+  return lastKnownUsageWindow(provider, availability);
+}
+
+/** Selects a reported main pool, including stale readings that must be labelled last known. */
+export function lastKnownUsageWindow(
+  provider: UsageProviderKind,
+  availability: ProviderAvailability,
+) {
+  if (availability.source === "unsupported") return undefined;
   const preferred = provider === "claude" || provider === "grok" ? "weekly" : "primary";
   return (
     availability.windows.find(

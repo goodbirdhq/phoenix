@@ -6,10 +6,10 @@ import {
   subscriptionLimitWindowLabel,
   type SubscriptionAvailabilitySource,
 } from "@t3tools/client-runtime/usage/subscription-availability";
-import { blockedSessionWindow, primaryUsageWindow } from "@t3tools/client-runtime/usage/quotas";
+import { blockedSessionWindow, lastKnownUsageWindow } from "@t3tools/client-runtime/usage/quotas";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
 import { usageProviderKind } from "./usageAccountPresentation";
-import { Button } from "../ui/button";
+import { UsageRefreshButton } from "./UsageRefreshButton";
 
 function resetLabel(window: ProviderAvailabilityWindow): string {
   return window.resetsAt
@@ -76,9 +76,11 @@ export function UsageQuotas({
     <section className="space-y-5 rounded-[10px] border bg-muted/30 p-5" aria-label="Usage limits">
       <div className="flex items-center justify-between gap-4">
         <h2 className="text-sm font-semibold">Usage limits</h2>
-        <Button variant="outline" size="sm" disabled={isRefreshing} onClick={onRefresh}>
-          {isRefreshing ? "Checking…" : "Refresh limits"}
-        </Button>
+        <UsageRefreshButton
+          label="Refresh limits"
+          refreshing={isRefreshing}
+          onRefresh={onRefresh}
+        />
       </div>
       {isPending && limits.length === 0 && (
         <p className="text-sm text-muted-foreground">Loading limits…</p>
@@ -89,7 +91,7 @@ export function UsageQuotas({
         const hero =
           kind === "claude"
             ? windows.find((window) => window.kind === "session" && !window.scope)
-            : primaryUsageWindow(kind, limit.availability);
+            : lastKnownUsageWindow(kind, limit.availability);
         const { color } = PROVIDER_PRESENTATION[kind];
         return (
           <div className="space-y-4" key={limit.key}>
@@ -98,7 +100,7 @@ export function UsageQuotas({
                 {limit.name} · {limit.environmentLabels.join(", ")}
               </h3>
             )}
-            {(limit.isStale || limit.isCurrentAvailabilityUnknown) && (
+            {(limit.isStale || limit.isCurrentAvailabilityUnknown || limit.availability.stale) && (
               <p role="status" className="text-xs text-muted-foreground">
                 {limit.isStale
                   ? "Last known reading. Limits need refresh."
@@ -197,9 +199,10 @@ export function UsageQuotaSummary({
       {limits.map((limit) => {
         const kind = usageProviderKind(limit.driver);
         const { mark: Mark, color } = PROVIDER_PRESENTATION[kind];
-        const unknown = limit.isStale || limit.isCurrentAvailabilityUnknown;
+        const unknown =
+          limit.isStale || limit.isCurrentAvailabilityUnknown || !!limit.availability.stale;
         const blocked = unknown ? undefined : blockedSessionWindow(kind, limit.availability);
-        const main = unknown ? undefined : primaryUsageWindow(kind, limit.availability);
+        const main = lastKnownUsageWindow(kind, limit.availability);
         const spark =
           kind === "codex" && !unknown
             ? limit.availability.windows.find((window) =>
@@ -229,7 +232,9 @@ export function UsageQuotaSummary({
                     />
                   </div>
                   <div className="text-[11px] text-muted-foreground">
-                    {subscriptionLimitWindowLabel(main)} · {resetLabel(main)}
+                    {unknown
+                      ? "Last known · needs refresh"
+                      : `${subscriptionLimitWindowLabel(main)} · ${resetLabel(main)}`}
                   </div>
                   {spark && (
                     <div className="text-[11px] text-muted-foreground">

@@ -41,7 +41,7 @@ import {
   refreshProviderCapacity,
   resolveAvailabilityEntries,
   selectHistoricalUsageEnvironments,
-  staleCapacityTargets,
+  capacityRefreshTargets,
   type CapacityRefreshTarget,
   type UsageRefreshPorts,
 } from "./usage.logic";
@@ -165,17 +165,19 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
 );
 
 const NO_CAPACITY_REFRESH_KEY = capacityRefreshKey([]);
+const activeCapacityRefreshAtom = Atom.make(NO_CAPACITY_REFRESH_KEY);
 
 /**
  * The cached per-instance availability reading, for surfaces that want the
  * numbers without the Usage page's summaries.
  *
- * Shares one non-refreshing atom with every reader. Mounting a reader subscribes
+ * Shares the active refresh snapshot with every reader. Mounting a reader subscribes
  * it to availability changes and may start the cached query, but never asks a
  * provider CLI for a forced refresh.
  */
 export function useProviderAvailability(): readonly EnvironmentProviderAvailabilityStatus[] {
-  return useAtomValue(providerAvailabilityAtom(NO_CAPACITY_REFRESH_KEY));
+  const refreshKey = useAtomValue(activeCapacityRefreshAtom);
+  return useAtomValue(providerAvailabilityAtom(refreshKey));
 }
 
 /**
@@ -224,7 +226,7 @@ export interface UsageView {
   readonly isUsageRefreshing: boolean;
   /** Rescans historical usage without probing Provider quota. */
   readonly refreshUsage: (input?: UsageSummaryInput) => void;
-  /** Revalidates missing, stale or failed subscription readings without rescanning usage. */
+  /** Revalidates eligible subscription readings without rescanning usage. */
   readonly refreshCapacity: (target?: CapacityRefreshTarget) => void;
   readonly providerAvailability: readonly EnvironmentProviderAvailabilityStatus[];
   readonly isProviderAvailabilityPending: boolean;
@@ -264,19 +266,32 @@ export function useUsage(
     () => selectHistoricalUsageEnvironments(allEnvironments, historicalEnvironmentId),
     [allEnvironments, historicalEnvironmentId],
   );
-  const [refreshKey, setRefreshKey] = useState(NO_CAPACITY_REFRESH_KEY);
+  const refreshKey = useAtomValue(activeCapacityRefreshAtom);
+  const setRefreshKey = useCallback((value: string | ((current: string) => string)) => {
+    appAtomRegistry.set(
+      activeCapacityRefreshAtom,
+      typeof value === "function" ? value(appAtomRegistry.get(activeCapacityRefreshAtom)) : value,
+    );
+  }, []);
+  useEffect(
+    () => () => appAtomRegistry.set(activeCapacityRefreshAtom, NO_CAPACITY_REFRESH_KEY),
+    [],
+  );
   const [focusGeneration, setFocusGeneration] = useState(0);
   const attemptedFocusGeneration = useRef(-1);
   const baseRefreshStartedForKey = useRef<string | null>(null);
   const providerAvailability = useAtomValue(providerAvailabilityAtom(refreshKey));
 
-  const beginCapacityRefresh = useCallback((targets: readonly CapacityRefreshTarget[]) => {
-    if (targets.length === 0) return;
-    refreshProviderCapacity(usageRefreshPorts, targets);
-    setRefreshKey((current) =>
-      capacityRefreshKey([...parseCapacityRefreshKey(current), ...targets]),
-    );
-  }, []);
+  const beginCapacityRefresh = useCallback(
+    (targets: readonly CapacityRefreshTarget[]) => {
+      if (targets.length === 0) return;
+      refreshProviderCapacity(usageRefreshPorts, targets);
+      setRefreshKey((current) =>
+        capacityRefreshKey([...parseCapacityRefreshKey(current), ...targets]),
+      );
+    },
+    [setRefreshKey],
+  );
 
   // A refresh query is one-shot. Once every target settles, re-read the normal
   // cached query and return to it; the last known values stayed visible while
@@ -317,7 +332,7 @@ export function useUsage(
       baseRefreshStartedForKey.current = null;
       setRefreshKey(NO_CAPACITY_REFRESH_KEY);
     }
-  }, [providerAvailability, refreshKey]);
+  }, [providerAvailability, refreshKey, setRefreshKey]);
 
   useEffect(() => {
     const onFocus = () => setFocusGeneration((generation) => generation + 1);
@@ -337,7 +352,7 @@ export function useUsage(
       return;
     }
     attemptedFocusGeneration.current = focusGeneration;
-    beginCapacityRefresh(staleCapacityTargets(providerAvailability));
+    beginCapacityRefresh(capacityRefreshTargets(providerAvailability));
   }, [beginCapacityRefresh, focusGeneration, providerAvailability, refreshKey]);
 
   // Refreshing only the derived atom would re-read the per-environment SWR
@@ -353,7 +368,7 @@ export function useUsage(
   const refreshCapacity = useCallback(
     (target?: CapacityRefreshTarget) =>
       beginCapacityRefresh(
-        target === undefined ? staleCapacityTargets(providerAvailability) : [target],
+        target === undefined ? capacityRefreshTargets(providerAvailability, "all") : [target],
       ),
     [beginCapacityRefresh, providerAvailability],
   );

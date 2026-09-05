@@ -162,7 +162,7 @@ export function UsagePage() {
   };
   const refreshWindow = () => {
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
-    // Historical usage scans remain independent from provider quota collection.
+    refreshCapacity();
     refreshUsage({
       ...nextWindow,
       includeSessions: pageTab === "projects" || pageTab === "threads",
@@ -182,7 +182,7 @@ export function UsagePage() {
       onMetricChange={setMetric}
       days={windowDays}
       onDaysChange={selectWindow}
-      refreshing={isUsageRefreshing}
+      refreshing={isUsageRefreshing || isCapacityRefreshing}
       onRefresh={refreshWindow}
     />
   );

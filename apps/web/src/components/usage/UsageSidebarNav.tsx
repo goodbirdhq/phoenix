@@ -19,7 +19,7 @@ import {
 } from "../ui/sidebar";
 import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
-import { primaryUsageWindow } from "@t3tools/client-runtime/usage/quotas";
+import { lastKnownUsageWindow } from "@t3tools/client-runtime/usage/quotas";
 import { usageProviderKind } from "./usageAccountPresentation";
 
 const AddProviderInstanceDialog = lazy(() =>
@@ -156,10 +156,7 @@ export function UsageSidebarNav() {
                 ),
               );
               const limit = limits[0];
-              const window =
-                limit && !limit.isStale && !limit.isCurrentAvailabilityUnknown
-                  ? primaryUsageWindow(kind, limit.availability)
-                  : undefined;
+              const window = limit ? lastKnownUsageWindow(kind, limit.availability) : undefined;
               const title = account.memberships[0]?.provider.displayName ?? label;
               return (
                 <SidebarMenuItem key={account.key}>
@@ -176,6 +173,12 @@ export function UsageSidebarNav() {
                     <Mark className="mt-0.5 size-4 shrink-0" />
                     <span className="flex min-w-0 flex-1 flex-col gap-2">
                       <span className="truncate">{title}</span>
+                      {window &&
+                        (limit?.isCurrentAvailabilityUnknown || limit?.availability.stale) && (
+                          <span className="text-[10px] text-sidebar-muted-foreground">
+                            Last known · needs refresh
+                          </span>
+                        )}
                       {window ? (
                         <span className="flex items-center gap-2">
                           <span className="h-1 flex-1 overflow-hidden rounded-full bg-sidebar-border">
