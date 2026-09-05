@@ -738,6 +738,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the user visits the thread.
   wokeAt: string | null;
   isActive: boolean;
+  activeThreadKey: string | null;
   openPullRequestsInRightPanel: boolean;
   jumpLabel: string | null;
   environmentLabel: string | null;
@@ -1097,14 +1098,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     <span
       className={cn(
         "min-w-0 flex-1 text-sm leading-5 transition-opacity motion-reduce:transition-none",
-        variant === "card"
-          ? "truncate font-medium tracking-[-0.01em] text-sidebar-foreground"
-          : cn(
-              "truncate font-normal group-hover/sidebar-row:text-foreground",
-              props.isActive || isWoke || variantAction === "unsnooze"
-                ? "text-sidebar-foreground"
-                : "text-sidebar-muted-foreground",
-            ),
+        "truncate tracking-[-0.01em]",
+        props.isActive || isSelected || isUnread || isWoke
+          ? "font-medium text-sidebar-foreground"
+          : "font-normal text-sidebar-muted-foreground group-hover/sidebar-row:text-sidebar-foreground",
         isRegeneratingTitle && "opacity-[0.55]",
       )}
     >
@@ -1177,7 +1174,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     return (
       <li
         data-thread-item
-        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_62px]"
+        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_52px]"
       >
         <Tooltip>
           <TooltipTrigger
@@ -1188,7 +1185,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 tabIndex={0}
                 data-testid="sidebar-row-slim"
                 aria-busy={isRegeneratingTitle || undefined}
-                className={cn(rowSurfaceClassName, "flex flex-col gap-1.5 px-3 py-2.5")}
+                className={cn(rowSurfaceClassName, "flex flex-col gap-1 px-3 py-1.5")}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
@@ -1297,8 +1294,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       className={cn(
         "list-none [content-visibility:auto]",
         isNested
-          ? "relative [contain-intrinsic-size:auto_92px] before:absolute before:inset-y-0 before:left-[var(--sidebar-hierarchy-rail)] before:w-px before:bg-sidebar-border before:content-['']"
-          : "[contain-intrinsic-size:auto_100px]",
+          ? "relative [contain-intrinsic-size:auto_76px] before:absolute before:inset-y-0 before:left-[var(--sidebar-hierarchy-rail)] before:w-px before:bg-sidebar-border before:content-['']"
+          : "[contain-intrinsic-size:auto_76px]",
         sortable?.isDragging && "z-20 opacity-80",
       )}
     >
@@ -1317,11 +1314,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         <div
           className={cn(
             "relative z-10 flex flex-col",
-            isNested ? "gap-1.5 py-2.5 pr-3" : "gap-2 p-3",
+            isNested ? "gap-1 py-1 pr-3" : "gap-1 px-3 py-1",
           )}
           style={isNested ? { paddingLeft: props.hierarchyIndentDepth === 1 ? 23 : 21 } : undefined}
         >
-          <div className="flex h-4 min-w-0 items-center gap-1.5">
+          <div className="relative flex h-4 min-w-0 items-center gap-1.5">
             {!isNested ? (
               <ProjectFavicon
                 environmentId={thread.environmentId}
@@ -1333,7 +1330,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             <span className="min-w-0 flex-1 truncate text-xs leading-4 text-sidebar-muted-foreground">
               {leadingLabel}
             </span>
-            <span className="flex h-4 min-w-0 items-center gap-1 text-xs leading-4">
+            <span
+              className={cn(
+                "flex h-4 min-w-[76px] items-center justify-end gap-1 text-xs leading-4 group-hover/sidebar-row:invisible group-focus-within/sidebar-row:invisible [@media(hover:none)]:visible! [@media(hover:none)]:pr-6",
+                snoozeMenuOpen && "invisible",
+              )}
+            >
               {isWokeStatus ? (
                 <button
                   type="button"
@@ -1391,33 +1393,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 </span>
               )}
             </span>
-          </div>
-          <div
-            className="relative flex h-5 min-w-0"
-            style={
-              {
-                "--sidebar-row-actions-width": `${24 * (1 + Number(props.settlementSupported) + Number(showSnoozeButton)) + 4}px`,
-              } as CSSProperties
-            }
-          >
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span
-                    className={cn(
-                      "flex min-w-0 flex-1 group-hover/sidebar-row:pr-[var(--sidebar-row-actions-width)] group-focus-within/sidebar-row:pr-[var(--sidebar-row-actions-width)] [@media(hover:none)]:pr-[var(--sidebar-row-actions-width)]",
-                      snoozeMenuOpen && "pr-[var(--sidebar-row-actions-width)]",
-                    )}
-                  />
-                }
-              >
-                {title}
-              </TooltipTrigger>
-              {detailsTooltip}
-            </Tooltip>
             <span
               className={cn(
-                "pointer-events-none absolute right-0 top-0 flex h-5 shrink-0 items-center rounded-sm bg-sidebar opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+                "pointer-events-none absolute right-0 -top-1 flex h-6 shrink-0 items-center rounded-sm bg-sidebar opacity-0 group-focus-within/sidebar-row:pointer-events-auto group-focus-within/sidebar-row:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:[&>*:not(:last-child)]:hidden",
                 snoozeMenuOpen && "pointer-events-auto opacity-100",
               )}
             >
@@ -1460,6 +1438,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 <EllipsisIcon className="size-3.5" />
               </button>
             </span>
+          </div>
+          <div className="relative flex h-5 min-w-0">
+            <Tooltip>
+              <TooltipTrigger render={<span className="flex min-w-0 flex-1" />}>
+                {title}
+              </TooltipTrigger>
+              {detailsTooltip}
+            </Tooltip>
             {isRegeneratingTitle ? (
               <span role="status" className="sr-only">
                 Regenerating title
@@ -1500,8 +1486,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             {prBadge}
             <SidebarTeamAvatars
               members={teamMembers}
+              activeThreadKey={props.activeThreadKey}
               providers={props.providerEntryByInstanceId}
-              environmentLabel={props.environmentLabel}
               expanded={props.teamExpanded}
               onToggle={() => props.onToggleTeam(threadKey)}
             />
@@ -1510,7 +1496,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
       </div>
       {props.teamExpanded && teamMembers.length > 1 ? (
-        <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs leading-4 text-sidebar-muted-foreground">
+        <div className="flex items-center justify-between gap-2 px-3 py-1 text-xs leading-4 text-sidebar-muted-foreground">
           <span>
             {teamMembers.length - 1} {teamMembers.length === 2 ? "descendant" : "descendants"}
             {pinnedTeamCount > 0 ? ` · ${pinnedTeamCount} pinned separately` : ""}
@@ -1543,6 +1529,16 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   onSelect: () => void;
 }) {
   const { thread } = props;
+  const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
+  const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
+  const emphasized =
+    props.isRouteActive ||
+    props.isHighlighted ||
+    isSelected ||
+    hasUnseenCompletion({ ...thread, lastVisitedAt }) ||
+    hasUnseenSidebarWake(threadWokeAt(thread, { now: new Date().toISOString() }), lastVisitedAt);
+
   const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(
     props.isHighlighted || props.isRouteActive,
   );
@@ -1619,7 +1615,16 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
             className="size-4 shrink-0"
             fallbackIcon={MessageSquareIcon}
           />
-          <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate",
+              emphasized
+                ? "font-medium text-sidebar-foreground"
+                : "font-normal text-sidebar-muted-foreground",
+            )}
+          >
+            {thread.title}
+          </span>
           <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">
             {threadTimeLabel(thread)}
           </span>
@@ -3249,25 +3254,51 @@ export default function Sidebar() {
         const isPinned = thread.pinnedAt != null;
         // Presets resolve at menu-open time (same as the popover).
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
+        const menuTeam = resolveSidebarTeamStatus(
+          thread,
+          sessionHierarchyEnabled ? (teamsByKey.get(threadKey) ?? [thread]) : [thread],
+          expandedTeamKeys.has(threadKey),
+        );
+        const reviewLabel =
+          menuTeam.status === "approval"
+            ? "Review decision"
+            : menuTeam.status === "input"
+              ? "Review input"
+              : menuTeam.status === "failed"
+                ? "Review failure"
+                : null;
+        const wake = threadWokeAt(thread, { now: new Date().toISOString() });
+        const unseenWake = hasUnseenSidebarWake(
+          wake,
+          useUiStateStore.getState().threadLastVisitedAtById[threadKey],
+        );
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            buildThreadActionMenuItems({
-              branch: thread.branch ?? null,
-              isPinned,
-              isSettled,
-              isSnoozed,
-              canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
-              isRegeneratingTitle,
-              isRunning:
-                thread.session?.status === "running" && thread.session.activeTurnId != null,
-              supports: {
-                settlement: supportsSettlement,
-                snooze: supportsSnooze,
-                pinning: supportsPinning,
-                titleRegeneration: supportsTitleRegeneration,
-              },
-              snoozePresets,
-            }),
+            [
+              ...(reviewLabel
+                ? [{ id: "review-status", label: reviewLabel, icon: "arrow-right" }]
+                : []),
+              ...(unseenWake
+                ? [{ id: "dismiss-woke", label: "Dismiss Woke notification", icon: "alarm-clock" }]
+                : []),
+              ...buildThreadActionMenuItems({
+                branch: thread.branch ?? null,
+                isPinned,
+                isSettled,
+                isSnoozed,
+                canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+                isRegeneratingTitle,
+                isRunning:
+                  thread.session?.status === "running" && thread.session.activeTurnId != null,
+                supports: {
+                  settlement: supportsSettlement,
+                  snooze: supportsSnooze,
+                  pinning: supportsPinning,
+                  titleRegeneration: supportsTitleRegeneration,
+                },
+                snoozePresets,
+              }),
+            ],
             position,
           ),
         );
@@ -3280,6 +3311,12 @@ export default function Sidebar() {
           return;
         }
         switch (clicked.value) {
+          case "review-status":
+            navigateToThread(scopeThreadRef(menuTeam.target.environmentId, menuTeam.target.id));
+            return;
+          case "dismiss-woke":
+            if (wake) acknowledgeWoke(threadRef, wake);
+            return;
           case "project-settings": {
             const projectGroup = projectGroupsRef.current.find((group) =>
               group.memberProjectRefs.some(
@@ -3449,6 +3486,11 @@ export default function Sidebar() {
       copyThreadIdToClipboard,
       deleteThread,
       handleMultiSelectContextMenu,
+      navigateToThread,
+      acknowledgeWoke,
+      sessionHierarchyEnabled,
+      teamsByKey,
+      expandedTeamKeys,
       markThreadUnread,
       openProjectSettings,
       projectCwdByKey,
@@ -3699,7 +3741,7 @@ export default function Sidebar() {
                   id="sidebar-thread-search-results"
                   role="listbox"
                   aria-label="Thread search results"
-                  className="flex flex-col gap-1"
+                  className="flex flex-col gap-0.5"
                 >
                   {threadSearchResults.map((thread, index) => {
                     const threadKey = scopedThreadKey(
@@ -3766,7 +3808,7 @@ export default function Sidebar() {
               closeDelay={0}
               timeout={400}
             >
-              <ul ref={attachListAutoAnimateRef} role="list" className="flex flex-col gap-1">
+              <ul ref={attachListAutoAnimateRef} role="list" className="flex flex-col gap-0.5">
                 {(() => {
                   const renderThreadRow = (
                     thread: EnvironmentThreadShell,
@@ -3846,6 +3888,7 @@ export default function Sidebar() {
                         // rows resolve to null on their own.
                         wokeAt={threadWokeAt(thread, { now: snoozeNow })}
                         isActive={routeThreadKey === threadKey}
+                        activeThreadKey={routeThreadKey}
                         openPullRequestsInRightPanel={routeThreadRef !== null}
                         jumpLabel={
                           showThreadJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null
@@ -3926,7 +3969,7 @@ export default function Sidebar() {
                             <ul
                               role="list"
                               aria-label="Pinned threads"
-                              className="flex flex-col gap-1"
+                              className="flex flex-col gap-0.5"
                             >
                               {orderedPinnedThreads.map((thread) => {
                                 const threadKey = scopedThreadKey(
