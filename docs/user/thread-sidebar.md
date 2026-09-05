@@ -79,24 +79,32 @@ When a session spawns other sessions, the sidebar can nest them instead of listi
 flat. Turn on **Sidebar session hierarchy** in Settings, under General. The switch only appears
 while **Session orchestration** is on, because nothing spawns children without it.
 
-On web and desktop, each thread has a provider avatar strip beside its branch. With hierarchy
-on, a parent's strip includes its whole team: the parent first, then its descendants. Up to six
-avatars are visible, followed by a circular overflow count. Click the strip or count to expand
-or collapse the children. A thread without children has one avatar; click it for session details.
-Hover a team strip for model, account, and environment details for every member.
-Hover a thread title for its branch and worktree details. The avatar strip overlaps more tightly
-at narrow widths to keep space for branch names.
+On web and desktop, each thread has a provider avatar beside its branch. With hierarchy
+on, the avatar is followed by a circular × total that includes the parent and all descendants.
+Hover or keyboard-focus the group to reveal up to five avatars, parent first. The counter shows
+how many sessions remain hidden, or disappears when all are visible. The group collapses again
+when you leave it. Reduced-motion preferences disable the expansion animation.
+
+Click the group to expand or collapse the children. A thread without children has one avatar;
+click it for session details. Hover the group to see each member's icon, title, provider and model.
+Working sessions have an outer spinner in the details popover. Badges identify failures,
+decision or input requests, waiting on a parent, monitoring, ready and snoozed sessions.
+Hover a thread title for its branch and worktree details.
+
+Thread rows use compact spacing and truncate long titles. Read, unselected titles use regular
+weight and muted text. Unread results, newly woken threads and selected threads use medium weight
+and stronger text, including in the session details popover. Working status alone does not make
+a title bold.
 
 Collapsed rows show the most actionable status in their subtree: a decision first, then input,
-then failure, followed by waiting on a parent, working, monitoring, and ready. Click a review action to open the thread
-that needs it. Working teams show the number of working sessions before the dotted indicator;
+then failure, followed by waiting on a parent, working, monitoring, and ready. Use the row’s options menu to review the thread that needs attention or dismiss a Woke notification. Working teams show the number of working sessions before the dotted indicator;
 ready threads show a green check. Expanded rows show their own status, while each child shows
 its own status or summarizes its children if collapsed. Counts always include every descendant,
 including a child that is also pinned, once.
 
 Children expand recursively and keep their branch visible. Indentation stops after four levels
 so deep trees keep room for their titles. Completed children remain visible until settled.
-Hover a row to show controls beside its title, focus them with the keyboard, or use its options menu to settle, snooze,
+Hover a row to replace its top-right status with controls, focus them with the keyboard, or use its options menu to settle, snooze,
 pin, or manage the thread. Snooze retains the existing wake presets and Wake now action.
 
 Pinning a child moves its row to the existing pinned section. Its project remains visible and
