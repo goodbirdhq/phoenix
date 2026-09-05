@@ -1847,3 +1847,57 @@ seedingLayer("CodexAdapterLive conversation seeding", (it) => {
     }),
   );
 });
+
+it.effect("refreshes quotas in the configured Codex home without starting a thread", () =>
+  Effect.gen(function* () {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-quota-probe-"));
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
+    );
+    const binary = NodePath.join(directory, "codex-probe");
+    const log = NodePath.join(directory, "requests.jsonl");
+    NodeFS.writeFileSync(
+      binary,
+      `#!${process.execPath}
+const fs = require("node:fs");
+require("node:readline").createInterface({input:process.stdin}).on("line", line => {
+  const message = JSON.parse(line);
+  fs.appendFileSync(process.env.PROBE_LOG, JSON.stringify({method:message.method,home:process.env.CODEX_HOME}) + "\\n");
+  if (message.id == null) return;
+  const result = message.method === "initialize" ? {userAgent:"codex/test",codexHome:process.env.CODEX_HOME,platformFamily:"unix",platformOs:"linux"}
+    : message.method === "account/read" ? {account:{type:"chatgpt",email:"test@example.invalid",planType:"pro"},requiresOpenaiAuth:true}
+    : message.method === "account/rateLimits/read" ? {rateLimits:{primary:{usedPercent:37,windowDurationMins:300,resetsAt:null}}}
+    : null;
+  process.stdout.write(JSON.stringify({id:message.id,result}) + "\\n");
+});
+`,
+      { mode: 0o700 },
+    );
+    const homePath = NodePath.join(directory, "account-b");
+    NodeFS.mkdirSync(homePath);
+    const adapter = yield* makeCodexAdapter(decodeCodexSettings({ binaryPath: binary, homePath }), {
+      instanceId: ProviderInstanceId.make("codex-b"),
+      environment: { CODEX_HOME: "/wrong-account", PROBE_LOG: log },
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          ServerConfig.layerTest(directory, directory),
+          ServerSettingsService.layerTest(),
+          providerSessionDirectoryTestLayer,
+        ),
+      ),
+    );
+    const reading = yield* adapter.refreshAvailability!();
+    NodeAssert.equal(reading.windows[0]?.usedPercent, 37);
+    const requests = NodeFS.readFileSync(log, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { method: string; home: string });
+    NodeAssert.deepEqual(
+      requests.map((request) => request.method),
+      ["initialize", "initialized", "account/read", "account/rateLimits/read"],
+    );
+    NodeAssert.ok(requests.every((request) => request.home === homePath));
+    NodeAssert.deepEqual(yield* adapter.listSessions(), []);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

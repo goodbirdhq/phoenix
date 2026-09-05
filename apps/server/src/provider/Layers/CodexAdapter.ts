@@ -7,6 +7,9 @@
  *
  * @module CodexAdapterLive
  */
+import * as DateTime from "effect/DateTime";
+import { connectCodexProbe } from "./CodexProvider.ts";
+import { codexUsageFromResponse } from "../codexUsage.ts";
 import {
   type CanonicalItemType,
   type CanonicalRequestType,
@@ -2076,8 +2079,41 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     ),
   );
 
+  const refreshAvailability: NonNullable<CodexAdapterShape["refreshAvailability"]> = () =>
+    Effect.gen(function* () {
+      const cwd = serverConfig.providerStatusCacheDir;
+      yield* fileSystem.makeDirectory(cwd, { recursive: true });
+      const client = yield* connectCodexProbe({
+        binaryPath: codexConfig.binaryPath,
+        homePath: codexConfig.homePath,
+        launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
+        cwd,
+        ...(options?.environment ? { environment: options.environment } : {}),
+      });
+      const account = yield* client.request("account/read", {});
+      if (account.account?.type !== "chatgpt") {
+        return codexUsageFromResponse({ rateLimits: {} }, DateTime.formatIso(yield* DateTime.now));
+      }
+      const response = yield* client.request("account/rateLimits/read", undefined);
+      return codexUsageFromResponse(response, DateTime.formatIso(yield* DateTime.now));
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+      Effect.scoped,
+      Effect.timeout("20 seconds"),
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "refreshAvailability",
+            detail: "Could not refresh Codex account limits.",
+            cause,
+          }),
+      ),
+    );
+
   return {
     provider: PROVIDER,
+    refreshAvailability,
     capabilities: {
       sessionModelSwitch: "in-session",
       conversationSeeding: "native-history",
