@@ -104,7 +104,11 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import {
+  useProjects,
+  useThreadShells,
+  useAllEnvironmentShellsBootstrapped,
+} from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
@@ -115,7 +119,7 @@ import {
   resolveActiveThreadRouteRef,
   resolveThreadRouteTarget,
 } from "../threadRoutes";
-import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
+import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import { SidebarTeamAvatars } from "./sidebar/SidebarTeamAvatars";
@@ -179,7 +183,11 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { SidebarFiltersMenu, type SidebarFilterCategory } from "./sidebar/SidebarFilters";
+import { useSidebarFiltersStore } from "./sidebar/sidebarFiltersStore";
 import {
+  pruneSidebarFilters,
+  hasUnseenSidebarWake,
+  resolveSidebarSnapshotPr,
   EMPTY_SIDEBAR_FILTERS,
   SIDEBAR_FILTER_STATUSES,
   activeSidebarFilterCount,
@@ -835,11 +843,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // message, settling, archiving, or a change request state that settles the
   // thread. Timer wakes survive a mere visit. An unparseable visit timestamp
   // counts as never-visited, so corrupt local data cannot eat the wake signal.
-  const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
-  const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =
-    wokeAtDate !== null &&
-    (lastVisitedDate === null || lastVisitedDate < wokeAtDate) &&
+    hasUnseenSidebarWake(props.wokeAt, lastVisitedAt) &&
     !changeRequestAutoSettles(pr, {
       autoSettleOnMerge: props.autoSettleOnMerge,
       thread,
@@ -1844,7 +1849,10 @@ export default function Sidebar() {
 
   const changeRequestSnapshotByKey = useAtomValue(threadChangeRequestSnapshotsAtom);
 
-  const [filters, setFilters] = useState<SidebarFilters>(EMPTY_SIDEBAR_FILTERS);
+  const filters = useSidebarFiltersStore((state) => state.filters);
+  const setFilters = useSidebarFiltersStore((state) => state.setFilters);
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const filterCount = activeSidebarFilterCount(filters);
   const scopedProjectKeys = useMemo(() => {
     if (filters.projects.length === 0 && filters.environments.length === 0) return null;
@@ -1856,7 +1864,51 @@ export default function Sidebar() {
         .map((ref) => `${ref.environmentId}:${ref.projectId}`),
     );
   }, [filters.projects, filters.environments, projectGroups]);
+  useEffect(() => {
+    if (!shellsBootstrapped) return;
+    if (
+      filters.projects.length === 0 &&
+      filters.environments.length === 0 &&
+      filters.accounts.length === 0
+    )
+      return;
+    const environmentIds = new Set(
+      environments.map((environment) => String(environment.environmentId)),
+    );
+    const accounts = new Set<string>();
+    if (filters.accounts.length > 0) {
+      for (const [environmentId, entries] of providerEntriesByEnvironment) {
+        if (!environmentIds.has(environmentId)) continue;
+        for (const entry of entries.values())
+          accounts.add(sidebarAccountKey(environmentId, entry.instanceId));
+      }
+      for (const thread of threads) {
+        if (environmentIds.has(thread.environmentId))
+          accounts.add(
+            sidebarAccountKey(
+              thread.environmentId,
+              thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+            ),
+          );
+      }
+    }
+    const next = pruneSidebarFilters(filters, {
+      projects: new Set(projectGroups.map((project) => project.projectKey)),
+      environments: environmentIds,
+      accounts,
+    });
+    if (next !== filters) setFilters(next);
+  }, [
+    filters,
+    setFilters,
+    projectGroups,
+    environments,
+    providerEntriesByEnvironment,
+    threads,
+    shellsBootstrapped,
+  ]);
   const filterCategories = useMemo<SidebarFilterCategory[]>(() => {
+    if (!filterMenuOpen) return [];
     const accounts = [...providerEntriesByEnvironment].flatMap(([environmentId, entries]) =>
       [...entries.values()].map((entry) => ({
         key: sidebarAccountKey(environmentId, entry.instanceId),
@@ -1952,6 +2004,7 @@ export default function Sidebar() {
       },
     ];
   }, [
+    filterMenuOpen,
     providerEntriesByEnvironment,
     environmentLabelById,
     filters.accounts,
@@ -2042,15 +2095,7 @@ export default function Sidebar() {
         serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       const snapshot = changeRequestSnapshotByKey.get(threadKey);
-      const changeRequest =
-        snapshot != null &&
-        (thread.linkedPullRequest == null
-          ? thread.worktreePath === null || snapshot.branch === thread.branch
-          : snapshot.linkedPullRequest?.projectId === thread.linkedPullRequest.projectId &&
-            snapshot.linkedPullRequest.repository === thread.linkedPullRequest.repository &&
-            snapshot.linkedPullRequest.number === thread.linkedPullRequest.number)
-          ? snapshot.pr
-          : null;
+      const changeRequest = resolveSidebarSnapshotPr(thread, snapshot);
       // Snooze outranks settlement and pinning until the thread wakes.
       if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
         snoozed.push(thread);
@@ -2131,9 +2176,16 @@ export default function Sidebar() {
           ? threadWokeAt(thread, { now: snoozeNow })
           : null;
         const woke =
-          section !== "settled" &&
-          wokeAt !== null &&
-          (lastVisitedAt === undefined || Date.parse(lastVisitedAt) < Date.parse(wokeAt));
+          hasUnseenSidebarWake(wokeAt, lastVisitedAt) &&
+          !changeRequestAutoSettles(
+            resolveSidebarSnapshotPr(
+              thread,
+              changeRequestSnapshotByKey.get(
+                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+              ),
+            ),
+            { autoSettleOnMerge, thread },
+          );
         return matchesSidebarThreadFilters(thread, filters, { section, lastVisitedAt, woke });
       });
     return {
@@ -2150,6 +2202,8 @@ export default function Sidebar() {
     filters,
     lastVisitedByKey,
     snoozeNow,
+    autoSettleOnMerge,
+    changeRequestSnapshotByKey,
   ]);
 
   const [expandedTeamKeys, setExpandedTeamKeys] = useState<ReadonlySet<string>>(() => new Set());
@@ -3519,7 +3573,7 @@ export default function Sidebar() {
         fixedHeader={
           // Lifted above the stage backdrop, whose fade bleeds below the
           // header and would otherwise paint across the search row's outline.
-          <SidebarGroup className="relative z-[1] h-[52px] px-4 py-2.5">
+          <SidebarGroup className="relative z-[1] h-[52px] px-4 py-2.5 pointer-coarse:py-1">
             <div className="flex items-center gap-1">
               <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1.5 text-sm font-normal text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
                 <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground" />
@@ -3569,6 +3623,8 @@ export default function Sidebar() {
               </div>
               <SidebarFiltersMenu
                 filters={filters}
+                open={filterMenuOpen}
+                onOpenChange={setFilterMenuOpen}
                 onChange={setFilters}
                 categories={filterCategories}
                 onNewProject={openAddProjectCommandPalette}
@@ -3580,7 +3636,7 @@ export default function Sidebar() {
                       <SidebarMenuButton
                         size="icon"
                         type="button"
-                        className="relative size-8 rounded-[8px] border border-[#0284C738] bg-[#0284C71F] text-[#0284C7] hover:bg-[#0284C7]/20 dark:text-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar [&>svg]:size-[18px] [&>svg]:text-current"
+                        className="relative size-8 rounded-[8px] border border-[#0284C738] bg-[#0284C71F] pointer-coarse:size-11 pointer-coarse:border-transparent pointer-coarse:bg-transparent pointer-coarse:before:absolute pointer-coarse:before:size-8 pointer-coarse:before:rounded-[8px] pointer-coarse:before:border pointer-coarse:before:border-[#0284C738] pointer-coarse:before:bg-[#0284C71F] pointer-coarse:[&>svg]:relative text-[#0284C7] hover:bg-[#0284C7]/20 dark:text-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar [&>svg]:size-[18px] [&>svg]:text-current"
                         onClick={handleNewThreadClick}
                         disabled={projects.length === 0}
                         aria-label="New thread"
@@ -3672,7 +3728,20 @@ export default function Sidebar() {
                 role="status"
                 className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
               >
-                No threads found
+                {filterCount > 0 ? (
+                  <>
+                    No threads match your search and filters.{" "}
+                    <button
+                      type="button"
+                      className="text-sky-600 hover:underline"
+                      onClick={() => setFilters(EMPTY_SIDEBAR_FILTERS)}
+                    >
+                      Clear filters
+                    </button>
+                  </>
+                ) : (
+                  "No threads found"
+                )}
               </p>
             )
           ) : null}
@@ -4016,7 +4085,7 @@ export default function Sidebar() {
                 </>
               ) : filterCount > 0 ? (
                 <>
-                  <span>No conversations match these filters</span>
+                  <span>No threads match these filters</span>
                   <button
                     type="button"
                     className="text-sky-600 hover:underline"

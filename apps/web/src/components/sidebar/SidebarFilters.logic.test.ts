@@ -3,6 +3,8 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/model
 import { describe, expect, it } from "vite-plus/test";
 import {
   EMPTY_SIDEBAR_FILTERS,
+  pruneSidebarFilters,
+  hasUnseenSidebarWake,
   activeSidebarFilterCount,
   matchesSidebarDraftFilters,
   matchesSidebarThreadFilters,
@@ -144,5 +146,55 @@ describe("sidebar conversation filters", () => {
     expect(matchesSidebarDraftFilters(session, composer, { ...filters, statuses: ["ready"] })).toBe(
       false,
     );
+  });
+});
+
+describe("filter target removal", () => {
+  it("drops removed targets while retaining existing selections and historic models", () => {
+    const filters = {
+      ...EMPTY_SIDEBAR_FILTERS,
+      projects: ["gone", "kept"],
+      environments: ["gone-env"],
+      accounts: ["gone-account"],
+      models: ["historic"],
+    };
+    expect(
+      pruneSidebarFilters(filters, {
+        projects: new Set(["kept"]),
+        environments: new Set(["offline-env"]),
+        accounts: new Set(),
+      }),
+    ).toEqual({ ...EMPTY_SIDEBAR_FILTERS, projects: ["kept"], models: ["historic"] });
+  });
+  it("keeps disconnected environments and accounts while their cached targets still exist", () => {
+    const filters = {
+      ...EMPTY_SIDEBAR_FILTERS,
+      environments: ["offline"],
+      accounts: [sidebarAccountKey("offline", "codex")],
+    };
+    expect(
+      pruneSidebarFilters(filters, {
+        projects: new Set(),
+        environments: new Set(["offline"]),
+        accounts: new Set(filters.accounts),
+      }),
+    ).toBe(filters);
+  });
+});
+
+describe("wake filtering", () => {
+  it("includes an unseen wake in the settled shelf and clears on a visit", () => {
+    const filters = { ...EMPTY_SIDEBAR_FILTERS, statuses: ["woke"] };
+    const wokeAt = "2026-09-05T12:00:00Z";
+    expect(
+      matchesSidebarThreadFilters(shell(), filters, {
+        ...context,
+        section: "settled",
+        woke: hasUnseenSidebarWake(wokeAt, "2026-09-05T11:00:00Z"),
+      }),
+    ).toBe(true);
+    expect(hasUnseenSidebarWake(wokeAt, "2026-09-05T13:00:00Z")).toBe(false);
+    expect(hasUnseenSidebarWake(wokeAt, "invalid")).toBe(true);
+    expect(hasUnseenSidebarWake("invalid", undefined)).toBe(false);
   });
 });

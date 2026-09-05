@@ -2,7 +2,7 @@ import {
   aggregateSchedules,
   unacknowledgedScheduleFailureCount,
 } from "@t3tools/client-runtime/schedules";
-import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   CalendarClockIcon,
@@ -123,9 +123,11 @@ function SidebarUtilityItem({
   label,
   onClick,
   active = false,
+  activeWidth,
   badge,
 }: {
   active?: boolean;
+  activeWidth: number;
   badge?: number;
   icon: ReactNode;
   label: string;
@@ -143,27 +145,16 @@ function SidebarUtilityItem({
                   : label
               }
               aria-current={active ? "page" : undefined}
-              style={
-                active
-                  ? {
-                      width:
-                        label === "Agents" || label === "Usage"
-                          ? 84
-                          : label === "Schedules"
-                            ? 112
-                            : 132,
-                    }
-                  : undefined
-              }
+              style={active ? { width: activeWidth } : undefined}
               onClick={onClick}
               className={cn(
-                "relative h-9 w-9 group-data-[wide-label=true]/footer:w-8 justify-center rounded-[8px] p-0 text-sidebar-muted-foreground [&>svg]:size-4 [&>svg]:text-current",
+                "relative h-9 w-9 @max-[316px]/sidebar-footer:w-7! @max-[316px]/sidebar-footer:px-0 group-data-[wide-label=true]/footer:w-8 justify-center rounded-[8px] p-0 text-sidebar-muted-foreground [&>svg]:size-4 [&>svg]:text-current",
                 active &&
                   "w-auto group-data-[wide-label=true]/footer:w-auto max-w-full gap-1.5 bg-zinc-200 hover:bg-zinc-200 px-3 text-xs font-semibold text-zinc-800 dark:bg-zinc-800 dark:hover:bg-zinc-800 dark:text-zinc-100 [&>svg]:size-[18px]",
               )}
             >
               {icon}
-              {active ? <span>{label}</span> : null}
+              {active ? <span className="@max-[316px]/sidebar-footer:hidden">{label}</span> : null}
               {badge ? (
                 <span
                   className="absolute right-0 top-0 flex min-h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[9px] font-semibold leading-none text-white"
@@ -183,8 +174,8 @@ function SidebarUtilityItem({
 
 // Survives the settings sidebar replacing the conversations sidebar. Only local
 // app locations are remembered, and a fresh client starts at the normal landing page.
-let lastAgentsPath = "/";
-let lastNonSettingsPath = "/";
+let lastAgentsLocation = { href: "/", index: 0 };
+let lastNonSettingsLocation = { href: "/", index: 0 };
 
 function SidebarSettingsMenu({ onNavigate }: { onNavigate: () => void }) {
   const navigate = useNavigate();
@@ -207,7 +198,7 @@ function SidebarSettingsMenu({ onNavigate }: { onNavigate: () => void }) {
             <SidebarMenuButton
               size="icon"
               aria-label={updateAvailable ? "Settings, update available" : "Settings"}
-              className="relative size-9 rounded-[8px] text-sidebar-muted-foreground [&>svg]:text-current data-popup-open:bg-zinc-200 dark:data-popup-open:bg-zinc-800"
+              className="relative size-9 @max-[316px]/sidebar-footer:w-7 rounded-[8px] text-sidebar-muted-foreground [&>svg]:text-current data-popup-open:bg-zinc-200 dark:data-popup-open:bg-zinc-800"
             />
           }
         >
@@ -247,7 +238,7 @@ function SidebarSettingsMenu({ onNavigate }: { onNavigate: () => void }) {
               {label}
             </MenuItem>
           ))}
-          {state ? (
+          {isElectron ? (
             <>
               <MenuSeparator />
               <SidebarUpdateMenuItem />
@@ -261,7 +252,8 @@ function SidebarSettingsMenu({ onNavigate }: { onNavigate: () => void }) {
 
 export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const router = useRouter();
+  const location = useLocation();
   const { isMobile, setOpenMobile } = useSidebar();
   const currentFooterPage = useLocation({
     select: (location) =>
@@ -278,9 +270,10 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                 : null,
   });
   useEffect(() => {
-    if (currentFooterPage !== "settings") lastNonSettingsPath = pathname;
-    if (currentFooterPage === null) lastAgentsPath = pathname;
-  }, [currentFooterPage, pathname]);
+    const target = { href: location.href, index: location.state.__TSR_index };
+    if (currentFooterPage !== "settings") lastNonSettingsLocation = target;
+    if (currentFooterPage === null) lastAgentsLocation = target;
+  }, [currentFooterPage, location.href, location.state.__TSR_index]);
   const { environments } = useEnvironments();
   const { environments: scheduleEnvironments } = useWebEnvironmentSchedules();
   const scheduleFailureCount = unacknowledgedScheduleFailureCount(
@@ -329,8 +322,10 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
-    void navigate({ to: lastNonSettingsPath });
-  }, [closeMobileSidebar, navigate]);
+    const distance = location.state.__TSR_index - lastNonSettingsLocation.index;
+    if (lastNonSettingsLocation.href !== "/" && distance > 0) router.history.go(-distance);
+    else void navigate({ href: lastNonSettingsLocation.href, replace: true });
+  }, [closeMobileSidebar, navigate, router, location.state.__TSR_index]);
 
   return (
     <SidebarMenu
@@ -339,7 +334,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         currentFooterPage === "pull-requests" ||
         currentFooterPage === "schedules"
       }
-      className="group/footer flex-row items-center justify-between gap-1"
+      className="@container/sidebar-footer group/footer flex-row items-center justify-between gap-1"
     >
       {currentFooterPage === "settings" ? (
         <SidebarMenuItem className="min-w-0 flex-1">
@@ -356,16 +351,18 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           <SidebarUtilityItem
             icon={<CodeXmlIcon strokeWidth={1.7} />}
             label="Agents"
+            activeWidth={84}
             active={currentFooterPage === null}
             onClick={() => {
               closeMobileSidebar();
-              void navigate({ to: lastAgentsPath });
+              void navigate({ href: lastAgentsLocation.href });
             }}
           />
           {pullRequestsSupported ? (
             <SidebarUtilityItem
               icon={<GitPullRequestIcon />}
               label="Pull Requests"
+              activeWidth={132}
               active={currentFooterPage === "pull-requests"}
               onClick={handlePullRequestsClick}
             />
@@ -373,6 +370,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           <SidebarUtilityItem
             icon={<CalendarClockIcon />}
             label="Schedules"
+            activeWidth={112}
             active={currentFooterPage === "schedules"}
             onClick={handleSchedulesClick}
             badge={scheduleFailureCount}
@@ -380,12 +378,14 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"
+            activeWidth={84}
             active={currentFooterPage === "usage"}
             onClick={handleUsageClick}
           />
           <SidebarUtilityItem
             icon={<ServerIcon />}
             label="Environments"
+            activeWidth={132}
             active={currentFooterPage === "environments"}
             onClick={handleEnvironmentsClick}
           />

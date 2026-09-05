@@ -24,7 +24,7 @@ their pinned threads keep the default newest-first order below the ones you have
 
 ## Search and filters
 
-The conversation sidebar has one row for search, filters, and the blue **New thread** button.
+On web and desktop, the conversation sidebar has one row for search, filters, and the blue **New thread** button.
 Open the filter menu to narrow conversations by projects, environments, status, provider accounts,
 or models. Select several values within a category to match any of them; different categories
 combine to narrow the results. Selections apply immediately. The filter badge counts active
@@ -42,7 +42,7 @@ current filters, including collapsed and settled conversations.
 
 ## Sidebar navigation
 
-The bottom navigation opens **Agents**, **Pull Requests** (when supported), **Schedules**,
+On web and desktop, the bottom navigation opens **Agents**, **Pull Requests** (when supported), **Schedules**,
 **Usage**, and **Environments**. The selected destination shows its name and a highlight.
 **Agents** returns to the conversation you last viewed.
 

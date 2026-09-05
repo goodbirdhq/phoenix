@@ -173,28 +173,29 @@ function FilterCategory({
 
 export function SidebarFiltersMenu({
   filters,
+  open,
+  onOpenChange,
   onChange,
   categories,
   onNewProject,
 }: {
   filters: SidebarFilters;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   onChange: (filters: SidebarFilters) => void;
   categories: readonly SidebarFilterCategory[];
   onNewProject: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const count = activeSidebarFilterCount(filters);
   return (
-    <Menu open={open} onOpenChange={setOpen}>
+    <Menu open={open} onOpenChange={onOpenChange}>
       <MenuTrigger
         render={
           <SidebarMenuButton
             size="icon"
-            aria-label={
-              count ? `Filter conversations, ${count} active categories` : "Filter conversations"
-            }
+            aria-label={count ? `Filter threads, ${count} active categories` : "Filter threads"}
             className={cn(
-              "relative size-8 shrink-0 overflow-visible rounded-[8px] text-sidebar-muted-foreground data-popup-open:bg-sidebar-row-hover [&>svg]:text-current",
+              "relative size-8 pointer-coarse:size-11 shrink-0 overflow-visible rounded-[8px] text-sidebar-muted-foreground data-popup-open:bg-sidebar-row-hover [&>svg]:text-current",
               count > 0 && "bg-[#0284C7]/10 text-[#0284C7] dark:text-sky-400",
             )}
           />
@@ -220,7 +221,7 @@ export function SidebarFiltersMenu({
             selected={filters[category.key]}
             onChange={(keys) => onChange({ ...filters, [category.key]: keys })}
             onNewProject={onNewProject}
-            onClose={() => setOpen(false)}
+            onClose={() => onOpenChange(false)}
           />
         ))}
         <MenuSeparator className="mx-0" />
