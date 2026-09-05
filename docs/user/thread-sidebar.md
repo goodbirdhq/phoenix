@@ -16,7 +16,8 @@ threads** is enabled. Right-click the same link and choose **Unlink from thread*
 
 On web and desktop, drag a pinned thread to change its position. On mobile, open the thread's menu
 and choose **Move up** or **Move down**. The order is stored by the server and appears on your
-other connected devices.
+other connected devices. On web and desktop, dragging under a filter places the moved thread
+beside the drop target in the full pinned order; hidden threads keep their relative order.
 
 If reordering is unavailable for one environment, update the Phoenix server running in that
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
