@@ -155,7 +155,8 @@ export type SessionProviderDescriptor = typeof SessionProviderDescriptor.Type;
 // MCP clients (Claude Code) reject hard enough to drop the whole server's
 // tools. Keep at least one optional field so the schema stays `type: object`.
 export const ListSessionProvidersInput = Schema.Struct({
-  // When true, omit providers that are not currently available.
+  // Disabled instances are always omitted. When true, also omit enabled
+  // instances that cannot currently start a session.
   onlyAvailable: Schema.optional(Schema.Boolean),
   // Explicitly asks supported providers to refresh a native quota snapshot.
   // It never starts an agent session or a turn.
