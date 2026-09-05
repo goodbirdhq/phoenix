@@ -3888,16 +3888,7 @@ export default function Sidebar() {
                         // rows resolve to null on their own.
                         wokeAt={threadWokeAt(thread, { now: snoozeNow })}
                         isActive={routeThreadKey === threadKey}
-                        activeThreadKey={
-                          routeThreadKey !== null &&
-                          (teamsByKey.get(threadKey) ?? [thread]).some(
-                            (member) =>
-                              scopedThreadKey(scopeThreadRef(member.environmentId, member.id)) ===
-                              routeThreadKey,
-                          )
-                            ? routeThreadKey
-                            : null
-                        }
+                        activeThreadKey={routeThreadKey}
                         openPullRequestsInRightPanel={routeThreadRef !== null}
                         jumpLabel={
                           showThreadJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null
