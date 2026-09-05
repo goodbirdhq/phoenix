@@ -2758,6 +2758,21 @@ export default function Sidebar() {
         override holds until all of them appear in canonical state. */
     readonly assignedKeys: ReadonlyMap<string, string>;
   } | null>(null);
+  // Hidden pins still own positions in the global run. Reorder against them
+  // too, so clearing a filter (or waking a snoozed pin) cannot reveal collisions.
+  const reorderablePinnedThreads = useMemo(
+    () =>
+      sortPinnedThreadsForSidebar(
+        threads.filter(
+          (thread) =>
+            thread.archivedAt === null &&
+            thread.pinnedAt != null &&
+            serverConfigs.get(thread.environmentId)?.environment.capabilities.threadPinReorder ===
+              true,
+        ),
+      ),
+    [threads, serverConfigs],
+  );
   const orderedPinnedThreads = useMemo(() => {
     if (optimisticPinnedOrder === null) return pinnedThreads;
     return orderItemsByPreferredIds({
@@ -2768,9 +2783,7 @@ export default function Sidebar() {
   }, [optimisticPinnedOrder, pinnedThreads]);
   useEffect(() => {
     if (optimisticPinnedOrder === null) return;
-    const canonical = pinnedThreads.filter((thread) =>
-      reorderablePinnedKeys.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
-    );
+    const canonical = reorderablePinnedThreads;
     const canonicalKeys = canonical.map((thread) =>
       scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
     );
@@ -2803,7 +2816,7 @@ export default function Sidebar() {
     if (membershipChanged || foreignKeyLanded || allAssignmentsLanded || orderConfirmed) {
       setOptimisticPinnedOrder(null);
     }
-  }, [optimisticPinnedOrder, pinnedThreads, reorderablePinnedKeys]);
+  }, [optimisticPinnedOrder, reorderablePinnedThreads]);
   const attemptPin = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
@@ -2850,9 +2863,11 @@ export default function Sidebar() {
       const activeKey = String(event.active.id);
       const overKey = event.over === null ? null : String(event.over.id);
       if (overKey === null || activeKey === overKey) return;
-      const reorderable = orderedPinnedThreads.filter((thread) =>
-        reorderablePinnedKeys.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
-      );
+      const reorderable = orderItemsByPreferredIds({
+        items: reorderablePinnedThreads,
+        preferredIds: optimisticPinnedOrder?.order ?? [],
+        getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      });
       const keys = reorderable.map((thread) =>
         scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
       );
@@ -2909,7 +2924,7 @@ export default function Sidebar() {
         }
       })();
     },
-    [orderedPinnedThreads, reorderPinnedThread, reorderablePinnedKeys],
+    [reorderablePinnedThreads, optimisticPinnedOrder, reorderPinnedThread],
   );
   // One snooze per thread at a time — same double-dispatch guard as settle.
   const snoozingThreadKeysRef = useRef(new Set<string>());
