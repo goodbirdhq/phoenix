@@ -28,19 +28,30 @@ When a session spawns other sessions, the sidebar can nest them instead of listi
 flat. Turn on **Sidebar session hierarchy** in Settings, under General. The switch only appears
 while **Session orchestration** is on, because nothing spawns children without it.
 
-With hierarchy on, a spawned thread sits directly beneath the session that started it, indented
-and connected by a rail down the gutter. Nesting is recursive: a child that spawns its own
-children nests another level, to any depth. Indentation stops after four levels so deep trees keep
-room for their titles — the rows still nest, they just stop moving right.
+On web and desktop, each thread has a provider avatar strip beside its branch. With hierarchy
+on, a parent's strip includes its whole team: the parent first, then its descendants. Up to six
+avatars are visible, followed by a circular overflow count. Click the strip or count to expand
+or collapse the children. A thread without children has one avatar; click it for session details.
+Hover a team strip for model, account, and environment details.
 
-Child rows are shorter than top-level cards: they drop the branch line, and their pull request
-number and terminal indicator move up beside the status instead. Children keep their own worktrees
-and branches — open a child to see its checkout.
+Collapsed rows show the most actionable status in their subtree: a decision first, then input,
+then failure, followed by working, monitoring, and ready. Click a review action to open the thread
+that needs it. Working teams show the number of working sessions before the dotted indicator;
+ready threads show a green check. Expanded rows show their own status, while each child shows
+its own status or summarizes its children if collapsed. Counts always include every descendant,
+including a child that is also pinned, once.
 
-Hierarchy applies to your active threads. Pinned threads keep the order you dragged them into, the
-snoozed shelf stays ordered by what wakes next, and the settled tail stays in history order. A
-child whose parent is pinned, snoozed, settled, or archived shows at the top level rather than
-disappearing with it.
+Children expand recursively and keep their branch visible. Indentation stops after four levels
+so deep trees keep room for their titles. Completed children remain visible until settled.
+Hover a row, focus its controls with the keyboard, or use its options menu to settle, snooze,
+pin, or manage the thread. Snooze retains the existing wake presets and Wake now action.
+
+Pinning a child moves its row to the existing pinned section. Its project remains visible and
+**From [parent title]** replaces its branch. Hover the tree icon to unpin it. Pinned threads keep
+the order you dragged them into, and can expand their own children. The snoozed shelf stays
+ordered by what wakes next, and the settled tail stays in history order. A child whose parent
+is snoozed, settled, archived, or outside the current project filter returns to the top level.
+Search continues to find collapsed and settled threads.
 
 ## Environment artwork
 
