@@ -76,6 +76,7 @@ import Migration0058 from "./Migrations/058_ProjectionThreadMessageOrigin.ts";
 import Migration0059 from "./Migrations/059_SessionEpisodeAndQueuedStateIndex.ts";
 import Migration0060 from "./Migrations/060_ClearAutomaticProjectModelDefaults.ts";
 import Migration0061 from "./Migrations/061_UsageSessionLinks.ts";
+import Migration0062 from "./Migrations/062_UsageCreationIndexes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -149,6 +150,7 @@ export const migrationEntries = [
   [59, "SessionEpisodeAndQueuedStateIndex", Migration0059],
   [60, "ClearAutomaticProjectModelDefaults", Migration0060],
   [61, "UsageSessionLinks", Migration0061],
+  [62, "UsageCreationIndexes", Migration0062],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
