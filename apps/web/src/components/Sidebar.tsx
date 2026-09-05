@@ -687,7 +687,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
   variant: "card" | "slim";
   hierarchyIndentDepth: number;
-  teamMembers: readonly SidebarThreadSummary[];
+  teamMembers?: readonly SidebarThreadSummary[] | undefined;
   teamExpanded: boolean;
   onToggleTeam: (key: string) => void;
   parentTitle: string | null;
@@ -809,7 +809,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const teamStatus = resolveSidebarTeamStatus(thread, props.teamMembers, props.teamExpanded);
+  const teamMembers = useMemo(() => props.teamMembers ?? [thread], [props.teamMembers, thread]);
+  const pinnedTeamCount = teamMembers.filter(
+    (member) => member.id !== thread.id && member.pinnedAt != null,
+  ).length;
+  const teamStatus = resolveSidebarTeamStatus(thread, teamMembers, props.teamExpanded);
   const status = teamStatus.status;
   // A woken thread reappears at its original position (the sort is
   // deliberately static), so the pill has to carry the weight. Snoozing is
@@ -1341,18 +1345,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       );
                     }}
                   >
-                    <span role="status" className="truncate">
-                      {reviewAction.label}
-                    </span>
+                    <span className="truncate">{reviewAction.label}</span>
                     <ArrowRightIcon className="size-3 shrink-0" />
                   </button>
                 ) : status === "working" ? (
                   <span
-                    role="status"
-                    aria-label={`${teamStatus.workingCount} working sessions`}
+                    role="img"
+                    aria-label={`${teamStatus.workingCount} working ${teamStatus.workingCount === 1 ? "session" : "sessions"}`}
                     className="inline-flex items-center gap-1 text-[#0284C7] dark:text-sky-400"
                   >
-                    {!props.teamExpanded && props.teamMembers.length > 1 ? (
+                    {!props.teamExpanded && teamMembers.length > 1 ? (
                       <span>{teamStatus.workingCount} ×</span>
                     ) : null}
                     <CircleDashedIcon aria-hidden className="size-4 text-[#60A5FA]" />
@@ -1442,13 +1444,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               ) : (
                 <>
                   {pinIndicator}
-                  <span className="min-w-0 flex-1 truncate">{thread.branch}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {thread.branch ?? "Local checkout"}
+                  </span>
                 </>
               )}
               {terminalStatusIcon}
               {prBadge}
               <SidebarTeamAvatars
-                members={props.teamMembers}
+                members={teamMembers}
                 providers={props.providerEntryByInstanceId}
                 environmentLabel={props.environmentLabel}
                 expanded={props.teamExpanded}
@@ -1460,16 +1464,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         </TooltipTrigger>
         {detailsTooltip}
       </Tooltip>
-      {props.teamExpanded && props.teamMembers.length > 1 ? (
+      {props.teamExpanded && teamMembers.length > 1 ? (
         <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs leading-4 text-sidebar-muted-foreground">
           <span>
-            {props.teamMembers.filter((member) => member.spawnedByThreadId === thread.id).length}{" "}
-            children
-            {props.teamMembers.some(
-              (member) => member.id !== thread.id && member.spawnedByThreadId !== thread.id,
-            )
-              ? ` · ${props.teamMembers.filter((member) => member.id !== thread.id && member.spawnedByThreadId !== thread.id).length} descendants`
-              : ""}
+            {teamMembers.length - 1} {teamMembers.length === 2 ? "descendant" : "descendants"}
+            {pinnedTeamCount > 0 ? ` · ${pinnedTeamCount} pinned separately` : ""}
           </span>
           <button
             type="button"
@@ -3641,9 +3640,7 @@ export default function Sidebar() {
                         variant={rowVariant}
                         hierarchyIndentDepth={hierarchyIndentDepth}
                         teamMembers={
-                          isCard && sessionHierarchyEnabled
-                            ? (teamsByKey.get(threadKey) ?? [thread])
-                            : [thread]
+                          isCard && sessionHierarchyEnabled ? teamsByKey.get(threadKey) : undefined
                         }
                         teamExpanded={expandedTeamKeys.has(threadKey)}
                         onToggleTeam={toggleTeam}
