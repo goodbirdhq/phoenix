@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 
-import { formatServiceStatus } from "./service.ts";
+import { formatServiceStatus, formatServiceUnchanged } from "./service.ts";
 
 const status = {
   supported: true,
@@ -8,6 +8,7 @@ const status = {
   current: true,
   unitPath: "/home/me/.config/systemd/user/phoenix.service",
   logPath: "/home/me/.phoenix/userdata/logs/boot-service.log",
+  activeVersion: "0.0.29",
   runtimeVersion: "phoenix v0.0.29 (b421b138)",
 } as const;
 
@@ -43,6 +44,38 @@ it("points a stale service at the published update command", () => {
   assert.include(
     formatServiceStatus({ ...status, current: false }, "0.0.29"),
     "Next: Run `npx @goodbirdhq/phoenix@latest service update`.",
+  );
+});
+
+it("does not tell an older CLI to repair a newer service", () => {
+  const output = formatServiceStatus(
+    {
+      ...status,
+      current: false,
+      activeVersion: "0.1.2",
+      runtimeVersion: "phoenix v0.1.2 (abc12345)",
+    },
+    "0.1.0",
+    "0.1.0 (oldold01)",
+  );
+
+  assert.include(output, "installed · phoenix@0.1.2 (newer than this CLI)");
+  assert.include(output, "  Service build: phoenix v0.1.2 (abc12345)");
+  assert.equal(output.includes("needs an update or repair"), false);
+  assert.equal(output.includes("Next: Run `npx"), false);
+});
+
+it("tells an older CLI to use npx @latest instead of claiming a successful update", () => {
+  assert.equal(
+    formatServiceUnchanged(
+      { ...status, current: false, activeVersion: "0.1.2" },
+      "0.1.0",
+      "update",
+    ),
+    [
+      "Phoenix service is already on phoenix@0.1.2, newer than this CLI (0.1.0).",
+      "Use `npx @goodbirdhq/phoenix@latest service update` to update.",
+    ].join("\n"),
   );
 });
 

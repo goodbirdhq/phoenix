@@ -116,14 +116,18 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
   const sourceLauncher = path.join(home, "service-launcher.mjs");
   const statePath = path.join(baseDir, "runtime", "service-state.json");
   yield* fs.writeFileString(sourceLauncher, "export {};\n");
-  const runtime = pinnedRuntimePaths(path, baseDir, "1.2.3");
-  yield* fs.makeDirectory(path.dirname(runtime.entryPath), { recursive: true });
-  yield* fs.writeFileString(runtime.entryPath, "export {};\n");
-  yield* fs.writeFileString(
-    path.join(path.dirname(runtime.entryPath), "service-launcher.mjs"),
-    "export const source = 'pinned runtime';\n",
-  );
-  yield* fs.writeFileString(runtime.sentinelPath, "1.2.3\n");
+  const pinVersion = (version: string) =>
+    Effect.gen(function* () {
+      const runtime = pinnedRuntimePaths(path, baseDir, version);
+      yield* fs.makeDirectory(path.dirname(runtime.entryPath), { recursive: true });
+      yield* fs.writeFileString(runtime.entryPath, "export {};\n");
+      yield* fs.writeFileString(
+        path.join(path.dirname(runtime.entryPath), "service-launcher.mjs"),
+        "export const source = 'pinned runtime';\n",
+      );
+      yield* fs.writeFileString(runtime.sentinelPath, `${version}\n`);
+    });
+  yield* pinVersion("1.2.3");
 
   const commands: string[] = [];
   const timeouts = new Map<string, unknown>();
@@ -134,8 +138,9 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
         const command = `${input.command} ${input.args.join(" ")}`;
         commands.push(command);
         timeouts.set(command, input.timeout);
+        const reportedVersion = /\/versions\/([^/]+)\//.exec(input.args[0] ?? "")?.[1] ?? "1.2.3";
         return {
-          stdout: input.args[1] === "--version" ? "t3 v1.2.3\n" : "",
+          stdout: input.args[1] === "--version" ? `t3 v${reportedVersion}\n` : "",
           stderr: "",
           code: ChildProcessSpawner.ExitCode(command === control.failCommand ? 1 : 0),
           timedOut: false,
@@ -146,11 +151,11 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
         };
       }),
   });
-  const makeService = (environmentPath = installerPath) =>
+  const makeServiceAt = (cliVersion: string, environmentPath = installerPath) =>
     BootService.make({
       baseDir,
       logsDir: path.join(baseDir, "userdata", "logs"),
-      cliVersion: "1.2.3",
+      cliVersion,
       host: {
         execPath: "/usr/bin/node",
         ...(usePinnedLauncher ? {} : { launcherSourcePath: sourceLauncher }),
@@ -171,8 +176,19 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
         ),
       ),
     );
+  const makeService = (environmentPath = installerPath) => makeServiceAt("1.2.3", environmentPath);
   const service = yield* makeService();
-  return { service, makeService, fs, statePath, commands, timeouts, control };
+  return {
+    service,
+    makeService,
+    makeServiceAt,
+    pinVersion,
+    fs,
+    statePath,
+    commands,
+    timeouts,
+    control,
+  };
 });
 
 it.layer(NodeServices.layer)("boot service install", (it) => {
@@ -411,6 +427,29 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         "launchctl bootout --wait gui/501/com.goodbird.phoenix.service",
         `launchctl bootstrap gui/501 ${plistPath}`,
       ]);
+    }),
+  );
+
+  it.effect("does not let an older CLI replace a newer active service", () =>
+    Effect.gen(function* () {
+      const { service, makeServiceAt, pinVersion, fs, statePath } = yield* makeHarness();
+      yield* pinVersion("1.2.2");
+      yield* service.install;
+      const older = yield* makeServiceAt("1.2.2");
+      expect((yield* older.install.pipe(Effect.flip))._tag).toBe("BootServiceWouldDowngradeError");
+      expect(parseServiceState(yield* fs.readFileString(statePath))?.activeVersion).toBe("1.2.3");
+    }),
+  );
+
+  it.effect("reports the active service runtime even when this CLI is older", () =>
+    Effect.gen(function* () {
+      const { service, makeServiceAt, pinVersion } = yield* makeHarness();
+      yield* pinVersion("1.2.2");
+      yield* service.install;
+      const status = yield* (yield* makeServiceAt("1.2.2")).status;
+      expect(status.current).toBe(false);
+      expect(status.activeVersion).toBe("1.2.3");
+      expect(status.runtimeVersion).toContain("1.2.3");
     }),
   );
 });

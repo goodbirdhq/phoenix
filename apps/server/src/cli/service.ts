@@ -35,7 +35,10 @@ export type ServiceReconcileResult =
 export const reconcileService = Effect.fn("cli.service.reconcile")(function* () {
   const service = yield* BootService.BootService;
   const status = yield* service.status;
-  if (status.installed && status.current) {
+  if (
+    status.installed &&
+    (status.current || BootService.isServiceNewerThanCli(status.activeVersion, packageJson.version))
+  ) {
     return { changed: false, status } satisfies ServiceReconcileResult;
   }
   const plan = yield* service.install;
@@ -45,6 +48,22 @@ export const reconcileService = Effect.fn("cli.service.reconcile")(function* () 
     plan,
   } satisfies ServiceReconcileResult;
 });
+
+export function formatServiceUnchanged(
+  status: BootService.BootServiceStatus,
+  cliVersion: string,
+  kind: "install" | "update",
+): string {
+  if (BootService.isServiceNewerThanCli(status.activeVersion, cliVersion)) {
+    return (
+      `Phoenix service is already on phoenix@${status.activeVersion}, newer than this CLI (${cliVersion}).\n` +
+      "Use `npx @goodbirdhq/phoenix@latest service update` to update."
+    );
+  }
+  return kind === "install"
+    ? `Phoenix service is already installed with phoenix@${cliVersion}.`
+    : `Phoenix service is already using phoenix@${cliVersion}.`;
+}
 
 export function formatServiceStatus(
   status: BootService.BootServiceStatus,
@@ -57,9 +76,16 @@ export function formatServiceStatus(
   if (!status.installed) {
     return "Phoenix service\n  Status: not installed\n  Next: Run `phoenix service install`.";
   }
+  const newer = BootService.isServiceNewerThanCli(status.activeVersion, cliVersion);
   return [
     "Phoenix service",
-    `  Status: ${status.current ? `installed · phoenix@${cliVersion}` : "needs an update or repair"}`,
+    `  Status: ${
+      status.current
+        ? `installed · phoenix@${cliVersion}`
+        : newer
+          ? `installed · phoenix@${status.activeVersion} (newer than this CLI)`
+          : "needs an update or repair"
+    }`,
     // The daemon runs a pinned copy, so an upgraded CLI does not mean an
     // upgraded service until it is reinstalled. Naming both builds is what
     // makes that gap visible instead of something to infer from release dates.
@@ -67,7 +93,9 @@ export function formatServiceStatus(
     `  CLI build: ${cliBuild}`,
     `  Unit: ${status.unitPath}`,
     `  Logs: ${status.logPath}`,
-    ...(status.current ? [] : ["  Next: Run `npx @goodbirdhq/phoenix@latest service update`."]),
+    ...(status.current || newer
+      ? []
+      : ["  Next: Run `npx @goodbirdhq/phoenix@latest service update`."]),
   ].join("\n");
 }
 
@@ -88,9 +116,7 @@ const serviceInstallCommand = Command.make("install", projectLocationFlags).pipe
       Effect.gen(function* () {
         const result = yield* reconcileService();
         if (!result.changed) {
-          yield* Console.log(
-            `Phoenix service is already installed with phoenix@${packageJson.version}.`,
-          );
+          yield* Console.log(formatServiceUnchanged(result.status, packageJson.version, "install"));
           return;
         }
         yield* Console.log(
@@ -111,7 +137,7 @@ const serviceUpdateCommand = Command.make("update", projectLocationFlags).pipe(
       Effect.gen(function* () {
         const result = yield* reconcileService();
         if (!result.changed) {
-          yield* Console.log(`Phoenix service is already using phoenix@${packageJson.version}.`);
+          yield* Console.log(formatServiceUnchanged(result.status, packageJson.version, "update"));
           return;
         }
         yield* Console.log(
@@ -153,11 +179,15 @@ const serviceStatusCommand = Command.make("status", projectLocationFlags).pipe(
 
 export const offerServiceDuringOnboarding = Effect.gen(function* () {
   const service = yield* BootService.BootService;
-  const { supported, installed, current } = yield* service.status;
+  const status = yield* service.status;
+  const { supported, installed, current } = status;
   if (!supported) {
     return false;
   }
-  if (installed && current) {
+  if (
+    installed &&
+    (current || BootService.isServiceNewerThanCli(status.activeVersion, packageJson.version))
+  ) {
     yield* Console.log("Phoenix is already set up to run in the background on this machine.");
     return true;
   }
@@ -202,6 +232,7 @@ export const recoverServiceOnboardingOffer = <R>(
         Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
       BootServiceUpdatePendingError: (error) =>
         Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
+      BootServiceWouldDowngradeError: (error) => Console.log(error.message).pipe(Effect.as(true)),
     }),
   );
 

@@ -24,6 +24,8 @@ import {
   SERVICE_LAUNCHER_FILE,
   SERVICE_LAUNCHER_PROTOCOL,
   SERVICE_STATE_FILE,
+  compareExactServiceVersions,
+  isExactServiceVersion,
   parseServiceState,
   serviceStateHasPendingUpdate,
   type ServiceState,
@@ -416,11 +418,24 @@ export class BootServiceUpdatePendingError extends Schema.TaggedErrorClass<BootS
   }
 }
 
+export class BootServiceWouldDowngradeError extends Schema.TaggedErrorClass<BootServiceWouldDowngradeError>()(
+  "BootServiceWouldDowngradeError",
+  {
+    activeVersion: Schema.String,
+    cliVersion: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Phoenix service is already on phoenix@${this.activeVersion}, newer than this CLI (${this.cliVersion}). Use \`npx @goodbirdhq/phoenix@latest service update\` to update.`;
+  }
+}
+
 export type BootServiceError =
   | BootServiceUnsupportedError
   | BootServiceCommandError
   | BootServiceInstallError
-  | BootServiceUpdatePendingError;
+  | BootServiceUpdatePendingError
+  | BootServiceWouldDowngradeError;
 
 export interface BootServiceStatus {
   readonly supported: boolean;
@@ -428,11 +443,26 @@ export interface BootServiceStatus {
   readonly current: boolean;
   readonly unitPath: string;
   readonly logPath: string;
+  // What the launcher will start, from service-state.json. Distinct from this
+  // CLI's version when PATH still has an older global install.
+  readonly activeVersion: string | null;
   // What the pinned runtime the service actually executes reports for
   // `--version`, read by running it. The CLI asking for status can be a
   // different build than the daemon, which is the whole reason to report it
   // separately. Null when it is not installed or could not be run.
   readonly runtimeVersion: string | null;
+}
+
+export function isServiceNewerThanCli(
+  activeVersion: string | null | undefined,
+  cliVersion: string,
+): boolean {
+  return (
+    typeof activeVersion === "string" &&
+    isExactServiceVersion(activeVersion) &&
+    isExactServiceVersion(cliVersion) &&
+    compareExactServiceVersions(activeVersion, cliVersion) > 0
+  );
 }
 
 export class BootService extends Context.Service<
@@ -592,6 +622,25 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       .makeDirectory(input.logsDir, { recursive: true })
       .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
 
+    const installed = yield* fs
+      .exists(unitPath)
+      .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+    if (installed) {
+      const previousStateText = yield* fs.readFileString(statePath).pipe(Effect.option);
+      if (Option.isSome(previousStateText)) {
+        const previousState = parseServiceState(previousStateText.value);
+        if (
+          previousState !== undefined &&
+          isServiceNewerThanCli(previousState.activeVersion, input.cliVersion)
+        ) {
+          return yield* new BootServiceWouldDowngradeError({
+            activeVersion: previousState.activeVersion,
+            cliVersion: input.cliVersion,
+          });
+        }
+      }
+    }
+
     // Prepare every immutable artifact before stopping the installed unit.
     yield* ensurePinnedRuntimeInstalled({
       baseDir: input.baseDir,
@@ -649,9 +698,6 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       .readFileString(launcherSourcePath)
       .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
 
-    const installed = yield* fs
-      .exists(unitPath)
-      .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
     if (installed) {
       yield* runSteps(manager.stop);
     }
@@ -717,6 +763,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         current: false,
         unitPath,
         logPath,
+        activeVersion: null,
         runtimeVersion: null,
       };
     }
@@ -727,6 +774,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         current: false,
         unitPath,
         logPath,
+        activeVersion: null,
         runtimeVersion: null,
       };
     }
@@ -742,18 +790,23 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     // Ask the binary the daemon runs what it is, rather than assuming it
     // matches this CLI. Diagnostic only: a runtime that cannot answer still
     // reports its install state normally.
-    const runtimeVersion = runtimeEntryExists
-      ? yield* runner
-          .run({
-            command: host.execPath,
-            args: [runtimePaths.entryPath, "--version"],
-            timeout: Duration.seconds(30),
-          })
-          .pipe(
-            Effect.map((result) => (result.code === 0 ? result.stdout.trim() : null)),
-            Effect.orElseSucceed(() => null),
-          )
-      : null;
+    const activeRuntimePaths =
+      state?.activeVersion === undefined
+        ? undefined
+        : pinnedRuntimePaths(path, input.baseDir, state.activeVersion);
+    const runtimeVersion =
+      activeRuntimePaths === undefined
+        ? null
+        : yield* runner
+            .run({
+              command: host.execPath,
+              args: [activeRuntimePaths.entryPath, "--version"],
+              timeout: Duration.seconds(30),
+            })
+            .pipe(
+              Effect.map((result) => (result.code === 0 ? result.stdout.trim() : null)),
+              Effect.orElseSucceed(() => null),
+            );
     const normalizeUnit = (contents: string) =>
       detectedManager.kind === "launchd"
         ? contents.replace(/(<key>PATH<\/key>\n\s*<string>)[^<]*(<\/string>)/, "$1$2")
@@ -761,6 +814,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     return {
       supported: true,
       installed: true,
+      activeVersion: state?.activeVersion ?? null,
       runtimeVersion,
       current:
         normalizeUnit(unit) === normalizeUnit(detectedManager.render(plan)) &&

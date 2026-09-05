@@ -14,6 +14,10 @@ to the latest release later:
 npx @goodbirdhq/phoenix@latest service update
 ```
 
+`phoenix --version` is the CLI on your PATH, which may be an older global install. Check the
+service with `phoenix service status`. `phoenix service update` without `@latest` uses that PATH
+CLI's version and will not replace a newer already-installed service.
+
 Inspect the installed service — including whether the running service build matches your CLI:
 
 ```sh

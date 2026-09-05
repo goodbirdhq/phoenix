@@ -15,8 +15,10 @@ the server.
   [self-managed server update runbook](../operations/updating-a-self-managed-server.md).
 
 Phoenix publishes its CLI as `@goodbirdhq/phoenix` on npm; update a global install with
-`npm install -g @goodbirdhq/phoenix@latest`. Never substitute `npx t3`: that installs upstream
-T3 Code, not Phoenix.
+`npm install -g @goodbirdhq/phoenix@latest`. A background-service host should update with
+`npx @goodbirdhq/phoenix@latest service update` — `phoenix service update` uses whatever CLI is
+on PATH, which can be older than the running service. Never substitute `npx t3`: that installs
+upstream T3 Code, not Phoenix.
 
 Updating or restarting interrupts active agent work and terminal commands. Saved threads, settings,
 and project files remain on the server machine.
