@@ -2237,7 +2237,7 @@ export function GeneralSettingsPanel() {
         {settings.enableSessionOrchestration ? (
           <SettingsRow
             {...searchableSetting("sidebar-session-hierarchy")}
-            description="Nest spawned sessions under the session that started them in the sidebar. Child rows are indented and drop the branch line to stay compact."
+            description="Group spawned sessions beneath their parent in the sidebar. Click the overlapping avatars to expand the team, including children of children."
             resetAction={
               settings.sidebarSessionHierarchyEnabled !==
               DEFAULT_UNIFIED_SETTINGS.sidebarSessionHierarchyEnabled ? (
