@@ -127,7 +127,10 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       });
     }
     const instanceChanged =
-      existingRuntime !== undefined && existingRuntime.providerInstanceId !== providerInstanceId;
+      existingRuntime !== undefined &&
+      !providerChanged &&
+      (existingRuntime.providerInstanceId ?? defaultInstanceIdForDriver(binding.provider)) !==
+        providerInstanceId;
     const resumeCursor =
       binding.resumeCursor !== undefined
         ? binding.resumeCursor

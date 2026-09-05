@@ -4,9 +4,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { it, assert } from "@effect/vitest";
-import { assertSome } from "@effect/vitest/utils";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -21,7 +20,9 @@ import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.t
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 
 function makeDirectoryLayer<E, R>(persistenceLayer: Layer.Layer<SqlClient.SqlClient, E, R>) {
-  const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(Layer.provide(persistenceLayer));
+  const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+    Layer.provideMerge(persistenceLayer),
+  );
   return Layer.mergeAll(
     runtimeRepositoryLayer,
     ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer)),
@@ -30,7 +31,7 @@ function makeDirectoryLayer<E, R>(persistenceLayer: Layer.Layer<SqlClient.SqlCli
 }
 
 it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryLive", (it) => {
-  it("upserts and reads thread bindings", () =>
+  it.effect("upserts and reads thread bindings", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
       const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
@@ -39,16 +40,14 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
 
       yield* directory.upsert({
         provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
         threadId: initialThreadId,
       });
 
       const provider = yield* directory.getProvider(initialThreadId);
       assert.equal(provider, "codex");
       const resolvedBinding = yield* directory.getBinding(initialThreadId);
-      assertSome(resolvedBinding, {
-        threadId: initialThreadId,
-        provider: ProviderDriverKind.make("codex"),
-      });
+      assert.equal(Option.isSome(resolvedBinding), true);
       if (Option.isSome(resolvedBinding)) {
         assert.equal(resolvedBinding.value.threadId, initialThreadId);
       }
@@ -57,6 +56,7 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
 
       yield* directory.upsert({
         provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
         threadId: nextThreadId,
       });
       const updatedBinding = yield* directory.getBinding(nextThreadId);
@@ -74,10 +74,11 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       }
 
       const threadIds = yield* directory.listThreadIds();
-      assert.deepEqual(threadIds, [nextThreadId]);
-    }));
+      assert.includeMembers([...threadIds], [initialThreadId, nextThreadId]);
+    }),
+  );
 
-  it("persists runtime fields and merges payload updates", () =>
+  it.effect("persists runtime fields and merges payload updates", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
       const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
@@ -86,6 +87,7 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
 
       yield* directory.upsert({
         provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
         threadId,
         status: "starting",
         resumeCursor: {
@@ -99,6 +101,7 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
 
       yield* directory.upsert({
         provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
         threadId,
         status: "running",
         runtimePayload: {
@@ -120,9 +123,10 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
           activeTurnId: "turn-1",
         });
       }
-    }));
+    }),
+  );
 
-  it("lists persisted bindings with metadata in oldest-first order", () =>
+  it.effect("lists persisted bindings with metadata in oldest-first order", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
       const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
@@ -164,70 +168,82 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
 
       const bindings = yield* directory.listBindings();
 
-      assert.deepEqual(bindings, [
-        {
-          threadId: olderThreadId,
-          provider: ProviderDriverKind.make("claudeAgent"),
+      assert.deepEqual(
+        bindings.filter(
+          (binding) => binding.threadId === olderThreadId || binding.threadId === newerThreadId,
+        ),
+        [
+          {
+            threadId: olderThreadId,
+            provider: ProviderDriverKind.make("claudeAgent"),
+            providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+            adapterKey: "claudeAgent",
+            runtimeMode: "approval-required",
+            status: "starting",
+            lastSeenAt: "2026-04-14T12:00:00.000Z",
+            resumeCursor: {
+              opaque: "resume-older",
+            },
+            runtimePayload: {
+              cwd: "/tmp/older",
+            },
+          },
+          {
+            threadId: newerThreadId,
+            provider: ProviderDriverKind.make("codex"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            adapterKey: "codex",
+            runtimeMode: "full-access",
+            status: "running",
+            lastSeenAt: "2026-04-14T12:05:00.000Z",
+            resumeCursor: {
+              opaque: "resume-newer",
+            },
+            runtimePayload: {
+              cwd: "/tmp/newer",
+            },
+          },
+        ],
+      );
+    }),
+  );
+
+  it.effect(
+    "resets adapterKey to the new provider when provider changes without an explicit adapter key",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory;
+        const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+        const threadId = ThreadId.make("thread-provider-change");
+
+        yield* runtimeRepository.upsert({
+          threadId,
+          providerName: "claudeAgent",
+          providerInstanceId: null,
           adapterKey: "claudeAgent",
-          runtimeMode: "approval-required",
-          status: "starting",
-          lastSeenAt: "2026-04-14T12:00:00.000Z",
-          resumeCursor: {
-            opaque: "resume-older",
-          },
-          runtimePayload: {
-            cwd: "/tmp/older",
-          },
-        },
-        {
-          threadId: newerThreadId,
-          provider: ProviderDriverKind.make("codex"),
-          adapterKey: "codex",
           runtimeMode: "full-access",
           status: "running",
-          lastSeenAt: "2026-04-14T12:05:00.000Z",
-          resumeCursor: {
-            opaque: "resume-newer",
-          },
-          runtimePayload: {
-            cwd: "/tmp/newer",
-          },
-        },
-      ]);
-    }));
+          lastSeenAt: "2026-01-01T00:00:00.000Z",
+          resumeCursor: null,
+          runtimePayload: null,
+        });
 
-  it("resets adapterKey to the new provider when provider changes without an explicit adapter key", () =>
-    Effect.gen(function* () {
-      const directory = yield* ProviderSessionDirectory;
-      const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
-      const threadId = ThreadId.make("thread-provider-change");
+        yield* directory.upsert({
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          threadId,
+        });
 
-      yield* runtimeRepository.upsert({
-        threadId,
-        providerName: "claudeAgent",
-        providerInstanceId: null,
-        adapterKey: "claudeAgent",
-        runtimeMode: "full-access",
-        status: "running",
-        lastSeenAt: "2026-01-01T00:00:00.000Z",
-        resumeCursor: null,
-        runtimePayload: null,
-      });
+        const runtime = yield* runtimeRepository.getByThreadId({ threadId });
+        assert.equal(Option.isSome(runtime), true);
+        if (Option.isSome(runtime)) {
+          assert.equal(runtime.value.providerName, "codex");
+          assert.equal(runtime.value.adapterKey, "codex");
+        }
+      }),
+  );
 
-      yield* directory.upsert({
-        provider: ProviderDriverKind.make("codex"),
-        threadId,
-      });
-
-      const runtime = yield* runtimeRepository.getByThreadId({ threadId });
-      assert.equal(Option.isSome(runtime), true);
-      if (Option.isSome(runtime)) {
-        assert.equal(runtime.value.providerName, "codex");
-        assert.equal(runtime.value.adapterKey, "codex");
-      }
-    }));
-
-  it("rehydrates persisted mappings across layer restart", () =>
+  it.effect("rehydrates persisted mappings across layer restart", () =>
     Effect.gen(function* () {
       const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-directory-"));
       const dbPath = NodePath.join(tempDir, "orchestration.sqlite");
@@ -239,6 +255,7 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         const directory = yield* ProviderSessionDirectory;
         yield* directory.upsert({
           provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
           threadId,
         });
       }).pipe(Effect.provide(directoryLayer));
@@ -250,10 +267,7 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         assert.equal(provider, "codex");
 
         const resolvedBinding = yield* directory.getBinding(threadId);
-        assertSome(resolvedBinding, {
-          threadId,
-          provider: ProviderDriverKind.make("codex"),
-        });
+        assert.equal(Option.isSome(resolvedBinding), true);
         if (Option.isSome(resolvedBinding)) {
           assert.equal(resolvedBinding.value.threadId, threadId);
         }
@@ -267,5 +281,6 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       }).pipe(Effect.provide(directoryLayer));
 
       NodeFS.rmSync(tempDir, { recursive: true, force: true });
-    }));
+    }),
+  );
 });

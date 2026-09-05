@@ -16,7 +16,38 @@ const layer = Layer.mergeAll(
   ProviderSessionDirectoryLive.pipe(Layer.provide(Runtime.layer)),
 ).pipe(Layer.provideMerge(SqlitePersistenceMemory));
 it.layer(layer)("durable usage linkage", (it) => {
-  it("retains native sessions across resets and returns their project metadata", () =>
+  it.effect("preserves legacy resume state only when promoting to the default account", () =>
+    Effect.gen(function* () {
+      const repository = yield* Runtime.ProviderSessionRuntimeRepository;
+      const directory = yield* ProviderSessionDirectory;
+      for (const instanceId of ["codex", "codex-other"]) {
+        const threadId = ThreadId.make(`legacy-${instanceId}`);
+        yield* repository.upsert({
+          threadId,
+          providerName: "codex",
+          providerInstanceId: null,
+          adapterKey: "codex",
+          runtimeMode: "full-access",
+          status: "running",
+          lastSeenAt: IsoDateTime.make("2026-09-01T00:00:00Z"),
+          resumeCursor: { threadId: "native-legacy" },
+          runtimePayload: null,
+        });
+        yield* directory.upsert({
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make(instanceId),
+          status: "stopped",
+        });
+        const row = Option.getOrThrow(yield* repository.getByThreadId({ threadId }));
+        assert.deepStrictEqual(
+          row.resumeCursor,
+          instanceId === "codex" ? { threadId: "native-legacy" } : null,
+        );
+      }
+    }),
+  );
+  it.effect("retains native sessions across resets and returns their project metadata", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const repository = yield* Runtime.ProviderSessionRuntimeRepository;
@@ -66,8 +97,9 @@ it.layer(layer)("durable usage linkage", (it) => {
       assert.strictEqual(links[0]?.thread.projectTitle, "Phoenix");
       assert.strictEqual(links[0]?.thread.projectFaviconPath, "/icon.png");
       assert.strictEqual(links[0]?.thread.createdAt, "2026-08-01T00:00:00Z");
-    }));
-  it("does not carry a native cursor into a different configured account", () =>
+    }),
+  );
+  it.effect("does not carry a native cursor into a different configured account", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
       const repository = yield* Runtime.ProviderSessionRuntimeRepository;
@@ -93,8 +125,9 @@ it.layer(layer)("durable usage linkage", (it) => {
         links.map((link) => link.provider_instance_id),
         ["codex-a"],
       );
-    }));
-  it("reports zero-usage threads from their actual creation time", () =>
+    }),
+  );
+  it.effect("reports zero-usage threads from their actual creation time", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const query = yield* Query.UsageAttributionQuery;
@@ -108,8 +141,9 @@ it.layer(layer)("durable usage linkage", (it) => {
         yield* query.creations("2026-09-05T00:00:00Z", "2026-09-06T00:00:00Z"),
         [],
       );
-    }));
-  it("counts a recreated draft once using its newest creation account", () =>
+    }),
+  );
+  it.effect("counts a recreated draft once using its newest creation account", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const query = yield* Query.UsageAttributionQuery;
@@ -128,5 +162,6 @@ it.layer(layer)("durable usage linkage", (it) => {
           },
         ],
       );
-    }));
+    }),
+  );
 });
