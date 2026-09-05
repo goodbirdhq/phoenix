@@ -203,6 +203,30 @@
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"
     },
+    "./usage/account-history": {
+      "types": "./src/usage/accountHistory.ts",
+      "default": "./src/usage/accountHistory.ts"
+    },
+    "./usage/report-chart-series": {
+      "types": "./src/usage/reportChartSeries.ts",
+      "default": "./src/usage/reportChartSeries.ts"
+    },
+    "./usage/chart-series": {
+      "types": "./src/usage/chartSeries.ts",
+      "default": "./src/usage/chartSeries.ts"
+    },
+    "./usage/quotas": {
+      "types": "./src/usage/quotas.ts",
+      "default": "./src/usage/quotas.ts"
+    },
+    "./usage/reports": {
+      "types": "./src/usage/reports.ts",
+      "default": "./src/usage/reports.ts"
+    },
+    "./usage/accounts": {
+      "types": "./src/usage/accounts.ts",
+      "default": "./src/usage/accounts.ts"
+    },
     "./usage/subscription-availability": {
       "types": "./src/usage/subscriptionAvailability.ts",
       "default": "./src/usage/subscriptionAvailability.ts"

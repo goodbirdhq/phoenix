@@ -29,6 +29,7 @@ import * as Exit from "effect/Exit";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { expandHomePath } from "../pathExpansion.ts";
 import { resolveClaudeHomePath } from "./Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
 import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.ts";
@@ -90,7 +91,7 @@ const decodeClaudeSettings = Schema.decodeUnknownExit(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownExit(CodexSettings);
 
 export interface ProviderInstanceHome {
-  readonly instanceId: string;
+  readonly instanceIds: readonly string[];
   /** Resolved and absolute; `~` expanded against this server's home. */
   readonly homePath: string;
   /**
@@ -113,8 +114,7 @@ export interface ProviderInstanceHome {
 export const claudeInstanceHomes = Effect.fn("providerHomes.claudeInstanceHomes")(function* (
   settings: ServerSettings,
 ): Effect.fn.Return<ReadonlyArray<ProviderInstanceHome>, never, Path.Path> {
-  const homes: ProviderInstanceHome[] = [];
-  const seen = new Set<string>();
+  const homes: (Omit<ProviderInstanceHome, "instanceIds"> & { instanceIds: string[] })[] = [];
   for (const entry of providerInstanceConfigsForDriver(settings, CLAUDE_DRIVER)) {
     const decoded = decodeClaudeSettings(entry.config ?? {});
     if (!Exit.isSuccess(decoded)) {
@@ -124,10 +124,13 @@ export const claudeInstanceHomes = Effect.fn("providerHomes.claudeInstanceHomes"
       continue;
     }
     const homePath = yield* resolveClaudeHomePath(decoded.value);
-    if (seen.has(homePath)) continue;
-    seen.add(homePath);
+    const existing = homes.find((home) => home.homePath === homePath);
+    if (existing) {
+      existing.instanceIds.push(entry.instanceId);
+      continue;
+    }
     homes.push({
-      instanceId: entry.instanceId,
+      instanceIds: [entry.instanceId],
       homePath,
       overridden: decoded.value.homePath.trim().length > 0,
     });
@@ -143,8 +146,7 @@ export const claudeInstanceHomes = Effect.fn("providerHomes.claudeInstanceHomes"
 export const codexInstanceHomes = Effect.fn("providerHomes.codexInstanceHomes")(function* (
   settings: ServerSettings,
 ): Effect.fn.Return<ReadonlyArray<ProviderInstanceHome>, never, Path.Path> {
-  const homes: ProviderInstanceHome[] = [];
-  const seen = new Set<string>();
+  const homes: (Omit<ProviderInstanceHome, "instanceIds"> & { instanceIds: string[] })[] = [];
   for (const entry of providerInstanceConfigsForDriver(settings, CODEX_DRIVER)) {
     const decoded = decodeCodexSettings(entry.config ?? {});
     if (!Exit.isSuccess(decoded)) {
@@ -154,10 +156,13 @@ export const codexInstanceHomes = Effect.fn("providerHomes.codexInstanceHomes")(
       continue;
     }
     const layout = yield* resolveCodexHomeLayout(decoded.value);
-    if (seen.has(layout.sharedHomePath)) continue;
-    seen.add(layout.sharedHomePath);
+    const existing = homes.find((home) => home.homePath === layout.sharedHomePath);
+    if (existing) {
+      existing.instanceIds.push(entry.instanceId);
+      continue;
+    }
     homes.push({
-      instanceId: entry.instanceId,
+      instanceIds: [entry.instanceId],
       homePath: layout.sharedHomePath,
       overridden: decoded.value.homePath.trim().length > 0,
     });
@@ -166,7 +171,7 @@ export const codexInstanceHomes = Effect.fn("providerHomes.codexInstanceHomes")(
 });
 
 export interface OpenCodeInstanceDatabase {
-  readonly instanceId: string;
+  readonly instanceIds: readonly string[];
   readonly databasePath: string;
 }
 
@@ -185,8 +190,7 @@ export const opencodeInstanceDatabases = Effect.fn("providerHomes.opencodeInstan
   ): Effect.fn.Return<ReadonlyArray<OpenCodeInstanceDatabase>, never, Path.Path> {
     const path = yield* Path.Path;
     const platform = yield* HostProcessPlatform;
-    const databases: OpenCodeInstanceDatabase[] = [];
-    const seen = new Set<string>();
+    const databases: { instanceIds: string[]; databasePath: string }[] = [];
 
     for (const entry of providerInstanceConfigsForDriver(settings, OPENCODE_DRIVER)) {
       const environment = mergeProviderInstanceEnvironment(entry.environment, baseEnvironment);
@@ -204,14 +208,44 @@ export const opencodeInstanceDatabases = Effect.fn("providerHomes.opencodeInstan
           ? configuredDatabase
           : path.join(openCodeDataDir, configuredDatabase || "opencode.db");
 
-      if (seen.has(databasePath)) continue;
-      seen.add(databasePath);
-      databases.push({ instanceId: entry.instanceId, databasePath });
+      const existing = databases.find((database) => database.databasePath === databasePath);
+      if (existing) {
+        existing.instanceIds.push(entry.instanceId);
+        continue;
+      }
+      databases.push({ instanceIds: [entry.instanceId], databasePath });
     }
 
     return databases;
   },
 );
+
+/** Grok history roots follow each configured instance's process environment. */
+export const grokInstanceHomes = Effect.fn("providerHomes.grokInstanceHomes")(function* (
+  settings: ServerSettings,
+  baseEnvironment: NodeJS.ProcessEnv = process.env,
+): Effect.fn.Return<ReadonlyArray<ProviderInstanceHome>, never, Path.Path> {
+  const path = yield* Path.Path;
+  const platform = yield* HostProcessPlatform;
+  const homes: (Omit<ProviderInstanceHome, "instanceIds"> & { instanceIds: string[] })[] = [];
+  for (const entry of providerInstanceConfigsForDriver(settings, ProviderDriverKind.make("grok"))) {
+    const environment = mergeProviderInstanceEnvironment(entry.environment, baseEnvironment);
+    const configuredHome = environment.GROK_HOME?.trim();
+    const userHome =
+      (platform === "win32" ? environment.USERPROFILE : environment.HOME)?.trim() ||
+      NodeOS.homedir();
+    const homePath = path.resolve(
+      configuredHome ? expandHomePath(configuredHome) : path.join(userHome, ".grok"),
+    );
+    const existing = homes.find((home) => home.homePath === homePath);
+    if (existing) {
+      existing.instanceIds.push(entry.instanceId);
+      continue;
+    }
+    homes.push({ instanceIds: [entry.instanceId], homePath, overridden: Boolean(configuredHome) });
+  }
+  return homes;
+});
 
 /**
  * The directories a Claude home may keep session transcripts and workflow

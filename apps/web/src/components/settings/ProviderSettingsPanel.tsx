@@ -35,7 +35,16 @@ import {
   RefreshCwIcon,
   TerminalIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import { isElectron } from "../../env";
@@ -206,10 +215,18 @@ function EnvironmentUnavailableRow({
   );
 }
 
-export function ProviderSettingsPanel() {
+interface ProviderSettingsInitialSelection {
+  readonly initialEnvironmentId?: EnvironmentId;
+  readonly initialInstanceId?: ProviderInstanceId;
+}
+const InitialSelection = createContext<ProviderSettingsInitialSelection>({});
+
+export function ProviderSettingsPanel(selection: ProviderSettingsInitialSelection = {}) {
   return (
     <SettingsPageContainer className="gap-8">
-      <ProviderSettingsPanelContent />
+      <InitialSelection value={selection}>
+        <ProviderSettingsPanelContent />
+      </InitialSelection>
     </SettingsPageContainer>
   );
 }
@@ -226,7 +243,7 @@ function ProviderSettingsPanelContent() {
   // device that drops out of the catalog falls back without erasing the pick —
   // if it reappears (e.g. after a reconnect) the selection is restored.
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(
-    primaryEnvironmentId,
+    useContext(InitialSelection).initialEnvironmentId ?? primaryEnvironmentId,
   );
   const effectiveEnvironmentId = resolveSelectedProviderEnvironmentId(
     options,
@@ -492,7 +509,9 @@ export function EnvironmentProviderSettings({
   });
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
-  const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(null);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(
+    useContext(InitialSelection).initialInstanceId ?? null,
+  );
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const searchTargetId = useSettingsSearchTargetId();
   const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<

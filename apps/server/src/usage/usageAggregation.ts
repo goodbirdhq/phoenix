@@ -12,7 +12,15 @@
  *
  * @module usageAggregation
  */
-import type { UsageBucket, UsageDay, UsageResolution, UsageTokenTotals } from "@t3tools/contracts";
+import type {
+  UsageBucket,
+  UsageDay,
+  UsageResolution,
+  UsageSession,
+  UsageSessionModel,
+  UsageSessionPeriod,
+  UsageTokenTotals,
+} from "@t3tools/contracts";
 
 import { addTotals, EMPTY_TOTALS, type UsageRecord } from "./usageTranscripts.ts";
 import { cacheSavingsUsd, priceUsage, type RateTable } from "./usagePricing.ts";
@@ -71,6 +79,7 @@ export interface AggregateOptions {
   readonly sinceDay: string;
   readonly untilDay: string;
   readonly rates: RateTable;
+  readonly includeSessions?: boolean;
   readonly resolution?: UsageResolution;
   readonly sinceTimeMs?: number;
   readonly untilTimeMs?: number;
@@ -78,6 +87,7 @@ export interface AggregateOptions {
 
 export interface AggregateResult {
   readonly buckets: readonly UsageBucket[];
+  readonly sessionUsage?: readonly UsageSession[];
   /** Records dropped because an earlier record carried the same dedupe key. */
   readonly duplicatesDropped: number;
   /** Records whose day fell outside the requested window. */
@@ -92,6 +102,18 @@ export interface AggregateResult {
  * the same `dedupeKey` legitimately appears in several transcripts.
  */
 export class UsageAggregator {
+  readonly #sessions = new Map<
+    string,
+    {
+      provider: UsageRecord["provider"];
+      sourceId: string;
+      sessionId: string;
+      firstActivityMs: number;
+      lastActivityMs: number;
+      models: Map<string, UsageSessionModel>;
+      periods: Map<string, UsageSessionPeriod>;
+    }
+  >();
   readonly #buckets = new Map<string, MutableBucket>();
   readonly #seen = new Set<string>();
   readonly #toDay: (timestampMs: number) => string;
@@ -181,6 +203,50 @@ export class UsageAggregator {
       record.reportedCostUsd,
     );
 
+    if (this.#options.includeSessions && sourceId && record.sessionId) {
+      const sessionKey = JSON.stringify([sourceId, record.provider, record.sessionId]);
+      let session = this.#sessions.get(sessionKey);
+      if (!session) {
+        session = {
+          provider: record.provider,
+          sourceId,
+          sessionId: record.sessionId,
+          firstActivityMs: record.timestampMs,
+          lastActivityMs: record.timestampMs,
+          models: new Map(),
+          periods: new Map(),
+        };
+        this.#sessions.set(sessionKey, session);
+      }
+      session.firstActivityMs = Math.min(session.firstActivityMs, record.timestampMs);
+      session.lastActivityMs = Math.max(session.lastActivityMs, record.timestampMs);
+      const period = hourStart || day;
+      const previousPeriod = session.periods.get(period);
+      const totals = record.totals;
+      session.periods.set(period, {
+        period,
+        costUsd: (previousPeriod?.costUsd ?? 0) + priced.costUsd,
+        totalTokens:
+          (previousPeriod?.totalTokens ?? 0) +
+          totals.uncachedInputTokens +
+          totals.cachedInputTokens +
+          totals.cacheCreationTokens +
+          totals.outputTokens,
+      });
+      const previous = session.models.get(record.model);
+      session.models.set(record.model, {
+        model: record.model,
+        totals: addTotals(previous?.totals ?? EMPTY_TOTALS, record.totals),
+        costUsd: (previous?.costUsd ?? 0) + priced.costUsd,
+        cacheSavingsUsd:
+          (previous?.cacheSavingsUsd ?? 0) +
+          cacheSavingsUsd(this.#options.rates, record.model, record.totals),
+        records: (previous?.records ?? 0) + 1,
+        unpricedRecords:
+          (previous?.unpricedRecords ?? 0) + (priced.costSource === "unpriced" ? 1 : 0),
+      });
+    }
+
     bucket.totals = addTotals(bucket.totals, record.totals);
     bucket.costUsd += priced.costUsd;
     bucket.cacheSavingsUsd += cacheSavingsUsd(this.#options.rates, record.model, record.totals);
@@ -222,6 +288,28 @@ export class UsageAggregator {
 
     return {
       buckets,
+      ...(this.#options.includeSessions
+        ? {
+            sessionUsage: [...this.#sessions.values()]
+              .map((session) => ({
+                provider: session.provider,
+                sourceId: session.sourceId,
+                sessionId: session.sessionId,
+                firstActivityAt: new Date(session.firstActivityMs).toISOString(),
+                lastActivityAt: new Date(session.lastActivityMs).toISOString(),
+                periods: [...session.periods.values()].sort((a, b) =>
+                  a.period.localeCompare(b.period),
+                ),
+                models: [...session.models.values()].sort((a, b) => a.model.localeCompare(b.model)),
+              }))
+              .sort(
+                (a, b) =>
+                  a.sourceId.localeCompare(b.sourceId) ||
+                  a.provider.localeCompare(b.provider) ||
+                  a.sessionId.localeCompare(b.sessionId),
+              ),
+          }
+        : {}),
       duplicatesDropped: this.#duplicatesDropped,
       outOfWindow: this.#outOfWindow,
     };

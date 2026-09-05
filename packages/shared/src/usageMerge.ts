@@ -13,6 +13,8 @@ import {
   type UsageProviderKind,
   type UsageSourceFingerprint,
   type UsageSummary,
+  type UsageSession,
+  type UsageThreadCreation,
 } from "@t3tools/contracts";
 
 export interface EnvironmentUsage {
@@ -62,7 +64,38 @@ export interface CostQuality {
   readonly cacheSavingsUsd: number;
 }
 
+/** Each environment's contribution after shared history stores are deduplicated. */
+export interface EnvironmentTotals {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly costUsd: number;
+  readonly totalTokens: number;
+  readonly cachedInputTokens: number;
+  readonly cacheCreationTokens: number;
+  readonly outputTokens: number;
+  readonly sessions: number;
+  readonly records: number;
+}
+
+export interface EnvironmentSessionUsage extends UsageSession {
+  readonly environmentId: EnvironmentId;
+  readonly environmentLabel: string;
+}
+
+export interface EnvironmentUsageBucket {
+  readonly environmentId: EnvironmentId;
+  readonly environmentLabel: string;
+  readonly configuredInstanceIds: readonly string[];
+  readonly bucket: UsageBucket;
+}
+
+export interface EnvironmentThreadCreation extends UsageThreadCreation {
+  readonly environmentId: EnvironmentId;
+}
 export interface MergedUsage {
+  readonly threadCreations: readonly EnvironmentThreadCreation[];
+  readonly threadCreationReporting: number;
+  readonly buckets: readonly EnvironmentUsageBucket[];
   readonly costUsd: number;
   readonly uncachedInputTokens: number;
   readonly cachedInputTokens: number;
@@ -73,6 +106,10 @@ export interface MergedUsage {
   readonly records: number;
   readonly sessions: number;
   readonly providers: readonly ProviderTotals[];
+  readonly environmentTotals: readonly EnvironmentTotals[];
+  readonly sessionUsage: readonly EnvironmentSessionUsage[];
+  /** Compatible environments that did not report optional session detail. */
+  readonly sessionDetailUnavailable: readonly EnvironmentId[];
   readonly models: readonly ModelTotals[];
   readonly daily: readonly DailyTotals[];
   readonly hourly: readonly HourlyTotals[];
@@ -150,6 +187,7 @@ function ownedContribution(
 ): {
   readonly buckets: readonly UsageBucket[];
   readonly sessionsByProvider: ReadonlyMap<UsageProviderKind, number>;
+  readonly sessionUsage: readonly UsageSession[];
 } {
   const ownedProviders = new Set<UsageProviderKind>();
   const ownedSourceIds = new Set<string>();
@@ -176,7 +214,79 @@ function ownedContribution(
         : ownedSourceIds.has(bucket.sourceId),
     ),
     sessionsByProvider,
+    sessionUsage: (environment.summary.sessionUsage ?? []).filter((session) =>
+      ownedSourceIds.has(session.sourceId),
+    ),
   };
+}
+
+/** Numeric ownership deduplicates history, but each server contributes its own
+ * thread links. Reconcile those annotations before assigning a project. */
+function reconcileSessionLinks(
+  owned: readonly EnvironmentSessionUsage[],
+  environments: readonly EnvironmentUsage[],
+): readonly EnvironmentSessionUsage[] {
+  const sourceKeys = new Map<string, string>();
+  const evidence = new Map<
+    string,
+    {
+      ambiguous: boolean;
+      links: Map<string, EnvironmentSessionUsage>;
+    }
+  >();
+  for (const environment of [...environments].sort((a, b) =>
+    a.environmentId.localeCompare(b.environmentId),
+  )) {
+    for (const source of environment.summary.sources) {
+      if (source.id !== undefined)
+        sourceKeys.set(
+          JSON.stringify([environment.environmentId, source.id]),
+          fingerprintKey(source.fingerprint),
+        );
+    }
+    const state = environment.summary.threadCreationSource;
+    const stateKey = state
+      ? JSON.stringify([state.hostId, state.statePath, state.volumeId])
+      : environment.environmentId;
+    for (const session of environment.summary.sessionUsage ?? []) {
+      const source = sourceKeys.get(JSON.stringify([environment.environmentId, session.sourceId]));
+      if (source === undefined) continue;
+      const key = JSON.stringify([source, session.provider, session.sessionId]);
+      let entry = evidence.get(key);
+      if (!entry) {
+        entry = { ambiguous: false, links: new Map() };
+        evidence.set(key, entry);
+      }
+      if (session.attribution === "ambiguous") entry.ambiguous = true;
+      if (session.attribution === "linked" && session.thread) {
+        const target = JSON.stringify([stateKey, session.thread.id]);
+        if (!entry.links.has(target))
+          entry.links.set(target, {
+            ...session,
+            environmentId: environment.environmentId,
+            environmentLabel: environment.label,
+          });
+      }
+    }
+  }
+  return owned.map((session) => {
+    const source = sourceKeys.get(JSON.stringify([session.environmentId, session.sourceId]));
+    const entry = evidence.get(JSON.stringify([source, session.provider, session.sessionId]));
+    if (!entry) return session;
+    const { thread: _thread, ...history } = session;
+    if (entry.ambiguous || entry.links.size > 1) return { ...history, attribution: "ambiguous" };
+    const linked = entry.links.values().next().value;
+    return linked
+      ? {
+          ...history,
+          attribution: "linked",
+          thread: linked.thread,
+          sourceId: linked.sourceId,
+          environmentId: linked.environmentId,
+          environmentLabel: linked.environmentLabel,
+        }
+      : session;
+  });
 }
 
 function bucketTokens(bucket: UsageBucket): number {
@@ -194,6 +304,9 @@ function isCompatibleContractVersion(version: number, expected: number): boolean
 }
 
 const EMPTY_MERGED: MergedUsage = {
+  threadCreations: [],
+  threadCreationReporting: 0,
+  buckets: [],
   costUsd: 0,
   uncachedInputTokens: 0,
   cachedInputTokens: 0,
@@ -204,6 +317,9 @@ const EMPTY_MERGED: MergedUsage = {
   records: 0,
   sessions: 0,
   providers: [],
+  environmentTotals: [],
+  sessionUsage: [],
+  sessionDetailUnavailable: [],
   models: [],
   daily: [],
   hourly: [],
@@ -244,6 +360,24 @@ export function mergeUsage(
   }
 
   const { ownerByFingerprint, duplicates } = claimSources(current);
+  const seenCreationSources = new Set<string>();
+  const threadCreations: EnvironmentThreadCreation[] = [];
+  for (const environment of [...current].sort((a, b) =>
+    a.environmentId.localeCompare(b.environmentId),
+  )) {
+    const source = environment.summary.threadCreationSource;
+    const key = source
+      ? JSON.stringify([source.hostId, source.statePath, source.volumeId])
+      : environment.environmentId;
+    if (seenCreationSources.has(key)) continue;
+    seenCreationSources.add(key);
+    threadCreations.push(
+      ...(environment.summary.threadCreations ?? []).map((creation) => ({
+        ...creation,
+        environmentId: environment.environmentId,
+      })),
+    );
+  }
 
   let costUsd = 0;
   let uncachedInputTokens = 0;
@@ -284,13 +418,50 @@ export function mergeUsage(
     }
   >();
   const contributingEnvironments: EnvironmentId[] = [];
+  const environmentTotals: EnvironmentTotals[] = [];
+  const ownedBuckets: EnvironmentUsageBucket[] = [];
+  const sessionUsage: EnvironmentSessionUsage[] = [];
+  const sessionDetailUnavailable: EnvironmentId[] = [];
 
   for (const environment of current) {
-    const { buckets, sessionsByProvider } = ownedContribution(environment, ownerByFingerprint);
+    const contribution = ownedContribution(environment, ownerByFingerprint);
+    const { buckets, sessionsByProvider } = contribution;
+    const sourcesById = new Map(environment.summary.sources.map((source) => [source.id, source]));
+    for (const bucket of buckets)
+      ownedBuckets.push({
+        environmentId: environment.environmentId,
+        environmentLabel: environment.label,
+        configuredInstanceIds:
+          bucket.sourceId === undefined
+            ? []
+            : (sourcesById.get(bucket.sourceId)?.configuredInstanceIds ?? []),
+        bucket,
+      });
+    if (environment.summary.sessionUsage === undefined)
+      sessionDetailUnavailable.push(environment.environmentId);
+    for (const session of contribution.sessionUsage)
+      sessionUsage.push({
+        ...session,
+        environmentId: environment.environmentId,
+        environmentLabel: environment.label,
+      });
     if (buckets.length > 0) contributingEnvironments.push(environment.environmentId);
+    const environmentTotal = {
+      environmentId: environment.environmentId,
+      label: environment.label,
+      costUsd: 0,
+      totalTokens: 0,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 0,
+      sessions: 0,
+      records: 0,
+    };
+    environmentTotals.push(environmentTotal);
 
     for (const [providerKind, providerSessions] of sessionsByProvider) {
       sessions += providerSessions;
+      environmentTotal.sessions += providerSessions;
       if (providerSessions === 0) continue;
       const provider = providerAccumulator.get(providerKind) ?? {
         costUsd: 0,
@@ -304,6 +475,12 @@ export function mergeUsage(
 
     for (const bucket of buckets) {
       const tokens = bucketTokens(bucket);
+      environmentTotal.costUsd += bucket.costUsd;
+      environmentTotal.totalTokens += tokens;
+      environmentTotal.cachedInputTokens += bucket.totals.cachedInputTokens;
+      environmentTotal.cacheCreationTokens += bucket.totals.cacheCreationTokens;
+      environmentTotal.outputTokens += bucket.totals.outputTokens;
+      environmentTotal.records += bucket.records;
 
       costUsd += bucket.costUsd;
       cacheSavingsUsd += bucket.cacheSavingsUsd;
@@ -413,6 +590,11 @@ export function mergeUsage(
   );
 
   return {
+    buckets: ownedBuckets,
+    threadCreations,
+    threadCreationReporting: current.filter(
+      (environment) => environment.summary.threadCreations !== undefined,
+    ).length,
     costUsd,
     uncachedInputTokens,
     cachedInputTokens,
@@ -423,6 +605,9 @@ export function mergeUsage(
     records,
     sessions,
     providers,
+    environmentTotals,
+    sessionUsage: reconcileSessionLinks(sessionUsage, current),
+    sessionDetailUnavailable,
     models,
     daily,
     hourly,

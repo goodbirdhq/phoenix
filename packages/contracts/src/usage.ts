@@ -158,6 +158,10 @@ export const UsageSource = Schema.Struct({
    * cross-environment identity. Optional for the same reason as `sourceId`.
    */
   id: Schema.optional(TrimmedNonEmptyString),
+  /** Current environment-local instances sharing this history store. This is
+   * store membership, not proof of who produced historical records. Absent on
+   * older servers; an empty array means no configured instance is associated. */
+  configuredInstanceIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   status: UsageSourceStatus,
   scannedFiles: NonNegativeInt,
   skippedFiles: NonNegativeInt,
@@ -188,7 +192,60 @@ export const UsagePricing = Schema.Struct({
 });
 export type UsagePricing = typeof UsagePricing.Type;
 
+/** Usage within the requested window, grouped by native provider session.
+ * Activity bounds are not session creation times or lifetime totals. */
+export const UsageSessionModel = Schema.Struct({
+  model: TrimmedNonEmptyString,
+  totals: UsageTokenTotals,
+  costUsd: Schema.Number,
+  cacheSavingsUsd: Schema.Number,
+  records: NonNegativeInt,
+  unpricedRecords: NonNegativeInt,
+});
+export type UsageSessionModel = typeof UsageSessionModel.Type;
+
+export const UsageThread = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  title: Schema.String,
+  createdAt: TrimmedNonEmptyString,
+  projectId: TrimmedNonEmptyString,
+  projectTitle: Schema.String,
+  projectWorkspaceRoot: Schema.String,
+  projectFaviconPath: Schema.NullOr(Schema.String),
+});
+export type UsageThread = typeof UsageThread.Type;
+
+export const UsageSessionPeriod = Schema.Struct({
+  period: TrimmedNonEmptyString,
+  costUsd: Schema.Number,
+  totalTokens: NonNegativeInt,
+});
+export type UsageSessionPeriod = typeof UsageSessionPeriod.Type;
+
+export const UsageThreadCreation = Schema.Struct({
+  threadId: TrimmedNonEmptyString,
+  createdAt: TrimmedNonEmptyString,
+  instanceId: Schema.NullOr(Schema.String),
+});
+export type UsageThreadCreation = typeof UsageThreadCreation.Type;
+
+export const UsageSession = Schema.Struct({
+  periods: Schema.optional(Schema.Array(UsageSessionPeriod)),
+  /** Absent on servers without Phoenix attribution support. */
+  attribution: Schema.optional(Schema.Literals(["linked", "unlinked", "ambiguous"])),
+  thread: Schema.optional(UsageThread),
+  provider: UsageProviderKind,
+  sourceId: TrimmedNonEmptyString,
+  sessionId: TrimmedNonEmptyString,
+  firstActivityAt: TrimmedNonEmptyString,
+  lastActivityAt: TrimmedNonEmptyString,
+  models: Schema.Array(UsageSessionModel),
+});
+export type UsageSession = typeof UsageSession.Type;
+
 export const UsageSummaryInput = Schema.Struct({
+  /** Opt in to session detail; overview clients avoid the extra payload. */
+  includeSessions: Schema.optional(Schema.Boolean),
   /** Inclusive first day of the window, in `timeZone`. */
   sinceDay: UsageDay,
   /** Inclusive last day of the window, in `timeZone`. */
@@ -219,6 +276,12 @@ export const UsageSummary = Schema.Struct({
   sinceDay: UsageDay,
   untilDay: UsageDay,
   buckets: Schema.Array(UsageBucket),
+  /** Absent when not requested or unsupported by an older server. */
+  sessionUsage: Schema.optional(Schema.Array(UsageSession)),
+  threadCreations: Schema.optional(Schema.Array(UsageThreadCreation)),
+  threadCreationSource: Schema.optional(
+    Schema.Struct({ hostId: Schema.String, statePath: Schema.String, volumeId: Schema.String }),
+  ),
   sources: Schema.Array(UsageSource),
   pricing: UsagePricing,
   /** Wall-clock cost of the scan, surfaced in diagnostics. */
@@ -263,6 +326,15 @@ export const narrowUsageSummary = (
     contractVersion: narrowedContractVersion,
     buckets,
     sources,
+    ...(summary.sessionUsage === undefined
+      ? {}
+      : {
+          sessionUsage: summary.sessionUsage.filter(
+            (session) =>
+              session.provider !== "grok" &&
+              (requestedVersion >= 5 || session.provider !== "opencode"),
+          ),
+        }),
   };
 };
 

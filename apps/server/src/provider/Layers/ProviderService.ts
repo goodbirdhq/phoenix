@@ -591,6 +591,11 @@ export const availabilityFromRuntimeEvent = (
       return undefined;
     const snapshot = payload.rateLimits;
     if (typeof snapshot !== "object" || snapshot === null) return undefined;
+    const snapshotFields = snapshot as Record<string, unknown>;
+    const limitId = typeof snapshotFields.limitId === "string" ? snapshotFields.limitId : undefined;
+    const scope = limitId && limitId !== "codex" ? limitId : undefined;
+    const limitName =
+      typeof snapshotFields.limitName === "string" ? snapshotFields.limitName : scope;
     const windows = (["primary", "secondary"] as const).flatMap((kind) => {
       const candidate = (snapshot as Record<string, unknown>)[kind];
       if (typeof candidate !== "object" || candidate === null) return [];
@@ -602,6 +607,13 @@ export const availabilityFromRuntimeEvent = (
       return [
         {
           kind,
+          ...(scope
+            ? {
+                scope,
+                label:
+                  kind === "primary" ? (limitName ?? scope) : `${limitName ?? scope} · secondary`,
+              }
+            : {}),
           usedPercent,
           ...(resetsAt ? { resetsAt } : {}),
           ...(typeof windowDurationMins === "number" &&

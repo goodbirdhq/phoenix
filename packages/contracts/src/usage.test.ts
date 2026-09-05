@@ -24,7 +24,8 @@ const decodeRequestAsV4Server = Schema.decodeUnknownSync(
   }),
 );
 
-const summary = Schema.decodeUnknownSync(UsageSummary)({
+const decodeUsageSummary = Schema.decodeUnknownSync(UsageSummary);
+const summary = decodeUsageSummary({
   contractVersion: 5,
   readAt: "2026-08-22T00:00:00.000Z",
   timeZone: "UTC",
@@ -134,5 +135,25 @@ describe("narrowUsageSummary", () => {
         contractVersion: 5,
       }),
     ).not.toThrow();
+  });
+});
+
+describe("usage source membership", () => {
+  it("decodes older summaries without inferring configured accounts", () => {
+    const decoded = decodeUsageSummary(summary);
+    expect(decoded.sources.every((source) => source.configuredInstanceIds === undefined)).toBe(
+      true,
+    );
+  });
+  it("preserves multiple configured instances on one history source", () => {
+    const decoded = decodeUsageSummary({
+      ...summary,
+      sources: summary.sources.map((source) => ({
+        ...source,
+        configuredInstanceIds: ["instance-a", "instance-b"],
+      })),
+    });
+    expect(decoded.sources[0]?.configuredInstanceIds).toEqual(["instance-a", "instance-b"]);
+    expect(() => decodeV4UsageSummary(narrowUsageSummary(decoded, 4))).not.toThrow();
   });
 });

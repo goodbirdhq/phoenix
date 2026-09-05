@@ -52,6 +52,13 @@ export const ProviderSessionRuntime = Schema.Struct({
 });
 export type ProviderSessionRuntime = typeof ProviderSessionRuntime.Type;
 
+/** Link evidence is a write input, not a column of the current runtime row. */
+export const UpsertProviderSessionRuntimeInput = Schema.Struct({
+  ...ProviderSessionRuntime.fields,
+  usageSessionId: Schema.optional(Schema.NullOr(Schema.String)),
+});
+export type UpsertProviderSessionRuntimeInput = typeof UpsertProviderSessionRuntimeInput.Type;
+
 export const GetProviderSessionRuntimeInput = Schema.Struct({ threadId: ThreadId });
 export type GetProviderSessionRuntimeInput = typeof GetProviderSessionRuntimeInput.Type;
 
@@ -70,7 +77,7 @@ export class ProviderSessionRuntimeRepository extends Context.Service<
      * Upserts by canonical `threadId`, including JSON payload/cursor fields.
      */
     readonly upsert: (
-      runtime: ProviderSessionRuntime,
+      runtime: UpsertProviderSessionRuntimeInput,
     ) => Effect.Effect<void, ProviderSessionRuntimeRepositoryError>;
 
     /**
@@ -236,15 +243,28 @@ export const make = Effect.gen(function* () {
   });
 
   const upsert: ProviderSessionRuntimeRepository["Service"]["upsert"] = (runtime) =>
-    upsertRuntimeRow(runtime).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          "ProviderSessionRuntimeRepository.upsert:query",
-          "ProviderSessionRuntimeRepository.upsert:encodeRequest",
-          { threadId: runtime.threadId },
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* upsertRuntimeRow(runtime);
+          if (runtime.usageSessionId && runtime.providerInstanceId) {
+            yield* sql`
+          INSERT INTO usage_session_links (provider_name, provider_instance_id, session_id, thread_id, observed_at)
+          VALUES (${runtime.providerName}, ${runtime.providerInstanceId}, ${runtime.usageSessionId}, ${runtime.threadId}, ${runtime.lastSeenAt})
+          ON CONFLICT (provider_name, provider_instance_id, session_id, thread_id) DO NOTHING
+        `;
+          }
+        }),
+      )
+      .pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProviderSessionRuntimeRepository.upsert:query",
+            "ProviderSessionRuntimeRepository.upsert:encodeRequest",
+            { threadId: runtime.threadId },
+          ),
         ),
-      ),
-    );
+      );
 
   const getByThreadId: ProviderSessionRuntimeRepository["Service"]["getByThreadId"] = (input) =>
     getRuntimeRowByThreadId(input).pipe(

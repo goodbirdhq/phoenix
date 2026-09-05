@@ -77,6 +77,43 @@ function environment(id: string, usageSummary: UsageSummary): EnvironmentUsage {
 }
 
 describe("mergeUsage", () => {
+  it("keeps environment breakdowns additive when two environments share a history store", () => {
+    const shared = summary(
+      [bucket({ sourceId: "shared" })],
+      [
+        {
+          id: "shared",
+          provider: "claude",
+          hostId: "mac",
+          homePath: "/shared",
+          distinctSessions: 1,
+        },
+      ],
+    );
+    const separate = summary(
+      [bucket({ costUsd: 3 })],
+      [{ provider: "claude", hostId: "linux", homePath: "/separate", distinctSessions: 2 }],
+    );
+    const merged = mergeUsage(
+      [environment("env-b", shared), environment("env-a", shared), environment("env-c", separate)],
+      USAGE_CONTRACT_VERSION,
+    );
+    expect(merged.environmentTotals.find((row) => row.environmentId === "env-b")?.costUsd).toBe(0);
+    expect(merged.environmentTotals.find((row) => row.environmentId === "env-a")?.costUsd).toBe(10);
+    expect(merged.environmentTotals.find((row) => row.environmentId === "env-c")?.costUsd).toBe(3);
+    for (const key of [
+      "costUsd",
+      "totalTokens",
+      "cachedInputTokens",
+      "cacheCreationTokens",
+      "outputTokens",
+      "sessions",
+      "records",
+    ] as const) {
+      expect(merged.environmentTotals.reduce((sum, row) => sum + row[key], 0)).toBe(merged[key]);
+    }
+  });
+
   it("sums environments that read different transcript directories", () => {
     const merged = mergeUsage(
       [
@@ -398,5 +435,132 @@ describe("mergeUsage", () => {
     ]);
     expect(merged.daily).toHaveLength(1);
     expect(merged.daily[0]?.costUsd).toBe(10);
+  });
+});
+
+describe("optional session detail", () => {
+  it("drops duplicate-store detail with its overview and preserves environment identity", () => {
+    const base = summary(
+      [bucket({ sourceId: "home" })],
+      [{ id: "home", provider: "claude", hostId: "host", homePath: "/claude" }],
+    );
+    const detailed: UsageSummary = {
+      ...base,
+      sessionUsage: [
+        {
+          provider: "claude",
+          sourceId: "home",
+          sessionId: "native",
+          firstActivityAt: "2026-08-07T00:00:00Z",
+          lastActivityAt: "2026-08-07T00:00:00Z",
+          models: [],
+        },
+      ],
+    };
+    const result = mergeUsage(
+      [
+        { environmentId: "a" as EnvironmentId, label: "A", summary: detailed },
+        { environmentId: "b" as EnvironmentId, label: "B", summary: detailed },
+        { environmentId: "c" as EnvironmentId, label: "Old", summary: base },
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+    expect(result.sessionUsage).toHaveLength(1);
+    expect(result.sessionUsage[0]?.environmentId).toBe("a");
+    expect(result.sessionDetailUnavailable).toEqual(["c"]);
+  });
+});
+
+describe("shared-store session attribution", () => {
+  const thread = {
+    id: "thread",
+    title: "Linked thread",
+    createdAt: "2026-08-07T00:00:00Z",
+    projectId: "project",
+    projectTitle: "Project",
+    projectWorkspaceRoot: "/workspace",
+    projectFaviconPath: null,
+  };
+  const report = (attribution: "linked" | "unlinked" | "ambiguous"): UsageSummary => ({
+    ...summary(
+      [bucket({ sourceId: "home" })],
+      [{ id: "home", provider: "claude", hostId: "host", homePath: "/shared" }],
+    ),
+    sessionUsage: [
+      {
+        provider: "claude",
+        sourceId: "home",
+        sessionId: "native",
+        firstActivityAt: "2026-08-07T00:00:00Z",
+        lastActivityAt: "2026-08-07T00:00:00Z",
+        models: [
+          {
+            model: "fixture-model",
+            totals: bucket({}).totals,
+            costUsd: 5,
+            cacheSavingsUsd: 0,
+            records: 1,
+            unpricedRecords: 0,
+          },
+        ],
+        attribution,
+        ...(attribution === "linked" ? { thread } : {}),
+      },
+    ],
+  });
+  const environment = (id: string, attribution: "linked" | "unlinked" | "ambiguous") => ({
+    environmentId: id as EnvironmentId,
+    label: id.toUpperCase(),
+    summary: report(attribution),
+  });
+  it("keeps one cost contribution and recovers a link from the duplicate reader", () => {
+    const a = environment("a", "unlinked");
+    const b = environment("b", "linked");
+    const duplicateSession = b.summary.sessionUsage![0]!;
+    b.summary = {
+      ...b.summary,
+      sessionUsage: [
+        {
+          ...duplicateSession,
+          models: duplicateSession.models.map((model) => ({ ...model, costUsd: 99 })),
+        },
+      ],
+    };
+    const merged = mergeUsage([a, b], USAGE_CONTRACT_VERSION);
+    expect(merged.costUsd).toBe(mergeUsage([a], USAGE_CONTRACT_VERSION).costUsd);
+    expect(merged.sessionUsage).toHaveLength(1);
+    expect(merged.sessionUsage[0]?.models[0]?.costUsd).toBe(5);
+    expect(merged.sessionUsage[0]).toMatchObject({
+      attribution: "linked",
+      environmentId: "b",
+      thread,
+    });
+    expect(mergeUsage([b, a], USAGE_CONTRACT_VERSION).sessionUsage).toEqual(merged.sessionUsage);
+  });
+  it("retains ambiguity from conflicting environment-local links", () => {
+    for (const other of ["linked", "ambiguous"] as const) {
+      const merged = mergeUsage(
+        [environment("a", "linked"), environment("b", other)],
+        USAGE_CONTRACT_VERSION,
+      );
+      expect(merged.sessionUsage).toHaveLength(1);
+      expect(merged.sessionUsage[0]?.attribution).toBe("ambiguous");
+      expect(merged.sessionUsage[0]?.thread).toBeUndefined();
+    }
+  });
+  it("recognizes two connections to the same Phoenix state as one thread link", () => {
+    const entries = [environment("a", "linked"), environment("b", "linked")].map((entry) => ({
+      ...entry,
+      summary: {
+        ...entry.summary,
+        threadCreationSource: { hostId: "host", statePath: "/state", volumeId: "volume" },
+      },
+    }));
+    const merged = mergeUsage(entries, USAGE_CONTRACT_VERSION);
+    expect(merged.sessionUsage[0]).toMatchObject({
+      attribution: "linked",
+      environmentId: "a",
+      thread,
+    });
   });
 });

@@ -1,3 +1,4 @@
+import * as UsageAttributionQuery from "./usage/UsageAttributionQuery.ts";
 import { EnvironmentHttpApi } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
@@ -193,7 +194,10 @@ const BackgroundLayerLive = BackgroundPolicy.layer.pipe(
   Layer.provideMerge(ServerSettingsLayerLive),
 );
 
-const UsageLayerLive = UsageService.layer.pipe(Layer.provide(ServerSettingsLayerLive));
+const UsageLayerLive = UsageService.layer.pipe(
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.provide(UsageAttributionQuery.layer.pipe(Layer.provide(SqlitePersistenceLayerLive))),
+);
 
 const ResourceDiagnosticsLayerLive = Layer.mergeAll(
   ResourceTelemetryLayerLive,

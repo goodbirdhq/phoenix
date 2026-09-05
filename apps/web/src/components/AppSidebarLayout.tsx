@@ -46,6 +46,10 @@ const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "90px";
 
 // The settings nav (and the Clerk profile surfaces behind it) only renders on
 // settings routes; lazy-loading it keeps that subtree out of the startup chunk.
+const UsageSidebarNav = lazy(() =>
+  import("./usage/UsageSidebarNav").then((module) => ({ default: module.UsageSidebarNav })),
+);
+
 const SettingsSidebarNav = lazy(() =>
   import("./settings/SettingsSidebarNav").then((module) => ({
     default: module.SettingsSidebarNav,
@@ -151,6 +155,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   // Settings routes show the settings nav in place of whichever thread
   // sidebar is active.
   const pathname = useLocation({ select: (location) => location.pathname });
+  const isOnUsage = pathname === "/usage";
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
@@ -240,6 +245,13 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
             <SidebarChromeHeader isElectron={isElectron} />
             <Suspense fallback={null}>
               <SettingsSidebarNav pathname={pathname} />
+            </Suspense>
+          </>
+        ) : isOnUsage ? (
+          <>
+            <SidebarChromeHeader isElectron={isElectron} />
+            <Suspense fallback={null}>
+              <UsageSidebarNav />
             </Suspense>
           </>
         ) : legacySidebarEnabled ? (

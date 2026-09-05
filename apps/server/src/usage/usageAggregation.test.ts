@@ -243,3 +243,59 @@ describe("UsageAggregator", () => {
     expect(result.buckets[0]?.sourceId).toBeUndefined();
   });
 });
+
+describe("session detail", () => {
+  const make = () =>
+    new UsageAggregator({
+      timeZone: "UTC",
+      sinceDay: "2026-08-01",
+      untilDay: "2026-08-31",
+      rates,
+      includeSessions: true,
+    });
+
+  it("reconciles model changes and duplicate responses with the overview", () => {
+    const aggregator = make();
+    aggregator.add(record({ dedupeKey: "first" }), "home");
+    aggregator.add(record({ dedupeKey: "first" }), "home");
+    aggregator.add(
+      record({
+        model: "other-model",
+        reportedCostUsd: 2,
+        timestampMs: Date.parse("2026-08-08T10:00:00Z"),
+      }),
+      "home",
+    );
+    const result = aggregator.finish();
+    expect(result.sessionUsage).toHaveLength(1);
+    const session = result.sessionUsage![0]!;
+    expect(session.models).toHaveLength(2);
+    expect(session.models.reduce((sum, model) => sum + model.costUsd, 0)).toBe(
+      result.buckets.reduce((sum, bucket) => sum + bucket.costUsd, 0),
+    );
+    expect(session.models.reduce((sum, model) => sum + model.records, 0)).toBe(2);
+    expect(session.firstActivityAt).toBe("2026-08-07T04:05:13.944Z");
+    expect(session.lastActivityAt).toBe("2026-08-08T10:00:00.000Z");
+  });
+
+  it("keeps same ids in different stores and providers separate, and excludes out-of-window usage", () => {
+    const aggregator = make();
+    aggregator.add(record(), "a");
+    aggregator.add(record(), "b");
+    aggregator.add(record({ provider: "codex" }), "a");
+    aggregator.add(record({ timestampMs: Date.parse("2026-07-01T00:00:00Z") }), "a");
+    expect(aggregator.finish().sessionUsage).toHaveLength(3);
+    expect(
+      aggregator.finish().sessionUsage!.every((session) => session.models[0]?.records === 1),
+    ).toBe(true);
+  });
+
+  it("keeps anonymous usage in the overview without inventing session identity", () => {
+    const aggregator = make();
+    aggregator.add(record({ sessionId: "" }), "a");
+    aggregator.add(record());
+    expect(aggregator.finish().sessionUsage).toEqual([]);
+    expect(aggregator.finish().buckets.reduce((sum, bucket) => sum + bucket.records, 0)).toBe(2);
+    expect(aggregate([record()]).sessionUsage).toBeUndefined();
+  });
+});

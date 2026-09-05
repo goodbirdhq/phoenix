@@ -1,3 +1,4 @@
+import { usageSessionIdentity } from "../usageSessionIdentity.ts";
 import { defaultInstanceIdForDriver, ProviderDriverKind, type ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -125,6 +126,17 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         issue: "providerInstanceId is required for provider session runtime bindings.",
       });
     }
+    const instanceChanged =
+      existingRuntime !== undefined &&
+      !providerChanged &&
+      (existingRuntime.providerInstanceId ?? defaultInstanceIdForDriver(binding.provider)) !==
+        providerInstanceId;
+    const resumeCursor =
+      binding.resumeCursor !== undefined
+        ? binding.resumeCursor
+        : providerChanged || instanceChanged
+          ? null
+          : (existingRuntime?.resumeCursor ?? null);
     yield* repository
       .upsert({
         threadId: resolvedThreadId,
@@ -136,10 +148,8 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? "full-access",
         status: binding.status ?? existingRuntime?.status ?? "running",
         lastSeenAt: now,
-        resumeCursor:
-          binding.resumeCursor !== undefined
-            ? binding.resumeCursor
-            : (existingRuntime?.resumeCursor ?? null),
+        resumeCursor,
+        usageSessionId: usageSessionIdentity(binding.provider, resumeCursor),
         runtimePayload: mergeRuntimePayload(
           existingRuntime?.runtimePayload ?? null,
           binding.runtimePayload,

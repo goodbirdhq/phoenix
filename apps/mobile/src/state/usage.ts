@@ -9,6 +9,9 @@
  *
  * @module state/usage
  */
+import { scopeAccountHistory } from "@t3tools/client-runtime/usage/account-history";
+import { findUsageAccount } from "@t3tools/client-runtime/usage/accounts";
+import { buildUsageAccounts, type UsageAccount } from "@t3tools/client-runtime/usage/accounts";
 import { useAtomValue } from "@effect/atom-react";
 import {
   USAGE_CONTRACT_VERSION,
@@ -37,6 +40,7 @@ export interface EnvironmentUsageStatus {
 }
 
 export interface EnvironmentProviderAvailabilityStatus {
+  readonly isConnected: boolean;
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly isPending: boolean;
@@ -65,6 +69,7 @@ const providerAvailabilityAtom = Atom.family((refresh: boolean) =>
       });
       statuses.push({
         environmentId,
+        isConnected: presentation.connection.phase === "connected",
         label: presentation.entry.target.label,
         // Availability does not carry enabled/auth facts. Keep the loading
         // state until the separate provider projection is ready, otherwise a
@@ -114,6 +119,8 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
 );
 
 export interface UsageView {
+  readonly allEnvironments: readonly EnvironmentUsageStatus[];
+  readonly accounts: readonly UsageAccount[];
   readonly merged: MergedUsage;
   readonly environments: readonly EnvironmentUsageStatus[];
   /** True until at least one environment has answered. */
@@ -131,7 +138,11 @@ export interface UsageView {
   readonly hasProviderAvailabilityError: boolean;
 }
 
-export function useUsage(input: UsageSummaryInput): UsageView {
+export function useUsage(
+  input: UsageSummaryInput,
+  environmentId: string | null = null,
+  accountKey: string | null = null,
+): UsageView {
   const windowKey = useMemo(
     () =>
       JSON.stringify({
@@ -141,6 +152,7 @@ export function useUsage(input: UsageSummaryInput): UsageView {
         resolution: input.resolution,
         sinceTime: input.sinceTime,
         untilTime: input.untilTime,
+        includeSessions: input.includeSessions,
       }),
     [
       input.sinceDay,
@@ -149,10 +161,18 @@ export function useUsage(input: UsageSummaryInput): UsageView {
       input.resolution,
       input.sinceTime,
       input.untilTime,
+      input.includeSessions,
     ],
   );
   const atom = usageByWindowAtom(windowKey);
-  const environments = useAtomValue(atom);
+  const allEnvironments = useAtomValue(atom);
+  const environments = useMemo(
+    () =>
+      environmentId === null
+        ? allEnvironments
+        : allEnvironments.filter((entry) => entry.environmentId === environmentId),
+    [allEnvironments, environmentId],
+  );
   const [refreshingAvailability, setRefreshingAvailability] = useState(false);
   const providerAvailability = useAtomValue(providerAvailabilityAtom(refreshingAvailability));
 
@@ -198,6 +218,12 @@ export function useUsage(input: UsageSummaryInput): UsageView {
     [environments, input],
   );
 
+  const accounts = useMemo(
+    () => buildUsageAccounts(providerAvailability, allEnvironments),
+    [providerAvailability, allEnvironments],
+  );
+
+  const account = findUsageAccount(accounts, accountKey);
   const merged = useMemo(() => {
     const answered: EnvironmentUsage[] = environments.flatMap((environment) =>
       environment.summary === null
@@ -206,12 +232,23 @@ export function useUsage(input: UsageSummaryInput): UsageView {
             {
               environmentId: environment.environmentId,
               label: environment.label,
-              summary: environment.summary,
+              summary:
+                accountKey === null
+                  ? environment.summary
+                  : account
+                    ? scopeAccountHistory(environment.summary, environment.environmentId, account)
+                    : {
+                        ...environment.summary,
+                        sources: [],
+                        buckets: [],
+                        sessionUsage: [],
+                        threadCreations: [],
+                      },
             },
           ],
     );
     return mergeUsage(answered, USAGE_CONTRACT_VERSION);
-  }, [environments]);
+  }, [environments, account, accountKey]);
 
   const answeredCount = environments.filter((environment) => environment.summary !== null).length;
   const stillReporting = environments.filter(
@@ -219,6 +256,8 @@ export function useUsage(input: UsageSummaryInput): UsageView {
   ).length;
 
   return {
+    allEnvironments,
+    accounts,
     merged,
     environments,
     isPending: answeredCount === 0 && stillReporting > 0,
