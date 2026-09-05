@@ -1,3 +1,5 @@
+import { UsageHoverSummary } from "../usage/UsageHoverSummary";
+import { useProviderUpdateCount } from "../../state/providerUpdates";
 import {
   aggregateSchedules,
   unacknowledgedScheduleFailureCount,
@@ -5,6 +7,7 @@ import {
 import { Link, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
+  ArrowUpIcon,
   CalendarClockIcon,
   ChartNoAxesColumnIcon,
   CodeXmlIcon,
@@ -125,10 +128,14 @@ function SidebarUtilityItem({
   active = false,
   activeWidth,
   badge,
+  updateCount,
+  tooltipContent,
 }: {
   active?: boolean;
   activeWidth: number;
   badge?: number;
+  updateCount?: number;
+  tooltipContent?: ReactNode;
   icon: ReactNode;
   label: string;
   onClick: () => void;
@@ -142,7 +149,9 @@ function SidebarUtilityItem({
               aria-label={
                 badge
                   ? `${label}, ${badge} unacknowledged ${badge === 1 ? "failure" : "failures"}`
-                  : label
+                  : updateCount
+                    ? `${label}, ${updateCount} provider updates available`
+                    : label
               }
               aria-current={active ? "page" : undefined}
               style={active ? { width: activeWidth } : undefined}
@@ -155,6 +164,14 @@ function SidebarUtilityItem({
             >
               {icon}
               {active ? <span className="@max-[316px]/sidebar-footer:hidden">{label}</span> : null}
+              {updateCount ? (
+                <span
+                  className="absolute -right-0.5 -top-0.5 rounded-full bg-sidebar p-0.5 text-warning"
+                  aria-hidden
+                >
+                  <ArrowUpIcon className="size-2.5" />
+                </span>
+              ) : null}
               {badge ? (
                 <span
                   className="absolute right-0 top-0 flex min-h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[9px] font-semibold leading-none text-white"
@@ -166,7 +183,7 @@ function SidebarUtilityItem({
             </SidebarMenuButton>
           }
         />
-        <TooltipPopup side="top">{label}</TooltipPopup>
+        <TooltipPopup side="top">{tooltipContent ?? label}</TooltipPopup>
       </Tooltip>
     </SidebarMenuItem>
   );
@@ -251,6 +268,7 @@ function SidebarSettingsMenu({ onNavigate }: { onNavigate: () => void }) {
 }
 
 export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
+  const providerUpdates = useProviderUpdateCount();
   const navigate = useNavigate();
   const router = useRouter();
   const location = useLocation();
@@ -382,6 +400,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"
+            tooltipContent={<UsageHoverSummary />}
             activeWidth={84}
             active={currentFooterPage === "usage"}
             onClick={handleUsageClick}
@@ -389,6 +408,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           <SidebarUtilityItem
             icon={<ServerIcon />}
             label="Environments"
+            updateCount={providerUpdates}
             activeWidth={132}
             active={currentFooterPage === "environments"}
             onClick={handleEnvironmentsClick}

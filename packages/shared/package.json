@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./lineAreaGeometry": {
+      "types": "./src/lineAreaGeometry.ts",
+      "import": "./src/lineAreaGeometry.ts"
+    },
     "./themePalettes": {
       "types": "./src/themePalettes.ts",
       "import": "./src/themePalettes.ts"

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  deriveSubscriptionAccounts,
-  subscriptionResetLabel,
-  subscriptionWindowLabel,
+  deriveSubscriptionLimits as deriveSubscriptionAccounts,
+  subscriptionLimitResetLabel as subscriptionResetLabel,
+  subscriptionLimitWindowLabel as subscriptionWindowLabel,
   type SubscriptionAvailabilitySource,
-} from "./SubscriptionAvailability";
+} from "@t3tools/client-runtime/usage/subscription-availability";
 
 const source = (
   overrides: Partial<SubscriptionAvailabilitySource> = {},

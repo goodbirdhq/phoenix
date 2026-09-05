@@ -1,3 +1,11 @@
+import { SegmentedControl } from "../../components/SegmentedControl";
+import { UsageReport } from "./UsageReport";
+import {
+  usageChartSeries,
+  type UsageChartGrouping,
+} from "@t3tools/client-runtime/usage/chart-series";
+import { usageReportSeries } from "@t3tools/client-runtime/usage/report-chart-series";
+import { findUsageAccount, usageAccountMemberKey } from "@t3tools/client-runtime/usage/accounts";
 import { useNavigation } from "@react-navigation/native";
 import {
   deriveSubscriptionLimits,
@@ -7,14 +15,11 @@ import {
   type SubscriptionAvailabilitySource,
   type SubscriptionLimit,
 } from "@t3tools/client-runtime/usage/subscription-availability";
-import type { DailyTotals, MergedUsage } from "@t3tools/shared/usageMerge";
+import type { MergedUsage } from "@t3tools/shared/usageMerge";
 import * as DateTime from "effect/DateTime";
 import {
   enumerateDays,
   enumerateHourStarts,
-  formatCount,
-  formatDayShort,
-  formatHourShort,
   formatPercent,
   formatTokens,
   formatUsd,
@@ -30,8 +35,8 @@ import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { SettingsSection } from "../settings/components/SettingsSection";
-import { UsageDailyChart } from "./UsageDailyChart";
-import type { UsageChartMetric } from "./usageChartData";
+import { LineAreaChart } from "../../components/charts/LineAreaChart";
+import type { UsageChartMetric } from "@t3tools/client-runtime/usage/chart-series";
 import { PROVIDER_LABEL, useProviderColors } from "./usageProviders";
 
 const WINDOW_OPTIONS = [
@@ -50,11 +55,24 @@ export function UsageRouteScreen() {
     days: 30,
     window: makeWindow(30),
   }));
+  const [accountKey, setAccountKey] = useState<string | null>(null);
+  const [environmentId, setEnvironmentId] = useState<string | null>(null);
+  const [tab, setTab] = useState("overview");
+  const [grouping, setGrouping] = useState<UsageChartGrouping>("provider");
+  const [threadByProvider, setThreadByProvider] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+  useEffect(() => {
+    setRevealed(false);
+    setTab("overview");
+  }, [accountKey]);
+  const colors = useProviderColors();
   const [metric, setMetric] = useState<UsageChartMetric>("cost");
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
   const {
     merged,
+    accounts,
+    allEnvironments,
     environments,
     isPending,
     isPartial,
@@ -62,31 +80,48 @@ export function UsageRouteScreen() {
     providerAvailability,
     isProviderAvailabilityPending,
     hasProviderAvailabilityError,
-  } = useUsage(window);
+  } = useUsage(
+    { ...window, includeSessions: tab === "projects" || tab === "threads" },
+    environmentId,
+    accountKey,
+  );
+  const selectedAccount = findUsageAccount(accounts, accountKey);
   const subscriptionLimits = useMemo(
     () =>
       deriveSubscriptionLimits(
         providerAvailability.flatMap((environment) =>
-          environment.providers.map((entry) => {
-            const provider = environment.serverProviders?.find(
-              (candidate) => candidate.instanceId === entry.instanceId,
-            );
-            return {
-              environmentId: environment.environmentId,
-              environmentLabel: environment.label,
-              instanceId: entry.instanceId,
-              driver: entry.driver,
-              displayName:
-                entry.displayName ?? provider?.displayName ?? providerLimitSourceName(entry.driver),
-              ...(provider?.accentColor ? { accentColor: provider.accentColor } : {}),
-              enabled: provider?.enabled === true,
-              authenticated: provider?.auth.status === "authenticated",
-              availability: entry.availability,
-            } satisfies SubscriptionAvailabilitySource;
-          }),
+          environment.providers
+            .filter(
+              (entry) =>
+                !selectedAccount ||
+                selectedAccount.memberships.some(
+                  (member) =>
+                    member.environmentId === environment.environmentId &&
+                    member.provider.instanceId === entry.instanceId,
+                ),
+            )
+            .map((entry) => {
+              const provider = environment.serverProviders?.find(
+                (candidate) => candidate.instanceId === entry.instanceId,
+              );
+              return {
+                environmentId: environment.environmentId,
+                environmentLabel: environment.label,
+                instanceId: entry.instanceId,
+                driver: entry.driver,
+                displayName:
+                  entry.displayName ??
+                  provider?.displayName ??
+                  providerLimitSourceName(entry.driver),
+                ...(provider?.accentColor ? { accentColor: provider.accentColor } : {}),
+                enabled: provider?.enabled === true,
+                authenticated: provider?.auth.status === "authenticated",
+                availability: entry.availability,
+              } satisfies SubscriptionAvailabilitySource;
+            }),
         ),
       ),
-    [providerAvailability],
+    [providerAvailability, selectedAccount],
   );
   const resetClockMs = useMinuteClock(
     subscriptionLimits.some((limit) =>
@@ -105,18 +140,53 @@ export function UsageRouteScreen() {
         : days,
     [days, isPast24Hours, window.sinceTime, window.untilTime],
   );
-  const chartTotals = useMemo(
-    (): readonly DailyTotals[] =>
-      isPast24Hours
-        ? merged.hourly.map((hour) => ({
-            day: hour.hourStart,
-            costUsd: hour.costUsd,
-            totalTokens: hour.totalTokens,
-            byProvider: hour.byProvider,
-          }))
-        : merged.daily,
-    [isPast24Hours, merged.daily, merged.hourly],
-  );
+  const chartRows = useMemo(() => {
+    const rows =
+      tab === "projects" || tab === "threads"
+        ? usageReportSeries(
+            merged,
+            accounts,
+            chartDays,
+            tab,
+            metric,
+            window.timeZone,
+            !selectedAccount && threadByProvider,
+          )
+        : usageChartSeries(
+            merged.buckets,
+            accounts,
+            chartDays,
+            tab === "models" ? "model" : grouping,
+            metric,
+          );
+    return rows.map((row) => ({
+      ...row,
+      color:
+        row.provider === "claude" ||
+        row.provider === "codex" ||
+        row.provider === "grok" ||
+        row.provider === "opencode"
+          ? colors[row.provider]
+          : selectedAccount?.driver === "claudeAgent"
+            ? colors.claude
+            : selectedAccount?.driver === "grok"
+              ? colors.grok
+              : selectedAccount?.driver === "opencode"
+                ? colors.opencode
+                : colors.codex,
+    }));
+  }, [
+    merged,
+    accounts,
+    chartDays,
+    tab,
+    metric,
+    window.timeZone,
+    grouping,
+    colors,
+    selectedAccount,
+    threadByProvider,
+  ]);
 
   // The pull spinner tracks re-scans of environments that have answered
   // before. The initial scan renders its own placeholder, and an unreachable
@@ -130,7 +200,7 @@ export function UsageRouteScreen() {
   };
   const refreshWindow = () => {
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
-    refresh(nextWindow);
+    refresh({ ...nextWindow, includeSessions: tab === "projects" || tab === "threads" });
     setWindowSelection({ days: windowDays, window: nextWindow });
   };
 
@@ -150,6 +220,97 @@ export function UsageRouteScreen() {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshWindow} />}
       >
+        <Text className="text-xs text-foreground-muted">Accounts</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View className="flex-row gap-2">
+            {[
+              { key: null, name: "All accounts" },
+              ...accounts.map((account) => ({
+                key: account.memberships[0]
+                  ? usageAccountMemberKey(account.memberships[0])
+                  : account.key,
+                name: account.name,
+              })),
+            ].map((account) => (
+              <Pressable
+                key={account.key ?? "all"}
+                accessibilityRole="button"
+                accessibilityState={{ selected: account.key === accountKey }}
+                onPress={() => setAccountKey(account.key)}
+                className={
+                  account.key === accountKey
+                    ? "rounded-lg bg-subtle-strong p-3"
+                    : "rounded-lg bg-card p-3"
+                }
+              >
+                <Text className="text-sm text-foreground">{account.name}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </ScrollView>
+        {selectedAccount && (
+          <View className="gap-1">
+            <View className="flex-row items-center gap-2">
+              <ProviderIcon provider={selectedAccount.driver} size={24} />
+              <Text className="text-xl font-t3-medium text-foreground">{selectedAccount.name}</Text>
+            </View>
+            {selectedAccount.emails.length > 0 && (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={revealed ? "Hide email" : "Reveal email"}
+                onPress={() => setRevealed(!revealed)}
+              >
+                <Text className="text-sm text-foreground-muted">
+                  {revealed ? selectedAccount.emails.join(", ") : "•••••••• · Tap to reveal"}
+                </Text>
+              </Pressable>
+            )}
+            <Text className="text-xs text-foreground-muted">
+              {selectedAccount.memberships[0]?.provider.auth.label}
+            </Text>
+          </View>
+        )}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View className="flex-row gap-2">
+            {[
+              { id: null, label: "All environments" },
+              ...allEnvironments.map((environment) => ({
+                id: String(environment.environmentId),
+                label: environment.label,
+              })),
+            ].map((environment) => (
+              <Pressable
+                key={environment.id ?? "all"}
+                accessibilityRole="button"
+                onPress={() => setEnvironmentId(environment.id)}
+                accessibilityState={{ selected: environmentId === environment.id }}
+                className="p-2"
+              >
+                <Text
+                  className={
+                    environmentId === environment.id
+                      ? "text-sm text-primary"
+                      : "text-sm text-foreground-muted"
+                  }
+                >
+                  {environment.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </ScrollView>
+        <SegmentedControl
+          scrollable
+          options={[
+            "overview",
+            "models",
+            "projects",
+            "threads",
+            ...(selectedAccount ? ["environments"] : []),
+          ].map((value) => ({ value, label: value[0]!.toUpperCase() + value.slice(1) }))}
+          selected={tab}
+          onSelect={setTab}
+        />
         <SegmentedControl
           options={WINDOW_OPTIONS.map((option) => ({ value: option.days, label: option.label }))}
           selected={windowDays}
@@ -158,12 +319,14 @@ export function UsageRouteScreen() {
 
         <UsageCoverageNotice environments={environments} merged={merged} isPartial={isPartial} />
 
-        <SubscriptionLimitsSection
-          limits={subscriptionLimits}
-          isPending={isProviderAvailabilityPending}
-          hasError={hasProviderAvailabilityError}
-          nowMs={resetClockMs}
-        />
+        {selectedAccount && tab === "overview" && (
+          <SubscriptionLimitsSection
+            limits={subscriptionLimits}
+            isPending={isProviderAvailabilityPending}
+            hasError={hasProviderAvailabilityError}
+            nowMs={resetClockMs}
+          />
+        )}
 
         {isPending ? (
           <Text className="py-16 text-center text-base text-foreground-muted">
@@ -175,20 +338,121 @@ export function UsageRouteScreen() {
           </Text>
         ) : (
           <>
-            <ChartCard
-              merged={merged}
-              days={chartDays}
-              daily={chartTotals}
-              metric={metric}
-              onMetricChange={setMetric}
-              sinceDay={window.sinceDay}
-              untilDay={window.untilDay}
-              isPast24Hours={isPast24Hours}
-              timeZone={window.timeZone}
-            />
-            <ProviderSection merged={merged} metric={metric} />
-            <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
-            <ModelsSection merged={merged} />
+            {tab === "environments" && selectedAccount ? (
+              selectedAccount.memberships.map((member) => (
+                <View
+                  key={usageAccountMemberKey(member)}
+                  className="gap-1 border-b border-border pb-3"
+                >
+                  <Text className="font-t3-medium text-foreground">{member.environmentLabel}</Text>
+                  <Text className="text-sm text-foreground-muted">
+                    {member.provider.version ?? "Version not reported"}
+                    {member.provider.versionAdvisory?.status === "behind_latest"
+                      ? " · Update available"
+                      : ""}
+                  </Text>
+                  <Text className="text-xs text-foreground-muted">
+                    {member.isConnected === false ? "Offline" : member.provider.auth.status} ·{" "}
+                    {member.provider.checkedAt}
+                  </Text>
+                </View>
+              ))
+            ) : (
+              <>
+                <View className="gap-1">
+                  <Text className="text-3xl font-t3-medium tabular-nums text-foreground">
+                    {metric === "cost"
+                      ? formatUsd(merged.costUsd)
+                      : formatTokens(merged.totalTokens)}
+                  </Text>
+                  <Text className="text-sm text-foreground-muted">
+                    {metric === "cost" ? "Estimated API cost" : "Processed tokens"} · selected
+                    period
+                  </Text>
+                </View>
+                <SegmentedControl
+                  options={[
+                    { value: "cost", label: "API cost" },
+                    { value: "tokens", label: "Tokens" },
+                  ]}
+                  selected={metric}
+                  onSelect={setMetric}
+                />
+                {tab === "overview" && (
+                  <SegmentedControl
+                    options={[
+                      { value: "provider", label: "Provider" },
+                      { value: "account", label: "Account" },
+                      { value: "environment", label: "Environment" },
+                    ]}
+                    selected={grouping}
+                    onSelect={setGrouping}
+                  />
+                )}
+                {tab === "threads" && (
+                  <>
+                    <Text className="text-base font-t3-medium text-foreground">
+                      Sessions created
+                    </Text>
+                    {!selectedAccount && (
+                      <SegmentedControl
+                        options={[
+                          { value: "total", label: "Total" },
+                          { value: "provider", label: "By provider" },
+                        ]}
+                        selected={threadByProvider ? "provider" : "total"}
+                        onSelect={(value) => setThreadByProvider(value === "provider")}
+                      />
+                    )}
+                  </>
+                )}
+                <LineAreaChart
+                  periods={chartDays}
+                  label={
+                    tab === "threads"
+                      ? "Sessions created"
+                      : metric === "cost"
+                        ? "API cost"
+                        : "Tokens"
+                  }
+                  height={CHART_HEIGHT}
+                  series={chartRows}
+                />
+                <View className="flex-row justify-between">
+                  <Text className="text-xs text-foreground-muted">
+                    {chartDays[0]?.slice(0, 16).replace("T", " ")}
+                  </Text>
+                  <Text className="text-xs text-foreground-muted">
+                    {chartDays.at(-1)?.slice(0, 16).replace("T", " ")}
+                  </Text>
+                </View>
+                {tab === "threads" && (
+                  <Text className="text-xs text-foreground-muted">
+                    Phoenix threads created, including those without token usage.
+                    {merged.threadCreationReporting === 0
+                      ? " Creation history is not available from these environments."
+                      : ""}
+                  </Text>
+                )}
+                <View className="flex-row flex-wrap gap-3">
+                  {chartRows.map((row) => (
+                    <Text key={row.id} className="text-xs text-foreground-muted">
+                      {row.label}
+                    </Text>
+                  ))}
+                </View>
+                {tab === "overview" && (
+                  <>
+                    <ProviderSection merged={merged} metric={metric} />
+                    <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
+                  </>
+                )}
+                {tab === "models" && <ModelsSection merged={merged} />}
+                {(tab === "projects" || tab === "threads") && (
+                  <UsageReport key={tab} mode={tab} merged={merged} />
+                )}
+              </>
+            )}
           </>
         )}
       </ScrollView>
@@ -340,150 +604,6 @@ function SubscriptionLimitsSection(props: {
         </View>
       )}
     </SettingsSection>
-  );
-}
-
-function SegmentedControl<Value extends number | string>(props: {
-  readonly options: readonly { readonly value: Value; readonly label: string }[];
-  readonly selected: Value;
-  readonly onSelect: (value: Value) => void;
-}) {
-  return (
-    <View className="flex-row overflow-hidden rounded-full border-continuous bg-card">
-      {props.options.map((option) => {
-        const active = option.value === props.selected;
-        return (
-          <Pressable
-            key={String(option.value)}
-            accessibilityRole="button"
-            accessibilityState={{ selected: active }}
-            onPress={() => props.onSelect(option.value)}
-            className={
-              active
-                ? "flex-1 items-center rounded-full bg-subtle-strong py-2"
-                : "flex-1 items-center py-2"
-            }
-          >
-            <Text
-              className={
-                active ? "text-sm font-t3-medium text-foreground" : "text-sm text-foreground-muted"
-              }
-            >
-              {option.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-/** Headline figure, the animated daily chart, and its legend, in one card. */
-function ChartCard(props: {
-  readonly merged: MergedUsage;
-  readonly days: readonly string[];
-  readonly daily: readonly DailyTotals[];
-  readonly metric: UsageChartMetric;
-  readonly onMetricChange: (metric: UsageChartMetric) => void;
-  readonly sinceDay: string;
-  readonly untilDay: string;
-  readonly isPast24Hours: boolean;
-  readonly timeZone: string;
-}) {
-  const { merged, metric } = props;
-  const colors = useProviderColors();
-  const hasActivity = props.daily.some((period) => period.totalTokens > 0);
-
-  return (
-    <View className="gap-4 rounded-[24px] border-continuous bg-card p-4">
-      <View className="flex-row items-start justify-between gap-3">
-        <View className="min-w-0 flex-1 gap-0.5">
-          <Text className="text-sm text-foreground-muted">
-            {metric === "cost" ? "Raw token cost" : "Processed tokens"}
-          </Text>
-          <Text className="text-4xl font-t3-bold tabular-nums text-foreground">
-            {metric === "cost" ? `${formatUsd(merged.costUsd)}*` : formatTokens(merged.totalTokens)}
-          </Text>
-          <Text className="text-sm text-foreground-muted">
-            {metric === "cost"
-              ? "* if billed at full API rate"
-              : `Across ${formatCount(merged.sessions)} sessions`}
-          </Text>
-        </View>
-        <MetricToggle metric={metric} onChange={props.onMetricChange} />
-      </View>
-
-      {hasActivity ? (
-        <UsageDailyChart
-          days={props.days}
-          daily={props.daily}
-          metric={metric}
-          height={CHART_HEIGHT}
-        />
-      ) : (
-        <View style={{ height: CHART_HEIGHT }} className="items-center justify-center">
-          <Text className="text-base text-foreground-muted">No activity in this window.</Text>
-        </View>
-      )}
-
-      <View className="flex-row items-center justify-between">
-        <Text className="text-xs text-foreground-tertiary">
-          {props.isPast24Hours
-            ? formatHourShort(props.days[0] ?? "", props.timeZone)
-            : formatDayShort(props.sinceDay)}
-        </Text>
-        <View className="flex-row items-center gap-4">
-          {merged.providers.map((provider) => (
-            <View key={provider.provider} className="flex-row items-center gap-1.5">
-              <View
-                className="size-2 rounded-full"
-                style={{ backgroundColor: colors[provider.provider] }}
-              />
-              <Text className="text-xs text-foreground-muted">
-                {PROVIDER_LABEL[provider.provider]}
-              </Text>
-            </View>
-          ))}
-        </View>
-        <Text className="text-xs text-foreground-tertiary">
-          {props.isPast24Hours
-            ? formatHourShort(props.days[props.days.length - 1] ?? "", props.timeZone)
-            : formatDayShort(props.untilDay)}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-function MetricToggle(props: {
-  readonly metric: UsageChartMetric;
-  readonly onChange: (metric: UsageChartMetric) => void;
-}) {
-  return (
-    <View className="flex-row overflow-hidden rounded-full bg-subtle">
-      {(["cost", "tokens"] as const).map((option) => {
-        const active = option === props.metric;
-        return (
-          <Pressable
-            key={option}
-            accessibilityRole="button"
-            accessibilityState={{ selected: active }}
-            onPress={() => props.onChange(option)}
-            className={active ? "rounded-full bg-subtle-strong px-3 py-1.5" : "px-3 py-1.5"}
-          >
-            <Text
-              className={
-                active
-                  ? "text-xs font-t3-medium uppercase text-foreground"
-                  : "text-xs uppercase text-foreground-muted"
-              }
-            >
-              {option}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
   );
 }
 

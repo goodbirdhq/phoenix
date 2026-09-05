@@ -6,6 +6,12 @@
  *
  * @module state/usage
  */
+import { scopeAccountHistory } from "@t3tools/client-runtime/usage/account-history";
+import {
+  buildUsageAccounts,
+  findUsageAccount,
+  type UsageAccount,
+} from "@t3tools/client-runtime/usage/accounts";
 import { useAtomValue } from "@effect/atom-react";
 import {
   USAGE_CONTRACT_VERSION,
@@ -49,6 +55,7 @@ export interface EnvironmentUsageStatus {
 }
 
 export interface EnvironmentProviderAvailabilityStatus {
+  readonly isConnected: boolean;
   readonly environmentId: EnvironmentId;
   readonly label: string;
   /** True until the availability RPC and provider-status projection both settle. */
@@ -136,6 +143,7 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
       });
       statuses.push({
         environmentId,
+        isConnected: presentation.connection.phase === "connected",
         label: presentation.entry.target.label,
         // A valid quota snapshot alone does not say whether an instance is
         // enabled or authenticated. Wait for that projection instead of
@@ -198,6 +206,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
 );
 
 export interface UsageView {
+  readonly accounts: readonly UsageAccount[];
   readonly merged: MergedUsage;
   /** Every Environment that can be selected for historical usage. Capacity stays global. */
   readonly allEnvironments: readonly EnvironmentUsageStatus[];
@@ -226,6 +235,7 @@ export interface UsageView {
 export function useUsage(
   input: UsageSummaryInput,
   historicalEnvironmentId: EnvironmentId | null = null,
+  accountKey: string | null = null,
 ): UsageView {
   const windowKey = useMemo(
     () =>
@@ -236,6 +246,7 @@ export function useUsage(
         resolution: input.resolution,
         sinceTime: input.sinceTime,
         untilTime: input.untilTime,
+        includeSessions: input.includeSessions,
       }),
     [
       input.sinceDay,
@@ -244,6 +255,7 @@ export function useUsage(
       input.resolution,
       input.sinceTime,
       input.untilTime,
+      input.includeSessions,
     ],
   );
   const atom = usageByWindowAtom(windowKey);
@@ -346,6 +358,13 @@ export function useUsage(
     [beginCapacityRefresh, providerAvailability],
   );
 
+  const accounts = useMemo(
+    () => buildUsageAccounts(providerAvailability, allEnvironments),
+    [providerAvailability, allEnvironments],
+  );
+
+  const selectedAccount = findUsageAccount(accounts, accountKey);
+
   const merged = useMemo(() => {
     const answered: EnvironmentUsage[] = environments.flatMap((environment) =>
       environment.summary === null
@@ -354,12 +373,27 @@ export function useUsage(
             {
               environmentId: environment.environmentId,
               label: environment.label,
-              summary: environment.summary,
+              summary:
+                accountKey === null
+                  ? environment.summary
+                  : selectedAccount
+                    ? scopeAccountHistory(
+                        environment.summary,
+                        environment.environmentId,
+                        selectedAccount,
+                      )
+                    : {
+                        ...environment.summary,
+                        buckets: [],
+                        sources: [],
+                        sessionUsage: [],
+                        threadCreations: [],
+                      },
             },
           ],
     );
     return mergeUsage(answered, USAGE_CONTRACT_VERSION);
-  }, [environments]);
+  }, [environments, accountKey, selectedAccount]);
 
   const answeredCount = environments.filter((environment) => environment.summary !== null).length;
   const stillReporting = environments.filter(
@@ -367,6 +401,7 @@ export function useUsage(
   ).length;
 
   return {
+    accounts,
     merged,
     allEnvironments,
     environments,

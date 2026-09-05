@@ -48,6 +48,8 @@ export const ProviderSessionRuntime = Schema.Struct({
   status: ProviderSessionRuntimeStatus,
   lastSeenAt: IsoDateTime,
   resumeCursor: Schema.NullOr(Schema.Unknown),
+  /** Native session linkage supplied by the provider boundary, retained across resets. */
+  usageSessionId: Schema.optional(Schema.NullOr(Schema.String)),
   runtimePayload: Schema.NullOr(Schema.Unknown),
 });
 export type ProviderSessionRuntime = typeof ProviderSessionRuntime.Type;
@@ -236,15 +238,28 @@ export const make = Effect.gen(function* () {
   });
 
   const upsert: ProviderSessionRuntimeRepository["Service"]["upsert"] = (runtime) =>
-    upsertRuntimeRow(runtime).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          "ProviderSessionRuntimeRepository.upsert:query",
-          "ProviderSessionRuntimeRepository.upsert:encodeRequest",
-          { threadId: runtime.threadId },
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* upsertRuntimeRow(runtime);
+          if (runtime.usageSessionId && runtime.providerInstanceId) {
+            yield* sql`
+          INSERT INTO usage_session_links (provider_name, provider_instance_id, session_id, thread_id, observed_at)
+          VALUES (${runtime.providerName}, ${runtime.providerInstanceId}, ${runtime.usageSessionId}, ${runtime.threadId}, ${runtime.lastSeenAt})
+          ON CONFLICT (provider_name, provider_instance_id, session_id, thread_id) DO NOTHING
+        `;
+          }
+        }),
+      )
+      .pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProviderSessionRuntimeRepository.upsert:query",
+            "ProviderSessionRuntimeRepository.upsert:encodeRequest",
+            { threadId: runtime.threadId },
+          ),
         ),
-      ),
-    );
+      );
 
   const getByThreadId: ProviderSessionRuntimeRepository["Service"]["getByThreadId"] = (input) =>
     getRuntimeRowByThreadId(input).pipe(

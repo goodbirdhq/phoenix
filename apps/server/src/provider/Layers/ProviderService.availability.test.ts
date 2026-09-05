@@ -455,3 +455,28 @@ describe("a refresh that came back with nothing", () => {
     expect(mergeProviderAvailability(claudeCliSnapshot, emptySdkUpdate)).toBe(claudeCliSnapshot);
   });
 });
+
+it("keeps Codex Spark updates separate from the main allowance", () => {
+  const main = availabilityFromRuntimeEvent(codexRateLimitEvent)!;
+  const spark = availabilityFromRuntimeEvent({
+    ...codexRateLimitEvent,
+    payload: {
+      rateLimits: {
+        rateLimits: { limitId: "codex-spark", limitName: "Spark", primary: { usedPercent: 80 } },
+      },
+    },
+  })!;
+  const merged = mergeProviderAvailability(main, spark);
+  expect(merged.windows).toContainEqual(
+    expect.objectContaining({
+      kind: "primary",
+      scope: "codex-spark",
+      label: "Spark",
+      usedPercent: 80,
+    }),
+  );
+  expect(
+    merged.windows.find((window) => window.kind === "primary" && window.scope === undefined)
+      ?.usedPercent,
+  ).toBe(40);
+});

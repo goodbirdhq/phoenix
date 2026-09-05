@@ -1,4 +1,4 @@
-import { EnvironmentId, USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
+import { USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
 import type { SubscriptionAvailabilitySource } from "@t3tools/client-runtime/usage/subscription-availability";
 import { mergeUsage } from "@t3tools/shared/usageMerge";
 import type { AnchorHTMLAttributes } from "react";
@@ -10,7 +10,7 @@ const testState = vi.hoisted(() => ({
   refreshUsage: vi.fn(),
   refreshCapacity: vi.fn(),
   metric: "cost" as "cost" | "tokens",
-  breakdown: "time" as "model" | "time",
+  pageTab: "overview" as "overview" | "models",
 }));
 const capacity = vi.hoisted(() => ({
   sources: [] as SubscriptionAvailabilitySource[],
@@ -35,8 +35,8 @@ vi.mock("react", async (importOriginal) => {
           }
         : initial === "cost"
           ? testState.metric
-          : initial === "model"
-            ? testState.breakdown
+          : initial === "overview"
+            ? testState.pageTab
             : initial,
       vi.fn(),
     ]),
@@ -49,6 +49,7 @@ vi.mock("@t3tools/client-runtime/usage/usage-warning", () => ({
   subscriptionAvailabilitySources: () => capacity.sources,
 }));
 vi.mock("@tanstack/react-router", () => ({
+  useSearch: () => ({}),
   Link: ({ to, ...props }: { readonly to: string } & AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a href={to} {...props} />
   ),
@@ -71,7 +72,8 @@ vi.mock("../WorkspaceBreadcrumb", () => ({
 }));
 vi.mock("../WorkspacePageContainer", () => ({ WorkspacePageContainer: "main" }));
 vi.mock("../WorkspacePageHeader", () => ({ WorkspacePageHeader: "header" }));
-vi.mock("./UsageProviderChart", () => ({ UsageProviderChart: "div" }));
+vi.mock("./UsageBreakdownChart", () => ({ UsageBreakdownChart: "div" }));
+vi.mock("./UsageReportChart", () => ({ UsageReportChart: "div" }));
 vi.mock("./usageProviders", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./usageProviders")>();
   return {
@@ -120,8 +122,9 @@ const modelTotals = Object.freeze([
 
 beforeEach(() => {
   testState.metric = "cost";
-  testState.breakdown = "time";
+  testState.pageTab = "overview";
   testState.useUsage.mockReturnValue({
+    accounts: [],
     merged: {
       ...mergeUsage([], USAGE_CONTRACT_VERSION),
       models: modelTotals,
@@ -179,7 +182,7 @@ describe("UsagePage hourly breakdown", () => {
 
 describe("UsagePage model breakdown", () => {
   it("sorts models by cost when the cost metric is selected", () => {
-    testState.breakdown = "model";
+    testState.pageTab = "models";
 
     const markup = renderToStaticMarkup(<UsagePage />);
     const body = markup.match(/<tbody>(.*?)<\/tbody>/)?.[1] ?? "";
@@ -189,7 +192,7 @@ describe("UsagePage model breakdown", () => {
 
   it("sorts models by token usage when the token metric is selected", () => {
     testState.metric = "tokens";
-    testState.breakdown = "model";
+    testState.pageTab = "models";
 
     const markup = renderToStaticMarkup(<UsagePage />);
     const body = markup.match(/<tbody>(.*?)<\/tbody>/)?.[1] ?? "";
@@ -200,126 +203,5 @@ describe("UsagePage model breakdown", () => {
       "token-heavy-model",
       "token-heavy-cheaper-model",
     ]);
-  });
-});
-
-const studio = EnvironmentId.make("studio");
-const laptop = EnvironmentId.make("laptop");
-
-describe("UsagePage", () => {
-  beforeEach(() => {
-    testState.refreshUsage.mockReset();
-    testState.refreshCapacity.mockReset();
-    testState.useUsage.mockReset();
-    capacity.sources = [
-      {
-        environmentId: studio,
-        environmentLabel: "Studio",
-        instanceId: "claude-primary",
-        driver: "claudeAgent",
-        displayName: "Claude Primary",
-        failoverGroup: "work",
-        enabled: true,
-        authenticated: true,
-        availabilityRefreshSupported: true,
-        availability: {
-          status: "available",
-          source: "claude_cli_usage",
-          observedAt: "2026-08-20T18:00:00.000Z",
-          account: { id: "shared", verification: "native_verified", displayName: "Work plan" },
-          windows: [{ kind: "session", label: "Current session", usedPercent: 24 }],
-        },
-      },
-      {
-        environmentId: studio,
-        environmentLabel: "Studio",
-        instanceId: "claude-backup",
-        driver: "claudeAgent",
-        displayName: "Claude Backup",
-        failoverGroup: "work",
-        enabled: true,
-        authenticated: true,
-        availabilityRefreshSupported: true,
-        isRefreshing: true,
-        availability: {
-          status: "available",
-          source: "claude_cli_usage",
-          observedAt: "2026-08-20T18:00:00.000Z",
-          account: { id: "shared", verification: "native_verified", displayName: "Work plan" },
-          windows: [{ kind: "session", label: "Current session", usedPercent: 24 }],
-        },
-      },
-      {
-        environmentId: laptop,
-        environmentLabel: "Laptop",
-        instanceId: "claude-personal",
-        driver: "claudeAgent",
-        displayName: "Claude Personal",
-        enabled: true,
-        authenticated: false,
-        availabilityRefreshSupported: true,
-        availability: { status: "unknown", source: "claude_agent_sdk", windows: [] },
-      },
-      {
-        environmentId: laptop,
-        environmentLabel: "Laptop",
-        instanceId: "codex-failed",
-        driver: "codex",
-        displayName: "Codex Failed",
-        enabled: true,
-        authenticated: true,
-        availabilityRefreshSupported: false,
-        availability: {
-          status: "available",
-          source: "codex_app_server",
-          observedAt: "2026-08-20T17:00:00.000Z",
-          stale: { reason: "refresh_failed", attemptedAt: "2026-08-20T18:00:00.000Z" },
-          windows: [{ kind: "weekly", label: "Weekly", usedPercent: 65 }],
-        },
-      },
-    ];
-    const merged = mergeUsage([], USAGE_CONTRACT_VERSION);
-    testState.useUsage.mockReturnValue({
-      merged: { ...merged, costUsd: 42, totalTokens: 1_000 },
-      allEnvironments: [
-        { environmentId: studio, label: "Studio", isPending: false, error: null, summary: null },
-        { environmentId: laptop, label: "Laptop", isPending: true, error: null, summary: null },
-      ],
-      environments: [
-        { environmentId: studio, label: "Studio", isPending: false, error: null, summary: null },
-        { environmentId: laptop, label: "Laptop", isPending: true, error: null, summary: null },
-      ],
-      isPending: false,
-      isPartial: false,
-      isUsageRefreshing: true,
-      refreshUsage: testState.refreshUsage,
-      refreshCapacity: testState.refreshCapacity,
-      providerAvailability: [],
-      isProviderAvailabilityPending: true,
-      isCapacityRefreshing: true,
-      hasProviderAvailabilityError: false,
-    });
-  });
-
-  it("renders realistic multi-Environment Capacity above retained historical Usage", () => {
-    const markup = renderToStaticMarkup(<UsagePage />);
-    expect(markup.indexOf('id="capacity-heading"')).toBeGreaterThanOrEqual(0);
-    expect(markup.indexOf('id="capacity-heading"')).toBeLessThan(markup.indexOf("sessions"));
-    expect(markup).toContain("$42.00");
-    expect(markup).toContain("API estimate");
-    expect(markup).toContain("Work plan");
-    expect(markup).toContain("Provider not authenticated");
-    expect(markup).toContain("Refresh failed — previous reading unconfirmed");
-    expect(markup).toContain("Current session: 24% used");
-    expect(markup).toContain("Studio");
-    expect(markup).toContain("Laptop");
-    expect(markup).toContain('aria-label="Historical usage environment"');
-    expect(markup).toContain("All Environments");
-    expect(markup).toContain('aria-label="Refresh capacity"');
-    expect(markup).toContain('aria-label="Refresh usage"');
-    expect(markup).toContain('aria-busy="true"');
-    expect(markup).toContain('aria-label="Capacity lens"');
-    expect(markup).toContain('aria-pressed="true"');
-    expect(testState.useUsage).toHaveBeenCalledWith(expect.any(Object), null);
   });
 });

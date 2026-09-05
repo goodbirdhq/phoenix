@@ -77,6 +77,43 @@ function environment(id: string, usageSummary: UsageSummary): EnvironmentUsage {
 }
 
 describe("mergeUsage", () => {
+  it("keeps environment breakdowns additive when two environments share a history store", () => {
+    const shared = summary(
+      [bucket({ sourceId: "shared" })],
+      [
+        {
+          id: "shared",
+          provider: "claude",
+          hostId: "mac",
+          homePath: "/shared",
+          distinctSessions: 1,
+        },
+      ],
+    );
+    const separate = summary(
+      [bucket({ costUsd: 3 })],
+      [{ provider: "claude", hostId: "linux", homePath: "/separate", distinctSessions: 2 }],
+    );
+    const merged = mergeUsage(
+      [environment("env-b", shared), environment("env-a", shared), environment("env-c", separate)],
+      USAGE_CONTRACT_VERSION,
+    );
+    expect(merged.environmentTotals.find((row) => row.environmentId === "env-b")?.costUsd).toBe(0);
+    expect(merged.environmentTotals.find((row) => row.environmentId === "env-a")?.costUsd).toBe(10);
+    expect(merged.environmentTotals.find((row) => row.environmentId === "env-c")?.costUsd).toBe(3);
+    for (const key of [
+      "costUsd",
+      "totalTokens",
+      "cachedInputTokens",
+      "cacheCreationTokens",
+      "outputTokens",
+      "sessions",
+      "records",
+    ] as const) {
+      expect(merged.environmentTotals.reduce((sum, row) => sum + row[key], 0)).toBe(merged[key]);
+    }
+  });
+
   it("sums environments that read different transcript directories", () => {
     const merged = mergeUsage(
       [
@@ -398,5 +435,38 @@ describe("mergeUsage", () => {
     ]);
     expect(merged.daily).toHaveLength(1);
     expect(merged.daily[0]?.costUsd).toBe(10);
+  });
+});
+
+describe("optional session detail", () => {
+  it("drops duplicate-store detail with its overview and preserves environment identity", () => {
+    const base = summary(
+      [bucket({ sourceId: "home" })],
+      [{ id: "home", provider: "claude", hostId: "host", homePath: "/claude" }],
+    );
+    const detailed: UsageSummary = {
+      ...base,
+      sessionUsage: [
+        {
+          provider: "claude",
+          sourceId: "home",
+          sessionId: "native",
+          firstActivityAt: "2026-08-07T00:00:00Z",
+          lastActivityAt: "2026-08-07T00:00:00Z",
+          models: [],
+        },
+      ],
+    };
+    const result = mergeUsage(
+      [
+        { environmentId: "a" as EnvironmentId, label: "A", summary: detailed },
+        { environmentId: "b" as EnvironmentId, label: "B", summary: detailed },
+        { environmentId: "c" as EnvironmentId, label: "Old", summary: base },
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+    expect(result.sessionUsage).toHaveLength(1);
+    expect(result.sessionUsage[0]?.environmentId).toBe("a");
+    expect(result.sessionDetailUnavailable).toEqual(["c"]);
   });
 });
