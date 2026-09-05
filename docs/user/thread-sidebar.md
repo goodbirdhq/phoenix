@@ -37,7 +37,7 @@ Hover a thread title for its branch and worktree details. The avatar strip overl
 at narrow widths to keep space for branch names.
 
 Collapsed rows show the most actionable status in their subtree: a decision first, then input,
-then failure, followed by working, monitoring, and ready. Click a review action to open the thread
+then failure, followed by waiting on a parent, working, monitoring, and ready. Click a review action to open the thread
 that needs it. Working teams show the number of working sessions before the dotted indicator;
 ready threads show a green check. Expanded rows show their own status, while each child shows
 its own status or summarizes its children if collapsed. Counts always include every descendant,

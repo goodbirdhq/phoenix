@@ -70,9 +70,10 @@ const statusPriority: Record<SidebarThreadStatus, number> = {
   approval: 0,
   input: 1,
   failed: 2,
-  working: 3,
-  monitoring: 4,
-  ready: 5,
+  "awaiting-parent": 3,
+  working: 4,
+  monitoring: 5,
+  ready: 6,
 };
 
 /** Expansion transfers descendant signals to their visible rows. The target

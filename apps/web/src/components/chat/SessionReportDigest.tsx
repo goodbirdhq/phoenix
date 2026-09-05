@@ -1,5 +1,10 @@
-import type { OrchestrationThreadActivity, ThreadId } from "@t3tools/contracts";
-import { CircleAlertIcon, FileTextIcon, InboxIcon, MailIcon } from "lucide-react";
+import type {
+  OrchestrationMessage,
+  OrchestrationThread,
+  OrchestrationThreadActivity,
+  ThreadId,
+} from "@t3tools/contracts";
+import { CircleAlertIcon, ClockIcon, FileTextIcon, InboxIcon, MailIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
@@ -11,21 +16,73 @@ import {
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 export const SESSION_REPORT_INBOX_PASSIVE_COPY =
-  "Opening this inbox or a child thread does not mark a report as read. Only the parent agent's read_report call clears an update.";
+  "Only reports the parent agent has not yet taken in. An update clears once the agent receives the report in a turn or reads it with read_report — opening this inbox or a child thread clears nothing.";
 
 /**
  * How long the exit animation runs before the icon unmounts. Kept in sync with
  * the `session-inbox-exit` keyframe so the element is not torn out mid-flight.
  */
 const EXIT_ANIMATION_MS = 180;
+const EMPTY_MESSAGES: ReadonlyArray<OrchestrationMessage> = [];
+const EMPTY_THREAD_TITLES: ReadonlyMap<string, string> = new Map();
 
 type IconPhase = "hidden" | "visible" | "leaving";
 
+/** One line of a message still sitting in this thread's delivery queue. */
+interface PendingChatEntry {
+  readonly messageId: string;
+  readonly from: string;
+  readonly preview: string;
+  readonly requestedAt: string;
+}
+
+const messagePreview = (text: string): string => {
+  const line = text.split(/\r?\n/u, 1)[0]?.replace(/\s+/g, " ").trim() ?? "";
+  return line.length <= 96 ? line : `${line.slice(0, 95).trimEnd()}…`;
+};
+
+/**
+ * Joins the thread's undelivered queue with its messages: what is still
+ * waiting for the agent, who said it, and since when. Origin distinguishes
+ * a child session's queued question from the human's queued follow-up.
+ */
+export const derivePendingChats = (
+  queuedTurnStarts: OrchestrationThread["queuedTurnStarts"] | null | undefined,
+  messages: ReadonlyArray<OrchestrationMessage>,
+  threadTitles: ReadonlyMap<string, string> = EMPTY_THREAD_TITLES,
+): ReadonlyArray<PendingChatEntry> => {
+  if (queuedTurnStarts === null || queuedTurnStarts === undefined) return [];
+  const byId = new Map(messages.map((message) => [message.id as string, message]));
+  return queuedTurnStarts.map((entry) => {
+    const message = byId.get(entry.messageId as string);
+    const origin = message?.origin;
+    return {
+      messageId: entry.messageId,
+      from:
+        origin === undefined
+          ? "You"
+          : origin.kind === "phoenix"
+            ? "Phoenix"
+            : origin.threadId == null
+              ? "Another session"
+              : (threadTitles.get(origin.threadId) ?? "Another session"),
+      preview: message !== undefined ? messagePreview(message.text) : "Queued message",
+      requestedAt: entry.requestedAt,
+    };
+  });
+};
+
 export function SessionReportDigest({
   activities,
+  queuedTurnStarts = null,
+  messages = EMPTY_MESSAGES,
+  threadTitles = EMPTY_THREAD_TITLES,
   onOpenChildThread,
 }: {
   readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
+  readonly queuedTurnStarts?: OrchestrationThread["queuedTurnStarts"] | null;
+  readonly messages?: ReadonlyArray<OrchestrationMessage>;
+  readonly threadTitles?: ReadonlyMap<string, string>;
   readonly onOpenChildThread: (threadId: ThreadId) => void;
 }) {
   const notifications = useMemo(() => deriveSessionReportNotifications(activities), [activities]);
@@ -35,8 +92,12 @@ export function SessionReportDigest({
     () => notifications.filter((notification) => notification.payload.status === "failure").length,
     [notifications],
   );
+  const pendingChats = useMemo(
+    () => derivePendingChats(queuedTurnStarts, messages, threadTitles),
+    [queuedTurnStarts, messages, threadTitles],
+  );
 
-  const count = notifications.length;
+  const count = notifications.length + pendingChats.length;
   const [phase, setPhase] = useState<IconPhase>(count > 0 ? "visible" : "hidden");
   // Bumped on each arrival so React remounts the icon and replays the one-shot
   // flash. Same trick as the prompt-stash counter: no looping animation, which
@@ -77,7 +138,7 @@ export function SessionReportDigest({
 
   const shownCount = count > 0 ? count : lastPresent.current.count;
   const shownFailedCount = count > 0 ? failedCount : lastPresent.current.failedCount;
-  const countLabel = `${shownCount} child report${shownCount === 1 ? "" : "s"} awaiting parent review`;
+  const countLabel = `${shownCount} update${shownCount === 1 ? "" : "s"} awaiting this agent`;
   const needsAttentionLabel =
     shownFailedCount === 0
       ? null
@@ -123,7 +184,10 @@ export function SessionReportDigest({
         </PopoverTrigger>
       </div>
       <PopoverPopup
-        align="center"
+        // Anchored to the composer's right edge: the trigger lives at the
+        // right end of the chat box, and a centered popup detaches from it.
+        side="top"
+        align="end"
         className="w-[min(34rem,calc(100vw-2rem))]"
         viewportClassName="max-h-[min(28rem,calc(100vh-10rem))]"
       >
@@ -135,6 +199,39 @@ export function SessionReportDigest({
               <p className="text-muted-foreground text-xs">{SESSION_REPORT_INBOX_PASSIVE_COPY}</p>
             </div>
           </div>
+          {pendingChats.length > 0 ? (
+            <div className="space-y-1 pb-1">
+              <p className="px-1 text-[.65rem] font-medium tracking-wider text-muted-foreground uppercase">
+                Waiting for the agent
+              </p>
+              <ul className="space-y-1" aria-label="Messages waiting for the agent">
+                {pendingChats.map((chat) => (
+                  <li
+                    key={chat.messageId}
+                    className="flex items-start gap-2 rounded-lg px-2 py-1.5"
+                  >
+                    <ClockIcon
+                      aria-hidden
+                      className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline justify-between gap-3">
+                        <span className="truncate font-medium text-foreground text-sm">
+                          {chat.from}
+                        </span>
+                        <span className="shrink-0 text-muted-foreground text-xs">
+                          {formatRelativeTimeLabel(chat.requestedAt)}
+                        </span>
+                      </span>
+                      <span className="mt-0.5 block line-clamp-2 text-muted-foreground text-xs">
+                        {chat.preview}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <ul className="space-y-1" aria-label="Unread child reports">
             {visibleChildren.map((child) => {
               const isFailure = child.latest.payload.status === "failure";

@@ -275,8 +275,71 @@ export function applyThreadDetailEvent(
           ...(event.payload.modelSelection !== undefined
             ? { modelSelection: event.payload.modelSelection }
             : {}),
+          // A queued release enters "releasing": the message is with the
+          // provider but no turn has consumed it yet, so its pending marker
+          // must survive until turn-start-consumed clears the entry.
+          ...(event.payload.queuedDelivery === true
+            ? {
+                queuedTurnStarts: (thread.queuedTurnStarts ?? []).map((entry) =>
+                  entry.messageId === event.payload.messageId
+                    ? { ...entry, releasingAt: event.payload.createdAt }
+                    : entry,
+                ),
+              }
+            : {}),
           runtimeMode: event.payload.runtimeMode,
           interactionMode: event.payload.interactionMode,
+          updatedAt: event.occurredAt,
+        },
+      };
+
+    // ── Queued delivery lifecycle ───────────────────────────────────
+    // Mirrors the server's projection_turns queue rows so a client can mark
+    // messages the agent has not consumed yet without refetching the thread.
+    case "thread.turn-start-queued":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedTurnStarts: [
+            ...(thread.queuedTurnStarts ?? []).filter(
+              (entry) => entry.messageId !== event.payload.messageId,
+            ),
+            {
+              messageId: event.payload.messageId,
+              mode: event.payload.mode,
+              requestedAt: event.payload.createdAt,
+            },
+          ],
+          updatedAt: event.occurredAt,
+        },
+      };
+
+    case "thread.turn-start-consumed":
+    case "thread.turn-start-cancelled":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedTurnStarts: (thread.queuedTurnStarts ?? []).filter(
+            (entry) => entry.messageId !== event.payload.messageId,
+          ),
+          updatedAt: event.occurredAt,
+        },
+      };
+
+    case "thread.turn-start-requeued":
+      // A stale release went back to the queue; the pending marker persists,
+      // just no longer "releasing".
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedTurnStarts: (thread.queuedTurnStarts ?? []).map((entry) =>
+            entry.messageId === event.payload.messageId
+              ? { messageId: entry.messageId, mode: entry.mode, requestedAt: entry.requestedAt }
+              : entry,
+          ),
           updatedAt: event.occurredAt,
         },
       };
@@ -313,6 +376,7 @@ export function applyThreadDetailEvent(
         ...(event.payload.attachments !== undefined
           ? { attachments: event.payload.attachments }
           : {}),
+        ...(event.payload.origin !== undefined ? { origin: event.payload.origin } : {}),
         turnId: event.payload.turnId,
         streaming: event.payload.streaming,
         createdAt: event.payload.createdAt,

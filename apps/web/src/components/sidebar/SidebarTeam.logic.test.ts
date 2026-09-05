@@ -13,6 +13,7 @@ const thread = (id: string, parent: string | null = null, environmentId = "local
   environmentId,
   spawnedByThreadId: parent,
   pinnedAt: null as string | null,
+  awaitingParentReplySince: null as string | null,
   hasPendingApprovals: false,
   hasPendingUserInput: false,
   session: null,
@@ -62,6 +63,20 @@ describe("sidebar teams", () => {
     });
     expect(resolveSidebarTeamStatus(child, [child, grandchild], false).target).toBe(grandchild);
     expect(resolveSidebarTeamStatus(child, [child, grandchild], true).target).toBe(child);
+  });
+
+  it("surfaces a descendant waiting on its parent until its team is expanded", () => {
+    const waiting = { ...child, awaitingParentReplySince: "2026-09-05T12:00:00Z" };
+    expect(resolveSidebarTeamStatus(parent, [parent, waiting], false)).toMatchObject({
+      status: "awaiting-parent",
+      target: waiting,
+      workingCount: 1,
+    });
+    expect(resolveSidebarTeamStatus(parent, [parent, waiting], true).status).toBe("working");
+    expect(resolveSidebarTeamStatus(waiting, [waiting], true).status).toBe("awaiting-parent");
+    expect(resolveSidebarTeamStatus(parent, [parent, waiting, grandchild], false).status).toBe(
+      "input",
+    );
   });
 
   it("shows a pinned child separately without duplicating it inside an expanded parent", () => {
@@ -137,6 +152,7 @@ describe("sidebar teams", () => {
     expect(resolveSidebarTeamStatus(parent, [parent, error, grandchild], false).status).toBe(
       "input",
     );
-    expect(resolveSidebarTeamStatus(parent, [parent, error], false).status).toBe("failed");
+    const waiting = { ...child, awaitingParentReplySince: "2026-09-05T12:00:00Z" };
+    expect(resolveSidebarTeamStatus(parent, [parent, error, waiting], false).status).toBe("failed");
   });
 });

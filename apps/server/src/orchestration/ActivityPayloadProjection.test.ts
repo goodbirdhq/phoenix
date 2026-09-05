@@ -253,6 +253,80 @@ describe("projectActivityPayload", () => {
     });
   });
 
+  it("carries the messaged parent's identity past the result summary", () => {
+    // send_to_parent's target only exists in the result, which summarizing
+    // truncates mid-JSON — same hazard the spawn carry exists for.
+    const sendResult = JSON.stringify({
+      parentThreadId: "parent-thread-1",
+      delivery: "queued",
+      awaitingReply: true,
+      padding: "x".repeat(120),
+    });
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          item: {
+            type: "mcpToolCall",
+            id: "item-msg-1",
+            tool: "send_to_parent",
+            server: "phoenix",
+            status: "completed",
+            arguments: { message: "Which SHA is master?", awaitingReply: true },
+            result: { content: [{ type: "text", text: sendResult }] },
+          },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.sessionMessage).toEqual({
+      direction: "to-parent",
+      threadId: "parent-thread-1",
+      preview: "Which SHA is master?",
+      awaitingReply: true,
+    });
+    expect((data.item as Record<string, unknown>).arguments).toEqual({ awaitingReply: true });
+  });
+
+  it("removes the full inter-session body from Claude-shaped activity input", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          toolName: "mcp__phoenix__send_to_session",
+          input: { threadId: "child-thread-1", message: "x".repeat(65_536), mode: "queue" },
+          result: {
+            type: "tool_result",
+            tool_use_id: "toolu_send",
+            content: JSON.stringify({ threadId: "child-thread-1", delivery: "queued" }),
+          },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.input).toEqual({ threadId: "child-thread-1", mode: "queue" });
+    expect((data.sessionMessage as { preview: string }).preview.length).toBeLessThanOrEqual(84);
+  });
+
+  it("removes an in-flight send_to_parent body before its parent id is known", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          item: {
+            type: "mcpToolCall",
+            tool: "send_to_parent",
+            server: "phoenix",
+            status: "inProgress",
+            arguments: { message: "private body", awaitingReply: true },
+          },
+        },
+      }),
+    );
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect((data.item as Record<string, unknown>).arguments).toEqual({ awaitingReply: true });
+  });
+
   it("leaves an in-flight spawn without a child id (the row stays 'Spawning session')", () => {
     const projected = projectActivityPayload(
       activity({
@@ -353,6 +427,100 @@ describe("Schedule write carrier survival", () => {
     for (const projected of [read, failed]) {
       const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
       expect(data.scheduleActivity).toBeUndefined();
+    }
+  });
+});
+
+describe("list_session_providers carrier survival", () => {
+  const providersResult = {
+    providers: [
+      {
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
+        displayName: "Claude A",
+        available: true,
+        availability: {
+          status: "limited",
+          source: "claude_agent_sdk",
+          windows: [
+            { kind: "primary", label: "Session", usedPercent: 12 },
+            { kind: "weekly", label: "Weekly", usedPercent: 100 },
+          ],
+        },
+        models: [
+          { id: "opus", displayName: "Opus", isDefault: true },
+          { id: "sonnet", displayName: "Sonnet", isDefault: false },
+        ],
+      },
+    ],
+  };
+
+  const listCall = (result: unknown) =>
+    activity({
+      itemType: "mcp_tool_call",
+      data: {
+        item: { type: "mcp_tool_call", server: "phoenix", tool: "list_session_providers", result },
+      },
+    });
+
+  it("carries the snapshot fields past the result summary", () => {
+    const projected = projectActivityPayload(listCall(providersResult));
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+
+    expect((data.item as Record<string, unknown>).result).not.toEqual(providersResult);
+    expect(data.providerListActivity).toEqual({
+      totalCount: 1,
+      providers: [
+        {
+          instanceId: "claudeAgent",
+          displayName: "Claude A",
+          driver: "claudeAgent",
+          available: true,
+          status: "limited",
+          windows: [
+            { kind: "primary", label: "Session", usedPercent: 12 },
+            { kind: "weekly", label: "Weekly", usedPercent: 100 },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not put the model catalog on the wire", () => {
+    const projected = projectActivityPayload(listCall(providersResult));
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    const carrier = data.providerListActivity as Record<string, unknown>;
+    const first = (carrier.providers as Array<Record<string, unknown>>)[0];
+
+    expect(first?.models).toBeUndefined();
+    expect(JSON.stringify(projected.payload).includes("opus")).toBe(false);
+  });
+
+  it("carries an empty success so the card can show none configured", () => {
+    const projected = projectActivityPayload(listCall({ providers: [] }));
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    expect(data.providerListActivity).toEqual({ providers: [], totalCount: 0 });
+  });
+
+  it("adds no carrier for a failed call or a different tool", () => {
+    const failed = projectActivityPayload(listCall({ error: "unavailable" }));
+    const other = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          item: {
+            type: "mcp_tool_call",
+            server: "phoenix",
+            tool: "spawn_session",
+            result: providersResult,
+          },
+        },
+      }),
+    );
+
+    for (const projected of [failed, other]) {
+      const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+      expect(data.providerListActivity).toBeUndefined();
     }
   });
 });

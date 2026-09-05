@@ -1357,6 +1357,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   ) : null}
                   <CircleDashedIcon aria-hidden className="size-4 text-[#60A5FA]" />
                 </span>
+              ) : status === "awaiting-parent" ? (
+                <span className="truncate text-[#4F46E5] dark:text-indigo-300">
+                  Waiting on parent
+                </span>
               ) : status === "monitoring" ? (
                 <span className="text-[#0284C7] dark:text-sky-400">Monitoring</span>
               ) : (

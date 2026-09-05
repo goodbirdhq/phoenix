@@ -82,4 +82,35 @@ layer("ProjectionTurnRepository queued receipts", (it) => {
       assert.equal(receipts[0]?.consumedByTurnId, TurnId.make("receipt-turn"));
     }),
   );
+
+  it.effect("aggregates every undelivered receipt beyond the detail page limit", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 49 });
+      const repository = yield* ProjectionTurnRepository;
+      yield* Effect.forEach(
+        Array.from({ length: 21 }, (_, index) => index),
+        (index) =>
+          repository.enqueueTurnStart({
+            threadId: THREAD_ID,
+            messageId: MessageId.make(`receipt-message-${index}`),
+            mode: "queue",
+            state: index === 20 ? "releasing" : "queued",
+            requestedAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+            releasingAt: index === 20 ? RELEASING_AT : null,
+            redeliveryCount: 0,
+          }),
+      );
+      yield* repository.markQueuedTurnStartReleasing({
+        threadId: THREAD_ID,
+        messageId: MessageId.make("receipt-message-20"),
+        releasingAt: RELEASING_AT,
+      });
+
+      assert.deepEqual(yield* repository.getQueuedDeliveryDiagnostics({ threadId: THREAD_ID }), {
+        pendingQueuedCount: 20,
+        stalledDeliveryCount: 1,
+        oldestUndeliveredMessageAt: REQUESTED_AT,
+      });
+    }),
+  );
 });

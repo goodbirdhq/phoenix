@@ -1,4 +1,5 @@
 import * as Haptics from "expo-haptics";
+import { useNavigation } from "@react-navigation/native";
 import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
 import { LayoutAnimation, Pressable, ScrollView, View } from "react-native";
 
@@ -129,10 +130,13 @@ export function ThreadWorkLog(props: {
   readonly copiedRowId: string | null;
   readonly expandedRows: Readonly<Record<string, boolean>>;
   readonly iconSubtleColor: import("react-native").ColorValue;
+  /** Route target for rows about another thread (spawned/messaged sessions). */
+  readonly environmentId: string;
   readonly onCopyRow: (rowId: string, value: string) => void;
   readonly onToggleRow: (rowId: string) => void;
 }) {
   const pressedBackground = useThemeColor("--color-subtle");
+  const navigation = useNavigation();
   const rows = visibleWorkLogActivities(props.activities).map((activity) => ({
     ...activity,
     detail: compactActivityDetail(activity.detail),
@@ -166,16 +170,28 @@ export function ThreadWorkLog(props: {
               {...(isFreshRow(row.createdAt) ? { entering: FadeIn.duration(200) } : {})}
             >
               <Pressable
-                accessibilityRole={canExpand ? "button" : undefined}
+                accessibilityRole={canExpand || row.openThreadId ? "button" : undefined}
                 accessibilityLabel={displayText}
                 accessibilityHint={
-                  canExpand
-                    ? "Double tap to show full details. Long press to copy."
-                    : "Long press to copy."
+                  row.openThreadId
+                    ? "Double tap to open the session. Long press to copy."
+                    : canExpand
+                      ? "Double tap to show full details. Long press to copy."
+                      : "Long press to copy."
                 }
                 accessibilityState={canExpand ? { expanded } : undefined}
                 hitSlop={4}
                 onPress={() => {
+                  // Routed rows (spawned/messaged sessions) open the other
+                  // thread — the whole point of the row — over expanding.
+                  if (row.openThreadId) {
+                    void Haptics.selectionAsync();
+                    navigation.navigate("Thread", {
+                      environmentId: props.environmentId,
+                      threadId: row.openThreadId,
+                    });
+                    return;
+                  }
                   if (canExpand) {
                     triggerDisclosureFeedback();
                     props.onToggleRow(row.id);
@@ -219,7 +235,14 @@ export function ThreadWorkLog(props: {
                       </Text>
                     ) : null}
                     <View className="h-4 w-4 items-center justify-center">
-                      {canExpand ? (
+                      {row.openThreadId ? (
+                        <SymbolView
+                          name={{ ios: "chevron.right", android: "chevron_right" }}
+                          size={11}
+                          tintColor={props.iconSubtleColor}
+                          type="monochrome"
+                        />
+                      ) : canExpand ? (
                         <SymbolView
                           name={
                             expanded

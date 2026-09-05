@@ -55,6 +55,9 @@ export const ProjectionThread = Schema.Struct({
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,
+  // Optional so row literals written before the awaiting-reply signal (and
+  // tests that never touch it) keep constructing; null means "not waiting".
+  awaitingParentReplySince: Schema.optional(Schema.NullOr(IsoDateTime)),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;

@@ -1,4 +1,5 @@
 import {
+  type OrchestrationThread,
   type EnvironmentId,
   type MessageId,
   type ScopedThreadRef,
@@ -73,6 +74,12 @@ import {
   ZapIcon,
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
+import {
+  formatProviderListHeading,
+  formatProviderListReadyLabel,
+  formatProviderListWindows,
+  providerListSummaryTone,
+} from "@t3tools/shared/providerListToolActivity";
 import { SCHEDULE_ACTION_LABELS } from "@t3tools/shared/scheduleToolActivity";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -117,6 +124,7 @@ import {
   type ParsedPreviewAnnotation,
 } from "~/lib/previewAnnotation";
 import { cn } from "~/lib/utils";
+import { useEnvironmentThreadTitles } from "~/state/entities";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
@@ -159,6 +167,7 @@ interface TimelineRowSharedState {
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
   onOpenThread: (threadId: string) => void;
+  threadTitles: ReadonlyMap<string, string>;
 }
 
 interface TimelineRowActivityState {
@@ -172,6 +181,9 @@ interface TimelineRowActivityState {
 
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
+const TimelinePendingDeliveryCtx = createContext<ReadonlyMap<string, "queued" | "releasing">>(
+  new Map(),
+);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
 const TIMELINE_LIST_FADE_HEADER = <div className="h-10 sm:h-12" />;
 
@@ -258,6 +270,8 @@ interface MessagesTimelineProps {
   topFadeEnabled?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
+  /** The thread's undelivered queue, for pending markers on unconsumed messages. */
+  queuedTurnStarts?: OrchestrationThread["queuedTurnStarts"] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +312,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
   loadEarlier = null,
+  queuedTurnStarts = null,
 }: MessagesTimelineProps) {
+  const threadTitles = useEnvironmentThreadTitles(activeThreadEnvironmentId);
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
@@ -529,6 +545,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     };
   }, [timelineViewportElement, rows.length]);
 
+  const pendingDeliveries = useMemo<ReadonlyMap<string, "queued" | "releasing">>(
+    () =>
+      new Map(
+        (queuedTurnStarts ?? []).map((entry) => [
+          entry.messageId as string,
+          entry.releasingAt !== undefined ? ("releasing" as const) : ("queued" as const),
+        ]),
+      ),
+    [queuedTurnStarts],
+  );
+
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
       timestampFormat,
@@ -547,6 +574,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel,
       onOpenAgents,
       onOpenThread,
+      threadTitles,
     }),
     [
       timestampFormat,
@@ -564,6 +592,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel,
       onOpenAgents,
       onOpenThread,
+      threadTitles,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -601,60 +630,62 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   return (
     <TimelineRowCtx value={sharedState}>
-      <TimelineRowActivityCtx value={activityState}>
-        <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
-          <LegendList<MessagesTimelineRow>
-            ref={listRef}
-            data={rows}
-            keyExtractor={keyExtractor}
-            getItemType={getItemType}
-            renderItem={renderItem}
-            estimatedItemSize={90}
-            initialScrollAtEnd
-            {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            contentInsetEndAdjustment={contentInsetEndAdjustment}
-            maintainScrollAtEnd={
-              anchoredEndSpace || !liveFollowEnabled || disclosureToggleSettling
-                ? false
-                : TIMELINE_MAINTAIN_SCROLL_AT_END
-            }
-            maintainVisibleContentPosition={maintainVisibleContentPosition}
-            onScroll={handleScroll}
-            className={cn(
-              "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
-              topFadeEnabled && "topbar-scroll-fade",
-            )}
-            ListHeaderComponent={
-              loadEarlier !== null ? (
-                <TimelineLoadEarlierHeader
-                  loading={loadEarlier.loading}
-                  onLoadEarlier={loadEarlier.onLoadEarlier}
-                  fade={topFadeEnabled}
-                />
-              ) : topFadeEnabled ? (
-                TIMELINE_LIST_FADE_HEADER
-              ) : (
-                TIMELINE_LIST_HEADER
-              )
-            }
-            ListFooterComponent={TIMELINE_LIST_FOOTER}
-          />
-          <TimelineMinimap
-            items={minimapItems}
-            hasPersistentGutter={minimapHasPersistentGutter}
-            hitStripWidth={minimapHitStripWidth}
-            stripMap={minimapStripMap}
-            onSelect={(item) => {
-              onManualNavigation();
-              void listRef.current?.scrollToIndex({
-                index: item.rowIndex,
-                animated: true,
-                viewOffset: 24,
-              });
-            }}
-          />
-        </div>
-      </TimelineRowActivityCtx>
+      <TimelinePendingDeliveryCtx value={pendingDeliveries}>
+        <TimelineRowActivityCtx value={activityState}>
+          <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
+            <LegendList<MessagesTimelineRow>
+              ref={listRef}
+              data={rows}
+              keyExtractor={keyExtractor}
+              getItemType={getItemType}
+              renderItem={renderItem}
+              estimatedItemSize={90}
+              initialScrollAtEnd
+              {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+              contentInsetEndAdjustment={contentInsetEndAdjustment}
+              maintainScrollAtEnd={
+                anchoredEndSpace || !liveFollowEnabled || disclosureToggleSettling
+                  ? false
+                  : TIMELINE_MAINTAIN_SCROLL_AT_END
+              }
+              maintainVisibleContentPosition={maintainVisibleContentPosition}
+              onScroll={handleScroll}
+              className={cn(
+                "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
+                topFadeEnabled && "topbar-scroll-fade",
+              )}
+              ListHeaderComponent={
+                loadEarlier !== null ? (
+                  <TimelineLoadEarlierHeader
+                    loading={loadEarlier.loading}
+                    onLoadEarlier={loadEarlier.onLoadEarlier}
+                    fade={topFadeEnabled}
+                  />
+                ) : topFadeEnabled ? (
+                  TIMELINE_LIST_FADE_HEADER
+                ) : (
+                  TIMELINE_LIST_HEADER
+                )
+              }
+              ListFooterComponent={TIMELINE_LIST_FOOTER}
+            />
+            <TimelineMinimap
+              items={minimapItems}
+              hasPersistentGutter={minimapHasPersistentGutter}
+              hitStripWidth={minimapHitStripWidth}
+              stripMap={minimapStripMap}
+              onSelect={(item) => {
+                onManualNavigation();
+                void listRef.current?.scrollToIndex({
+                  index: item.rowIndex,
+                  animated: true,
+                  viewOffset: 24,
+                });
+              }}
+            />
+          </div>
+        </TimelineRowActivityCtx>
+      </TimelinePendingDeliveryCtx>
     </TimelineRowCtx>
   );
 });
@@ -995,7 +1026,13 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "work-live" ? <LiveWorkEntryTimelineRow row={row} /> : null}
       {row.kind === "work-toggle" ? <WorkGroupToggleTimelineRow row={row} /> : null}
       {row.kind === "turn-fold" ? <TurnFoldTimelineRow row={row} /> : null}
-      {row.kind === "message" && row.message.role === "user" ? <UserTimelineRow row={row} /> : null}
+      {row.kind === "message" && row.message.role === "user" ? (
+        row.message.origin !== undefined ? (
+          <SessionOriginMessageRow row={row} />
+        ) : (
+          <UserTimelineRow row={row} />
+        )
+      ) : null}
       {row.kind === "message" && row.message.role === "assistant" ? (
         <AssistantTimelineRow row={row} />
       ) : null}
@@ -1006,6 +1043,72 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     </div>
   );
 });
+
+/** Small truth line under an unconsumed message: sent is not the same as
+ * heard, and the difference is exactly what the wedge incidents hid. */
+function PendingDeliveryTag({ messageId }: { messageId: string }) {
+  const state = use(TimelinePendingDeliveryCtx).get(messageId);
+  if (state === undefined) return null;
+  return (
+    <span className="text-[11px] text-muted-foreground/80">
+      {state === "releasing"
+        ? "Delivering…"
+        : "Queued — the agent gets this after its current turn"}
+    </span>
+  );
+}
+
+/**
+ * A user-role message another session (or Phoenix itself) authored. Rendered
+ * left-aligned in a bordered card so it can never be mistaken for the
+ * human's own bubble, with a routed header naming the speaker. The body is
+ * the exact text the agent consumed — origin is presentation metadata, never
+ * a rewrite.
+ */
+function SessionOriginMessageRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+  const ctx = use(TimelineRowCtx);
+  const origin = row.message.origin;
+  if (!origin) return null;
+  const linkedTitle =
+    origin.threadId == null ? null : (ctx.threadTitles.get(origin.threadId) ?? null);
+  const openThreadId = origin.threadId ?? null;
+  const label =
+    origin.kind === "phoenix"
+      ? linkedTitle !== null
+        ? `Phoenix · about ${linkedTitle}`
+        : "Phoenix"
+      : (linkedTitle ?? "Another session");
+
+  return (
+    <div className="group flex flex-col items-start gap-1">
+      <div className="relative max-w-[85%] rounded-2xl border border-border/60 bg-card/60 p-3">
+        {openThreadId !== null ? (
+          <button
+            type="button"
+            onClick={() => ctx.onOpenThread(openThreadId)}
+            className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <BotIcon aria-hidden className="size-3.5 shrink-0" />
+            <span className="min-w-0 truncate">{label}</span>
+            <span className="text-info-foreground">▸</span>
+          </button>
+        ) : (
+          <span className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <BotIcon aria-hidden className="size-3.5 shrink-0" />
+            <span className="min-w-0 truncate">{label}</span>
+          </span>
+        )}
+        <CollapsibleUserMessageBody
+          text={row.message.text}
+          terminalContexts={[]}
+          skills={ctx.skills}
+          markdownCwd={ctx.markdownCwd}
+        />
+      </div>
+      <PendingDeliveryTag messageId={row.message.id} />
+    </div>
+  );
+}
 
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
@@ -1089,6 +1192,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           markdownCwd={ctx.markdownCwd}
         />
       </div>
+      <PendingDeliveryTag messageId={row.message.id} />
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
@@ -2709,6 +2813,87 @@ const SessionSpawnCtaRow = memo(function SessionSpawnCtaRow(props: {
   );
 });
 
+/** Inter-session message rows (`send_to_session` down, `send_to_parent` up):
+ * the other two verbs of the session conversation get the same routed chrome
+ * as spawn, so the whole exchange reads as one system in the timeline. */
+const SessionMessageCtaRow = memo(function SessionMessageCtaRow(props: {
+  workEntry: TimelineWorkEntry;
+}) {
+  const { workEntry } = props;
+  const { onOpenThread } = use(TimelineRowCtx);
+  const message = workEntry.sessionMessage;
+  if (!message) {
+    return null;
+  }
+
+  const failed =
+    workEntry.tone === "error" ||
+    workEntry.toolLifecycleStatus === "failed" ||
+    workEntry.toolLifecycleStatus === "declined" ||
+    workEntry.toolLifecycleStatus === "stopped";
+  const toParent = message.direction === "to-parent";
+  const canOpen = !failed && message.threadId !== undefined;
+  const openThreadId = canOpen ? message.threadId : null;
+  const sending = !failed && !canOpen;
+  const lead = failed
+    ? toParent
+      ? "Failed to message parent"
+      : "Failed to message session"
+    : toParent
+      ? "Messaged parent"
+      : "Messaged session";
+  const trailing = failed
+    ? "failed"
+    : sending
+      ? "sending"
+      : toParent && message.awaitingReply === true
+        ? "✓ sent · awaiting reply"
+        : "✓ sent";
+  const className =
+    "-mx-1 flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px]";
+  const content = (
+    <>
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          failed ? "bg-destructive" : sending ? "bg-info" : "bg-success",
+        )}
+      />
+      <WorkEntryIconSvg name="message-circle" className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate">
+        <span className="font-medium">{lead}</span>
+        {message.preview ? (
+          <span className="text-muted-foreground"> · {message.preview}</span>
+        ) : null}
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
+        <span>{trailing}</span>
+        {canOpen ? <span className="text-info-foreground">Open ▸</span> : null}
+      </span>
+    </>
+  );
+
+  if (!openThreadId) {
+    return (
+      <div role="status" className={className}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpenThread(openThreadId)}
+      aria-label={toParent ? "Open parent session" : "Open messaged session"}
+      className={cn(className, "transition hover:bg-accent/50")}
+    >
+      {content}
+    </button>
+  );
+});
+
 /** Next run in the Schedule's own zone — the answer to "when does this fire?". */
 function formatScheduleNextRun(instant: string | null, timeZone: string): string | null {
   if (!instant) return null;
@@ -2788,6 +2973,83 @@ const ScheduleWriteRow = memo(function ScheduleWriteRow(props: { workEntry: Time
   );
 });
 
+/**
+ * `list_session_providers` used to dump a fat JSON blob (then slimming cut it
+ * to 84 chars). Like Schedule writes, it gets a snapshot receipt: one row that
+ * survives grouping and shows the availability that mattered at call time.
+ * Models and full quota history stay in Usage/Settings.
+ */
+const ProviderListRow = memo(function ProviderListRow(props: { workEntry: TimelineWorkEntry }) {
+  const activity = props.workEntry.providerListActivity;
+  if (!activity) return null;
+  const tone = providerListSummaryTone(activity);
+  const heading = formatProviderListHeading(activity);
+  const [lead, ...rest] = heading.split(" · ");
+
+  return (
+    <div className="-mx-1 rounded-md border border-border/60 bg-card/50 px-2.5 py-2">
+      <div className="flex items-center gap-2 text-[13px]">
+        <span
+          aria-hidden
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            tone === "success"
+              ? "bg-success"
+              : tone === "warning"
+                ? "bg-warning"
+                : "bg-muted-foreground",
+          )}
+        />
+        <WrenchIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="min-w-0 truncate">
+          <span className="font-medium">{lead}</span>
+          {rest.length > 0 ? (
+            <span className="text-muted-foreground"> · {rest.join(" · ")}</span>
+          ) : null}
+        </span>
+        <span className="ml-auto shrink-0 font-mono text-[.7rem] text-muted-foreground">
+          snapshot
+        </span>
+      </div>
+      {activity.providers.length > 0 ? (
+        <ul className="mt-2 space-y-1.5">
+          {activity.providers.map((provider) => {
+            const ready = formatProviderListReadyLabel(provider.available);
+            const windows = formatProviderListWindows(provider.windows);
+            const quota =
+              provider.status === "limited" && windows.length === 0 ? "limited" : windows;
+            const dot =
+              provider.status === "limited"
+                ? "bg-warning"
+                : provider.status === "available"
+                  ? "bg-success"
+                  : "bg-muted-foreground";
+            return (
+              <li key={provider.instanceId} className="flex items-center gap-2 text-[12px]">
+                <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dot)} />
+                <span className="min-w-0 truncate font-medium">{provider.displayName}</span>
+                <span className="hidden truncate text-muted-foreground sm:inline">
+                  · {provider.driver}
+                </span>
+                <span className="ml-auto flex min-w-0 shrink items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
+                  <span
+                    className={cn(provider.available ? "text-success" : "text-muted-foreground")}
+                  >
+                    {ready}
+                  </span>
+                  {quota ? (
+                    <span className="hidden min-w-0 truncate tabular-nums sm:inline">{quota}</span>
+                  ) : null}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+});
+
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
@@ -2801,10 +3063,16 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   if (workEntry.spawnedSession) {
     return <SessionSpawnCtaRow workEntry={workEntry} />;
   }
+  if (workEntry.sessionMessage) {
+    return <SessionMessageCtaRow workEntry={workEntry} />;
+  }
   // A failed write changed nothing, so it falls through to the generic row,
   // where the error text is already visible on expand.
   if (workEntry.scheduleActivity && !isFailedWorkEntry(workEntry)) {
     return <ScheduleWriteRow workEntry={workEntry} />;
+  }
+  if (workEntry.providerListActivity && !isFailedWorkEntry(workEntry)) {
+    return <ProviderListRow workEntry={workEntry} />;
   }
   return (
     <PlainWorkEntryRow
