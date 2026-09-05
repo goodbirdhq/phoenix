@@ -2,18 +2,27 @@ import {
   aggregateSchedules,
   unacknowledgedScheduleFailureCount,
 } from "@t3tools/client-runtime/schedules";
-import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   CalendarClockIcon,
   ChartNoAxesColumnIcon,
+  CodeXmlIcon,
+  BotIcon,
+  KeyboardIcon,
+  PaletteIcon,
+  Settings2Icon,
   GitPullRequestIcon,
   ServerIcon,
   SettingsIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { memo, useCallback } from "react";
+import { memo, useCallback, useEffect } from "react";
 
+import { isElectron } from "../../env";
+import { isMacPlatform } from "../../lib/utils";
+import { useDesktopUpdateState } from "../../state/desktopUpdate";
+import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator, MenuShortcut } from "../ui/menu";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { APP_BASE_NAME } from "~/branding";
 import { cn } from "../../lib/utils";
@@ -38,7 +47,7 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
-import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
+import { SidebarUpdateArchitectureWarning, SidebarUpdateMenuItem } from "./SidebarUpdatePill";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -113,18 +122,56 @@ function SidebarUtilityItem({
   icon,
   label,
   onClick,
+  active = false,
+  badge,
 }: {
+  active?: boolean;
+  badge?: number;
   icon: ReactNode;
   label: string;
   onClick: () => void;
 }) {
   return (
-    <SidebarMenuItem className="shrink-0">
+    <SidebarMenuItem className={cn("min-w-0", active ? "shrink" : "shrink-0")}>
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            <SidebarMenuButton
+              aria-label={
+                badge
+                  ? `${label}, ${badge} unacknowledged ${badge === 1 ? "failure" : "failures"}`
+                  : label
+              }
+              aria-current={active ? "page" : undefined}
+              style={
+                active
+                  ? {
+                      width:
+                        label === "Agents" || label === "Usage"
+                          ? 84
+                          : label === "Schedules"
+                            ? 112
+                            : 132,
+                    }
+                  : undefined
+              }
+              onClick={onClick}
+              className={cn(
+                "relative h-9 w-9 group-data-[wide-label=true]/footer:w-8 justify-center rounded-[8px] p-0 text-sidebar-muted-foreground [&>svg]:size-4 [&>svg]:text-current",
+                active &&
+                  "w-auto group-data-[wide-label=true]/footer:w-auto max-w-full gap-1.5 bg-zinc-200 hover:bg-zinc-200 px-3 text-xs font-semibold text-zinc-800 dark:bg-zinc-800 dark:hover:bg-zinc-800 dark:text-zinc-100 [&>svg]:size-[18px]",
+              )}
+            >
               {icon}
+              {active ? <span>{label}</span> : null}
+              {badge ? (
+                <span
+                  className="absolute right-0 top-0 flex min-h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[9px] font-semibold leading-none text-white"
+                  aria-label={`${badge} unacknowledged failures`}
+                >
+                  {badge > 99 ? "99+" : badge}
+                </span>
+              ) : null}
             </SidebarMenuButton>
           }
         />
@@ -134,9 +181,87 @@ function SidebarUtilityItem({
   );
 }
 
+// Survives the settings sidebar replacing the conversations sidebar. Only local
+// app locations are remembered, and a fresh client starts at the normal landing page.
+let lastAgentsPath = "/";
+let lastNonSettingsPath = "/";
+
+function SidebarSettingsMenu({ onNavigate }: { onNavigate: () => void }) {
+  const navigate = useNavigate();
+  const state = useDesktopUpdateState();
+  const updateAvailable =
+    state?.status === "available" ||
+    state?.status === "downloaded" ||
+    state?.status === "downloading";
+  const items = [
+    { to: "/settings/general", label: "General", Icon: Settings2Icon },
+    { to: "/settings/appearance", label: "Appearance", Icon: PaletteIcon },
+    { to: "/settings/keybindings", label: "Keybindings", Icon: KeyboardIcon },
+    { to: "/settings/providers", label: "Providers", Icon: BotIcon },
+  ] as const;
+  return (
+    <SidebarMenuItem className="shrink-0">
+      <Menu>
+        <MenuTrigger
+          render={
+            <SidebarMenuButton
+              size="icon"
+              aria-label={updateAvailable ? "Settings, update available" : "Settings"}
+              className="relative size-9 rounded-[8px] text-sidebar-muted-foreground [&>svg]:text-current data-popup-open:bg-zinc-200 dark:data-popup-open:bg-zinc-800"
+            />
+          }
+        >
+          <SettingsIcon className="size-4" />
+          {updateAvailable ? (
+            <span className="absolute right-1 top-[3px] size-[7px] rounded-full border border-sidebar bg-sky-600" />
+          ) : null}
+        </MenuTrigger>
+        <MenuPopup
+          side="top"
+          align="end"
+          className="w-[272px] rounded-[8px] border border-border bg-popover shadow-md backdrop-filter-none [--glass-opacity:100%]"
+        >
+          <MenuItem
+            className="h-8 rounded-[4px] text-sm"
+            onClick={() => {
+              onNavigate();
+              void navigate({ to: "/settings" });
+            }}
+          >
+            <SettingsIcon className="size-4" />
+            All settings…
+            <MenuShortcut>
+              {isElectron ? (isMacPlatform(navigator.platform) ? "⌘," : "Ctrl+,") : null}
+            </MenuShortcut>
+          </MenuItem>
+          {items.map(({ to, label, Icon }) => (
+            <MenuItem
+              key={to}
+              className="h-8 rounded-[4px] text-sm"
+              onClick={() => {
+                onNavigate();
+                void navigate({ to });
+              }}
+            >
+              <Icon className="size-4" />
+              {label}
+            </MenuItem>
+          ))}
+          {state ? (
+            <>
+              <MenuSeparator />
+              <SidebarUpdateMenuItem />
+            </>
+          ) : null}
+        </MenuPopup>
+      </Menu>
+    </SidebarMenuItem>
+  );
+}
+
 export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
-  const canGoBack = useCanGoBack();
+  const pathname = useLocation({ select: (location) => location.pathname });
   const { isMobile, setOpenMobile } = useSidebar();
   const currentFooterPage = useLocation({
     select: (location) =>
@@ -152,6 +277,10 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                 ? "pull-requests"
                 : null,
   });
+  useEffect(() => {
+    if (currentFooterPage !== "settings") lastNonSettingsPath = pathname;
+    if (currentFooterPage === null) lastAgentsPath = pathname;
+  }, [currentFooterPage, pathname]);
   const { environments } = useEnvironments();
   const { environments: scheduleEnvironments } = useWebEnvironmentSchedules();
   const scheduleFailureCount = unacknowledgedScheduleFailureCount(
@@ -181,11 +310,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     closeMobileSidebar();
     void navigate({ to: "/pull-requests", search: { involvement: "all", state: "open" } });
   }, [closeMobileSidebar, navigate]);
-  const handleSettingsClick = useCallback(() => {
-    closeMobileSidebar();
-    void navigate({ to: "/settings" });
-  }, [closeMobileSidebar, navigate]);
-
   const handleUsageClick = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -205,18 +329,24 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
-    if (canGoBack) {
-      window.history.back();
-      return;
-    }
-    void navigate({ to: "/" });
-  }, [canGoBack, closeMobileSidebar, navigate]);
+    void navigate({ to: lastNonSettingsPath });
+  }, [closeMobileSidebar, navigate]);
 
   return (
-    <SidebarMenu className="flex-row items-center">
-      {currentFooterPage ? (
+    <SidebarMenu
+      data-wide-label={
+        currentFooterPage === "environments" ||
+        currentFooterPage === "pull-requests" ||
+        currentFooterPage === "schedules"
+      }
+      className="group/footer flex-row items-center justify-between gap-1"
+    >
+      {currentFooterPage === "settings" ? (
         <SidebarMenuItem className="min-w-0 flex-1">
-          <SidebarMenuButton onClick={handleBackClick}>
+          <SidebarMenuButton
+            onClick={handleBackClick}
+            className="h-9 rounded-[8px] text-xs font-medium"
+          >
             <ArrowLeftIcon />
             <span>Back</span>
           </SidebarMenuButton>
@@ -224,65 +354,51 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       ) : (
         <>
           <SidebarUtilityItem
-            icon={<SettingsIcon />}
-            label="Settings"
-            onClick={handleSettingsClick}
+            icon={<CodeXmlIcon strokeWidth={1.7} />}
+            label="Agents"
+            active={currentFooterPage === null}
+            onClick={() => {
+              closeMobileSidebar();
+              void navigate({ to: lastAgentsPath });
+            }}
           />
           {pullRequestsSupported ? (
             <SidebarUtilityItem
               icon={<GitPullRequestIcon />}
               label="Pull Requests"
+              active={currentFooterPage === "pull-requests"}
               onClick={handlePullRequestsClick}
             />
           ) : null}
-          {/* The failure badge needs its own trigger, so this one does not use
-              SidebarUtilityItem. */}
-          <SidebarMenuItem className="shrink-0">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <SidebarMenuButton
-                    aria-label={
-                      scheduleFailureCount > 0
-                        ? `Schedules, ${scheduleFailureCount} unacknowledged ${scheduleFailureCount === 1 ? "failure" : "failures"}`
-                        : "Schedules"
-                    }
-                    className="relative"
-                    onClick={handleSchedulesClick}
-                    size="icon"
-                  >
-                    <CalendarClockIcon />
-                    {scheduleFailureCount > 0 ? (
-                      <span className="absolute -right-0.5 -top-0.5 flex min-h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[9px] font-semibold leading-none text-white">
-                        {scheduleFailureCount > 99 ? "99+" : scheduleFailureCount}
-                      </span>
-                    ) : null}
-                  </SidebarMenuButton>
-                }
-              />
-              <TooltipPopup side="top">Schedules</TooltipPopup>
-            </Tooltip>
-          </SidebarMenuItem>
           <SidebarUtilityItem
-            icon={<ServerIcon />}
-            label="Environments"
-            onClick={handleEnvironmentsClick}
+            icon={<CalendarClockIcon />}
+            label="Schedules"
+            active={currentFooterPage === "schedules"}
+            onClick={handleSchedulesClick}
+            badge={scheduleFailureCount}
           />
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"
+            active={currentFooterPage === "usage"}
             onClick={handleUsageClick}
           />
+          <SidebarUtilityItem
+            icon={<ServerIcon />}
+            label="Environments"
+            active={currentFooterPage === "environments"}
+            onClick={handleEnvironmentsClick}
+          />
+          <SidebarSettingsMenu onNavigate={closeMobileSidebar} />
         </>
       )}
-      <SidebarUpdatePill />
     </SidebarMenu>
   );
 });
 
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
-    <SidebarFooter className="p-[var(--sidebar-content-inset)]">
+    <SidebarFooter className="border-t-0 p-2.5">
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />

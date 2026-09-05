@@ -43,15 +43,12 @@ import {
   CircleCheckIcon,
   CircleDashedIcon,
   ClockIcon,
-  FolderIcon,
-  FolderPlusIcon,
   GitBranchIcon,
   MessageSquareIcon,
   PinIcon,
   PlusIcon,
   SearchIcon,
   ServerIcon,
-  SettingsIcon,
   SquarePenIcon,
   TerminalIcon,
   XIcon,
@@ -95,10 +92,7 @@ import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { readLocalApi } from "../localApi";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
-import {
-  buildSidebarProjectSnapshots,
-  type SidebarProjectSnapshot,
-} from "../sidebarProjectGrouping";
+import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -184,7 +178,17 @@ import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import { SidebarFiltersMenu, type SidebarFilterCategory } from "./sidebar/SidebarFilters";
+import {
+  EMPTY_SIDEBAR_FILTERS,
+  SIDEBAR_FILTER_STATUSES,
+  activeSidebarFilterCount,
+  matchesSidebarDraftFilters,
+  matchesSidebarThreadFilters,
+  matchesSidebarSelection,
+  sidebarAccountKey,
+  type SidebarFilters,
+} from "./sidebar/SidebarFilters.logic";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -579,6 +583,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectCwdByKey: ReadonlyMap<string, string>;
   projectFaviconPathByKey: ReadonlyMap<string, string | null | undefined>;
   scopedProjectKeys: ReadonlySet<string> | null;
+  filters: SidebarFilters;
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
 }) {
@@ -624,6 +629,8 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       ) {
         continue;
       }
+      if (!matchesSidebarDraftFilters(session, draftsByThreadKey[draftKey], props.filters))
+        continue;
       if (draftKey === props.routeDraftId) {
         // Open draft: render the frozen entry snapshot, or nothing for a
         // draft that has never been left. Gated on the LIVE session above so
@@ -647,6 +654,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
     frozenActive,
     props.routeDraftId,
     props.scopedProjectKeys,
+    props.filters,
   ]);
   const handleDiscard = useCallback(
     (draftId: DraftId) => {
@@ -1702,7 +1710,6 @@ export default function Sidebar() {
       );
     },
   });
-  const [projectScopeMenuOpen, setProjectScopeMenuOpen] = useState(false);
   const newThreadContext = useHandleNewThread();
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
@@ -1837,32 +1844,130 @@ export default function Sidebar() {
 
   const changeRequestSnapshotByKey = useAtomValue(threadChangeRequestSnapshotsAtom);
 
-  // Project scope: one menu above the list. Scoping filters the list without
-  // making the header width depend on the number or length of project names.
-  const [projectScopeKey, setProjectScopeKey] = useState<string | null>(null);
-  const scopedProjectGroup = useMemo(
-    () =>
-      projectScopeKey === null
-        ? null
-        : (projectGroups.find((project) => project.projectKey === projectScopeKey) ?? null),
-    [projectGroups, projectScopeKey],
-  );
-  const scopedProjectKeys = useMemo(
-    () =>
-      scopedProjectGroup === null
-        ? null
-        : new Set(
-            scopedProjectGroup.memberProjectRefs.map(
-              (projectRef) => `${projectRef.environmentId}:${projectRef.projectId}`,
-            ),
-          ),
-    [scopedProjectGroup],
-  );
-  useEffect(() => {
-    if (projectScopeKey !== null && scopedProjectGroup === null) {
-      setProjectScopeKey(null);
+  const [filters, setFilters] = useState<SidebarFilters>(EMPTY_SIDEBAR_FILTERS);
+  const filterCount = activeSidebarFilterCount(filters);
+  const scopedProjectKeys = useMemo(() => {
+    if (filters.projects.length === 0 && filters.environments.length === 0) return null;
+    return new Set(
+      projectGroups
+        .filter((group) => matchesSidebarSelection(filters.projects, group.projectKey))
+        .flatMap((group) => group.memberProjectRefs)
+        .filter((ref) => matchesSidebarSelection(filters.environments, ref.environmentId))
+        .map((ref) => `${ref.environmentId}:${ref.projectId}`),
+    );
+  }, [filters.projects, filters.environments, projectGroups]);
+  const filterCategories = useMemo<SidebarFilterCategory[]>(() => {
+    const accounts = [...providerEntriesByEnvironment].flatMap(([environmentId, entries]) =>
+      [...entries.values()].map((entry) => ({
+        key: sidebarAccountKey(environmentId, entry.instanceId),
+        label: entry.displayName,
+        description:
+          environments.find((environment) => environment.environmentId === environmentId)?.label ??
+          environmentId,
+      })),
+    );
+    const accountKeys = new Set(accounts.map((account) => account.key));
+    const models = new Map<string, { key: string; label: string }>();
+    for (const [environmentId, entries] of providerEntriesByEnvironment) {
+      for (const entry of entries.values()) {
+        if (
+          !matchesSidebarSelection(
+            filters.accounts,
+            sidebarAccountKey(environmentId, entry.instanceId),
+          )
+        )
+          continue;
+        for (const model of entry.models)
+          models.set(model.slug, { key: model.slug, label: model.name });
+      }
     }
-  }, [projectScopeKey, scopedProjectGroup]);
+    for (const thread of threads) {
+      const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+      const accountKey = sidebarAccountKey(thread.environmentId, instanceId);
+      if (!accountKeys.has(accountKey)) {
+        accountKeys.add(accountKey);
+        accounts.push({
+          key: accountKey,
+          label: instanceId,
+          description: environmentLabelById.get(thread.environmentId) ?? thread.environmentId,
+        });
+      }
+      if (!matchesSidebarSelection(filters.accounts, accountKey)) continue;
+      const model = thread.modelSelection.model;
+      if (!models.has(model)) models.set(model, { key: model, label: model });
+    }
+    // Keep selected historic models removable even after changing the account filter.
+    for (const model of filters.models)
+      if (!models.has(model)) models.set(model, { key: model, label: model });
+    return [
+      {
+        key: "projects",
+        label: "Projects",
+        allLabel: "All projects",
+        options: projectGroups.map((group) => ({
+          key: group.projectKey,
+          label: group.displayName,
+          description: [
+            ...new Set(
+              group.memberProjectRefs.map(
+                (ref) => environmentLabelById.get(ref.environmentId) ?? ref.environmentId,
+              ),
+            ),
+          ].join(", "),
+          onEdit: () => {
+            if (isMobile) setOpenMobile(false);
+            void router.navigate({
+              to: "/projects/$projectKey",
+              params: { projectKey: group.projectKey },
+            });
+          },
+        })),
+      },
+      {
+        key: "environments",
+        label: "Environments",
+        allLabel: "All environments",
+        options: environments.map((environment) => ({
+          key: environment.environmentId,
+          label: environment.label,
+        })),
+      },
+      {
+        key: "statuses",
+        label: "Status",
+        allLabel: "All statuses",
+        options: SIDEBAR_FILTER_STATUSES,
+      },
+      {
+        key: "accounts",
+        label: "Provider accounts",
+        allLabel: "All provider accounts",
+        options: accounts,
+      },
+      {
+        key: "models",
+        label: "Models",
+        allLabel: "All models",
+        options: [...models.values()].sort((a, b) => a.label.localeCompare(b.label)),
+      },
+    ];
+  }, [
+    providerEntriesByEnvironment,
+    environmentLabelById,
+    filters.accounts,
+    filters.models,
+    threads,
+    projectGroups,
+    environments,
+    isMobile,
+    setOpenMobile,
+    router,
+  ]);
+  const lastVisitedByKey = useUiStateStore((state) =>
+    filters.statuses.includes("unread") || filters.statuses.includes("woke")
+      ? state.threadLastVisitedAtById
+      : null,
+  );
   // Count-only subscription: the parent needs "are there draft rows" for the
   // empty state, while SidebarDraftBlock owns the per-keystroke content
   // subscription. Selecting a number keeps typing in a draft composer from
@@ -1885,6 +1990,8 @@ export default function Sidebar() {
       ) {
         continue;
       }
+      if (!matchesSidebarDraftFilters(session, store.draftsByThreadKey[draftKey], filters))
+        continue;
       count += 1;
     }
     return count;
@@ -1893,34 +2000,18 @@ export default function Sidebar() {
   // hidden now, and bulk actions must never count or touch invisible rows.
   useEffect(() => {
     clearSelection();
-  }, [clearSelection, projectScopeKey]);
-
-  const handleProjectSettings = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
-      event.preventDefault();
-      event.stopPropagation();
-      setProjectScopeMenuOpen(false);
-      if (isMobile) {
-        setOpenMobile(false);
-      }
-      void router.navigate({
-        to: "/projects/$projectKey",
-        params: { projectKey: projectGroup.projectKey },
-      });
-    },
-    [isMobile, router, setOpenMobile],
-  );
+  }, [clearSelection, filters]);
 
   // Settled threads stay in the live shell stream (settled ≠ archived), so
   // the partition works directly off live shells: no archived-snapshot
   // merging, no optimistic holds. Archived threads remain hidden here —
   // archive keeps its original "remove from sidebar" meaning.
   const {
-    pinnedThreads,
+    pinnedThreads: allPinnedThreads,
     reorderablePinnedKeys,
-    activeThreads,
-    snoozedThreads,
-    settledThreads,
+    activeThreads: allActiveThreads,
+    snoozedThreads: allSnoozedThreads,
+    settledThreads: allSettledThreads,
     snoozeNow,
   } = useMemo(() => {
     const now = `${nowMinute}:00.000Z`;
@@ -2016,6 +2107,51 @@ export default function Sidebar() {
     threads,
   ]);
 
+  const { pinnedThreads, activeThreads, snoozedThreads, settledThreads } = useMemo(() => {
+    if (
+      filters.accounts.length === 0 &&
+      filters.models.length === 0 &&
+      filters.statuses.length === 0
+    ) {
+      return {
+        pinnedThreads: allPinnedThreads,
+        activeThreads: allActiveThreads,
+        snoozedThreads: allSnoozedThreads,
+        settledThreads: allSettledThreads,
+      };
+    }
+    const select = (
+      rows: EnvironmentThreadShell[],
+      section: "pinned" | "active" | "snoozed" | "settled",
+    ) =>
+      rows.filter((thread) => {
+        const lastVisitedAt =
+          lastVisitedByKey?.[scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))];
+        const wokeAt = filters.statuses.includes("woke")
+          ? threadWokeAt(thread, { now: snoozeNow })
+          : null;
+        const woke =
+          section !== "settled" &&
+          wokeAt !== null &&
+          (lastVisitedAt === undefined || Date.parse(lastVisitedAt) < Date.parse(wokeAt));
+        return matchesSidebarThreadFilters(thread, filters, { section, lastVisitedAt, woke });
+      });
+    return {
+      pinnedThreads: select(allPinnedThreads, "pinned"),
+      activeThreads: select(allActiveThreads, "active"),
+      snoozedThreads: select(allSnoozedThreads, "snoozed"),
+      settledThreads: select(allSettledThreads, "settled"),
+    };
+  }, [
+    allPinnedThreads,
+    allActiveThreads,
+    allSnoozedThreads,
+    allSettledThreads,
+    filters,
+    lastVisitedByKey,
+    snoozeNow,
+  ]);
+
   const [expandedTeamKeys, setExpandedTeamKeys] = useState<ReadonlySet<string>>(() => new Set());
   const toggleTeam = useCallback((key: string) => {
     setExpandedTeamKeys((current) => {
@@ -2031,11 +2167,12 @@ export default function Sidebar() {
   );
   const teamsByKey = useMemo(() => buildSidebarTeams(teamThreads), [teamThreads]);
   useEffect(() => {
+    const existingKeys = new Set([...allPinnedThreads, ...allActiveThreads].map(sidebarTeamKey));
     setExpandedTeamKeys((current) => {
-      const next = new Set([...current].filter((key) => teamsByKey.has(key)));
+      const next = new Set([...current].filter((key) => existingKeys.has(key)));
       return next.size === current.size ? current : next;
     });
-  }, [teamsByKey]);
+  }, [allPinnedThreads, allActiveThreads]);
   const parentTitleByKey = useMemo(
     () => new Map(threads.map((thread) => [sidebarTeamKey(thread), thread.title])),
     [threads],
@@ -2126,8 +2263,8 @@ export default function Sidebar() {
   // soonest-first, so entry 0 is the boundary.
   useEffect(() => {
     const nextWakeAtMs =
-      snoozedThreads.length > 0 && snoozedThreads[0]?.snoozedUntil != null
-        ? Date.parse(snoozedThreads[0].snoozedUntil)
+      allSnoozedThreads.length > 0 && allSnoozedThreads[0]?.snoozedUntil != null
+        ? Date.parse(allSnoozedThreads[0].snoozedUntil)
         : Number.NaN;
     if (Number.isNaN(nextWakeAtMs)) return;
     // setTimeout delays are signed 32-bit: anything larger overflows and
@@ -2137,14 +2274,14 @@ export default function Sidebar() {
     const delayMs = Math.min(Math.max(0, nextWakeAtMs - Date.now()) + 50, 2_147_483_647);
     const id = window.setTimeout(() => bumpSnoozeWakeTick((tick) => tick + 1), delayMs);
     return () => window.clearTimeout(id);
-  }, [snoozedThreads]);
+  }, [allSnoozedThreads]);
 
   // The settled tail renders in pages: history shouldn't dominate the
   // sidebar, and the common lookups are recent. Expansion resets when the
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = projectScopeKey ?? "all";
+  const settledResetKey = JSON.stringify(filters);
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -3382,10 +3519,10 @@ export default function Sidebar() {
         fixedHeader={
           // Lifted above the stage backdrop, whose fade bleeds below the
           // header and would otherwise paint across the search row's outline.
-          <SidebarGroup className="relative z-[1] gap-1 p-[var(--sidebar-content-inset)]">
+          <SidebarGroup className="relative z-[1] h-[52px] px-4 py-2.5">
             <div className="flex items-center gap-1">
-              <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
-                <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
+              <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1.5 text-sm font-normal text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
+                <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground" />
                 <Input
                   ref={threadSearchInputRef}
                   nativeInput
@@ -3412,7 +3549,7 @@ export default function Sidebar() {
                       ? `sidebar-thread-search-result-${activeSearchResultIndex}`
                       : undefined
                   }
-                  className="min-w-0 flex-1 [&_[data-slot=input]]:h-auto [&_[data-slot=input]]:p-0 [&_[data-slot=input]]:leading-normal [&_[data-slot=input]]:text-sm [&_[data-slot=input]]:font-medium [&_[data-slot=input]]:text-sidebar-foreground [&_[data-slot=input]]:placeholder:text-sidebar-muted-foreground"
+                  className="min-w-0 flex-1 [&_[data-slot=input]]:h-auto [&_[data-slot=input]]:p-0 [&_[data-slot=input]]:leading-normal [&_[data-slot=input]]:text-sm [&_[data-slot=input]]:font-normal [&_[data-slot=input]]:text-sidebar-foreground [&_[data-slot=input]]:placeholder:text-sidebar-muted-foreground"
                 />
                 {isSearchingThreads ? (
                   <Button
@@ -3430,6 +3567,12 @@ export default function Sidebar() {
                   </Button>
                 ) : null}
               </div>
+              <SidebarFiltersMenu
+                filters={filters}
+                onChange={setFilters}
+                categories={filterCategories}
+                onNewProject={openAddProjectCommandPalette}
+              />
               <div className="shrink-0">
                 <Tooltip>
                   <TooltipTrigger
@@ -3437,18 +3580,14 @@ export default function Sidebar() {
                       <SidebarMenuButton
                         size="icon"
                         type="button"
-                        className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                        className="relative size-8 rounded-[8px] border border-[#0284C738] bg-[#0284C71F] text-[#0284C7] hover:bg-[#0284C7]/20 dark:text-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar [&>svg]:size-[18px] [&>svg]:text-current"
                         onClick={handleNewThreadClick}
                         disabled={projects.length === 0}
                         aria-label="New thread"
                       />
                     }
                   >
-                    <SquarePenIcon />
-                    <span
-                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
-                      aria-hidden="true"
-                    />
+                    <SquarePenIcon strokeWidth={1.8} />
                   </TooltipTrigger>
                   <TooltipPopup side="right">
                     {projectGroups.length > 1 ? (
@@ -3474,104 +3613,6 @@ export default function Sidebar() {
                 </Tooltip>
               </div>
             </div>
-            {projectGroups.length > 0 ? (
-              <div className="flex items-center gap-1">
-                <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
-                  <MenuTrigger
-                    render={
-                      <SidebarMenuButton
-                        aria-label="Filter threads by project"
-                        className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                      />
-                    }
-                  >
-                    {scopedProjectGroup ? (
-                      <ProjectFavicon
-                        environmentId={scopedProjectGroup.environmentId}
-                        cwd={scopedProjectGroup.workspaceRoot}
-                        faviconPath={scopedProjectGroup.faviconPath}
-                        className="size-4 shrink-0"
-                      />
-                    ) : (
-                      <FolderIcon className="size-4 shrink-0" />
-                    )}
-                    <span className="min-w-0 flex-1 truncate">
-                      {scopedProjectGroup?.displayName ?? "All projects"}
-                    </span>
-                    <ChevronDownIcon className="-mr-px size-4 shrink-0" />
-                  </MenuTrigger>
-                  <MenuPopup align="start" className="w-(--anchor-width)">
-                    <MenuRadioGroup
-                      value={projectScopeKey ?? "all"}
-                      onValueChange={(value) =>
-                        setProjectScopeKey(value === "all" ? null : (value as string))
-                      }
-                    >
-                      <MenuRadioItem
-                        value="all"
-                        closeOnClick
-                        className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                      >
-                        <FolderIcon className="size-4 shrink-0" />
-                        <span className="min-w-0 truncate text-sm">All projects</span>
-                      </MenuRadioItem>
-                      {projectGroups.map((project) => {
-                        const scopeKey = project.projectKey;
-                        return (
-                          <MenuRadioItem
-                            key={scopeKey}
-                            value={scopeKey}
-                            closeOnClick
-                            className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                          >
-                            <ProjectFavicon
-                              environmentId={project.environmentId}
-                              cwd={project.workspaceRoot}
-                              faviconPath={project.faviconPath}
-                              className="size-4 shrink-0"
-                            />
-                            <span className="min-w-0 truncate text-sm">{project.displayName}</span>
-                            <Button
-                              size="icon-xs"
-                              variant="ghost-muted"
-                              aria-label={`Project settings for ${project.displayName}`}
-                              title={`Project settings for ${project.displayName}`}
-                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                void handleProjectSettings(event, project);
-                              }}
-                            >
-                              <SettingsIcon className="size-3.5" />
-                            </Button>
-                          </MenuRadioItem>
-                        );
-                      })}
-                    </MenuRadioGroup>
-                  </MenuPopup>
-                </Menu>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <SidebarMenuButton
-                        size="icon"
-                        className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                        onClick={openAddProjectCommandPalette}
-                        type="button"
-                        aria-label="New project"
-                      />
-                    }
-                  >
-                    <FolderPlusIcon />
-                    <span
-                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
-                      aria-hidden="true"
-                    />
-                  </TooltipTrigger>
-                  <TooltipPopup side="right">New project</TooltipPopup>
-                </Tooltip>
-              </div>
-            ) : null}
           </SidebarGroup>
         }
       >
@@ -3780,6 +3821,7 @@ export default function Sidebar() {
                       projectCwdByKey={projectCwdByKey}
                       projectFaviconPathByKey={projectFaviconPathByKey}
                       scopedProjectKeys={scopedProjectKeys}
+                      filters={filters}
                       routeDraftId={routeDraftIdForRows}
                       onNavigateToDraft={navigateToDraft}
                     />,
@@ -3972,8 +4014,17 @@ export default function Sidebar() {
                     Add project
                   </button>
                 </>
-              ) : scopedProjectGroup ? (
-                `No threads in ${scopedProjectGroup.displayName} yet`
+              ) : filterCount > 0 ? (
+                <>
+                  <span>No conversations match these filters</span>
+                  <button
+                    type="button"
+                    className="text-sky-600 hover:underline"
+                    onClick={() => setFilters(EMPTY_SIDEBAR_FILTERS)}
+                  >
+                    Clear filters
+                  </button>
+                </>
               ) : (
                 "No threads yet"
               )}

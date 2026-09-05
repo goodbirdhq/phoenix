@@ -22,6 +22,35 @@ If reordering is unavailable for one environment, update the Phoenix server runn
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
 their pinned threads keep the default newest-first order below the ones you have arranged.
 
+## Search and filters
+
+The conversation sidebar has one row for search, filters, and the blue **New thread** button.
+Open the filter menu to narrow conversations by projects, environments, status, provider accounts,
+or models. Select several values within a category to match any of them; different categories
+combine to narrow the results. Selections apply immediately. The filter badge counts active
+categories, and **Clear filters** restores the full list.
+
+Project settings are available from the wrench beside each project in the filter submenu.
+**New project** is in the same submenu. Provider accounts belong to their environment, so selecting
+an account on one machine does not include a same-named account on another machine. The model
+list follows the selected accounts and includes models used by existing conversations.
+
+Status filters include pending approval, awaiting input, waiting on a parent, working, monitoring,
+failed, and ready, plus unread, woke, pinned, snoozed, and settled. Drafts follow project,
+environment, account, and model filters; they have no agent status yet. Search works within the
+current filters, including collapsed and settled conversations.
+
+## Sidebar navigation
+
+The bottom navigation opens **Agents**, **Pull Requests** (when supported), **Schedules**,
+**Usage**, and **Environments**. The selected destination shows its name and a highlight.
+**Agents** returns to the conversation you last viewed.
+
+The **Settings** button opens a menu with **All settings**, General, Appearance, Keybindings,
+and Providers shortcuts. In the desktop app, **Check for updates** is in this menu; an available
+update adds a badge to Settings and the update action. Inside settings pages, **Back** returns
+to the destination you came from.
+
 ## Session hierarchy
 
 When a session spawns other sessions, the sidebar can nest them instead of listing everything

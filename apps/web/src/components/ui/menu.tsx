@@ -28,6 +28,8 @@ function MenuPopup({
   alignOffset,
   side = "bottom",
   anchor,
+  collisionAvoidance,
+  collisionPadding,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
@@ -35,6 +37,8 @@ function MenuPopup({
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
   side?: MenuPrimitive.Positioner.Props["side"];
   anchor?: MenuPrimitive.Positioner.Props["anchor"];
+  collisionAvoidance?: MenuPrimitive.Positioner.Props["collisionAvoidance"];
+  collisionPadding?: MenuPrimitive.Positioner.Props["collisionPadding"];
 }) {
   const hasExplicitWidthClass =
     typeof className === "string" &&
@@ -49,6 +53,8 @@ function MenuPopup({
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
+        collisionAvoidance={collisionAvoidance}
+        collisionPadding={collisionPadding}
         className="z-[130]"
         data-slot="menu-positioner"
         side={side}

@@ -2,7 +2,6 @@ import { TriangleAlertIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { isElectron } from "../../env";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
-import { cn } from "../../lib/utils";
 import { ensureLocalApi } from "../../localApi";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -19,8 +18,8 @@ import {
 } from "../desktopUpdate.logic";
 import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
+import { MenuItem } from "../ui/menu";
 import { Separator } from "../ui/separator";
-import { SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   DesktopUpdateStatusIcon,
@@ -51,7 +50,6 @@ function resolveSidebarUpdatePresentation({
   return {
     iconStatus,
     showUpdateDetails,
-    showUpdateIconState: showUpdateDetails && !showCheckIcon,
   } as const;
 }
 
@@ -136,7 +134,7 @@ function SidebarUpdateArchitectureWarningContent() {
   );
 }
 
-export function SidebarUpdatePill() {
+export function SidebarUpdateMenuItem() {
   return isElectron ? <SidebarUpdateControl /> : null;
 }
 
@@ -162,7 +160,7 @@ function SidebarUpdateControl() {
     isChecking: state?.status === "checking",
     prefersReducedMotion,
   });
-  const { iconStatus, showUpdateDetails, showUpdateIconState } = resolveSidebarUpdatePresentation({
+  const { iconStatus, showUpdateDetails } = resolveSidebarUpdatePresentation({
     action,
     isDownloading,
     showCheckIcon,
@@ -305,70 +303,46 @@ function SidebarUpdateControl() {
     );
   }, [prefersReducedMotion, state?.status]);
 
+  const menuItem = (
+    <MenuItem
+      className="h-8 text-sm"
+      disabled={isInteractionDisabled}
+      onClick={handleAction}
+      closeOnClick={false}
+    >
+      <DesktopUpdateStatusIcon
+        key={showCheckIcon ? checkAnimationKey : iconStatus}
+        downloadPercent={state?.downloadPercent ?? null}
+        isCheckAnimating={showCheckIcon && !prefersReducedMotion}
+        onCheckAnimationIteration={handleCheckAnimationIteration}
+        status={iconStatus}
+      />
+      <span className="min-w-0 flex-1 truncate">
+        {showCheckIcon
+          ? "Checking for updates…"
+          : isDownloading
+            ? "Downloading update…"
+            : action === "install"
+              ? "Restart to update"
+              : "Check for updates"}
+      </span>
+      {action === "download" || action === "install" ? (
+        <span className="rounded bg-sky-600/10 px-1.5 text-xs leading-5 text-sky-600 dark:text-sky-400">
+          Available
+        </span>
+      ) : null}
+    </MenuItem>
+  );
   return (
-    <SidebarMenuItem className="ml-auto shrink-0">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              type="button"
-              aria-label={tooltip}
-              aria-disabled={isInteractionDisabled || undefined}
-              className={cn(
-                "inline-flex size-8 items-center justify-center rounded-full outline-hidden ring-ring transition-colors focus-visible:ring-2",
-                isInteractionDisabled ? "cursor-not-allowed" : "cursor-pointer",
-                showUpdateIconState
-                  ? cn(
-                      "bg-update-surface text-update-foreground",
-                      !isInteractionDisabled && "hover:bg-update/12",
-                    )
-                  : cn(
-                      "text-[var(--sidebar-icon-color)]",
-                      !isInteractionDisabled &&
-                        "hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-                    ),
-                disabled && !showUpdateIconState && "opacity-60",
-              )}
-              onClick={handleAction}
-            >
-              <DesktopUpdateStatusIcon
-                key={showCheckIcon ? checkAnimationKey : iconStatus}
-                downloadPercent={state?.downloadPercent ?? null}
-                isCheckAnimating={showCheckIcon && !prefersReducedMotion}
-                onCheckAnimationIteration={handleCheckAnimationIteration}
-                status={iconStatus}
-              />
-            </button>
-          }
-        />
-        <TooltipPopup
-          align="center"
-          className={
-            showUpdateDetails && state?.channel === "nightly" && state.releaseNotes.length > 0
-              ? // pointer-events-auto overrides the positioner's pointer-events-none so the
-                // release notes stay open (and scrollable) when the cursor moves into them.
-                "pointer-events-auto max-w-none text-balance"
-              : undefined
-          }
-          side="top"
-          style={
-            showUpdateDetails
-              ? {
-                  background:
-                    "color-mix(in srgb, var(--update) 18%, color-mix(in srgb, var(--popover) var(--glass-opacity), transparent))",
-                  borderColor: "var(--update-foreground)",
-                }
-              : undefined
-          }
-          variant={showUpdateDetails ? "glass" : "default"}
-        >
-          {showUpdateDetails && state ? (
-            <SidebarUpdateReleaseNotesTooltip state={state} tooltip={tooltip} />
-          ) : (
-            tooltip
-          )}
-        </TooltipPopup>
-      </Tooltip>
-    </SidebarMenuItem>
+    <Tooltip>
+      <TooltipTrigger render={menuItem} />
+      <TooltipPopup side="right" className="pointer-events-auto max-w-none">
+        {showUpdateDetails && state ? (
+          <SidebarUpdateReleaseNotesTooltip state={state} tooltip={tooltip} />
+        ) : (
+          tooltip
+        )}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
