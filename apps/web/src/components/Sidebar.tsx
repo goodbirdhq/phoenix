@@ -1395,7 +1395,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             </span>
             <span
               className={cn(
-                "pointer-events-none absolute right-0 -top-1 flex h-6 shrink-0 items-center rounded-sm bg-sidebar opacity-0 group-focus-within/sidebar-row:pointer-events-auto group-focus-within/sidebar-row:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:[&>*:not(:last-child)]:hidden",
+                "pointer-events-none absolute right-0 -top-1 flex h-6 shrink-0 items-center rounded-sm opacity-0 group-focus-within/sidebar-row:pointer-events-auto group-focus-within/sidebar-row:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:[&>*:not(:last-child)]:hidden",
                 snoozeMenuOpen && "pointer-events-auto opacity-100",
               )}
             >
@@ -1489,6 +1489,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               activeThreadKey={props.activeThreadKey}
               providers={props.providerEntryByInstanceId}
               expanded={props.teamExpanded}
+              selected={props.isActive || isSelected}
               onToggle={() => props.onToggleTeam(threadKey)}
             />
           </div>

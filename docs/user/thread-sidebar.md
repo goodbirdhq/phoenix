@@ -81,9 +81,9 @@ while **Session orchestration** is on, because nothing spawns children without i
 
 On web and desktop, each thread has a provider avatar beside its branch. With hierarchy
 on, the avatar is followed by a circular × total that includes the parent and all descendants.
-Hover or keyboard-focus the group to reveal up to five avatars, parent first. The counter shows
+Hover the conversation row or keyboard-focus the group to reveal up to five avatars, parent first. The counter shows
 how many sessions remain hidden, or disappears when all are visible. The group collapses again
-when you leave it. Reduced-motion preferences disable the expansion animation.
+when you leave the row, unless the conversation is selected. Selected conversations keep their avatars expanded. Reduced-motion preferences disable the expansion animation.
 
 Click the group to expand or collapse the children. A thread without children has one avatar;
 click it for session details. Hover the group to see each member's icon, title, provider and model.

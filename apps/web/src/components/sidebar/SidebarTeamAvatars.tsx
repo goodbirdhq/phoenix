@@ -145,6 +145,7 @@ export function SidebarTeamAvatars(props: {
   providers: ReadonlyMap<string, ProviderInstanceEntry>;
   activeThreadKey: string | null;
   expanded: boolean;
+  selected: boolean;
   onToggle: () => void;
 }) {
   const { members, providers } = props;
@@ -198,8 +199,8 @@ export function SidebarTeamAvatars(props: {
             className={cn(
               "pointer-events-none absolute top-0 flex size-6 items-center justify-center rounded-full border border-sidebar-border bg-sidebar-row-active transition-[left,opacity] duration-150 ease-out motion-reduce:transition-none",
               index === 0
-                ? "left-[var(--rest-left)] group-hover/avatars:left-[var(--open-left)] group-focus-visible/avatars:left-[var(--open-left)]"
-                : "left-[var(--rest-left)] opacity-0 group-hover/avatars:left-[var(--open-left)] group-hover/avatars:opacity-100 group-focus-visible/avatars:left-[var(--open-left)] group-focus-visible/avatars:opacity-100",
+                ? "left-[var(--rest-left)] group-hover/sidebar-row:left-[var(--open-left)] group-focus-visible/avatars:left-[var(--open-left)] group-data-[selected=true]/avatars:left-[var(--open-left)]"
+                : "left-[var(--rest-left)] opacity-0 group-hover/sidebar-row:left-[var(--open-left)] group-hover/sidebar-row:opacity-100 group-focus-visible/avatars:left-[var(--open-left)] group-data-[selected=true]/avatars:left-[var(--open-left)] group-focus-visible/avatars:opacity-100 group-data-[selected=true]/avatars:opacity-100",
             )}
             style={
               {
@@ -220,13 +221,14 @@ export function SidebarTeamAvatars(props: {
           aria-hidden
           className={cn(
             "pointer-events-none absolute right-0 top-0 flex size-6 items-center justify-center rounded-full border border-sidebar-border bg-sidebar-row-active text-xs text-sidebar-muted-foreground transition-opacity duration-150 motion-reduce:transition-none",
-            overflow === 0 && "group-hover/avatars:opacity-0 group-focus-visible/avatars:opacity-0",
+            overflow === 0 &&
+              "group-hover/sidebar-row:opacity-0 group-focus-visible/avatars:opacity-0 group-data-[selected=true]/avatars:opacity-0",
           )}
         >
-          <span className="group-hover/avatars:hidden group-focus-visible/avatars:hidden">
+          <span className="group-hover/sidebar-row:hidden group-focus-visible/avatars:hidden group-data-[selected=true]/avatars:hidden">
             ×{members.length}
           </span>
-          <span className="hidden group-hover/avatars:inline group-focus-visible/avatars:inline">
+          <span className="hidden group-hover/sidebar-row:inline group-focus-visible/avatars:inline group-data-[selected=true]/avatars:inline">
             +{overflow}
           </span>
         </span>
@@ -238,6 +240,7 @@ export function SidebarTeamAvatars(props: {
       type="button"
       className="group/avatars relative block h-6 shrink-0 cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
       style={{ width, maxWidth: "50%" }}
+      data-selected={props.selected}
       aria-label={
         hasChildren
           ? `${props.expanded ? "Collapse" : "Expand"} team, ${members.length} sessions`
