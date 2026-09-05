@@ -72,6 +72,13 @@ export function UsageQuotas({
   readonly onRefresh: () => void;
 }) {
   const limits = useMemo(() => deriveSubscriptionLimits(sources), [sources]);
+  const canRefresh = sources.some(
+    (source) => source.enabled && source.authenticated && source.availabilityRefreshSupported,
+  );
+  const refreshUnavailableReason = isPending
+    ? "Waiting for account status…"
+    : "Manual quota refresh is unavailable for this account. Limits update when its provider reports them.";
+
   return (
     <section className="space-y-5 rounded-[10px] border bg-muted/30 p-5" aria-label="Usage limits">
       <div className="flex items-center justify-between gap-4">
@@ -80,8 +87,14 @@ export function UsageQuotas({
           label="Refresh limits"
           refreshing={isRefreshing}
           onRefresh={onRefresh}
+          disabledReason={canRefresh ? undefined : refreshUnavailableReason}
         />
       </div>
+      {!canRefresh && !isPending && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {refreshUnavailableReason}
+        </p>
+      )}
       {isPending && limits.length === 0 && (
         <p className="text-sm text-muted-foreground">Loading limits…</p>
       )}

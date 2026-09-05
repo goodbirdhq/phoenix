@@ -202,7 +202,10 @@ const correlateSnapshotWithSource = (
       ),
     );
   }
-  return Effect.succeed(snapshot);
+  return Effect.succeed({
+    ...snapshot,
+    ...(source.availabilityRefreshSupported ? { availabilityRefreshSupported: true } : {}),
+  });
 };
 
 /**
@@ -222,6 +225,7 @@ const snapshotInstanceKey = (provider: ServerProvider): ProviderInstanceId => {
 const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource => ({
   instanceId: instance.instanceId,
   driverKind: instance.driverKind,
+  availabilityRefreshSupported: typeof instance.adapter.refreshAvailability === "function",
   getSnapshot: instance.snapshot.getSnapshot,
   refresh: instance.snapshot.refresh,
   streamChanges: instance.snapshot.streamChanges,

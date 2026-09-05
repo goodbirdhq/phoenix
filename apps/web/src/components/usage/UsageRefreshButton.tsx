@@ -7,10 +7,12 @@ export function UsageRefreshButton({
   refreshing,
   onRefresh,
   label,
+  disabledReason,
 }: {
   readonly refreshing: boolean;
   readonly onRefresh: () => void;
   readonly label: string;
+  readonly disabledReason?: string | undefined;
 }) {
   const [previousRefreshing, setPreviousRefreshing] = useState(refreshing);
   const [checked, setChecked] = useState(false);
@@ -22,7 +24,8 @@ export function UsageRefreshButton({
     <Button
       size="sm"
       variant="outline"
-      disabled={refreshing}
+      disabled={refreshing || !!disabledReason}
+      title={disabledReason}
       aria-label={label}
       aria-busy={refreshing || undefined}
       onClick={() => {
@@ -30,8 +33,14 @@ export function UsageRefreshButton({
         onRefresh();
       }}
     >
-      {checked ? <CheckIcon className="size-3.5" /> : <RefreshCwIcon className="size-3.5" />}
-      <span role="status">{refreshing ? "Checking…" : checked ? "Checked" : label}</span>
+      {checked && !disabledReason ? (
+        <CheckIcon className="size-3.5" />
+      ) : (
+        <RefreshCwIcon className="size-3.5" />
+      )}
+      <span role="status">
+        {refreshing ? "Checking…" : checked && !disabledReason ? "Checked" : label}
+      </span>
     </Button>
   );
 }
