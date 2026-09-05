@@ -32,7 +32,9 @@ On web and desktop, each thread has a provider avatar strip beside its branch. W
 on, a parent's strip includes its whole team: the parent first, then its descendants. Up to six
 avatars are visible, followed by a circular overflow count. Click the strip or count to expand
 or collapse the children. A thread without children has one avatar; click it for session details.
-Hover a team strip for model, account, and environment details.
+Hover a team strip for model, account, and environment details for every member.
+Hover a thread title for its branch and worktree details. The avatar strip overlaps more tightly
+at narrow widths to keep space for branch names.
 
 Collapsed rows show the most actionable status in their subtree: a decision first, then input,
 then failure, followed by working, monitoring, and ready. Click a review action to open the thread
@@ -43,7 +45,7 @@ including a child that is also pinned, once.
 
 Children expand recursively and keep their branch visible. Indentation stops after four levels
 so deep trees keep room for their titles. Completed children remain visible until settled.
-Hover a row, focus its controls with the keyboard, or use its options menu to settle, snooze,
+Hover a row to show controls beside its title, focus them with the keyboard, or use its options menu to settle, snooze,
 pin, or manage the thread. Snooze retains the existing wake presets and Wake now action.
 
 Pinning a child moves its row to the existing pinned section. Its project remains visible and
@@ -63,3 +65,6 @@ pill** fallback because their colors are not controlled by Phoenix.
 To generate a fresh title from the conversation, open a thread's context menu and choose
 **Regenerate title**. While Phoenix is generating it, the action reads **Regenerating…** and cannot
 be selected again. The option is hidden when the connected environment needs a server update.
+
+Expansion resets when a thread leaves the active or pinned list. Separately pinned descendants
+are identified in the expanded team count, even though their rows live in the pinned section.

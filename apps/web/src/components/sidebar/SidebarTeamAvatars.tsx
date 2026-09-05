@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { BotIcon } from "lucide-react";
 import { type SidebarThreadSummary } from "../../types";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
@@ -16,12 +16,22 @@ export function SidebarTeamAvatars(props: {
 }) {
   const { members, providers } = props;
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const instanceBadges = useMemo(
+    () =>
+      new Map(
+        [...providers].map(([id, provider]) => [
+          id,
+          shouldShowInstanceBadge(provider, providers.values()),
+        ]),
+      ),
+    [providers],
+  );
   const hasChildren = members.length > 1;
   const visible = members.slice(0, 6);
   const overflow = members.length - visible.length;
   const details = (
-    <div className="flex max-w-72 flex-col gap-3 text-xs">
-      {visible.map((thread) => {
+    <div className="flex max-h-80 max-w-72 flex-col gap-3 overflow-y-auto text-xs">
+      {members.map((thread) => {
         const provider = providers.get(
           thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
         );
@@ -46,6 +56,9 @@ export function SidebarTeamAvatars(props: {
       ) : null}
     </div>
   );
+  const steps = visible.length - 1 + (overflow > 0 ? 1 : 0);
+  const avatarLeft = (index: number) =>
+    steps === 0 ? "0px" : `calc(${index / steps} * (100% - 24px))`;
   const avatars = (
     <>
       {visible.map((thread, index) => {
@@ -56,14 +69,18 @@ export function SidebarTeamAvatars(props: {
           <span
             key={thread.id}
             className="absolute top-0 flex size-6 items-center justify-center rounded-full border border-sidebar-border bg-sidebar-row-active"
-            style={{ left: index * 18 }}
+            style={{ left: avatarLeft(index) }}
           >
             {provider ? (
               <ProviderInstanceIcon
                 driverKind={provider.driverKind}
                 displayName={provider.displayName}
                 accentColor={provider.accentColor}
-                showBadge={shouldShowInstanceBadge(provider, providers.values())}
+                showBadge={
+                  instanceBadges.get(
+                    thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+                  ) ?? false
+                }
                 className="size-4"
                 iconClassName="size-4"
                 badgeClassName="right-[-3px] bottom-[-2px] h-[11px] min-w-3 rounded-[5px] px-0.5 text-[7px]"
@@ -77,7 +94,7 @@ export function SidebarTeamAvatars(props: {
       {overflow > 0 ? (
         <span
           className="absolute top-0 flex size-6 items-center justify-center rounded-full border border-sidebar-border bg-sidebar-row-active text-xs text-sidebar-muted-foreground"
-          style={{ left: visible.length * 18 }}
+          style={{ left: avatarLeft(visible.length) }}
         >
           +{overflow}
         </span>
@@ -88,7 +105,7 @@ export function SidebarTeamAvatars(props: {
     <button
       type="button"
       className="relative block h-6 shrink-0 cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      style={{ width: 24 + (visible.length - 1 + (overflow > 0 ? 1 : 0)) * 18 }}
+      style={{ width: 24 + steps * 18, maxWidth: "50%" }}
       aria-label={
         hasChildren
           ? `${props.expanded ? "Collapse" : "Expand"} team, ${members.length} sessions`
