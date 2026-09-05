@@ -1041,6 +1041,39 @@ describe("planPinnedReorder", () => {
     expect(assignments[0]!.orderKey > "f" && assignments[0]!.orderKey < "m").toBe(true);
   });
 
+  it("keeps hidden pinned neighbors between a filtered drop and the next visible row", () => {
+    // Visible a,c; moving c above a must keep c below the hidden head.
+    const assignments = planPinnedReorder({
+      orderedIds: ["hidden", "c", "a"],
+      keysById: new Map([
+        ["hidden", "f"],
+        ["a", "m"],
+        ["c", "t"],
+      ]),
+      movedId: "c",
+    });
+    expect(assignments).toHaveLength(1);
+    expect(assignments[0]!.orderKey > "f").toBe(true);
+    expect(assignments[0]!.orderKey < "m").toBe(true);
+  });
+
+  it("includes hidden keyless pins in materialization without changing their relative order", () => {
+    const assignments = planPinnedReorder({
+      orderedIds: ["a", "c", "hidden-1", "hidden-2"],
+      keysById: new Map([
+        ["a", "m"],
+        ["hidden-1", null],
+        ["hidden-2", null],
+        ["c", null],
+      ]),
+      movedId: "c",
+    });
+    expect(assignments.map((entry) => entry.id)).toEqual(["a", "c", "hidden-1", "hidden-2"]);
+    const keys = assignments.map((entry) => entry.orderKey);
+    expect(keys).toEqual([...keys].sort());
+    expect(new Set(keys).size).toBe(4);
+  });
+
   it("treats list edges as open bounds", () => {
     const assignments = planPinnedReorder({
       orderedIds: ["b", "a"],
