@@ -84,7 +84,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       <SidebarBrand onBackdrop={backdropVariant !== null} />
       {pillLabel ? (
         <Badge
-          className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"
+          className="relative z-10 ml-1 hidden rounded-full px-1.5 text-muted-foreground @[15rem]/sidebar-header:inline-flex"
           data-environment-identification="pill"
           size="sm"
           variant="secondary"
@@ -259,15 +259,17 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) =>
       /^\/settings(?:\/|$)/.test(location.pathname)
         ? "settings"
-        : location.pathname === "/usage"
-          ? "usage"
-          : location.pathname === "/environments"
-            ? "environments"
-            : location.pathname === "/schedules"
-              ? "schedules"
-              : location.pathname === "/pull-requests"
-                ? "pull-requests"
-                : null,
+        : /^\/projects\/[^/]+\/?$/.test(location.pathname)
+          ? "project-settings"
+          : location.pathname === "/usage"
+            ? "usage"
+            : location.pathname === "/pull-requests"
+              ? "pull-requests"
+              : location.pathname === "/environments"
+                ? "environments"
+                : location.pathname === "/schedules"
+                  ? "schedules"
+                  : null,
   });
   useEffect(() => {
     const target = { href: location.href, index: location.state.__TSR_index };

@@ -6,7 +6,6 @@ import { Modal, Pressable, ScrollView, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
-import { useThemeColor } from "../../lib/useThemeColor";
 
 function HandoffModeRow(props: {
   readonly mode: ThreadMigrationHandoffMode;
@@ -16,7 +15,6 @@ function HandoffModeRow(props: {
   readonly disabledReason: string | null;
   readonly onSelect: (mode: ThreadMigrationHandoffMode) => void;
 }) {
-  const iconColor = String(useThemeColor("--color-icon"));
   const disabled = props.disabledReason !== null;
   return (
     <Pressable
@@ -38,7 +36,12 @@ function HandoffModeRow(props: {
         )}
       >
         {props.selected ? (
-          <SymbolView name="checkmark" size={11} tintColor={iconColor} type="monochrome" />
+          <SymbolView
+            name="checkmark"
+            size={11}
+            tintColorClassName="accent-primary-foreground"
+            type="monochrome"
+          />
         ) : null}
       </View>
       <View className="min-w-0 flex-1 gap-1">
@@ -65,7 +68,6 @@ export function ThreadMigrationDialog(props: {
   readonly onConfirm: (handoffMode: ThreadMigrationHandoffMode) => void;
 }) {
   const [handoffMode, setHandoffMode] = useState<ThreadMigrationHandoffMode>("replay");
-  const iconColor = String(useThemeColor("--color-icon-muted"));
   const availability = deriveMigrationModeAvailability({
     isOriginLimited: props.isOriginLimited,
     isTurnStreaming: props.isTurnStreaming,
@@ -119,7 +121,12 @@ export function ThreadMigrationDialog(props: {
               disabled={props.isPending}
               onPress={close}
             >
-              <SymbolView name="xmark" size={14} tintColor={iconColor} type="monochrome" />
+              <SymbolView
+                name="xmark"
+                size={14}
+                tintColorClassName="accent-icon-muted"
+                type="monochrome"
+              />
             </Pressable>
           </View>
 
@@ -135,7 +142,7 @@ export function ThreadMigrationDialog(props: {
                 <SymbolView
                   name="chevron.right"
                   size={14}
-                  tintColor={iconColor}
+                  tintColorClassName="accent-icon-muted"
                   type="monochrome"
                 />
                 <Text

@@ -108,11 +108,11 @@ function testSession(
 ): RpcSession.RpcSession {
   return {
     client,
-    initialConfig: Effect.succeed(
-      options?.completionMarker === true
-        ? ({ threadResumeCompletionMarker: true } as never)
-        : ({} as never),
-    ),
+    initialConfig: Effect.succeed({
+      ...(options?.completionMarker === true ? { threadResumeCompletionMarker: true } : {}),
+      environment: { capabilities: { fileAttachments: { maxUploadBytes: 1024 } } },
+    } as never),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
     closed: Effect.never,
@@ -143,6 +143,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const loaderCalls = yield* Ref.make(0);
   const lastSubscribeAfterSequence = yield* Ref.make<number | undefined>(undefined);
   const lastRequestCompletionMarker = yield* Ref.make<boolean | undefined>(undefined);
+  const lastAcceptsNonImageAttachments = yield* Ref.make<boolean | undefined>(undefined);
   const savedThreads = yield* Ref.make<ReadonlyArray<OrchestrationThreadDetailSnapshot>>([]);
   const removedThreads = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
   const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
@@ -159,11 +160,13 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: {
       readonly afterSequence?: number;
       readonly requestCompletionMarker?: boolean;
+      readonly acceptsNonImageAttachments?: boolean;
     }) =>
       Stream.unwrap(
         Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
           Effect.andThen(Ref.set(lastSubscribeAfterSequence, input.afterSequence)),
           Effect.andThen(Ref.set(lastRequestCompletionMarker, input.requestCompletionMarker)),
+          Effect.andThen(Ref.set(lastAcceptsNonImageAttachments, input.acceptsNonImageAttachments)),
           Effect.as(streamFrom(inputs)),
         ),
       ),
@@ -247,6 +250,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     loaderCalls,
     lastSubscribeAfterSequence,
     lastRequestCompletionMarker,
+    lastAcceptsNonImageAttachments,
     supervisorState,
     supervisorSession,
     savedThreads,
@@ -597,6 +601,17 @@ describe("EnvironmentThreads", () => {
       }
 
       expect((yield* Ref.get(harness.latest)).status).toBe("live");
+    }),
+  );
+
+  it.effect("opts into extended attachments when the server advertises them", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      expect(yield* Ref.get(harness.lastAcceptsNonImageAttachments)).toBe(true);
     }),
   );
 

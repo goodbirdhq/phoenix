@@ -44,6 +44,7 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
   readonly timeoutMs?: number;
   readonly window?: ThreadSnapshotWindow;
+  readonly acceptsNonImageAttachments?: boolean;
 }) {
   const requestUrl = environmentEndpointUrl(
     input.prepared.httpBaseUrl,
@@ -68,6 +69,9 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
           ...(input.window?.beforeCursor !== undefined
             ? { beforeCursor: input.window.beforeCursor }
             : {}),
+          ...(input.acceptsNonImageAttachments === true
+            ? { acceptsNonImageAttachments: "true" as const }
+            : {}),
         },
         headers,
       }),
@@ -90,6 +94,7 @@ export class ThreadSnapshotLoader extends Context.Service<
       prepared: PreparedConnection,
       threadId: ThreadId,
       window?: ThreadSnapshotWindow,
+      acceptsNonImageAttachments?: boolean,
     ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>>;
   }
 >()("@t3tools/client-runtime/state/threadSnapshotHttp/ThreadSnapshotLoader") {}
@@ -107,12 +112,18 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
     // connections work without one).
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
     return ThreadSnapshotLoader.of({
-      load: (prepared: PreparedConnection, threadId: ThreadId, window?: ThreadSnapshotWindow) =>
+      load: (
+        prepared: PreparedConnection,
+        threadId: ThreadId,
+        window?: ThreadSnapshotWindow,
+        acceptsNonImageAttachments?: boolean,
+      ) =>
         fetchEnvironmentThreadSnapshot({
           prepared,
           threadId,
           signer,
           ...(window !== undefined ? { window } : {}),
+          ...(acceptsNonImageAttachments === true ? { acceptsNonImageAttachments: true } : {}),
         }).pipe(
           Effect.map(Option.some<OrchestrationThreadDetailSnapshot>),
           Effect.provideService(HttpClient.HttpClient, httpClient),

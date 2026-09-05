@@ -21,6 +21,7 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
+import { ThreadDeletionReactor } from "./Services/ThreadDeletionReactor.ts";
 
 export type ThreadTurnStartCommand = Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
 
@@ -204,6 +205,7 @@ export const make = Effect.gen(function* () {
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
   const projection = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const threadDeletionReactor = yield* ThreadDeletionReactor;
 
   const randomUUID = crypto.randomUUIDv4.pipe(
     Effect.mapError(
@@ -469,7 +471,7 @@ export const make = Effect.gen(function* () {
 
     const bootstrapProgram = Effect.gen(function* () {
       if (bootstrap?.createThread) {
-        yield* orchestrationEngine.dispatch(
+        const created = yield* orchestrationEngine.dispatch(
           {
             type: "thread.create",
             commandId: yield* serverCommandId("bootstrap-thread-create"),
@@ -487,6 +489,9 @@ export const make = Effect.gen(function* () {
           },
           options,
         );
+        // A successful create is the lifecycle fence: cleanup for the prior
+        // incarnation must finish before this thread starts owning resources.
+        yield* threadDeletionReactor.drainThrough(created.sequence);
         createdThread = true;
       }
 
@@ -524,12 +529,19 @@ export const make = Effect.gen(function* () {
               cwd: bootstrap.prepareWorktree.projectCwd,
               remoteName: "origin",
             });
-            const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+            const remoteBaseExists = yield* gitWorkflow.remoteBranchExists({
               cwd: bootstrap.prepareWorktree.projectCwd,
+              remoteName: "origin",
               refName: bootstrap.prepareWorktree.baseBranch,
-              fallbackRemoteName: "origin",
             });
-            worktreeBaseRef = resolvedRemoteBase.commitSha;
+            if (remoteBaseExists) {
+              const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+                cwd: bootstrap.prepareWorktree.projectCwd,
+                refName: bootstrap.prepareWorktree.baseBranch,
+                fallbackRemoteName: "origin",
+              });
+              worktreeBaseRef = resolvedRemoteBase.commitSha;
+            }
           }
           const checkoutRef = bootstrap.prepareWorktree.checkoutRef ?? worktreeBaseRef;
           const checkoutCommit = yield* resolveWorktreeCheckoutCommit(gitWorkflow, {

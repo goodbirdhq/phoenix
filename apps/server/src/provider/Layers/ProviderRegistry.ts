@@ -78,95 +78,62 @@ const makeManualProviderMaintenanceCapabilities = (provider: ProviderDriverKind)
 const hasModelCapabilities = (model: ServerProvider["models"][number]): boolean =>
   (model.capabilities?.optionDescriptors?.length ?? 0) > 0;
 
-const OPENCODE_DRIVER = ProviderDriverKind.make("opencode");
+const MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER = 16;
 
-/**
- * A successful OpenCode probe that reports zero models is only trusted after
- * it has been observed this many consecutive times. A single flaky inventory
- * (locked CLI database, transient auth hiccup in the upstream gateway) must
- * not wipe the model picker; a genuinely stale inventory disappears on the
- * next confirmation.
- */
-export const OPENCODE_EMPTY_INVENTORY_CONFIRMATIONS = 2;
-
-export interface OpenCodeInventoryRetention {
-  /**
-   * `checkedAt` of the last snapshot folded into `consecutiveEmptyInventories`.
-   * Counting each distinct probe once keeps duplicate deliveries of the same
-   * snapshot (subscription race, enrichment republish) from double-counting.
-   */
-  readonly lastCountedCheckedAt: string | null;
-  readonly consecutiveEmptyInventories: number;
+export function upsertProviderWorkspaceSnapshot(
+  provider: ServerProvider,
+  cwd: string,
+  scopedSnapshot: ServerProvider,
+): ServerProvider {
+  const workspaceSnapshot = {
+    cwd,
+    checkedAt: scopedSnapshot.checkedAt,
+    slashCommands: scopedSnapshot.slashCommands,
+    skills: scopedSnapshot.skills,
+  } satisfies NonNullable<ServerProvider["workspaceSnapshots"]>[number];
+  return {
+    ...provider,
+    workspaceSnapshots: [
+      ...(provider.workspaceSnapshots ?? []).filter((snapshot) => snapshot.cwd !== cwd),
+      workspaceSnapshot,
+    ].slice(-MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER),
+  };
 }
 
-export const initialOpenCodeInventoryRetention: OpenCodeInventoryRetention = {
-  lastCountedCheckedAt: null,
-  consecutiveEmptyInventories: 0,
-};
-
-export const isOpenCodeEmptySuccessfulInventory = (provider: ServerProvider): boolean =>
-  provider.driver === OPENCODE_DRIVER &&
-  provider.enabled &&
-  provider.installed &&
-  provider.status !== "error" &&
-  provider.models.length === 0;
-
-export const advanceOpenCodeInventoryRetention = (
-  previous: OpenCodeInventoryRetention,
-  provider: ServerProvider,
-): OpenCodeInventoryRetention => {
-  if (provider.driver !== OPENCODE_DRIVER || provider.checkedAt === previous.lastCountedCheckedAt) {
-    return previous;
-  }
-  return {
-    lastCountedCheckedAt: provider.checkedAt,
-    consecutiveEmptyInventories: isOpenCodeEmptySuccessfulInventory(provider)
-      ? previous.consecutiveEmptyInventories + 1
-      : 0,
-  };
-};
-
-const shouldRetainMissingProviderModels = (
-  provider: ServerProvider,
-  consecutiveEmptyInventories: number,
-): boolean => {
-  if (provider.driver !== OPENCODE_DRIVER) {
+const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean => {
+  if (provider.driver !== ProviderDriverKind.make("opencode")) {
     return true;
   }
 
   // OpenCode's initial snapshot is deliberately non-authoritative while its
   // first probe is still running. A probe error from an installed CLI/server
   // is likewise partial: it could not establish the current inventory.
+  // Conversely, disabled and missing-CLI snapshots are authoritative removals,
+  // as are successful ready/warning inventories (including an empty one after
+  // logout or plugin removal).
   const isPendingInitialProbe =
     provider.enabled && !provider.installed && provider.status === "warning";
   const didInstalledProviderProbeFail = provider.installed && provider.status === "error";
-  if (isPendingInitialProbe || didInstalledProviderProbeFail) {
-    return true;
-  }
-
-  // A successful empty inventory (logout, plugin removal) is an authoritative
-  // removal, but only once confirmed by consecutive probes.
-  if (isOpenCodeEmptySuccessfulInventory(provider)) {
-    return consecutiveEmptyInventories < OPENCODE_EMPTY_INVENTORY_CONFIRMATIONS;
-  }
-
-  // Disabled and missing-CLI snapshots are immediate authoritative removals.
-  return false;
+  return isPendingInitialProbe || didInstalledProviderProbeFail;
 };
+
+const shouldRetainMissingOpenCodeMetadata = (provider: ServerProvider): boolean =>
+  provider.driver === ProviderDriverKind.make("opencode") &&
+  shouldRetainMissingProviderModels(provider);
 
 const mergeProviderModels = (
   provider: ServerProvider,
   previousModels: ReadonlyArray<ServerProvider["models"][number]>,
   nextModels: ReadonlyArray<ServerProvider["models"][number]>,
-  consecutiveEmptyInventories: number,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
-  const shouldRetainMissingModels = shouldRetainMissingProviderModels(
-    provider,
-    consecutiveEmptyInventories,
-  );
+  const shouldRetainMissingModels = shouldRetainMissingProviderModels(provider);
+  // Custom rows are derived from settings and every snapshot carries the full
+  // current list, so a custom model missing from `nextModels` was removed by
+  // the user and must not be resurrected from the previous snapshot.
+  const retainablePreviousModels = previousModels.filter((model) => !model.isCustom);
 
-  if (shouldRetainMissingModels && nextModels.length === 0 && previousModels.length > 0) {
-    return previousModels;
+  if (shouldRetainMissingModels && nextModels.length === 0 && retainablePreviousModels.length > 0) {
+    return retainablePreviousModels;
   }
 
   const previousBySlug = new Map(previousModels.map((model) => [model.slug, model] as const));
@@ -182,38 +149,35 @@ const mergeProviderModels = (
   });
   const nextSlugs = new Set(nextModels.map((model) => model.slug));
   return shouldRetainMissingModels
-    ? [...mergedModels, ...previousModels.filter((model) => !nextSlugs.has(model.slug))]
+    ? [...mergedModels, ...retainablePreviousModels.filter((model) => !nextSlugs.has(model.slug))]
     : mergedModels;
 };
 
-/**
- * @param consecutiveEmptyInventories how many distinct consecutive successful
- * probes have reported zero models for this instance (see
- * `advanceOpenCodeInventoryRetention`). Zero — the default when no history is
- * available — retains the previous models until the inventory is reconfirmed.
- */
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
   nextProvider: ServerProvider,
-  consecutiveEmptyInventories = 0,
 ): ServerProvider =>
   !previousProvider
     ? nextProvider
     : {
         ...nextProvider,
-        models: mergeProviderModels(
-          nextProvider,
-          previousProvider.models,
-          nextProvider.models,
-          consecutiveEmptyInventories,
-        ),
+        models: mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
+        ...(nextProvider.workspaceSnapshots !== undefined
+          ? { workspaceSnapshots: nextProvider.workspaceSnapshots }
+          : previousProvider.workspaceSnapshots !== undefined
+            ? { workspaceSnapshots: previousProvider.workspaceSnapshots }
+            : {}),
+        ...(shouldRetainMissingOpenCodeMetadata(nextProvider)
+          ? {
+              slashCommands:
+                nextProvider.slashCommands.length === 0
+                  ? previousProvider.slashCommands
+                  : nextProvider.slashCommands,
+              skills:
+                nextProvider.skills.length === 0 ? previousProvider.skills : nextProvider.skills,
+            }
+          : {}),
       };
-
-export const selectProvidersByKind = (
-  providers: ReadonlyArray<ServerProvider>,
-  providerKinds: ReadonlySet<ProviderDriverKind>,
-): ReadonlyArray<ServerProvider> =>
-  providers.filter((provider) => providerKinds.has(provider.driver));
 
 export const haveProvidersChanged = (
   previousProviders: ReadonlyArray<ServerProvider>,
@@ -238,15 +202,7 @@ const correlateSnapshotWithSource = (
       ),
     );
   }
-  if (source.availabilityRefreshSupported === undefined) {
-    return Effect.succeed(snapshot);
-  }
-  const { availabilityRefreshSupported: _cachedCapability, ...currentSnapshot } = snapshot;
-  return Effect.succeed(
-    source.availabilityRefreshSupported
-      ? { ...currentSnapshot, availabilityRefreshSupported: true }
-      : currentSnapshot,
-  );
+  return Effect.succeed(snapshot);
 };
 
 /**
@@ -266,7 +222,6 @@ const snapshotInstanceKey = (provider: ServerProvider): ProviderInstanceId => {
 const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource => ({
   instanceId: instance.instanceId,
   driverKind: instance.driverKind,
-  availabilityRefreshSupported: instance.adapter.refreshAvailability !== undefined,
   getSnapshot: instance.snapshot.getSnapshot,
   refresh: instance.snapshot.refresh,
   streamChanges: instance.snapshot.streamChanges,
@@ -355,11 +310,9 @@ export const ProviderRegistryLive = Layer.effect(
       ),
     );
     const providersRef = yield* Ref.make<ReadonlyArray<ServerProvider>>(cachedProviders);
-    // Per-instance OpenCode empty-inventory confirmations. Folded in lockstep
-    // with `mergeProviderSnapshot` so a flaky empty probe cannot wipe models.
-    const inventoryRetentionRef = yield* Ref.make(
-      new Map<ProviderInstanceId, OpenCodeInventoryRetention>(),
-    );
+    const workspaceRefreshesRef = yield* Ref.make<
+      ReadonlyMap<ProviderInstance, ReadonlySet<string>>
+    >(new Map());
     const maintenanceActionStatesRef = yield* Ref.make<
       ReadonlyMap<ProviderInstanceId, { readonly update?: ServerProviderUpdateState | undefined }>
     >(new Map());
@@ -392,7 +345,8 @@ export const ProviderRegistryLive = Layer.effect(
           cacheDir: config.providerStatusCacheDir,
           instanceId: key,
         }).pipe(Effect.provideService(Path.Path, path));
-        yield* writeProviderStatusCache({ filePath, provider }).pipe(
+        const { workspaceSnapshots: _workspaceSnapshots, ...machineProvider } = provider;
+        yield* writeProviderStatusCache({ filePath, provider: machineProvider }).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
           Effect.tapError(Effect.logError),
@@ -430,26 +384,6 @@ export const ProviderRegistryLive = Layer.effect(
           concurrency: "unbounded",
         },
       );
-      // Advance each incoming snapshot's empty-inventory confirmation before
-      // merging, so the merge decision sees the post-fold count. Distinct
-      // probes count once (see `advanceOpenCodeInventoryRetention`).
-      const retentionByIncoming = new Map<ProviderInstanceId, OpenCodeInventoryRetention>();
-      if (options?.replace !== true) {
-        for (const provider of nextProvidersWithUpdateState) {
-          const key = snapshotInstanceKey(provider);
-          const [retention] = yield* Ref.modify(inventoryRetentionRef, (retentionByInstance) => {
-            const previousRetention =
-              retentionByInstance.get(key) ?? initialOpenCodeInventoryRetention;
-            const nextRetention = advanceOpenCodeInventoryRetention(previousRetention, provider);
-            const nextMap =
-              nextRetention === previousRetention
-                ? retentionByInstance
-                : new Map(retentionByInstance).set(key, nextRetention);
-            return [[nextRetention, nextMap] as const, nextMap];
-          });
-          retentionByIncoming.set(key, retention);
-        }
-      }
       const [previousProviders, providers, providersToPersist] = yield* Ref.modify(
         providersRef,
         (previousProviders) => {
@@ -465,11 +399,7 @@ export const ProviderRegistryLive = Layer.effect(
               key,
               options?.replace === true
                 ? provider
-                : mergeProviderSnapshot(
-                    mergedProviders.get(key),
-                    provider,
-                    retentionByIncoming.get(key)?.consecutiveEmptyInventories ?? 0,
-                  ),
+                : mergeProviderSnapshot(mergedProviders.get(key), provider),
             );
           }
 
@@ -658,6 +588,28 @@ export const ProviderRegistryLive = Layer.effect(
           newlyAdded.push([instanceId, instance] as const);
         }
 
+        const rebuiltInstanceIds = new Set(
+          newlyAdded
+            .map(([instanceId]) => instanceId)
+            .filter((instanceId) => previousSubs.has(instanceId)),
+        );
+        if (rebuiltInstanceIds.size > 0) {
+          const [previousProviders, providers] = yield* Ref.modify(
+            providersRef,
+            (previousProviders) => {
+              const providers = previousProviders.map((provider) => {
+                if (!rebuiltInstanceIds.has(provider.instanceId)) return provider;
+                const { workspaceSnapshots: _workspaceSnapshots, ...machineSnapshot } = provider;
+                return machineSnapshot;
+              });
+              return [[previousProviders, providers] as const, providers];
+            },
+          );
+          if (haveProvidersChanged(previousProviders, providers)) {
+            yield* PubSub.publish(changesPubSub, providers);
+          }
+        }
+
         // Fork long-lived subscriptions to each new/rebuilt instance's
         // change stream before reading its current snapshot. If the
         // driver's own initial probe finishes during this sync, either
@@ -714,15 +666,6 @@ export const ProviderRegistryLive = Layer.effect(
           yield* PubSub.publish(changesPubSub, providers);
         }
         yield* Ref.update(maintenanceActionStatesRef, (previous) => {
-          const next = new Map(previous);
-          for (const instanceId of previous.keys()) {
-            if (!knownInstanceIds.has(instanceId)) {
-              next.delete(instanceId);
-            }
-          }
-          return next;
-        });
-        yield* Ref.update(inventoryRetentionRef, (previous) => {
           const next = new Map(previous);
           for (const instanceId of previous.keys()) {
             if (!knownInstanceIds.has(instanceId)) {
@@ -808,12 +751,76 @@ export const ProviderRegistryLive = Layer.effect(
       return yield* Ref.get(providersRef);
     });
 
+    const refreshWorkspaceSnapshot = Effect.fn("refreshWorkspaceSnapshot")(function* (input: {
+      readonly instanceId: ProviderInstanceId;
+      readonly cwd: string;
+    }) {
+      const providers = yield* Ref.get(providersRef);
+      const provider = providers.find((candidate) => candidate.instanceId === input.instanceId);
+      if (
+        !provider ||
+        !provider.enabled ||
+        provider.workspaceSnapshots?.some((s) => s.cwd === input.cwd)
+      ) {
+        return providers;
+      }
+      const instance = yield* instanceRegistry.getInstance(input.instanceId);
+      if (!instance?.snapshotForCwd) return providers;
+      const claimed = yield* Ref.modify(workspaceRefreshesRef, (refreshes) => {
+        const current = refreshes.get(instance);
+        if (current?.has(input.cwd)) return [false, refreshes] as const;
+        const next = new Map(refreshes);
+        next.set(instance, new Set(current).add(input.cwd));
+        return [true, next] as const;
+      });
+      if (!claimed) return yield* Ref.get(providersRef);
+      return yield* instance.snapshotForCwd(input.cwd).pipe(
+        Effect.flatMap((scopedSnapshot) =>
+          scopedSnapshot.status === "error"
+            ? Ref.get(providersRef)
+            : instanceRegistry.getInstance(input.instanceId).pipe(
+                Effect.flatMap((currentInstance) => {
+                  if (currentInstance !== instance) return Ref.get(providersRef);
+                  return Ref.modify(providersRef, (currentProviders) => {
+                    const nextProviders = currentProviders.map((candidate) =>
+                      candidate.instanceId === input.instanceId &&
+                      !candidate.workspaceSnapshots?.some((s) => s.cwd === input.cwd)
+                        ? upsertProviderWorkspaceSnapshot(candidate, input.cwd, scopedSnapshot)
+                        : candidate,
+                    );
+                    return [[currentProviders, nextProviders] as const, nextProviders];
+                  }).pipe(
+                    Effect.tap(([previousProviders, nextProviders]) =>
+                      haveProvidersChanged(previousProviders, nextProviders)
+                        ? PubSub.publish(changesPubSub, nextProviders)
+                        : Effect.void,
+                    ),
+                    Effect.map(([, nextProviders]) => nextProviders),
+                  );
+                }),
+              ),
+        ),
+        Effect.ensuring(
+          Ref.update(workspaceRefreshesRef, (refreshes) => {
+            const next = new Map(refreshes);
+            const current = new Set(next.get(instance));
+            current.delete(input.cwd);
+            if (current.size) next.set(instance, current);
+            else next.delete(instance);
+            return next;
+          }),
+        ),
+      );
+    });
+
     return {
       getProviders: Ref.get(providersRef),
       refresh: (provider?: ProviderDriverKind) =>
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstance: (instanceId: ProviderInstanceId) =>
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
+      refreshWorkspaceSnapshot: (input) =>
+        refreshWorkspaceSnapshot(input).pipe(Effect.catchCause(recoverRefreshFailure)),
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
       get streamChanges() {

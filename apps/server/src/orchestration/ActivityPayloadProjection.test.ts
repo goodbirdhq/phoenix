@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
-import { projectActivityPayload } from "./ActivityPayloadProjection.ts";
+import type {
+  OrchestrationEvent,
+  OrchestrationThreadActivity,
+  OrchestrationThreadDetailSnapshot,
+} from "@t3tools/contracts";
+import {
+  projectActivityEvent,
+  projectActivityPayload,
+  projectThreadDetailSnapshot,
+} from "./ActivityPayloadProjection.ts";
 
 function activity(payload: Record<string, unknown>): OrchestrationThreadActivity {
   return {
@@ -64,6 +72,28 @@ describe("projectActivityPayload", () => {
     expect(JSON.stringify(projected.payload).length).toBeLessThan(500);
   });
 
+  it("keeps preview normalization and fence-only fallback while scanning lines", () => {
+    const preview = projectActivityPayload(
+      activity({
+        itemType: "command_execution",
+        data: { rawOutput: `\`\`\`\n  actual\tresult  \n${"x".repeat(5000)}` },
+      }),
+    );
+    const fences = projectActivityPayload(
+      activity({
+        itemType: "command_execution",
+        data: { rawOutput: "```\r\n \t \n```\n" },
+      }),
+    );
+
+    expect((preview.payload as { data: { rawOutput: unknown } }).data.rawOutput).toEqual({
+      content: "actual result",
+    });
+    expect((fences.payload as { data: { rawOutput: unknown } }).data.rawOutput).toEqual({
+      content: "2 lines",
+    });
+  });
+
   it("keeps bounded Claude and ACP command output summaries", () => {
     const claude = projectActivityPayload(
       activity({
@@ -97,7 +127,7 @@ describe("projectActivityPayload", () => {
     expect(JSON.stringify(acp.payload).length).toBeLessThan(500);
   });
 
-  it("normalizes Claude and OpenCode command inputs before slimming provider data", () => {
+  it("keeps bounded Claude command input and result summaries", () => {
     const claude = projectActivityPayload(
       activity({
         itemType: "command_execution",
@@ -105,7 +135,13 @@ describe("projectActivityPayload", () => {
         data: {
           toolName: "Bash",
           input: { command: "vp test run" },
-          result: { content: "x".repeat(5_000) },
+          result: {
+            type: "tool_result",
+            content: [
+              { type: "text", text: "tests passed" },
+              { type: "text", text: "x".repeat(5_000) },
+            ],
+          },
         },
       }),
     );
@@ -126,14 +162,45 @@ describe("projectActivityPayload", () => {
 
     expect(claude.payload).toMatchObject({
       toolCallId: "claude-call-1",
-      data: { command: "vp test run" },
+      data: {
+        toolName: "Bash",
+        command: "vp test run",
+        rawOutput: { content: "tests passed" },
+      },
     });
     expect(openCode.payload).toMatchObject({
       toolCallId: "opencode-call-1",
       data: { command: "vp lint" },
     });
-    expect(JSON.stringify(claude.payload).length).toBeLessThan(200);
+    expect(JSON.stringify(claude.payload).length).toBeLessThan(250);
     expect(JSON.stringify(openCode.payload).length).toBeLessThan(200);
+  });
+
+  it("keeps full Claude Read image paths through repeated projection", () => {
+    const imagePath = `/workspace/${"nested folder/".repeat(16)}reference image.webp`;
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "dynamic_tool_call",
+        detail: 'Read: {"file_path":"truncated..."}',
+        data: {
+          toolName: "Read",
+          input: { file_path: imagePath },
+          result: { content: "Image Size: 1280x720." },
+        },
+      }),
+    );
+    const projectedAgain = projectActivityPayload(projected);
+
+    expect(projected.payload).toMatchObject({ data: { imagePath } });
+    expect(projectedAgain.payload).toMatchObject({ data: { imagePath } });
+
+    const textRead = projectActivityPayload(
+      activity({
+        itemType: "dynamic_tool_call",
+        data: { toolName: "Read", input: { file_path: "/workspace/src/index.ts" } },
+      }),
+    );
+    expect(textRead.payload).not.toMatchObject({ data: { imagePath: expect.anything() } });
   });
 
   it("slims Codex-shaped mcp_tool_call items to rendered fields plus a result summary", () => {
@@ -428,6 +495,56 @@ describe("Schedule write carrier survival", () => {
       const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
       expect(data.scheduleActivity).toBeUndefined();
     }
+  });
+});
+
+describe("legacy attachment projection", () => {
+  const image = {
+    type: "image" as const,
+    id: "image-1",
+    name: "image.png",
+    mimeType: "image/png",
+    sizeBytes: 100,
+  };
+  const file = {
+    type: "file" as const,
+    id: "file-1",
+    name: "notes.txt",
+    mimeType: "text/plain",
+    sizeBytes: 20,
+  };
+
+  it("removes non-image attachments from legacy snapshots and live events", () => {
+    const snapshot = {
+      sequence: 3,
+      thread: { messages: [{ attachments: [image, file] }], activities: [] },
+    } as unknown as OrchestrationThreadDetailSnapshot;
+    const event = {
+      type: "thread.message-sent",
+      payload: { attachments: [image, file] },
+    } as unknown as OrchestrationEvent;
+    const projectedEvent = projectActivityEvent(event, { acceptsNonImageAttachments: false });
+
+    expect(
+      projectThreadDetailSnapshot(snapshot, { acceptsNonImageAttachments: false }).thread
+        .messages[0]?.attachments,
+    ).toEqual([image]);
+    expect(
+      projectedEvent.type === "thread.message-sent"
+        ? projectedEvent.payload.attachments
+        : undefined,
+    ).toEqual([image]);
+  });
+
+  it("preserves extended attachments for capable clients", () => {
+    const snapshot = {
+      sequence: 3,
+      thread: { messages: [{ attachments: [image, file] }], activities: [] },
+    } as unknown as OrchestrationThreadDetailSnapshot;
+    expect(
+      projectThreadDetailSnapshot(snapshot, { acceptsNonImageAttachments: true }).thread.messages[0]
+        ?.attachments,
+    ).toEqual([image, file]);
   });
 });
 

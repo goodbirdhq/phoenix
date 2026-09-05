@@ -17,6 +17,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -28,6 +29,7 @@ import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ServerActivation } from "../../serverActivation.ts";
 import {
   ProjectionTurnRepository,
   type ProjectionQueuedTurnStart,
@@ -165,6 +167,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   readonly live?: boolean;
   readonly updatedAt?: string;
   readonly boundaryEvents?: ReadonlyArray<OrchestrationEvent>;
+  readonly preActivationEvent?: OrchestrationEvent;
   readonly queuedRowsRef?: Ref.Ref<Array<ProjectionQueuedTurnStart>>;
   readonly queuedMessageText?: string;
   readonly queuedMessageCreatedAt?: string;
@@ -176,6 +179,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   readonly recoverTerminalAtStartup?: boolean;
 }) {
   const commands = yield* Ref.make<Array<OrchestrationCommand>>([]);
+  const preActivationObserved = yield* Deferred.make<void>();
   const queuedRows = input.queuedRowsRef ?? (yield* Ref.make([...input.queued]));
   const childShell = yield* Ref.make(
     makeShell(CHILD_ID, input.status, input.updatedAt, input.reportDelivery ?? null),
@@ -188,6 +192,12 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
     dispatch: (command) =>
       Effect.gen(function* () {
         yield* Ref.update(commands, (entries) => [...entries, command]);
+        if (
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "session-report.posted"
+        ) {
+          yield* Deferred.succeed(preActivationObserved, undefined);
+        }
         if (command.type === "thread.turn.start.queued") {
           yield* Ref.update(queuedRows, (entries) =>
             entries.filter((entry) => entry.messageId !== command.messageId),
@@ -220,6 +230,14 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
         sequence += 1;
         return { sequence };
       }),
+    subscribeDomainEvents: PubSub.subscribe(events).pipe(
+      Effect.map((subscription) =>
+        Stream.concat(
+          Stream.fromIterable(input.boundaryEvents ?? []),
+          Stream.fromSubscription(subscription),
+        ),
+      ),
+    ),
     streamDomainEvents: Stream.merge(
       Stream.fromPubSub(events),
       Stream.fromIterable(input.boundaryEvents ?? []),
@@ -310,7 +328,17 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
     Effect.provideService(ProviderService, provider),
     Effect.provideService(GitWorkflowService.GitWorkflowService, gitWorkflow),
   );
-  yield* reactor.start();
+  if (input.preActivationEvent === undefined) {
+    yield* reactor.start();
+  } else {
+    const activation = yield* Deferred.make<void>();
+    yield* reactor
+      .start()
+      .pipe(Effect.provideService(ServerActivation, Deferred.await(activation)));
+    yield* PubSub.publish(events, input.preActivationEvent);
+    yield* Deferred.succeed(activation, undefined);
+    yield* Deferred.await(preActivationObserved);
+  }
   yield* Effect.yieldNow;
   yield* reactor.drain;
   yield* Effect.yieldNow;
@@ -338,6 +366,27 @@ describe("SessionSpawnReactor queued delivery", () => {
           expect(
             commands.filter((command) => command.type === "thread.turn.start.queued"),
           ).toHaveLength(1);
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("retains a report event published before server activation", () =>
+    Effect.scoped(
+      createHarness({
+        status: "ready",
+        queued: [],
+        preActivationEvent: queuedReportPostedEvent(),
+      }).pipe(
+        Effect.map(({ commands }) => {
+          expect(
+            commands.some(
+              (command) =>
+                command.type === "thread.activity.append" &&
+                command.activity.kind === "session-report.posted",
+            ),
+          ).toBe(true);
         }),
         Effect.provide(NodeServices.layer),
       ),

@@ -21,30 +21,31 @@ import {
   PinnedRuntimeInstallError,
 } from "./pinnedRuntime.ts";
 import {
+  PUBLISHED_PACKAGE_NAME,
   SERVICE_LAUNCHER_FILE,
   SERVICE_LAUNCHER_PROTOCOL,
   SERVICE_STATE_FILE,
   compareExactServiceVersions,
-  isExactServiceVersion,
   parseServiceState,
+  serviceStateActiveVersion,
   serviceStateHasPendingUpdate,
   type ServiceState,
 } from "./serviceProtocol.ts";
 
 const BOOT_SERVICE_NAME = "phoenix";
-export const BOOT_SERVICE_UNIT_FILE = `${BOOT_SERVICE_NAME}.service`;
+const BOOT_SERVICE_UNIT_FILE = `${BOOT_SERVICE_NAME}.service`;
 // `.service` suffix keeps the label distinct from the desktop app's bundle id
 // (com.goodbird.phoenix), so launchd and TCC records never collide.
-export const BOOT_SERVICE_LAUNCHD_LABEL = "com.goodbird.phoenix.service";
-export const BOOT_SERVICE_PLIST_FILE = `${BOOT_SERVICE_LAUNCHD_LABEL}.plist`;
-export const BOOT_SERVICE_UNIT_ENV = "T3_BOOT_SERVICE_UNIT";
+const BOOT_SERVICE_LAUNCHD_LABEL = "com.goodbird.phoenix.service";
+const BOOT_SERVICE_PLIST_FILE = `${BOOT_SERVICE_LAUNCHD_LABEL}.plist`;
+const BOOT_SERVICE_UNIT_ENV = "T3_BOOT_SERVICE_UNIT";
 
 /** systemd expands `%` specifiers, including in unquoted append-log paths. */
-export function escapeSystemdSpecifiers(value: string): string {
+function escapeSystemdSpecifiers(value: string): string {
   return value.replaceAll("%", "%%");
 }
 
-export function quoteSystemdValue(value: string): string {
+function quoteSystemdValue(value: string): string {
   const escaped = escapeSystemdSpecifiers(value);
   return /[\s"'\\]/.test(escaped)
     ? `"${escaped.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`
@@ -94,7 +95,7 @@ export function renderBootServiceUnit(plan: BootServicePlan): string {
 }
 
 /** Plist values are emitted as XML text nodes; only these three need escaping. */
-export function escapeXmlText(value: string): string {
+function escapeXmlText(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
@@ -201,7 +202,7 @@ export interface BootServiceManager {
   readonly finalize: ReadonlyArray<BootServiceStep>;
 }
 
-export function systemdManager(input: {
+function systemdManager(input: {
   readonly path: Path.Path;
   readonly homeDir: string;
 }): BootServiceManager {
@@ -268,7 +269,7 @@ export function systemdManager(input: {
   };
 }
 
-export function launchdManager(input: {
+function launchdManager(input: {
   readonly path: Path.Path;
   readonly homeDir: string;
   readonly uid: number;
@@ -350,7 +351,7 @@ export function launchdManager(input: {
 }
 
 /** Undefined means this host cannot run the background service. */
-export function selectBootServiceManager(input: {
+function selectBootServiceManager(input: {
   readonly platform: NodeJS.Platform;
   readonly homeDir: string;
   readonly uid: number | undefined;
@@ -418,15 +419,15 @@ export class BootServiceUpdatePendingError extends Schema.TaggedErrorClass<BootS
   }
 }
 
-export class BootServiceWouldDowngradeError extends Schema.TaggedErrorClass<BootServiceWouldDowngradeError>()(
-  "BootServiceWouldDowngradeError",
+export class BootServiceDowngradeRefusedError extends Schema.TaggedErrorClass<BootServiceDowngradeRefusedError>()(
+  "BootServiceDowngradeRefusedError",
   {
-    activeVersion: Schema.String,
-    cliVersion: Schema.String,
+    installedVersion: Schema.String,
+    targetVersion: Schema.String,
   },
 ) {
   override get message(): string {
-    return `Phoenix service is already on phoenix@${this.activeVersion}, newer than this CLI (${this.cliVersion}). Use \`npx @goodbirdhq/phoenix@latest service update\` to update.`;
+    return `Refusing to replace ${PUBLISHED_PACKAGE_NAME}@${this.installedVersion} with older ${PUBLISHED_PACKAGE_NAME}@${this.targetVersion}. Run the command again with --allow-downgrade to continue.`;
   }
 }
 
@@ -435,17 +436,15 @@ export type BootServiceError =
   | BootServiceCommandError
   | BootServiceInstallError
   | BootServiceUpdatePendingError
-  | BootServiceWouldDowngradeError;
+  | BootServiceDowngradeRefusedError;
 
 export interface BootServiceStatus {
   readonly supported: boolean;
   readonly installed: boolean;
   readonly current: boolean;
+  readonly installedVersion?: string;
   readonly unitPath: string;
   readonly logPath: string;
-  // What the launcher will start, from service-state.json. Distinct from this
-  // CLI's version when PATH still has an older global install.
-  readonly activeVersion: string | null;
   // What the pinned runtime the service actually executes reports for
   // `--version`, read by running it. The CLI asking for status can be a
   // different build than the daemon, which is the whole reason to report it
@@ -453,22 +452,12 @@ export interface BootServiceStatus {
   readonly runtimeVersion: string | null;
 }
 
-export function isServiceNewerThanCli(
-  activeVersion: string | null | undefined,
-  cliVersion: string,
-): boolean {
-  return (
-    typeof activeVersion === "string" &&
-    isExactServiceVersion(activeVersion) &&
-    isExactServiceVersion(cliVersion) &&
-    compareExactServiceVersions(activeVersion, cliVersion) > 0
-  );
-}
-
 export class BootService extends Context.Service<
   BootService,
   {
-    readonly install: Effect.Effect<BootServicePlan, BootServiceError>;
+    readonly install: (options?: {
+      readonly allowDowngrade?: boolean;
+    }) => Effect.Effect<BootServicePlan, BootServiceError>;
     readonly uninstall: Effect.Effect<boolean, BootServiceError>;
     readonly status: Effect.Effect<BootServiceStatus, BootServiceError>;
   }
@@ -616,30 +605,13 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       { discard: true },
     );
 
-  const install: BootService["Service"]["install"] = Effect.gen(function* () {
+  const install = Effect.fn("cloud.boot_service.install")(function* (options?: {
+    readonly allowDowngrade?: boolean;
+  }) {
     const manager = yield* requireManager;
     yield* fs
       .makeDirectory(input.logsDir, { recursive: true })
       .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
-
-    const installed = yield* fs
-      .exists(unitPath)
-      .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
-    if (installed) {
-      const previousStateText = yield* fs.readFileString(statePath).pipe(Effect.option);
-      if (Option.isSome(previousStateText)) {
-        const previousState = parseServiceState(previousStateText.value);
-        if (
-          previousState !== undefined &&
-          isServiceNewerThanCli(previousState.activeVersion, input.cliVersion)
-        ) {
-          return yield* new BootServiceWouldDowngradeError({
-            activeVersion: previousState.activeVersion,
-            cliVersion: input.cliVersion,
-          });
-        }
-      }
-    }
 
     // Prepare every immutable artifact before stopping the installed unit.
     yield* ensurePinnedRuntimeInstalled({
@@ -698,6 +670,9 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       .readFileString(launcherSourcePath)
       .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
 
+    const installed = yield* fs
+      .exists(unitPath)
+      .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
     if (installed) {
       yield* runSteps(manager.stop);
     }
@@ -705,11 +680,23 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     yield* Effect.gen(function* () {
       if (installed) {
         const previousStateText = yield* fs.readFileString(statePath).pipe(Effect.option);
-        if (
-          Option.isSome(previousStateText) &&
-          serviceStateHasPendingUpdate(previousStateText.value)
-        ) {
-          return yield* new BootServiceUpdatePendingError();
+        if (Option.isSome(previousStateText)) {
+          if (serviceStateHasPendingUpdate(previousStateText.value)) {
+            return yield* new BootServiceUpdatePendingError();
+          }
+          // A remote update can finish after the CLI checks status. Read its
+          // final version after the launcher stops and before changing files.
+          const installedVersion = serviceStateActiveVersion(previousStateText.value);
+          if (
+            installedVersion !== undefined &&
+            options?.allowDowngrade !== true &&
+            compareExactServiceVersions(input.cliVersion, installedVersion) < 0
+          ) {
+            return yield* new BootServiceDowngradeRefusedError({
+              installedVersion,
+              targetVersion: input.cliVersion,
+            });
+          }
         }
       }
       yield* fs
@@ -737,7 +724,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       ),
     );
     return plan;
-  }).pipe(Effect.withSpan("cloud.boot_service.install"));
+  });
 
   const uninstall: BootService["Service"]["uninstall"] = Effect.gen(function* () {
     const manager = yield* requireManager;
@@ -763,7 +750,6 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         current: false,
         unitPath,
         logPath,
-        activeVersion: null,
         runtimeVersion: null,
       };
     }
@@ -774,7 +760,6 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         current: false,
         unitPath,
         logPath,
-        activeVersion: null,
         runtimeVersion: null,
       };
     }
@@ -787,26 +772,32 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         fs.readFileString(statePath).pipe(Effect.option),
       ]);
     const state = Option.isSome(stateText) ? parseServiceState(stateText.value) : undefined;
-    // Ask the binary the daemon runs what it is, rather than assuming it
-    // matches this CLI. Diagnostic only: a runtime that cannot answer still
-    // reports its install state normally.
-    const activeRuntimePaths =
-      state?.activeVersion === undefined
+    const installedVersion = Option.isSome(stateText)
+      ? serviceStateActiveVersion(stateText.value)
+      : undefined;
+    // Ask the runtime named by the launcher state, not the runtime belonging
+    // to this CLI. An older CLI may be inspecting a newer installed service.
+    const installedRuntimePaths =
+      installedVersion === undefined
         ? undefined
-        : pinnedRuntimePaths(path, input.baseDir, state.activeVersion);
-    const runtimeVersion =
-      activeRuntimePaths === undefined
-        ? null
-        : yield* runner
-            .run({
-              command: host.execPath,
-              args: [activeRuntimePaths.entryPath, "--version"],
-              timeout: Duration.seconds(30),
-            })
-            .pipe(
-              Effect.map((result) => (result.code === 0 ? result.stdout.trim() : null)),
-              Effect.orElseSucceed(() => null),
-            );
+        : pinnedRuntimePaths(path, input.baseDir, installedVersion);
+    const installedRuntimeEntryExists =
+      installedRuntimePaths !== undefined &&
+      (installedVersion === input.cliVersion
+        ? runtimeEntryExists
+        : yield* fs.exists(installedRuntimePaths.entryPath));
+    const runtimeVersion = installedRuntimeEntryExists
+      ? yield* runner
+          .run({
+            command: host.execPath,
+            args: [installedRuntimePaths.entryPath, "--version"],
+            timeout: Duration.seconds(30),
+          })
+          .pipe(
+            Effect.map((result) => (result.code === 0 ? result.stdout.trim() : null)),
+            Effect.orElseSucceed(() => null),
+          )
+      : null;
     const normalizeUnit = (contents: string) =>
       detectedManager.kind === "launchd"
         ? contents.replace(/(<key>PATH<\/key>\n\s*<string>)[^<]*(<\/string>)/, "$1$2")
@@ -814,7 +805,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     return {
       supported: true,
       installed: true,
-      activeVersion: state?.activeVersion ?? null,
+      ...(installedVersion === undefined ? {} : { installedVersion }),
       runtimeVersion,
       current:
         normalizeUnit(unit) === normalizeUnit(detectedManager.render(plan)) &&

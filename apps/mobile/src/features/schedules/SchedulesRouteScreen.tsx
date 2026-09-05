@@ -15,7 +15,6 @@ import { AppText as Text } from "../../components/AppText";
 import { EmptyState } from "../../components/EmptyState";
 import { StatusPill, type StatusTone } from "../../components/StatusPill";
 import { SymbolView } from "../../components/AppSymbol";
-import { useThemeColor } from "../../lib/useThemeColor";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import {
   buildScheduleRows,
@@ -244,7 +243,6 @@ export function SchedulesRouteScreen() {
 
 function ScheduleCreateHeaderButton() {
   const navigation = useNavigation();
-  const icon = useThemeColor("--color-icon");
   return (
     <Pressable
       accessibilityLabel="Create Schedule"
@@ -257,7 +255,7 @@ function ScheduleCreateHeaderButton() {
         })
       }
     >
-      <SymbolView name="plus" size={20} tintColor={icon} type="monochrome" />
+      <SymbolView name="plus" size={20} tintColorClassName="accent-icon" type="monochrome" />
     </Pressable>
   );
 }
@@ -292,7 +290,6 @@ function FilterButton(props: {
 }
 
 function ScheduleListRow(props: { readonly row: ScheduleRow; readonly onPress: () => void }) {
-  const chevron = useThemeColor("--color-chevron");
   return (
     <Pressable
       accessibilityLabel={`${props.row.name}, ${STATE_TONES[props.row.state].label}`}
@@ -334,7 +331,12 @@ function ScheduleListRow(props: { readonly row: ScheduleRow; readonly onPress: (
         </View>
         <View className="items-end gap-3">
           <StatusPill {...STATE_TONES[props.row.state]} size="compact" />
-          <SymbolView name="chevron.right" size={15} tintColor={chevron} type="monochrome" />
+          <SymbolView
+            name="chevron.right"
+            size={15}
+            tintColorClassName="accent-chevron"
+            type="monochrome"
+          />
         </View>
       </View>
     </Pressable>

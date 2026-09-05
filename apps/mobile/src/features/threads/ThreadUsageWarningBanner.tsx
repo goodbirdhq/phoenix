@@ -4,7 +4,6 @@ import { Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { ProviderIcon } from "../../components/ProviderIcon";
-import { useThemeColor } from "../../lib/useThemeColor";
 import { useProviderAvailability } from "../../state/usage";
 import {
   deriveMobileThreadUsageWarning,
@@ -25,7 +24,6 @@ export const ThreadUsageWarningBanner = memo(function ThreadUsageWarningBanner(p
   const environments = useProviderAvailability();
   const [dismissedKeys, setDismissedKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [expiryTick, setExpiryTick] = useState(0);
-  const iconColor = String(useThemeColor("--color-icon-muted"));
   const warning = useMemo(
     () =>
       deriveMobileThreadUsageWarning({
@@ -73,7 +71,12 @@ export const ThreadUsageWarningBanner = memo(function ThreadUsageWarningBanner(p
           hitSlop={8}
           onPress={handleDismiss}
         >
-          <SymbolView name="xmark" size={13} tintColor={iconColor} type="monochrome" />
+          <SymbolView
+            name="xmark"
+            size={13}
+            tintColorClassName="accent-icon-muted"
+            type="monochrome"
+          />
         </Pressable>
       </View>
     </View>

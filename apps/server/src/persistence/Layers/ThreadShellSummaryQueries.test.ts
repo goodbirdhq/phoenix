@@ -69,7 +69,7 @@ const message = (
 });
 
 layer("Thread shell summary queries", (it) => {
-  it.effect("listUserInputByThreadId returns only the kinds the tally folds over", () =>
+  it.effect("listUserInputLifecycleByThreadId returns only the kinds the tally folds over", () =>
     Effect.gen(function* () {
       const activities = yield* ProjectionThreadActivityRepository;
       const threadId = thread("kinds");
@@ -102,7 +102,7 @@ layer("Thread shell summary queries", (it) => {
         }),
       );
 
-      const narrowed = yield* activities.listUserInputByThreadId({ threadId });
+      const narrowed = yield* activities.listUserInputLifecycleByThreadId({ threadId });
 
       assert.deepStrictEqual(
         narrowed.map((row) => row.activityId),
@@ -114,7 +114,7 @@ layer("Thread shell summary queries", (it) => {
     }),
   );
 
-  it.effect("listUserInputByThreadId preserves the ordering of the full list", () =>
+  it.effect("listUserInputLifecycleByThreadId preserves the ordering of the full list", () =>
     Effect.gen(function* () {
       const activities = yield* ProjectionThreadActivityRepository;
       const threadId = thread("ordering");
@@ -134,7 +134,7 @@ layer("Thread shell summary queries", (it) => {
       );
 
       const all = yield* activities.listByThreadId({ threadId });
-      const narrowed = yield* activities.listUserInputByThreadId({ threadId });
+      const narrowed = yield* activities.listUserInputLifecycleByThreadId({ threadId });
 
       const expected = all
         .filter((row) =>
@@ -148,7 +148,7 @@ layer("Thread shell summary queries", (it) => {
     }),
   );
 
-  it.effect("listUserInputByThreadId stays scoped to its thread", () =>
+  it.effect("listUserInputLifecycleByThreadId stays scoped to its thread", () =>
     Effect.gen(function* () {
       const activities = yield* ProjectionThreadActivityRepository;
       const threadId = thread("scope");
@@ -165,7 +165,7 @@ layer("Thread shell summary queries", (it) => {
         }),
       );
 
-      const narrowed = yield* activities.listUserInputByThreadId({ threadId });
+      const narrowed = yield* activities.listUserInputLifecycleByThreadId({ threadId });
       assert.deepStrictEqual(
         narrowed.map((row) => row.activityId),
         ["c1"],

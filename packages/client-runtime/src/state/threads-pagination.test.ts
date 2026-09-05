@@ -133,6 +133,7 @@ type LoaderResponse = Option.Option<OrchestrationThreadDetailSnapshot>;
 
 const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (options?: {
   readonly paginationCapability?: boolean;
+  readonly fileAttachmentsCapability?: boolean;
   readonly initialResponse?: LoaderResponse;
   /** Cached snapshot returned by the cache store (simulates a warm cache). */
   readonly cached?: OrchestrationThreadDetailSnapshot;
@@ -140,6 +141,7 @@ const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (opt
   const inputs = yield* Queue.unbounded<OrchestrationThreadStreamItem>();
   const observed = yield* Queue.unbounded<EnvironmentThreadState>();
   const loaderWindows = yield* Ref.make<ReadonlyArray<ThreadSnapshotWindow | undefined>>([]);
+  const loaderAttachmentCapabilities = yield* Ref.make<ReadonlyArray<boolean | undefined>>([]);
   const lastSubscribeInput = yield* Ref.make<Record<string, unknown> | undefined>(undefined);
   const savedThreads = yield* Ref.make<ReadonlyArray<OrchestrationThreadDetailSnapshot>>([]);
   // Older-page responses resolve through deferreds so tests can interleave
@@ -156,7 +158,11 @@ const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (opt
     client,
     initialConfig: Effect.succeed({
       threadSnapshotPagination: options?.paginationCapability !== false,
+      environment: {
+        capabilities: options?.fileAttachmentsCapability === false ? {} : { fileAttachments: {} },
+      },
     } as never),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
     closed: Effect.never,
@@ -168,8 +174,14 @@ const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (opt
     Option.some(PREPARED),
   );
   const snapshotLoader = ThreadSnapshotLoader.of({
-    load: (_prepared, _threadId, window) =>
+    load: (_prepared, _threadId, window, acceptsNonImageAttachments) =>
       Ref.update(loaderWindows, (current) => [...current, window]).pipe(
+        Effect.andThen(
+          Ref.update(loaderAttachmentCapabilities, (current) => [
+            ...current,
+            acceptsNonImageAttachments,
+          ]),
+        ),
         Effect.andThen(
           window?.beforeCursor === undefined
             ? Effect.succeed(
@@ -230,6 +242,7 @@ const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (opt
     awaitState,
     resolveNextPage,
     loaderWindows,
+    loaderAttachmentCapabilities,
     lastSubscribeInput,
     savedThreads,
     threadState,
@@ -297,6 +310,7 @@ describe("thread pagination state", () => {
       });
       const windows = yield* Ref.get(harness.loaderWindows);
       expect(windows[0]?.turnLimit).toBe(INITIAL_THREAD_USER_TURN_LIMIT);
+      expect(yield* Ref.get(harness.loaderAttachmentCapabilities)).toEqual([true]);
       const subscribeInput = yield* Ref.get(harness.lastSubscribeInput);
       expect(subscribeInput?.turnLimit).toBe(INITIAL_THREAD_USER_TURN_LIMIT);
     }),
@@ -314,6 +328,21 @@ describe("thread pagination state", () => {
       expect(windows[0]).toBeUndefined();
       const subscribeInput = yield* Ref.get(harness.lastSubscribeInput);
       expect(subscribeInput?.turnLimit).toBeUndefined();
+    }),
+  );
+
+  it.effect("keeps HTTP snapshots image-only for clients without file attachment support", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        fileAttachmentsCapability: false,
+        initialResponse: Option.some({ snapshotSequence: 10, thread: BASE_THREAD }),
+      });
+      yield* harness.awaitState((value) => Option.isSome(value.data));
+
+      expect(yield* Ref.get(harness.loaderAttachmentCapabilities)).toEqual([false]);
+      expect(
+        (yield* Ref.get(harness.lastSubscribeInput))?.acceptsNonImageAttachments,
+      ).toBeUndefined();
     }),
   );
 

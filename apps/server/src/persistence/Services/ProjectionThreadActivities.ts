@@ -91,14 +91,11 @@ export interface ProjectionThreadActivityRepositoryShape {
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadActivity>, ProjectionRepositoryError>;
 
   /**
-   * List only the activity rows that can change the pending-user-input tally.
+   * List activity rows used to derive pending user-input state.
    *
-   * Same ordering as `listByThreadId`, filtered to
-   * `PENDING_USER_INPUT_ACTIVITY_KINDS`. Threads accumulate tens of thousands
-   * of tool activities whose payloads run to megabytes; the summary refresh
-   * runs on nearly every event, so it must not read history it cannot use.
+   * Filters in SQLite so unrelated payloads do not enter server memory.
    */
-  readonly listUserInputByThreadId: (
+  readonly listUserInputLifecycleByThreadId: (
     input: ListProjectionThreadActivitiesInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadActivity>, ProjectionRepositoryError>;
 

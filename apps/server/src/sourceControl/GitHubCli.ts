@@ -1,6 +1,8 @@
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -15,6 +17,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import {
   decodeGitHubPullRequestJson,
   decodeGitHubPullRequestListJson,
+  type NormalizedGitHubPullRequestRecord,
 } from "./gitHubPullRequests.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -203,9 +206,18 @@ export interface GitHubPullRequestSummary {
   readonly headRefName: string;
   readonly headRefOid?: string | null;
   readonly state?: "open" | "closed" | "merged";
+  readonly updatedAt?: string;
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly headRepositoryOwnerLogin?: string | null;
+}
+
+function pullRequestSummary(input: NormalizedGitHubPullRequestRecord): GitHubPullRequestSummary {
+  const { updatedAt, ...summary } = input;
+  return {
+    ...summary,
+    ...(Option.isSome(updatedAt) ? { updatedAt: DateTime.formatIso(updatedAt.value) } : {}),
+  };
 }
 
 export interface GitHubRepositoryCloneUrls {
@@ -374,9 +386,7 @@ export const make = Effect.gen(function* () {
                     );
                   }
 
-                  return Effect.succeed(
-                    decoded.success.map(({ updatedAt: _updatedAt, ...summary }) => summary),
-                  );
+                  return Effect.succeed(decoded.success.map(pullRequestSummary));
                 }),
               ),
         ),
@@ -389,7 +399,7 @@ export const make = Effect.gen(function* () {
           "view",
           input.reference,
           "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -406,9 +416,7 @@ export const make = Effect.gen(function* () {
                 );
               }
 
-              return Effect.succeed(
-                (({ updatedAt: _updatedAt, ...summary }) => summary)(decoded.success),
-              );
+              return Effect.succeed(pullRequestSummary(decoded.success));
             }),
           ),
         ),

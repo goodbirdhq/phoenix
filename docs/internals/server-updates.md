@@ -2,11 +2,9 @@
 
 > For maintainers. Using Phoenix? See [docs/user](../user/).
 
-> Dormant upstream architecture. Phoenix has no owned package distribution, so it does not advertise
-> or execute remote server updates and it does not install the upstream `t3` npm package. Keep this
-> design as reference until Phoenix has a separately owned, verified distribution path.
+Phoenix publishes its managed server runtime as `@goodbirdhq/phoenix` on npm.
 
-The inherited design uses one stable launcher selected by the platform service manager (systemd on
+The design uses one stable launcher selected by the platform service manager (systemd on
 Linux, launchd on macOS). Foreground CLI processes do not self-update, and a running server never
 edits its service definition or durable service state.
 
@@ -31,7 +29,7 @@ The state contains one active version and, at most, one update record:
 
 Every write uses same-directory replacement plus file and directory fsync.
 
-## Inherited remote update design (disabled)
+## Remote update design
 
 1. The active server installs a Phoenix-owned exact-version artifact into a unique staging directory.
 2. The target runs `__service-preflight` and verifies that the stable launcher supports its update
@@ -65,8 +63,8 @@ server stops and before the trial starts. This makes trial migrations and writes
 requiring down migrations. The snapshot is retained across launcher restarts and is removed only
 after commit or after both restore and the terminal rollback state are durable.
 
-The protocol version is part of the safety boundary. Reactivation requires a Phoenix-owned artifact
-source plus a local launcher migration path that never resolves the upstream `t3` package.
+The protocol version is part of the safety boundary. Reactivation requires the Phoenix-owned
+`@goodbirdhq/phoenix` artifact plus a local launcher migration path.
 
 Snapshots briefly require enough free disk for another copy of the SQLite files. Attachments and
 other files under the state directory are outside this rollback boundary.
@@ -80,9 +78,18 @@ recorded reason. Older servers without an ID retain version-only reconnect behav
 
 ## Capability and Compatibility
 
-The existing additive RPC and lifecycle schemas remain compatible with older clients. Phoenix
-servers advertise only `desktop-managed` updates; every other process shape requires a source build
-and relaunch. The client ignores legacy `boot-service` and `respawn` capabilities.
+The existing additive RPC and lifecycle schemas remain compatible with older clients. New servers
+advertise remote self-update only when they have valid launcher context and a live IPC channel.
+Desktop-managed servers advertise `desktopAppUpdate` when the desktop telemetry control fd is
+attached. The progress RPC asks the desktop app to check and download, then returns a preparation
+token while the backend is still connected. Only after the client receives that result does it send
+`server.commitDesktopUpdate`. A successful commit closes the connection and must reconnect at the
+prepared version. The desktop app and bundled server versions stay equal because
+`scripts/update-release-package-versions.ts` bumps them together. If install fails, the desktop keeps its windows, restarts stopped backends, and
+replays the failure for the same token. This two-phase handoff prevents backend shutdown from
+dropping the only successful RPC result. Desktop servers without the capability direct the user to
+update the desktop app locally. Other process shapes provide a manual command; the old detached
+foreground respawn path no longer exists.
 
 ## Source Map
 

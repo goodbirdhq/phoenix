@@ -1,277 +1,226 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFS from "node:fs";
+// @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real
+// transcript trees on disk, outside the service's Effect FileSystem.
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeSqlite from "node:sqlite";
 
-import {
-  ProviderDriverKind,
-  ProviderInstanceId,
-  USAGE_CONTRACT_VERSION,
-  type UsageDay,
-  type UsageSummary,
-} from "@t3tools/contracts";
-import { it as effectIt } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import { HttpClient } from "effect/unstable/http";
+import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { afterAll, assert, describe } from "vite-plus/test";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { UsageDay, type UsageSummaryInput } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Scheduler from "effect/Scheduler";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
-import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as UsageService from "./UsageService.ts";
 
-/**
- * Two signed-in Claude accounts, each with its own `CLAUDE_CONFIG_DIR`, plus a
- * Codex home — the shape of a machine that runs more than one subscription.
- */
-const stateRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-usage-service-"));
-const claudeAHome = NodePath.join(stateRoot, "claude-a");
-const claudeBHome = NodePath.join(stateRoot, "claude-b");
-const openCodeDataHome = NodePath.join(stateRoot, "opencode-data");
-
-function writeClaudeTranscript(home: string, sessionId: string, messageId: string): void {
-  const dir = NodePath.join(home, "projects", "-tmp-project");
-  NodeFS.mkdirSync(dir, { recursive: true });
-  const line = JSON.stringify({
+function claudeLine(id: number, outputTokens: number): string {
+  return `${JSON.stringify({
     type: "assistant",
-    timestamp: "2026-08-07T12:00:00.000Z",
-    sessionId,
-    requestId: `req-${messageId}`,
+    timestamp: "2026-08-01T10:00:00Z",
+    requestId: `req_${id}`,
+    sessionId: "session-1",
     message: {
-      id: messageId,
+      id: `msg_${id}`,
       model: "claude-fable-5",
-      usage: {
-        input_tokens: 100,
-        output_tokens: 50,
-        cache_read_input_tokens: 0,
-        cache_creation_input_tokens: 0,
-      },
+      usage: { input_tokens: 10, output_tokens: outputTokens },
     },
-  });
-  NodeFS.writeFileSync(NodePath.join(dir, `${sessionId}.jsonl`), `${line}\n`);
+  })}\n`;
 }
 
-writeClaudeTranscript(claudeAHome, "session-a", "msg_a");
-writeClaudeTranscript(claudeBHome, "session-b", "msg_b");
-
-function writeOpenCodeDatabase(): void {
-  const dataDir = NodePath.join(openCodeDataHome, "opencode");
-  NodeFS.mkdirSync(dataDir, { recursive: true });
-  const database = new NodeSqlite.DatabaseSync(NodePath.join(dataDir, "opencode.db"));
-  database.exec(`
-    CREATE TABLE message (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      time_created INTEGER NOT NULL,
-      time_updated INTEGER NOT NULL,
-      data TEXT NOT NULL
-    )
-  `);
-  const insert = database.prepare(
-    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
-  );
-  insert.run(
-    "msg-opencode",
-    "session-opencode",
-    Date.parse("2026-08-07T12:00:00.000Z"),
-    Date.parse("2026-08-07T12:00:01.000Z"),
-    JSON.stringify({
-      role: "assistant",
-      time: { created: Date.parse("2026-08-07T12:00:00.000Z") },
-      providerID: "anthropic",
-      modelID: "claude-sonnet-4-5",
-      cost: 0.0125,
-      tokens: {
-        input: 100,
-        output: 50,
-        reasoning: 10,
-        cache: { read: 20, write: 30 },
-      },
-    }),
-  );
-  insert.run(
-    "msg-opencode-zero",
-    "session-opencode-zero",
-    Date.parse("2026-08-07T12:01:00.000Z"),
-    Date.parse("2026-08-07T12:01:01.000Z"),
-    JSON.stringify({
-      role: "assistant",
-      providerID: "anthropic",
-      modelID: "claude-sonnet-4-5",
-      cost: 0,
-      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-    }),
-  );
-  database.close();
-}
-
-writeOpenCodeDatabase();
-
-afterAll(() => {
-  NodeFS.rmSync(stateRoot, { recursive: true, force: true });
-});
-
-/** Rates are fetched over the network; this suite is about which files get read. */
-const offlineHttpClient = Layer.succeed(
-  HttpClient.HttpClient,
-  HttpClient.make(() => Effect.die("usage tests do not fetch rates")),
-);
-
-const layerFor = (settings: Parameters<typeof serverSettingsLayerTest>[0] = {}) =>
-  UsageService.layer.pipe(
-    Layer.provide(
-      serverSettingsLayerTest({
-        ...settings,
-        providerInstances: {
-          [ProviderInstanceId.make("opencode")]: {
-            driver: ProviderDriverKind.make("opencode"),
-            environment: [
-              { name: "XDG_DATA_HOME", value: NodePath.join(stateRoot, "missing-opencode-data") },
-            ],
-            config: {},
-          },
-          ...settings.providerInstances,
-        },
-      }),
-    ),
-    Layer.provide(offlineHttpClient),
-    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-usage-service-test-" })),
-    Layer.provide(NodeServices.layer),
-  );
-
-const window = {
-  sinceDay: "2026-08-01" as UsageDay,
-  untilDay: "2026-08-31" as UsageDay,
+const WINDOW: UsageSummaryInput = {
   timeZone: "UTC",
-  contractVersion: USAGE_CONTRACT_VERSION,
+  sinceDay: UsageDay.make("2026-07-31"),
+  untilDay: UsageDay.make("2026-08-02"),
 };
 
-const claudeSources = (summary: UsageSummary) =>
-  summary.sources.filter((source) => source.fingerprint.provider === "claude");
+const setup = Effect.gen(function* () {
+  const home = yield* Effect.promise(() =>
+    NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "usage-service-test-")),
+  );
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(() => NodeFSP.rm(home, { recursive: true, force: true })),
+  );
+  const transcriptDir = NodePath.join(home, "claude", "projects", "proj");
+  yield* Effect.promise(() => NodeFSP.mkdir(transcriptDir, { recursive: true }));
+  return {
+    home,
+    transcript: NodePath.join(transcriptDir, "session.jsonl"),
+    settings: {
+      providers: {
+        claudeAgent: { homePath: NodePath.join(home, "claude") },
+        codex: { homePath: NodePath.join(home, "codex") },
+      },
+    },
+  };
+});
 
-describe("UsageService transcript sources", () => {
-  effectIt.effect("includes usage from an OpenCode database", () =>
+const serviceLayers = (input: {
+  readonly prefix: string;
+  readonly home: string;
+  readonly settings: Parameters<typeof ServerSettings.layerTest>[0];
+  readonly onRatesFetch?: () => void;
+}) =>
+  ServerConfig.layerTest(process.cwd(), { prefix: input.prefix }).pipe(
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(ServerSettings.layerTest(input.settings)),
+    Layer.provideMerge(
+      Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.sync(() => {
+            input.onRatesFetch?.();
+            // Unparsable rates: every scan retries the fetch, which makes the
+            // fetch count a boundary-level observation of how many scans ran.
+            return HttpClientResponse.fromWeb(request, Response.json({}));
+          }),
+        ),
+      ),
+    ),
+    Layer.provideMerge(
+      Layer.succeed(HostProcessEnvironment, { GROK_HOME: NodePath.join(input.home, "grok") }),
+    ),
+  );
+
+function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens: number } }[] }) {
+  return summary.buckets.reduce((sum, bucket) => sum + bucket.totals.outputTokens, 0);
+}
+
+describe("UsageService", () => {
+  it.live("counts appended usage on a rescan of a grown transcript", () =>
     Effect.gen(function* () {
-      const usage = yield* UsageService.UsageService;
-      const summary = yield* usage.readSummary(window);
+      const { transcript, settings, home } = yield* setup;
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
 
-      const source = summary.sources.find(
-        (candidate) => String(candidate.fingerprint.provider) === "opencode",
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(serviceLayers({ prefix: "usage-service-grow-test", home, settings })),
       );
-      assert.isDefined(source);
-      assert.equal(
-        source?.fingerprint.resolvedHomePath,
-        NodePath.join(openCodeDataHome, "opencode", "opencode.db"),
-      );
-      assert.equal(source?.distinctSessions, 1);
-      assert.equal(source?.malformedRecords, 0);
 
-      const bucket = summary.buckets.find((candidate) => String(candidate.provider) === "opencode");
-      assert.isDefined(bucket);
-      assert.equal(bucket?.model, "anthropic/claude-sonnet-4-5");
-      assert.deepEqual(bucket?.totals, {
-        uncachedInputTokens: 100,
-        cachedInputTokens: 20,
-        cacheCreationTokens: 30,
-        outputTokens: 60,
-        reasoningTokens: 10,
-      });
-      assert.equal(bucket?.costUsd, 0.0125);
-      assert.equal(bucket?.costSource, "providerReported");
+      const first = yield* service.readSummary(WINDOW);
+      assert.strictEqual(totalOutputTokens(first), 5);
 
-      const legacySummary = yield* usage.readSummary({
-        sinceDay: window.sinceDay,
-        untilDay: window.untilDay,
-        timeZone: window.timeZone,
-      });
-      assert.equal(legacySummary.contractVersion, 4);
-      assert.isFalse(
-        legacySummary.buckets.some((candidate) => String(candidate.provider) === "opencode"),
-      );
-      assert.isFalse(
-        legacySummary.sources.some(
-          (candidate) => String(candidate.fingerprint.provider) === "opencode",
+      yield* Effect.promise(() => NodeFSP.appendFile(transcript, claudeLine(2, 7)));
+      const second = yield* service.readSummary(WINDOW);
+      assert.strictEqual(totalOutputTokens(second), 12);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("shares one scan between concurrent identical requests", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
+
+      let ratesFetches = 0;
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          serviceLayers({
+            prefix: "usage-service-flight-test",
+            home,
+            settings,
+            onRatesFetch: () => {
+              ratesFetches += 1;
+            },
+          }),
         ),
       );
-    }).pipe(
-      Effect.provide(
-        layerFor({
-          providerInstances: {
-            [ProviderInstanceId.make("opencode")]: {
-              driver: ProviderDriverKind.make("opencode"),
-              environment: [{ name: "XDG_DATA_HOME", value: openCodeDataHome }],
-              config: {},
-            },
-          },
-        }),
-      ),
-    ),
-  );
 
-  effectIt.effect("reads every configured Claude account, not just the default one", () =>
-    Effect.gen(function* () {
-      const usage = yield* UsageService.UsageService;
-      const summary = yield* usage.readSummary(window);
-
-      const homes = claudeSources(summary)
-        .map((source) => source.fingerprint.resolvedHomePath)
-        .toSorted();
-      assert.deepEqual(homes, [
-        NodePath.join(claudeAHome, "projects"),
-        NodePath.join(claudeBHome, "projects"),
-      ]);
-
-      // Both accounts' tokens land, and each bucket says which home it came
-      // from so a client can drop one shared home without dropping the other.
-      const claudeBuckets = summary.buckets.filter((bucket) => bucket.provider === "claude");
-      assert.equal(claudeBuckets.length, 2);
-      assert.equal(
-        claudeBuckets.reduce((total, bucket) => total + bucket.totals.outputTokens, 0),
-        100,
+      const [first, second] = yield* Effect.all(
+        [service.readSummary(WINDOW), service.readSummary(WINDOW)],
+        { concurrency: 2 },
       );
-      assert.equal(new Set(claudeBuckets.map((bucket) => bucket.sourceId)).size, 2);
+      assert.deepStrictEqual(first, second);
+      assert.strictEqual(ratesFetches, 1);
 
-      // Every bucket's source id resolves to a source row in the same summary.
-      const sourceIds = new Set(summary.sources.map((source) => source.id));
-      assert.isTrue(summary.buckets.every((bucket) => sourceIds.has(bucket.sourceId)));
-    }).pipe(
-      Effect.provide(
-        layerFor({
-          providers: { claudeAgent: { homePath: claudeAHome } },
-          providerInstances: {
-            [ProviderInstanceId.make("claudeAgent_claude_b")]: {
-              driver: ProviderDriverKind.make("claudeAgent"),
-              config: { homePath: claudeBHome },
-            },
-          },
-        }),
-      ),
-    ),
+      // A later request is fresh work again, not a stale cached answer.
+      yield* service.readSummary(WINDOW);
+      assert.strictEqual(ratesFetches, 2);
+    }).pipe(Effect.scoped),
   );
 
-  effectIt.effect("scans a home shared by two instances once", () =>
+  it.live("does not orphan an in-flight scan when its first caller is interrupted", () =>
     Effect.gen(function* () {
-      const usage = yield* UsageService.UsageService;
-      const summary = yield* usage.readSummary(window);
+      const { settings, home } = yield* setup;
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          serviceLayers({ prefix: "usage-service-interruption-test", home, settings }),
+        ),
+      );
 
-      assert.equal(claudeSources(summary).length, 1);
-      const claudeBuckets = summary.buckets.filter((bucket) => bucket.provider === "claude");
-      assert.equal(claudeBuckets.length, 1);
-      assert.equal(claudeBuckets[0]?.totals.outputTokens, 50);
-    }).pipe(
-      Effect.provide(
-        layerFor({
-          providers: { claudeAgent: { homePath: claudeAHome } },
-          providerInstances: {
-            [ProviderInstanceId.make("claudeAgent_duplicate")]: {
-              driver: ProviderDriverKind.make("claudeAgent"),
-              config: { homePath: claudeAHome },
-            },
+      let orphanedAt: number | undefined;
+      for (let interruptAt = 1; interruptAt <= 31; interruptAt += 1) {
+        const tasks: Array<() => void> = [];
+        const dispatcher: Scheduler.SchedulerDispatcher = {
+          scheduleTask: (task) => tasks.push(task),
+          flush: () => {
+            let task: (() => void) | undefined;
+            while ((task = tasks.shift()) !== undefined) task();
           },
-        }),
-      ),
-    ),
+        };
+
+        let requestFiber: Fiber.Fiber<unknown, unknown> | undefined;
+        let requestChecks = 0;
+        const scheduler: Scheduler.Scheduler = {
+          executionMode: "async",
+          makeDispatcher: () => dispatcher,
+          shouldYield: (fiber) => {
+            if (fiber !== requestFiber) return false;
+            requestChecks += 1;
+            if (requestChecks !== interruptAt) return false;
+            fiber.interruptUnsafe();
+            return true;
+          },
+        };
+
+        // Each candidate needs a distinct key because the broken case leaves
+        // its entry in the service's private in-flight map. The invalid window
+        // keeps the real scan synchronous once its detached fiber starts.
+        const input: UsageSummaryInput = {
+          ...WINDOW,
+          sinceDay: UsageDay.make("2026-09-01"),
+          untilDay: UsageDay.make(`2026-08-${String(interruptAt).padStart(2, "0")}`),
+        };
+        const first = yield* service
+          .readSummary(input)
+          .pipe(
+            Effect.exit,
+            Effect.provideService(Scheduler.Scheduler, scheduler),
+            Effect.forkChild,
+          );
+        requestFiber = first;
+        yield* Effect.yieldNow;
+        dispatcher.flush();
+
+        const second = yield* service.readSummary(input).pipe(
+          Effect.match({
+            onFailure: (error) => error.reason,
+            onSuccess: () => "success" as const,
+          }),
+          Effect.provideService(Scheduler.Scheduler, scheduler),
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        dispatcher.flush();
+        const secondExit = second.pollUnsafe();
+        if (secondExit === undefined) {
+          second.interruptUnsafe();
+          orphanedAt = interruptAt;
+          break;
+        }
+        if (Exit.isFailure(secondExit)) {
+          assert.fail("the matching request fiber was interrupted");
+        }
+        assert.strictEqual(secondExit.value, "invalidWindow");
+      }
+
+      assert.isUndefined(
+        orphanedAt,
+        `interruption left the next matching request pending at scheduler check ${orphanedAt}`,
+      );
+    }).pipe(Effect.scoped),
   );
 });

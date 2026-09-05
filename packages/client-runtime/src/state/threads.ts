@@ -166,6 +166,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Option.match(cached, { onNone: () => 0, onSome: (snapshot) => snapshot.snapshotSequence }),
   );
   const awaitingCompletion = yield* Ref.make(false);
+  const acceptsNonImageAttachmentsRef = yield* Ref.make(false);
   // Bumped whenever loaded history may have been rewritten out from under an
   // in-flight older-page fetch (snapshot replacement, revert, deletion). A
   // page response captured under an older epoch is discarded, not merged.
@@ -485,7 +486,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       turnLimit: OLDER_THREAD_PAGE_USER_TURN_LIMIT,
       beforeCursor: page.beforeCursor,
     };
-    const response = yield* snapshotLoader.load(prepared, threadId, window);
+    const response = yield* snapshotLoader.load(
+      prepared,
+      threadId,
+      window,
+      yield* Ref.get(acceptsNonImageAttachmentsRef),
+    );
     // Staleness check and merge run under the same lock as stream-item
     // application, so a revert/snapshot cannot land between them (TOCTOU
     // review finding) — anything that rewrites history bumps the epoch
@@ -562,6 +568,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               ({}) as {
                 threadResumeCompletionMarker?: boolean;
                 threadSnapshotPagination?: boolean;
+                environment?: { capabilities?: { fileAttachments?: unknown } };
               },
           ),
         );
@@ -570,7 +577,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         // servers reject unknown query params, and a windowed WS fallback to
         // such a server would silently hide history.
         const supportsPagination = config.threadSnapshotPagination === true;
+        const acceptsNonImageAttachments =
+          config.environment?.capabilities?.fileAttachments !== undefined;
         yield* Ref.set(paginationSupported, supportsPagination);
+        yield* Ref.set(acceptsNonImageAttachmentsRef, acceptsNonImageAttachments);
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
 
@@ -609,6 +619,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             prepared,
             threadId,
             supportsPagination ? { turnLimit: INITIAL_THREAD_USER_TURN_LIMIT } : undefined,
+            acceptsNonImageAttachments,
           );
           if (Option.isSome(httpSnapshot)) {
             yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
@@ -628,6 +639,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
         return {
           threadId,
+          ...(acceptsNonImageAttachments ? { acceptsNonImageAttachments: true as const } : {}),
           ...(canResume ? { afterSequence: sequence } : {}),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
           // The WS fallback snapshot (sent when afterSequence is missing or

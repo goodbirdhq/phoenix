@@ -30,6 +30,31 @@ You can stop it and remove it from startup:
 phoenix service uninstall
 ```
 
+The service uses the same Phoenix version as the CLI you run. To install a nightly or an exact
+version, use that version of the published package:
+
+```sh
+npx @goodbirdhq/phoenix@nightly service update
+npx @goodbirdhq/phoenix@1.2.3 service update
+```
+
+The install and update commands refuse to replace a newer service with an older version. Setup
+through T3 Connect leaves a newer service unchanged. To downgrade, select the exact older version
+and pass `--allow-downgrade`:
+
+```sh
+npx @goodbirdhq/phoenix@1.2.3 service update --allow-downgrade
+```
+
+Updating restarts Phoenix briefly. Let active agent work and terminal commands finish first.
+If a remote update is already in progress, wait for it to finish before retrying a local update.
+
+The service runs a small stable launcher. Exact Phoenix versions are installed separately, so a
+failed remote candidate can return to the previous version without rewriting the service
+definition. The launcher snapshots the database before a remote candidate starts, so database
+updates roll back with the server version. An older launcher may require one local
+`service update` before this is available.
+
 Running a source checkout instead? Keep managing your own service definition and follow the
 [self-managed server update runbook](../operations/updating-a-self-managed-server.md) — `service
 install` pins published releases, not your local build.
