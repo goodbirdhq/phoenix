@@ -44,6 +44,7 @@ export function UsageReport({
               <Text className="font-t3-medium text-foreground">{row.title}</Text>
               <Text className="text-xs text-foreground-muted">
                 {row.environmentLabel}
+                {row.attribution === "ambiguous" ? " · Shared history" : ""}
                 {mode === "threads" && row.project ? ` · ${row.project.projectTitle}` : ""}
               </Text>
             </View>

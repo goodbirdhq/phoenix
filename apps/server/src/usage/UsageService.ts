@@ -1,5 +1,3 @@
-import { UsageAttributionQuery } from "./UsageAttributionQuery.ts";
-import { attributeUsageSessions } from "./usageAttribution.ts";
 /**
  * UsageService - scans provider transcripts and returns priced usage buckets.
  *
@@ -14,6 +12,8 @@ import { attributeUsageSessions } from "./usageAttribution.ts";
  *
  * @module UsageService
  */
+import { UsageAttributionQuery } from "./UsageAttributionQuery.ts";
+import { attributeUsageSessions, usageSessionLinkCandidates } from "./usageAttribution.ts";
 import * as NodeOS from "node:os";
 
 import {
@@ -642,7 +642,13 @@ export const make = Effect.gen(function* () {
     const sessionUsage =
       aggregated.sessionUsage === undefined
         ? undefined
-        : attributeUsageSessions(aggregated.sessionUsage, sources, yield* attributionQuery.list());
+        : attributeUsageSessions(
+            aggregated.sessionUsage,
+            sources,
+            yield* attributionQuery.list(
+              usageSessionLinkCandidates(aggregated.sessionUsage, sources),
+            ),
+          );
     const toDay = makeDayFormatter(input.timeZone);
     const threadCreations = input.includeSessions
       ? (yield* attributionQuery.creations(

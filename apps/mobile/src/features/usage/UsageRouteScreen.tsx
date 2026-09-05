@@ -1,3 +1,4 @@
+import { scopeAccountHistory } from "@t3tools/client-runtime/usage/account-history";
 import { SegmentedControl } from "../../components/SegmentedControl";
 import { UsageReport } from "./UsageReport";
 import {
@@ -23,6 +24,7 @@ import {
   formatPercent,
   formatTokens,
   formatUsd,
+  formatDateTimeShort,
   makeWindow,
 } from "@t3tools/shared/usageFormat";
 import { useEffect, useMemo, useState } from "react";
@@ -86,6 +88,18 @@ export function UsageRouteScreen() {
     accountKey,
   );
   const selectedAccount = findUsageAccount(accounts, accountKey);
+  const hasMappedHistory = useMemo(
+    () =>
+      !accountKey ||
+      (selectedAccount &&
+        environments.some(
+          (environment) =>
+            environment.summary &&
+            scopeAccountHistory(environment.summary, environment.environmentId, selectedAccount)
+              .sources.length > 0,
+        )),
+    [accountKey, selectedAccount, environments],
+  );
   const subscriptionLimits = useMemo(
     () =>
       deriveSubscriptionLimits(
@@ -224,23 +238,22 @@ export function UsageRouteScreen() {
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View className="flex-row gap-2">
             {[
-              { key: null, name: "All accounts" },
+              { key: null, name: "All accounts", selected: accountKey === null },
               ...accounts.map((account) => ({
                 key: account.memberships[0]
                   ? usageAccountMemberKey(account.memberships[0])
                   : account.key,
                 name: account.name,
+                selected: selectedAccount?.key === account.key,
               })),
             ].map((account) => (
               <Pressable
                 key={account.key ?? "all"}
                 accessibilityRole="button"
-                accessibilityState={{ selected: account.key === accountKey }}
+                accessibilityState={{ selected: account.selected }}
                 onPress={() => setAccountKey(account.key)}
                 className={
-                  account.key === accountKey
-                    ? "rounded-lg bg-subtle-strong p-3"
-                    : "rounded-lg bg-card p-3"
+                  account.selected ? "rounded-lg bg-subtle-strong p-3" : "rounded-lg bg-card p-3"
                 }
               >
                 <Text className="text-sm text-foreground">{account.name}</Text>
@@ -328,7 +341,7 @@ export function UsageRouteScreen() {
           />
         )}
 
-        {isPending ? (
+        {isPending || (Boolean(accountKey) && !selectedAccount && isProviderAvailabilityPending) ? (
           <Text className="py-16 text-center text-base text-foreground-muted">
             Scanning provider transcripts…
           </Text>
@@ -336,27 +349,48 @@ export function UsageRouteScreen() {
           <Text className="py-16 text-center text-base text-foreground-muted">
             Connect an environment to see usage.
           </Text>
+        ) : !hasMappedHistory && tab !== "environments" ? (
+          <Text className="py-8 text-sm text-foreground-muted">
+            No history can currently be assigned to this account in the selected environments.
+            Shared or unmapped history is available in All accounts.
+          </Text>
         ) : (
           <>
             {tab === "environments" && selectedAccount ? (
-              selectedAccount.memberships.map((member) => (
-                <View
-                  key={usageAccountMemberKey(member)}
-                  className="gap-1 border-b border-border pb-3"
-                >
-                  <Text className="font-t3-medium text-foreground">{member.environmentLabel}</Text>
-                  <Text className="text-sm text-foreground-muted">
-                    {member.provider.version ?? "Version not reported"}
-                    {member.provider.versionAdvisory?.status === "behind_latest"
-                      ? " · Update available"
-                      : ""}
-                  </Text>
-                  <Text className="text-xs text-foreground-muted">
-                    {member.isConnected === false ? "Offline" : member.provider.auth.status} ·{" "}
-                    {member.provider.checkedAt}
-                  </Text>
-                </View>
-              ))
+              selectedAccount.memberships
+                .filter(
+                  (member) => environmentId === null || member.environmentId === environmentId,
+                )
+                .map((member) => (
+                  <View
+                    key={usageAccountMemberKey(member)}
+                    className="gap-1 border-b border-border pb-3"
+                  >
+                    <Text className="font-t3-medium text-foreground">
+                      {member.environmentLabel}
+                    </Text>
+                    <Text className="text-sm text-foreground-muted">
+                      {member.provider.version ?? "Version not reported"}
+                      {member.provider.versionAdvisory?.status === "behind_latest"
+                        ? " · Update available"
+                        : ""}
+                    </Text>
+                    <Text className="text-xs text-foreground-muted">
+                      {member.isConnected === false
+                        ? "Offline"
+                        : !member.provider.enabled
+                          ? "Disabled"
+                          : !member.provider.installed
+                            ? "Not installed"
+                            : member.provider.auth.status === "authenticated"
+                              ? "Signed in"
+                              : member.provider.auth.status === "unauthenticated"
+                                ? "Signed out"
+                                : "Unknown"}{" "}
+                      · {formatDateTimeShort(member.provider.checkedAt, window.timeZone)}
+                    </Text>
+                  </View>
+                ))
             ) : (
               <>
                 <View className="gap-1">

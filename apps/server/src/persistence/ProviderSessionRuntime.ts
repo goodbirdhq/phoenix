@@ -48,11 +48,16 @@ export const ProviderSessionRuntime = Schema.Struct({
   status: ProviderSessionRuntimeStatus,
   lastSeenAt: IsoDateTime,
   resumeCursor: Schema.NullOr(Schema.Unknown),
-  /** Native session linkage supplied by the provider boundary, retained across resets. */
-  usageSessionId: Schema.optional(Schema.NullOr(Schema.String)),
   runtimePayload: Schema.NullOr(Schema.Unknown),
 });
 export type ProviderSessionRuntime = typeof ProviderSessionRuntime.Type;
+
+/** Link evidence is a write input, not a column of the current runtime row. */
+export const UpsertProviderSessionRuntimeInput = Schema.Struct({
+  ...ProviderSessionRuntime.fields,
+  usageSessionId: Schema.optional(Schema.NullOr(Schema.String)),
+});
+export type UpsertProviderSessionRuntimeInput = typeof UpsertProviderSessionRuntimeInput.Type;
 
 export const GetProviderSessionRuntimeInput = Schema.Struct({ threadId: ThreadId });
 export type GetProviderSessionRuntimeInput = typeof GetProviderSessionRuntimeInput.Type;
@@ -72,7 +77,7 @@ export class ProviderSessionRuntimeRepository extends Context.Service<
      * Upserts by canonical `threadId`, including JSON payload/cursor fields.
      */
     readonly upsert: (
-      runtime: ProviderSessionRuntime,
+      runtime: UpsertProviderSessionRuntimeInput,
     ) => Effect.Effect<void, ProviderSessionRuntimeRepositoryError>;
 
     /**

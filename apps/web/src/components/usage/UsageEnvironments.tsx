@@ -6,14 +6,18 @@ import { Badge } from "../ui/badge";
 
 export function UsageEnvironments({
   account,
+  environmentId,
   merged,
   timeZone,
 }: {
   readonly account: UsageAccount;
+  readonly environmentId: string | null;
   readonly merged: MergedUsage;
   readonly timeZone: string;
 }) {
-  const ids = [...new Set(account.memberships.map((member) => member.environmentId))];
+  const ids = [...new Set(account.memberships.map((member) => member.environmentId))].filter(
+    (id) => environmentId === null || id === environmentId,
+  );
   return (
     <Table>
       <TableHeader>

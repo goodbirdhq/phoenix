@@ -10,7 +10,8 @@ const testState = vi.hoisted(() => ({
   refreshUsage: vi.fn(),
   refreshCapacity: vi.fn(),
   metric: "cost" as "cost" | "tokens",
-  pageTab: "overview" as "overview" | "models",
+  pageTab: "overview" as "overview" | "models" | "projects" | "threads",
+  accountKey: undefined as string | undefined,
 }));
 const capacity = vi.hoisted(() => ({
   sources: [] as SubscriptionAvailabilitySource[],
@@ -49,7 +50,7 @@ vi.mock("@t3tools/client-runtime/usage/usage-warning", () => ({
   subscriptionAvailabilitySources: () => capacity.sources,
 }));
 vi.mock("@tanstack/react-router", () => ({
-  useSearch: () => ({}),
+  useSearch: () => ({ account: testState.accountKey }),
   Link: ({ to, ...props }: { readonly to: string } & AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a href={to} {...props} />
   ),
@@ -121,6 +122,7 @@ const modelTotals = Object.freeze([
 ]);
 
 beforeEach(() => {
+  testState.accountKey = undefined;
   testState.metric = "cost";
   testState.pageTab = "overview";
   testState.useUsage.mockReturnValue({
@@ -205,3 +207,26 @@ describe("UsagePage model breakdown", () => {
     ]);
   });
 });
+
+it("does not declare a deep-linked account unavailable before provider status answers", () => {
+  testState.accountKey = "pending-account";
+  testState.useUsage.mockReturnValue({
+    ...testState.useUsage(),
+    isProviderAvailabilityPending: true,
+  });
+  const markup = renderToStaticMarkup(<UsagePage />);
+  expect(markup).toContain("Loading account");
+  expect(markup).not.toContain("Account unavailable");
+  expect(markup).not.toContain("No history can currently be assigned");
+});
+
+it.each(["projects", "threads"] as const)(
+  "does not claim missing detail while %s loads",
+  (mode) => {
+    testState.pageTab = mode;
+    testState.useUsage.mockReturnValue({ ...testState.useUsage(), isPending: true });
+    const markup = renderToStaticMarkup(<UsagePage />);
+    expect(markup).not.toContain("No session detail available");
+    expect(markup).not.toContain("Session creation history is not available");
+  },
+);

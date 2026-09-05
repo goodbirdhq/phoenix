@@ -80,15 +80,18 @@ export function UsagePage() {
     accountKey ?? null,
   );
   const selectedAccount = findUsageAccount(accounts, accountKey);
-  const hasMappedHistory =
-    !accountKey ||
-    (selectedAccount &&
-      allEnvironments.some(
-        (environment) =>
-          environment.summary &&
-          scopeAccountHistory(environment.summary, environment.environmentId, selectedAccount)
-            .sources.length > 0,
-      ));
+  const hasMappedHistory = useMemo(
+    () =>
+      !accountKey ||
+      (selectedAccount &&
+        environments.some(
+          (environment) =>
+            environment.summary &&
+            scopeAccountHistory(environment.summary, environment.environmentId, selectedAccount)
+              .sources.length > 0,
+        )),
+    [accountKey, selectedAccount, environments],
+  );
   const updateCount =
     selectedAccount?.memberships.filter(
       (member) => member.provider.versionAdvisory?.status === "behind_latest",
@@ -119,7 +122,8 @@ export function UsagePage() {
   // Hold the content until every environment is terminal. Rendering merged
   // totals while devices are still answering makes every number on the page
   // jump as each one lands.
-  const settling = isPending || isPartial;
+  const accountPending = Boolean(accountKey) && !selectedAccount && isProviderAvailabilityPending;
+  const settling = isPending || isPartial || accountPending;
 
   const days = useMemo(
     () => enumerateDays(window.sinceDay, window.untilDay),
@@ -206,10 +210,18 @@ export function UsagePage() {
             ) : (
               <PageHeading
                 actions={toolbar}
-                title={accountKey ? "Account unavailable" : "All accounts"}
+                title={
+                  accountKey
+                    ? accountPending
+                      ? "Loading account…"
+                      : "Account unavailable"
+                    : "All accounts"
+                }
                 description={
                   accountKey
-                    ? "This account is no longer available. Select an account from the sidebar."
+                    ? accountPending
+                      ? "Checking configured accounts…"
+                      : "This account is no longer available. Select an account from the sidebar."
                     : `${accounts.length} configured accounts · ${allEnvironments.length} ${allEnvironments.length === 1 ? "environment" : "environments"}`
                 }
               />
@@ -242,37 +254,43 @@ export function UsagePage() {
                 <TabsContent value="environments">
                   <UsageEnvironments
                     account={selectedAccount}
+                    environmentId={historicalEnvironmentId}
                     merged={merged}
                     timeZone={window.timeZone}
                   />
                 </TabsContent>
               )}
-              <TabsContent value="projects" className="space-y-6">
-                <UsageReportChart
-                  mode="projects"
-                  merged={merged}
-                  periods={isPast24Hours ? hours : days}
-                  metric={metric}
-                  accounts={accounts}
-                  timeZone={window.timeZone}
-                  accountDriver={selectedAccount?.driver}
-                  allAccounts={!selectedAccount}
-                />
-                <UsageReport mode="projects" merged={merged} />
-              </TabsContent>
-              <TabsContent value="threads" className="space-y-6">
-                <UsageReportChart
-                  mode="threads"
-                  merged={merged}
-                  periods={isPast24Hours ? hours : days}
-                  metric={metric}
-                  accounts={accounts}
-                  timeZone={window.timeZone}
-                  accountDriver={selectedAccount?.driver}
-                  allAccounts={!selectedAccount}
-                />
-                <UsageReport mode="threads" merged={merged} />
-              </TabsContent>
+              {(["projects", "threads"] as const).map((mode) => (
+                <TabsContent key={mode} value={mode} className="space-y-6">
+                  {settling ? (
+                    <UsageSkeleton />
+                  ) : !hasMappedHistory ? (
+                    <p className="py-8 text-sm text-muted-foreground">
+                      No history can currently be assigned to this account. Shared or unmapped
+                      history is available in All accounts.
+                    </p>
+                  ) : (
+                    <>
+                      <UsageCoverageNotice
+                        environments={environments}
+                        duplicateSources={merged.duplicateSources}
+                        staleEnvironments={merged.staleEnvironments}
+                      />
+                      <UsageReportChart
+                        mode={mode}
+                        merged={merged}
+                        periods={isPast24Hours ? hours : days}
+                        metric={metric}
+                        accounts={accounts}
+                        timeZone={window.timeZone}
+                        accountDriver={selectedAccount?.driver}
+                        allAccounts={!selectedAccount}
+                      />
+                      <UsageReport mode={mode} merged={merged} />
+                    </>
+                  )}
+                </TabsContent>
+              ))}
               <TabsContent
                 value={pageTab === "models" ? "models" : "overview"}
                 className="space-y-6"

@@ -470,3 +470,97 @@ describe("optional session detail", () => {
     expect(result.sessionDetailUnavailable).toEqual(["c"]);
   });
 });
+
+describe("shared-store session attribution", () => {
+  const thread = {
+    id: "thread",
+    title: "Linked thread",
+    createdAt: "2026-08-07T00:00:00Z",
+    projectId: "project",
+    projectTitle: "Project",
+    projectWorkspaceRoot: "/workspace",
+    projectFaviconPath: null,
+  };
+  const report = (attribution: "linked" | "unlinked" | "ambiguous"): UsageSummary => ({
+    ...summary(
+      [bucket({ sourceId: "home" })],
+      [{ id: "home", provider: "claude", hostId: "host", homePath: "/shared" }],
+    ),
+    sessionUsage: [
+      {
+        provider: "claude",
+        sourceId: "home",
+        sessionId: "native",
+        firstActivityAt: "2026-08-07T00:00:00Z",
+        lastActivityAt: "2026-08-07T00:00:00Z",
+        models: [
+          {
+            model: "fixture-model",
+            totals: bucket({}).totals,
+            costUsd: 5,
+            cacheSavingsUsd: 0,
+            records: 1,
+            unpricedRecords: 0,
+          },
+        ],
+        attribution,
+        ...(attribution === "linked" ? { thread } : {}),
+      },
+    ],
+  });
+  const environment = (id: string, attribution: "linked" | "unlinked" | "ambiguous") => ({
+    environmentId: id as EnvironmentId,
+    label: id.toUpperCase(),
+    summary: report(attribution),
+  });
+  it("keeps one cost contribution and recovers a link from the duplicate reader", () => {
+    const a = environment("a", "unlinked");
+    const b = environment("b", "linked");
+    const duplicateSession = b.summary.sessionUsage![0]!;
+    b.summary = {
+      ...b.summary,
+      sessionUsage: [
+        {
+          ...duplicateSession,
+          models: duplicateSession.models.map((model) => ({ ...model, costUsd: 99 })),
+        },
+      ],
+    };
+    const merged = mergeUsage([a, b], USAGE_CONTRACT_VERSION);
+    expect(merged.costUsd).toBe(mergeUsage([a], USAGE_CONTRACT_VERSION).costUsd);
+    expect(merged.sessionUsage).toHaveLength(1);
+    expect(merged.sessionUsage[0]?.models[0]?.costUsd).toBe(5);
+    expect(merged.sessionUsage[0]).toMatchObject({
+      attribution: "linked",
+      environmentId: "b",
+      thread,
+    });
+    expect(mergeUsage([b, a], USAGE_CONTRACT_VERSION).sessionUsage).toEqual(merged.sessionUsage);
+  });
+  it("retains ambiguity from conflicting environment-local links", () => {
+    for (const other of ["linked", "ambiguous"] as const) {
+      const merged = mergeUsage(
+        [environment("a", "linked"), environment("b", other)],
+        USAGE_CONTRACT_VERSION,
+      );
+      expect(merged.sessionUsage).toHaveLength(1);
+      expect(merged.sessionUsage[0]?.attribution).toBe("ambiguous");
+      expect(merged.sessionUsage[0]?.thread).toBeUndefined();
+    }
+  });
+  it("recognizes two connections to the same Phoenix state as one thread link", () => {
+    const entries = [environment("a", "linked"), environment("b", "linked")].map((entry) => ({
+      ...entry,
+      summary: {
+        ...entry.summary,
+        threadCreationSource: { hostId: "host", statePath: "/state", volumeId: "volume" },
+      },
+    }));
+    const merged = mergeUsage(entries, USAGE_CONTRACT_VERSION);
+    expect(merged.sessionUsage[0]).toMatchObject({
+      attribution: "linked",
+      environmentId: "a",
+      thread,
+    });
+  });
+});

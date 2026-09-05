@@ -49,3 +49,5 @@ Dismiss the line and it stays gone for that thread until the window resets; the 
 again. Other threads on the same account keep their own warning. A reading the provider could not
 confirm remains visible on the Usage page for context, but it does not drive chat warnings or
 migration suggestions until a current reading arrives.
+
+Historical usage includes archived and deleted Phoenix threads: removing a conversation does not remove its recorded token usage or API cost.

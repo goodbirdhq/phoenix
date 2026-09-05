@@ -7,6 +7,23 @@ export interface UsageSessionLink {
   readonly thread: UsageThread;
 }
 
+export type UsageSessionLinkKey = Omit<UsageSessionLink, "thread">;
+
+/** Only the selected report's sessions and configured stores need a lookup. */
+export function usageSessionLinkCandidates(
+  sessions: readonly UsageSession[],
+  sources: readonly UsageSource[],
+): readonly UsageSessionLinkKey[] {
+  const sourceById = new Map(sources.map((source) => [source.id, source]));
+  return sessions.flatMap((session) =>
+    (sourceById.get(session.sourceId)?.configuredInstanceIds ?? []).map((instanceId) => ({
+      providerName: session.provider === "claude" ? "claudeAgent" : session.provider,
+      providerInstanceId: instanceId,
+      sessionId: session.sessionId,
+    })),
+  );
+}
+
 /** Match recorded native identity within the configured history store. Neither
  * workspace paths nor the account currently signed in establish ownership. */
 export function attributeUsageSessions(

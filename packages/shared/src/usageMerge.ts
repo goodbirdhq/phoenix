@@ -220,6 +220,75 @@ function ownedContribution(
   };
 }
 
+/** Numeric ownership deduplicates history, but each server contributes its own
+ * thread links. Reconcile those annotations before assigning a project. */
+function reconcileSessionLinks(
+  owned: readonly EnvironmentSessionUsage[],
+  environments: readonly EnvironmentUsage[],
+): readonly EnvironmentSessionUsage[] {
+  const sourceKeys = new Map<string, string>();
+  const evidence = new Map<
+    string,
+    {
+      ambiguous: boolean;
+      links: Map<string, EnvironmentSessionUsage>;
+    }
+  >();
+  for (const environment of [...environments].sort((a, b) =>
+    a.environmentId.localeCompare(b.environmentId),
+  )) {
+    for (const source of environment.summary.sources) {
+      if (source.id !== undefined)
+        sourceKeys.set(
+          JSON.stringify([environment.environmentId, source.id]),
+          fingerprintKey(source.fingerprint),
+        );
+    }
+    const state = environment.summary.threadCreationSource;
+    const stateKey = state
+      ? JSON.stringify([state.hostId, state.statePath, state.volumeId])
+      : environment.environmentId;
+    for (const session of environment.summary.sessionUsage ?? []) {
+      const source = sourceKeys.get(JSON.stringify([environment.environmentId, session.sourceId]));
+      if (source === undefined) continue;
+      const key = JSON.stringify([source, session.provider, session.sessionId]);
+      let entry = evidence.get(key);
+      if (!entry) {
+        entry = { ambiguous: false, links: new Map() };
+        evidence.set(key, entry);
+      }
+      if (session.attribution === "ambiguous") entry.ambiguous = true;
+      if (session.attribution === "linked" && session.thread) {
+        const target = JSON.stringify([stateKey, session.thread.id]);
+        if (!entry.links.has(target))
+          entry.links.set(target, {
+            ...session,
+            environmentId: environment.environmentId,
+            environmentLabel: environment.label,
+          });
+      }
+    }
+  }
+  return owned.map((session) => {
+    const source = sourceKeys.get(JSON.stringify([session.environmentId, session.sourceId]));
+    const entry = evidence.get(JSON.stringify([source, session.provider, session.sessionId]));
+    if (!entry) return session;
+    const { thread: _thread, ...history } = session;
+    if (entry.ambiguous || entry.links.size > 1) return { ...history, attribution: "ambiguous" };
+    const linked = entry.links.values().next().value;
+    return linked
+      ? {
+          ...history,
+          attribution: "linked",
+          thread: linked.thread,
+          sourceId: linked.sourceId,
+          environmentId: linked.environmentId,
+          environmentLabel: linked.environmentLabel,
+        }
+      : session;
+  });
+}
+
 function bucketTokens(bucket: UsageBucket): number {
   // reasoningTokens is a subset of outputTokens and must not be added again.
   return (
@@ -537,7 +606,7 @@ export function mergeUsage(
     sessions,
     providers,
     environmentTotals,
-    sessionUsage,
+    sessionUsage: reconcileSessionLinks(sessionUsage, current),
     sessionDetailUnavailable,
     models,
     daily,

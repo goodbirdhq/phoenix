@@ -101,7 +101,7 @@ export function buildUsageAccounts(
   }
   return [...groups.entries()]
     .map(([key, group]) => {
-      const memberships = group.memberships.toSorted(
+      const memberships = [...group.memberships].sort(
         (a, b) =>
           b.provider.checkedAt.localeCompare(a.provider.checkedAt) ||
           a.environmentId.localeCompare(b.environmentId) ||
@@ -126,7 +126,7 @@ export function buildUsageAccounts(
         name: newest?.provider.displayName ?? PROVIDER_DISPLAY_NAMES[group.driver] ?? group.driver,
       };
     })
-    .toSorted(
+    .sort(
       (a, b) =>
         a.driver.localeCompare(b.driver) ||
         a.name.localeCompare(b.name) ||

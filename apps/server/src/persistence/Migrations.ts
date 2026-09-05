@@ -74,8 +74,8 @@ import Migration0056 from "./Migrations/056_ProjectionThreadsUnsettledAt.ts";
 import Migration0057 from "./Migrations/057_ProjectionThreadsAwaitingParentReply.ts";
 import Migration0058 from "./Migrations/058_ProjectionThreadMessageOrigin.ts";
 import Migration0059 from "./Migrations/059_SessionEpisodeAndQueuedStateIndex.ts";
-import Migration0061 from "./Migrations/061_UsageSessionLinks.ts";
 import Migration0060 from "./Migrations/060_ClearAutomaticProjectModelDefaults.ts";
+import Migration0061 from "./Migrations/061_UsageSessionLinks.ts";
 
 /**
  * Migration loader with all migrations defined inline.
