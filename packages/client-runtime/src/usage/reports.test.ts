@@ -39,6 +39,39 @@ const session: EnvironmentSessionUsage = {
   ],
 };
 describe("usage reports", () => {
+  it("omits zero-usage local messages from older servers without hiding real unpriced usage", () => {
+    const model = session.models[0]!;
+    const [row] = buildUsageReport(
+      [
+        {
+          ...session,
+          attribution: "unlinked",
+          thread: undefined,
+          models: [
+            { ...model, unpricedRecords: 1, costUsd: 0 },
+            {
+              ...model,
+              model: "<synthetic>",
+              totals: {
+                uncachedInputTokens: 0,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+                outputTokens: 0,
+                reasoningTokens: 0,
+              },
+              costUsd: 0,
+              unpricedRecords: 1,
+            },
+          ],
+        },
+      ],
+      "threads",
+    );
+    expect(row?.models).toEqual(["model"]);
+    expect(row?.unpricedRecords).toBe(1);
+    expect(row?.totalTokens).toBe(45);
+    expect(row?.title).toBe("Unlinked session · native");
+  });
   it("combines a thread's native sessions and models without counting reasoning twice", () => {
     const rows = buildUsageReport(
       [

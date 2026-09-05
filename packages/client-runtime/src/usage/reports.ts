@@ -50,7 +50,9 @@ export function buildUsageReport(
     .map(([key, group]) => {
       const first = group[0]!;
       const project = first.attribution === "linked" ? first.thread : undefined;
-      const models = group.flatMap((session) => session.models);
+      const models = group
+        .flatMap((session) => session.models)
+        .filter((model) => tokens(model) > 0 || model.costUsd > 0);
       return {
         key,
         environmentId: first.environmentId,
@@ -61,7 +63,7 @@ export function buildUsageReport(
             : project.projectTitle
           : mode === "projects"
             ? "Unattributed usage"
-            : `Native session · ${first.sessionId}`,
+            : `Unlinked session · ${first.sessionId.slice(0, 8)}`,
         project,
         attribution: project
           ? ("linked" as const)

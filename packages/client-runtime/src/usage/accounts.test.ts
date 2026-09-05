@@ -137,16 +137,17 @@ describe("usage accounts", () => {
     expect(account?.emails).toEqual([]);
     expect(account?.name).toBe("Work");
   });
-  it("shows disabled and API-key instances without requiring email or quota support", () => {
+  it("hides disabled instances while retaining enabled API-key accounts", () => {
     const a = provider({
       driver: ProviderDriverKind.make("grok"),
       enabled: false,
       auth: { status: "authenticated", type: "api_key", label: "xAI API key" },
     });
-    const [account] = buildUsageAccounts([environment("a", [a])], []);
+    expect(buildUsageAccounts([environment("a", [a])], [])).toEqual([]);
+    const [account] = buildUsageAccounts([environment("a", [{ ...a, enabled: true }])], []);
     expect(account?.name).toBe("Work");
     expect(account?.memberships[0]?.provider.auth.type).toBe("api_key");
-    expect(account?.memberships[0]?.provider.enabled).toBe(false);
+    expect(account?.memberships[0]?.provider.enabled).toBe(true);
   });
   it("preserves shared-store membership without merging the two accounts", () => {
     const a = provider();

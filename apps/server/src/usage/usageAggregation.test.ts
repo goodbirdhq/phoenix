@@ -299,3 +299,30 @@ describe("session detail", () => {
     expect(aggregate([record()]).sessionUsage).toBeUndefined();
   });
 });
+
+it("excludes local synthetic messages from models, sessions, and pricing coverage", () => {
+  const aggregator = new UsageAggregator({
+    timeZone: "UTC",
+    sinceDay: "2026-08-01",
+    untilDay: "2026-08-31",
+    rates,
+    includeSessions: true,
+  });
+  expect(
+    aggregator.add(
+      record({
+        model: "<synthetic>",
+        totals: {
+          uncachedInputTokens: 0,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+        },
+      }),
+      "store",
+    ),
+  ).toBe(false);
+  expect(aggregator.finish().buckets).toEqual([]);
+  expect(aggregator.finish().sessionUsage).toEqual([]);
+});

@@ -16,7 +16,7 @@ selected date range independently from subscription capacity.
 
 ## Accounts and environments
 
-Usage has its own sidebar. Select **All accounts** for combined history or a configured account for its linked history. Account headers show the provider, a concealed email when available, and the reported subscription label. Select the eye control to reveal or hide the email.
+Usage has its own sidebar with search, provider filters, and an add-account button. Only enabled provider accounts appear; disabling an account does not remove its recorded usage from All accounts. Select **All accounts** for combined history or a configured account for its linked history. Account headers show the provider, a concealed email when available, and the reported subscription label. Select the eye control to reveal or hide the email.
 
 The **Overview** tab shows activity over time; **Models** shows the model breakdown. **Projects** and **Threads** show usage during the selected period, including project icons, models, tokens, cache reads and writes, and estimated API cost. A thread can combine several native provider sessions. Account pages also have an **Environments** tab with installed versions, sign-in or offline status, last check time and available usage totals. Provider updates appear beside the installed version, on the Environments tab, and as an arrow on the sidebar’s Environments button.
 
@@ -24,7 +24,7 @@ The **Overview** tab shows activity over time; **Models** shows the model breakd
 
 Some history stores are shared by different accounts, and older environments may not report which instances use a store. That history stays in All accounts. Account pages include only stores linked exclusively to that account’s instances. A linked directory describes where history is stored; it does not prove which login produced every older record. A dash means an account total cannot be established, rather than zero activity.
 
-Native sessions without a unique recorded Phoenix thread link remain visible as unattributed usage. Shared history linked to more than one thread is marked accordingly. Some older environments cannot supply session detail; their totals still appear in Overview. Table costs cover the selected period, not lifetime thread cost. The separate creation chart uses actual thread creation records.
+Provider history without a matching Phoenix conversation appears as an **Unlinked session**. This can include sessions started outside Phoenix or older history without a recorded link. Its usage stays in the totals; Projects groups it under **Unattributed usage**. Local synthetic messages with no model call do not appear in usage reports. Shared history linked to more than one thread is marked accordingly. Some older environments cannot supply session detail; their totals still appear in Overview. Table costs cover the selected period, not lifetime thread cost. The separate creation chart uses actual thread creation records.
 
 ## Limits and charts
 

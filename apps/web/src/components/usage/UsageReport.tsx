@@ -36,7 +36,8 @@ export function UsageReport({
     <div className="space-y-5">
       <p className="text-xs text-muted-foreground">
         Usage during the selected period. API cost is an estimate; subscription charges are
-        separate. Native sessions without a unique Phoenix thread link remain unattributed.
+        separate. Unlinked sessions are provider history without a matching Phoenix conversation;
+        their usage is included in totals.
       </p>
       {merged.sessionDetailUnavailable.length > 0 && (
         <p role="status" className="text-sm text-muted-foreground">

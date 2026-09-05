@@ -144,6 +144,13 @@ export class UsageAggregator {
    * that landed rather than everything the mtime prefilter happened to admit.
    */
   add(record: UsageRecord, sourceId?: string): boolean {
+    // Claude's local notices are not model calls, including records read from old scan caches.
+    if (
+      record.provider === "claude" &&
+      ["<synthetic>", "synthetic"].includes(record.model.trim().toLowerCase())
+    ) {
+      return false;
+    }
     if (record.dedupeKey !== null) {
       if (this.#seen.has(record.dedupeKey)) {
         this.#duplicatesDropped += 1;
