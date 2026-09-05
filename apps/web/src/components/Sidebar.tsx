@@ -1864,6 +1864,7 @@ export default function Sidebar() {
         .map((ref) => `${ref.environmentId}:${ref.projectId}`),
     );
   }, [filters.projects, filters.environments, projectGroups]);
+  const accountFilterThreads = filters.accounts.length > 0 ? threads : null;
   useEffect(() => {
     if (!shellsBootstrapped) return;
     if (
@@ -1882,7 +1883,7 @@ export default function Sidebar() {
         for (const entry of entries.values())
           accounts.add(sidebarAccountKey(environmentId, entry.instanceId));
       }
-      for (const thread of threads) {
+      for (const thread of accountFilterThreads ?? []) {
         if (environmentIds.has(thread.environmentId))
           accounts.add(
             sidebarAccountKey(
@@ -1904,7 +1905,7 @@ export default function Sidebar() {
     projectGroups,
     environments,
     providerEntriesByEnvironment,
-    threads,
+    accountFilterThreads,
     shellsBootstrapped,
   ]);
   const filterCategories = useMemo<SidebarFilterCategory[]>(() => {
@@ -3651,7 +3652,7 @@ export default function Sidebar() {
                       <SidebarMenuButton
                         size="icon"
                         type="button"
-                        className="relative size-8 rounded-[8px] border border-[#0284C738] bg-[#0284C71F] pointer-coarse:size-11 pointer-coarse:border-transparent pointer-coarse:bg-transparent pointer-coarse:before:absolute pointer-coarse:before:size-8 pointer-coarse:before:rounded-[8px] pointer-coarse:before:border pointer-coarse:before:border-[#0284C738] pointer-coarse:before:bg-[#0284C71F] pointer-coarse:[&>svg]:relative text-[#0284C7] hover:bg-[#0284C7]/20 dark:text-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar [&>svg]:size-[18px] [&>svg]:text-current"
+                        className="relative size-8 rounded-[8px] border border-[#0284C738] bg-[#0284C71F] pointer-coarse:size-11 pointer-coarse:border-transparent pointer-coarse:bg-transparent pointer-coarse:before:absolute pointer-coarse:before:size-8 pointer-coarse:before:rounded-[8px] pointer-coarse:before:border pointer-coarse:before:border-[#0284C738] pointer-coarse:before:bg-[#0284C71F] pointer-coarse:hover:bg-transparent pointer-coarse:hover:before:bg-[#0284C7]/20 pointer-coarse:[&>svg]:relative text-[#0284C7] hover:bg-[#0284C7]/20 dark:text-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar [&>svg]:size-[18px] [&>svg]:text-current"
                         onClick={handleNewThreadClick}
                         disabled={projects.length === 0}
                         aria-label="New thread"

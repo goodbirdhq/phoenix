@@ -195,15 +195,16 @@ export function SidebarFiltersMenu({
             size="icon"
             aria-label={count ? `Filter threads, ${count} active categories` : "Filter threads"}
             className={cn(
-              "relative size-8 pointer-coarse:size-11 shrink-0 overflow-visible rounded-[8px] text-sidebar-muted-foreground data-popup-open:bg-sidebar-row-hover [&>svg]:text-current",
-              count > 0 && "bg-[#0284C7]/10 text-[#0284C7] dark:text-sky-400",
+              "relative size-8 pointer-coarse:size-11 pointer-coarse:bg-transparent pointer-coarse:hover:bg-transparent pointer-coarse:data-popup-open:bg-transparent pointer-coarse:before:absolute pointer-coarse:before:size-8 pointer-coarse:before:rounded-[8px] pointer-coarse:hover:before:bg-sidebar-row-hover pointer-coarse:data-popup-open:before:bg-sidebar-row-hover pointer-coarse:[&>svg]:relative shrink-0 overflow-visible rounded-[8px] text-sidebar-muted-foreground data-popup-open:bg-sidebar-row-hover [&>svg]:text-current",
+              count > 0 &&
+                "bg-[#0284C7]/10 pointer-coarse:before:bg-[#0284C7]/10 text-[#0284C7] dark:text-sky-400",
             )}
           />
         }
       >
         <ListFilterIcon className="size-4" strokeWidth={1.7} />
         {count > 0 ? (
-          <span className="absolute -right-0.5 -top-0.5 flex size-3.5 items-center justify-center rounded-full bg-[#0284C7] text-[9px] font-semibold text-white">
+          <span className="absolute -right-0.5 -top-0.5 pointer-coarse:right-1 pointer-coarse:top-1 flex size-3.5 items-center justify-center rounded-full bg-[#0284C7] text-[9px] font-semibold text-white">
             {count}
           </span>
         ) : null}

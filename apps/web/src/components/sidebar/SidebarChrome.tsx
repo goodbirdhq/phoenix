@@ -198,7 +198,7 @@ function SidebarSettingsMenu({ onNavigate }: { onNavigate: () => void }) {
             <SidebarMenuButton
               size="icon"
               aria-label={updateAvailable ? "Settings, update available" : "Settings"}
-              className="relative size-9 @max-[316px]/sidebar-footer:w-7 rounded-[8px] text-sidebar-muted-foreground [&>svg]:text-current data-popup-open:bg-zinc-200 dark:data-popup-open:bg-zinc-800"
+              className="relative size-9 @max-[316px]/sidebar-footer:w-7! rounded-[8px] text-sidebar-muted-foreground [&>svg]:text-current data-popup-open:bg-zinc-200 dark:data-popup-open:bg-zinc-800"
             />
           }
         >
@@ -322,6 +322,8 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
+    // TanStack history supplies this index; if unavailable, the comparison
+    // falls through to replacing with the remembered full location.
     const distance = location.state.__TSR_index - lastNonSettingsLocation.index;
     if (lastNonSettingsLocation.href !== "/" && distance > 0) router.history.go(-distance);
     else void navigate({ href: lastNonSettingsLocation.href, replace: true });

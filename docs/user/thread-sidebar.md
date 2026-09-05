@@ -25,8 +25,8 @@ their pinned threads keep the default newest-first order below the ones you have
 
 ## Search and filters
 
-On web and desktop, the conversation sidebar has one row for search, filters, and the blue **New thread** button.
-Open the filter menu to narrow conversations by projects, environments, status, provider accounts,
+On web and desktop, the thread sidebar has one row for search, filters, and the blue **New thread** button.
+Open the filter menu to narrow threads by projects, environments, status, provider accounts,
 or models. Select several values within a category to match any of them; different categories
 combine to narrow the results. Selections apply immediately. The filter badge counts active
 categories, and **Clear filters** restores the full list.
@@ -34,18 +34,19 @@ categories, and **Clear filters** restores the full list.
 Project settings are available from the wrench beside each project in the filter submenu.
 **New project** is in the same submenu. Provider accounts belong to their environment, so selecting
 an account on one machine does not include a same-named account on another machine. The model
-list follows the selected accounts and includes models used by existing conversations.
+list follows the selected accounts and includes models used by existing threads.
 
 Status filters include pending approval, awaiting input, waiting on a parent, working, monitoring,
-failed, and ready, plus unread, woke, pinned, snoozed, and settled. Drafts follow project,
+failed, and ready, plus unread, woke, pinned, snoozed, and settled. **Woke** finds unseen wakes,
+including threads that are still working or need attention; those rows show their current status first. Drafts follow project,
 environment, account, and model filters; they have no agent status yet. Search works within the
-current filters, including collapsed and settled conversations.
+current filters, including collapsed and settled threads.
 
 ## Sidebar navigation
 
 On web and desktop, the bottom navigation opens **Agents**, **Pull Requests** (when supported), **Schedules**,
 **Usage**, and **Environments**. The selected destination shows its name and a highlight.
-**Agents** returns to the conversation you last viewed.
+**Agents** returns to the thread you last viewed.
 
 The **Settings** button opens a menu with **All settings**, General, Appearance, Keybindings,
 and Providers shortcuts. In the desktop app, **Check for updates** is in this menu; an available
