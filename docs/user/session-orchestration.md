@@ -153,7 +153,9 @@ Send one complete instruction and use a ping to check progress. Interrupting del
 current work; it keeps the existing message order and does not replace earlier instructions.
 Claude uses native interruption when possible, retaining the conversation runtime. If background
 work or a failed interrupt requires a restart, Phoenix confirms process exit before resuming.
-An ordinary interrupt does not generate a session death notice.
+An ordinary interrupt does not generate a session death notice. If Phoenix cannot confirm that
+a provider stopped, it keeps queued instructions blocked and sends the parent a failure notice.
+Inspect the session error, resolve the provider problem, and retry Stop before resuming work.
 
 A delivery receipt confirms that the provider accepted an input for a particular turn. It does not
 prove that the agent understood or completed the instruction. For important approvals, request one

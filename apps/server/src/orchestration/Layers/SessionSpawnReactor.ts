@@ -47,7 +47,13 @@ type ReportPostedEvent = Extract<OrchestrationEvent, { type: "thread.report-post
 type SessionSetEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
 type TurnQueuedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-queued" }>;
 type TurnRequestedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>;
-type WatchedEvent = ReportPostedEvent | SessionSetEvent | TurnQueuedEvent | TurnRequestedEvent;
+type StopFailureEvent = Extract<OrchestrationEvent, { type: "thread.activity-appended" }>;
+type WatchedEvent =
+  | ReportPostedEvent
+  | SessionSetEvent
+  | TurnQueuedEvent
+  | TurnRequestedEvent
+  | StopFailureEvent;
 type WorkerInput =
   | { readonly type: "event"; readonly event: WatchedEvent }
   | { readonly type: "recover"; readonly threadId: ThreadId }
@@ -760,6 +766,19 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   const processEvent = Effect.fn("SessionSpawnReactor.processEvent")(function* (
     event: WatchedEvent,
   ) {
+    if (event.type === "thread.activity-appended") {
+      if (event.payload.activity.kind !== "provider.session.stop.failed") return;
+      const key = `session-stop-unconfirmed:${event.payload.threadId}:${event.eventId}`;
+      yield* notifyParent({
+        childThreadId: event.payload.threadId,
+        origin: { kind: "phoenix", threadId: event.payload.threadId },
+        commandTag: "session-stop-unconfirmed",
+        commandId: CommandId.make(key),
+        messageId: MessageId.make(key),
+        text: `[Phoenix] Stop could not be confirmed for spawned session ${event.payload.threadId} at ${event.occurredAt}. Its provider may still be running. Queued instructions remain blocked to prevent overlapping work. Inspect read_session and ping_session, then retry Stop after resolving the provider failure. This is not a death notice and may arrive after recovery.`,
+      }).pipe(Effect.retry({ times: 2, schedule: Schedule.exponential(100) }));
+      return;
+    }
     if (event.type === "thread.turn-start-queued") return;
     if (event.type === "thread.turn-start-requested") {
       // A parent turn starting on a delivered report message IS the parent
@@ -1198,6 +1217,10 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
     yield* forkParked(
       Stream.runForEach(domainEvents, (event) => {
         if (
+          !(
+            event.type === "thread.activity-appended" &&
+            event.payload.activity.kind === "provider.session.stop.failed"
+          ) &&
           event.type !== "thread.report-posted" &&
           event.type !== "thread.session-set" &&
           event.type !== "thread.turn-start-queued" &&

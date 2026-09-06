@@ -3629,6 +3629,61 @@ describe("ProviderCommandReactor", () => {
     ).toEqual(["thread-2", "thread-1"]);
   });
 
+  it("a failed stop stays blocked, exposes its error, and allows an explicit stop retry", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("stop-failure-session"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "ready",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    harness.stopSession.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "claudeAgent",
+          method: "stop",
+          detail: "exit unconfirmed",
+        }),
+      ),
+    );
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("failed-stop"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    const failed = (await harness.readModel()).threads[0]!;
+    expect(failed.session).toMatchObject({ status: "ready", stopRequestedAt: now });
+    expect(failed.session?.lastError).toContain("Provider stop was not confirmed");
+    expect(failed.activities.some((a) => a.kind === "provider.session.stop.failed")).toBe(true);
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("retry-stop"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    expect(harness.stopSession).toHaveBeenCalledTimes(2);
+    expect((await harness.readModel()).threads[0]?.session?.status).toBe("stopped");
+  });
+
   it("an unconfirmed process interrupt escalates to a session stop", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

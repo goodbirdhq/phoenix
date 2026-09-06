@@ -2290,6 +2290,51 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("retains the native result usage when interrupt acknowledgement times out", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const entered = yield* Deferred.make<void>();
+      harness.query.interrupt = () => {
+        Deferred.doneUnsafe(entered, Effect.void);
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "interrupted",
+          session_id: "native-timeout",
+          usage: { input_tokens: 12, output_tokens: 3 },
+          modelUsage: {},
+          total_cost_usd: 0.01,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+        } as unknown as SDKMessage);
+        return new Promise<void>(() => {});
+      };
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "work" });
+      const completed = yield* adapter.streamEvents.pipe(
+        Stream.filter((e) => e.type === "turn.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const interrupt = yield* adapter.interruptTurn(THREAD_ID).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust("3 seconds");
+      yield* Fiber.join(interrupt);
+      const event = (yield* Fiber.join(completed))[0];
+      assert.equal(event?.type, "turn.completed");
+      if (event?.type === "turn.completed")
+        assert.deepEqual(event.payload.usage, { input_tokens: 12, output_tokens: 3 });
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("an interrupt overlapping explicit stop cannot publish readiness after exit", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

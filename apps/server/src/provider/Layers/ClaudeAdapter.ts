@@ -343,6 +343,7 @@ interface ClaudeSessionContext {
    */
   pendingSeedPrompt: string | undefined;
   stopped: boolean;
+  pendingInterruptResult: SDKResultMessage | undefined;
   interruption:
     | {
         readonly completion: Deferred.Deferred<void>;
@@ -2524,6 +2525,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     const updatedAt = yield* nowIso;
     context.turnState = undefined;
+    context.pendingInterruptResult = undefined;
     context.session = {
       ...context.session,
       status: "ready",
@@ -3949,7 +3951,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     );
 
     if (context.turnState && options?.interrupt !== true) {
-      yield* completeTurn(context, "interrupted", "Session stopped.");
+      yield* completeTurn(
+        context,
+        "interrupted",
+        "Session stopped.",
+        context.pendingInterruptResult,
+      );
     }
 
     yield* Queue.shutdown(context.promptQueue);
@@ -3992,7 +3999,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // after the old runtime is gone, so queued follow-ups cannot race teardown.
     if (options?.interrupt === true) {
       if (context.turnState) {
-        yield* completeTurn(context, "interrupted", "Interrupted by caller.");
+        yield* completeTurn(
+          context,
+          "interrupted",
+          "Interrupted by caller.",
+          context.pendingInterruptResult,
+        );
       } else {
         const stamp = yield* makeEventStamp();
         yield* offerRuntimeEvent({
@@ -4664,6 +4676,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastThreadStartedId: undefined,
         pendingSeedPrompt: seed === undefined ? undefined : formatConversationSeedPrompt(seed),
         stopped: false,
+        pendingInterruptResult: undefined,
         interruption: undefined,
         interruptPermit: Semaphore.makeUnsafe(1),
       };
@@ -4745,9 +4758,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   );
 
   const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
+    const beforeInterrupt = yield* requireSession(input.threadId);
+    yield* beforeInterrupt.interruptPermit.withPermits(1)(Effect.void);
     const context = yield* requireSession(input.threadId);
-    yield* context.interruptPermit.withPermits(1)(Effect.void);
-    yield* requireSession(input.threadId);
     const modelCatalog = yield* modelCatalogEffect;
     const selectedModel =
       input.modelSelection !== undefined && input.modelSelection.instanceId === boundInstanceId
@@ -4912,6 +4925,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               yield* completeTurn(context, "interrupted", undefined, interruption.result);
               return;
             }
+            context.pendingInterruptResult = interruption.result;
           }
           // Background work or a failed native interrupt needs a confirmed process exit.
           yield* stopSessionInternal(context, { interrupt: true, emitExitEvent: false });

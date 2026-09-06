@@ -358,6 +358,45 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
 });
 
 describe("SessionSpawnReactor queued delivery", () => {
+  it.effect("notifies the parent that stop is unconfirmed without claiming the child died", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const event: OrchestrationEvent = {
+          ...sessionSetEvent(makeShell(CHILD_ID, "running")),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: CHILD_ID,
+            activity: {
+              id: EventId.make("stop-failed"),
+              kind: "provider.session.stop.failed",
+              tone: "error",
+              summary: "Provider stop was not confirmed",
+              payload: { detail: "exit unconfirmed" },
+              turnId: null,
+              createdAt: NOW,
+            },
+          },
+        };
+        const harness = yield* createHarness({
+          status: "running",
+          queued: [queued("blocked")],
+          live: true,
+          boundaryEvents: [event, event],
+        });
+        const notices = harness.commands.filter(
+          (c) => c.type === "thread.turn.start" && c.threadId === PARENT_ID,
+        );
+        expect(notices.length).toBeGreaterThan(0);
+        expect(new Set(notices.map((c) => c.commandId)).size).toBe(1);
+        expect(notices[0]?.type === "thread.turn.start" && notices[0].message.text).toContain(
+          "Queued instructions remain blocked",
+        );
+        expect(harness.commands.some((c) => c.type === "thread.report.post")).toBe(false);
+        expect(harness.queuedRows[0]?.state).toBe("queued");
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
   it.effect("releases a queued user message that quotes a report envelope", () =>
     Effect.scoped(
       createHarness({

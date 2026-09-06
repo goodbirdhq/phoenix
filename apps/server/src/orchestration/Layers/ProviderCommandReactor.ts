@@ -1977,13 +1977,26 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         case "thread.session-stop-requested":
           yield* processSessionStopRequested(event).pipe(
             Effect.catchCause((cause) =>
-              appendProviderFailureActivity({
-                threadId: event.payload.threadId,
-                kind: "provider.session.stop.failed",
-                summary: "Provider stop was not confirmed",
-                detail: Cause.pretty(cause),
-                turnId: null,
-                createdAt: event.payload.createdAt,
+              Effect.gen(function* () {
+                const current = yield* resolveThread(event.payload.threadId);
+                const detail = Cause.pretty(cause);
+                if (current?.session)
+                  yield* setThreadSession({
+                    threadId: current.id,
+                    session: {
+                      ...current.session,
+                      lastError: `Provider stop was not confirmed: ${detail}`,
+                    },
+                    createdAt: event.payload.createdAt,
+                  });
+                yield* appendProviderFailureActivity({
+                  threadId: event.payload.threadId,
+                  kind: "provider.session.stop.failed",
+                  summary: "Provider stop was not confirmed",
+                  detail,
+                  turnId: null,
+                  createdAt: event.payload.createdAt,
+                });
               }),
             ),
           );

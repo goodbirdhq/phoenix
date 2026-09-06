@@ -649,7 +649,10 @@ handshake completes, so fallback cannot close a follow-up admitted too early. Ba
 observed owned-process exit before resuming. SDK iterator cleanup alone is insufficient. Intentional
 interruption does not publish a terminal exit; explicit stops retain terminal behavior. Interrupt
 timeouts escalate plain Stop as well as queued interruptions, guarded by the original turn and
-episode. Unconfirmed interruption or process termination never claims the session is ready.
+episode. Unconfirmed interruption or process termination never claims the session is ready. A failed stop
+retains its delivery block, writes a visible last error, and notifies the parent with a deterministic
+system message. The parent should inspect the failure and retry Stop; clearing the block without
+confirmed termination could overlap work on the old runtime.
 Provider commands use per-thread FIFO workers: lifecycle control and later turn preparation stay
 ordered without blocking unrelated threads. Explicit stop and interruption share Claude teardown
 ownership. Late runtime lifecycle events cannot reopen a confirmed stopped episode. Terminal queue cancellation
