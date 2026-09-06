@@ -76,10 +76,13 @@ export interface ProviderAdapterShape<TError> {
   ) => Effect.Effect<ProviderSession, TError>;
 
   /**
-   * Send a turn to an active provider session.
+   * Send a turn to an active provider session. ACP adapters report native
+   * dispatch through onAccepted while their prompt response is still pending.
+   * Other adapters return at acceptance. Neither proves model understanding.
    */
   readonly sendTurn: (
     input: ProviderSendTurnInput,
+    onAccepted?: (result: ProviderTurnStartResult) => Effect.Effect<void>,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
 
   /**

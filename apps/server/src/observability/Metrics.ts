@@ -51,7 +51,7 @@ export const providerTurnsTotal = Metric.counter("t3_provider_turns_total", {
 });
 
 export const providerTurnDuration = Metric.timer("t3_provider_turn_duration", {
-  description: "Provider turn request duration.",
+  description: "Provider turn request duration; send measures input acceptance, not completion.",
 });
 
 export const providerRuntimeEventsTotal = Metric.counter("t3_provider_runtime_events_total", {

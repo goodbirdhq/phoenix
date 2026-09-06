@@ -1205,6 +1205,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (targetThread.session?.stopRequestedAt != null)
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Session stop is pending; queued input remains pending.",
+        });
       const queuedTurn = targetThread.queuedTurnStarts?.find(
         (entry) => entry.messageId === command.messageId && entry.releasingAt === undefined,
       );
@@ -1248,12 +1253,44 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.turn.queue.consume": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      // A successful provider send is authoritative even if cancellation raced
+      // its response. The durable receipt must reflect the input that arrived.
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.turn-start-consumed",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          turnId: command.turnId,
+          consumedAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.turn.queue.cancel": {
       const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (
+        command.expectedSessionEpisode !== undefined &&
+        ((targetThread.session?.status !== "stopped" && targetThread.session?.status !== "error") ||
+          (targetThread.session.episodeStartedAt ?? targetThread.session.updatedAt) !==
+            command.expectedSessionEpisode)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Terminal episode changed before queued input cancellation.",
+        });
+      }
       if (!targetThread.queuedTurnStarts?.some((entry) => entry.messageId === command.messageId)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1412,6 +1449,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (
+        (command.onlyIfActiveTurnId !== undefined &&
+          (thread.session?.activeTurnId !== command.onlyIfActiveTurnId ||
+            (thread.session.status !== "running" && thread.session.status !== "starting"))) ||
+        (command.onlyIfSessionEpisode !== undefined &&
+          (thread.session?.episodeStartedAt ?? null) !== command.onlyIfSessionEpisode)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Session changed before interrupt escalation.",
+        });
+      }
       // Settle-cleanup stops are conditional: between the settle landing and
       // this command, another client may have re-engaged the thread (a turn
       // start unsettles it and brings the session alive). Commands are
@@ -1444,6 +1493,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           createdAt: command.createdAt,
+          ...(command.onlyIfActiveTurnId !== undefined
+            ? { onlyIfActiveTurnId: command.onlyIfActiveTurnId }
+            : {}),
+          ...(command.onlyIfSessionEpisode !== undefined
+            ? { onlyIfSessionEpisode: command.onlyIfSessionEpisode }
+            : {}),
           stopReason: command.stopReason ?? "user_stopped",
           stoppedBy: command.stoppedBy ?? "user",
           gracePeriodMs: command.gracePeriodMs ?? null,
@@ -1485,47 +1540,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           session: {
             ...command.session,
-            // Keep the marker through the synthetic `starting` transition.
-            // Provider runtime ingestion copies it onto the subsequent
-            // `running` transition that carries the provider turn id.
-            queuedDeliveryMessageId:
-              command.session.status === "running" &&
-              command.session.activeTurnId !== null &&
-              command.session.queuedDeliveryMessageId !== null
-                ? null
-                : command.session.queuedDeliveryMessageId,
+            // Historical events still replay, but new lifecycle commands never
+            // acknowledge a message. Only a native input acceptance can do that.
+            queuedDeliveryMessageId: null,
           },
         },
       };
-      const releasedQueuedTurn =
-        command.session.status === "running" &&
-        command.session.activeTurnId !== null &&
-        command.session.queuedDeliveryMessageId !== undefined &&
-        command.session.queuedDeliveryMessageId !== null
-          ? thread.queuedTurnStarts?.find(
-              (entry) =>
-                entry.messageId === command.session.queuedDeliveryMessageId &&
-                entry.releasingAt !== undefined,
-            )
-          : undefined;
-      const consumedEvent: Omit<OrchestrationEvent, "sequence"> | undefined =
-        releasedQueuedTurn === undefined || command.session.activeTurnId === null
-          ? undefined
-          : {
-              ...(yield* withEventBase({
-                aggregateKind: "thread",
-                aggregateId: command.threadId,
-                occurredAt: command.createdAt,
-                commandId: command.commandId,
-              })),
-              type: "thread.turn-start-consumed",
-              payload: {
-                threadId: command.threadId,
-                messageId: releasedQueuedTurn.messageId,
-                turnId: command.session.activeTurnId,
-                consumedAt: command.createdAt,
-              },
-            };
       // Only a session coming alive is activity worth waking a settled thread
       // for — status writes like ready/stopped/error arrive after the fact and
       // must not fight a user's explicit settle. Snooze is deliberately NOT
@@ -1538,7 +1558,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.session.status === "starting" || command.session.status === "running";
       // Real activity resets ANY override (settled wakes, active unpins).
       if (thread.settledOverride === null || !isSessionActivity) {
-        return consumedEvent === undefined ? sessionSetEvent : [sessionSetEvent, consumedEvent];
+        return sessionSetEvent;
       }
       const unsettledEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
@@ -1554,9 +1574,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
-      return consumedEvent === undefined
-        ? [unsettledEvent, sessionSetEvent]
-        : [unsettledEvent, sessionSetEvent, consumedEvent];
+      return [unsettledEvent, sessionSetEvent];
     }
 
     case "thread.message.assistant.delta": {

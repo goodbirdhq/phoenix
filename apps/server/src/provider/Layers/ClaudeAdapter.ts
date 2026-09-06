@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as Option from "effect/Option";
+import * as Semaphore from "effect/Semaphore";
+import * as Scope from "effect/Scope";
+import * as NodeChildProcess from "node:child_process";
 /**
  * ClaudeAdapterLive - Scoped live implementation for the Claude Agent provider adapter.
  *
@@ -338,6 +343,14 @@ interface ClaudeSessionContext {
    */
   pendingSeedPrompt: string | undefined;
   stopped: boolean;
+  pendingInterruptResult: SDKResultMessage | undefined;
+  interruption:
+    | {
+        readonly completion: Deferred.Deferred<void>;
+        result: SDKResultMessage | undefined;
+      }
+    | undefined;
+  readonly interruptPermit: Semaphore.Semaphore;
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
@@ -345,6 +358,8 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
   readonly close: () => void;
+  readonly waitForExit: () => Promise<void>;
+  readonly interrupt: (() => Promise<unknown>) | undefined;
 }
 
 export interface ClaudeAdapterLiveOptions {
@@ -1761,6 +1776,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   claudeSettings: ClaudeSettings,
   options?: ClaudeAdapterLiveOptions,
 ) {
+  const adapterScope = yield* Scope.Scope;
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("claudeAgent");
   const modelCatalogEffect = (
     options?.modelCatalog ?? Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG)
@@ -1794,11 +1810,41 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     ((input: {
       readonly prompt: AsyncIterable<SDKUserMessage>;
       readonly options: ClaudeQueryOptions;
-    }) =>
-      query({
+    }): ClaudeQueryRuntime => {
+      const exited = Promise.withResolvers<void>();
+      let spawned = false;
+      let closing = false;
+      const runtime = query({
         prompt: input.prompt,
-        options: input.options,
-      }) as ClaudeQueryRuntime);
+        options: {
+          ...input.options,
+          spawnClaudeCodeProcess: (options) => {
+            if (closing) throw new Error("Claude query closed before process spawn.");
+            const child = NodeChildProcess.spawn(options.command, options.args, {
+              cwd: options.cwd,
+              env: options.env,
+              signal: options.signal,
+              stdio: ["pipe", "pipe", "pipe"],
+              windowsHide: true,
+            });
+            // Custom SDK spawners own stderr draining; unread pipes can block the CLI.
+            child.stderr.on("data", (chunk: Buffer) => input.options.stderr?.(chunk.toString()));
+            spawned = true;
+            child.once("exit", () => exited.resolve());
+            child.once("error", () => {
+              if (child.pid === undefined) exited.resolve();
+            });
+            return child;
+          },
+        },
+      });
+      return Object.assign(runtime, {
+        waitForExit: () => {
+          closing = true;
+          return spawned ? exited.promise : Promise.resolve();
+        },
+      });
+    });
 
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
@@ -2295,6 +2341,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     errorMessage?: string,
     result?: SDKResultMessage,
   ) {
+    // A result alone is not a safe boundary while native cancellation is pending.
+    if (context.interruption) {
+      context.interruption.result = result;
+      yield* Deferred.succeed(context.interruption.completion, undefined);
+      return;
+    }
     const resultContextWindow = maxClaudeContextWindowFromModelUsage(result?.modelUsage);
     if (resultContextWindow !== undefined) {
       context.lastKnownContextWindow = resultContextWindow;
@@ -2473,6 +2525,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     const updatedAt = yield* nowIso;
     context.turnState = undefined;
+    context.pendingInterruptResult = undefined;
     context.session = {
       ...context.session,
       status: "ready",
@@ -3806,9 +3859,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const stopSessionInternal = Effect.fn("stopSessionInternal")(function* (
     context: ClaudeSessionContext,
-    options?: { readonly emitExitEvent?: boolean },
+    options?: { readonly emitExitEvent?: boolean; readonly interrupt?: boolean },
   ) {
-    if (context.stopped) return;
+    if (context.stopped && sessions.get(context.session.threadId) !== context) return;
 
     // Schedule process termination before any cleanup that can wait on the
     // provider. The SDK closes stdin, then escalates from SIGTERM to SIGKILL.
@@ -3872,8 +3925,38 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       yield* pending.cancel;
     }
 
-    if (context.turnState) {
-      yield* completeTurn(context, "interrupted", "Session stopped.");
+    // SDK iterator cleanup has a shorter grace period than process termination.
+    // Only an observed exit proves another runtime can safely resume this history.
+    yield* Effect.tryPromise({
+      try: () => context.query.waitForExit(),
+      catch: (cause) =>
+        new ProviderAdapterProcessError({
+          provider: PROVIDER,
+          threadId: context.session.threadId,
+          detail: "Claude process exit was not confirmed.",
+          cause,
+        }),
+    }).pipe(
+      Effect.timeout("8 seconds"),
+      Effect.catchTag("TimeoutError", (cause) =>
+        Effect.fail(
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: context.session.threadId,
+            detail: "Claude process did not exit within 8 seconds.",
+            cause,
+          }),
+        ),
+      ),
+    );
+
+    if (context.turnState && options?.interrupt !== true) {
+      yield* completeTurn(
+        context,
+        "interrupted",
+        "Session stopped.",
+        context.pendingInterruptResult,
+      );
     }
 
     yield* Queue.shutdown(context.promptQueue);
@@ -3881,7 +3964,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const streamFiber = context.streamFiber;
     context.streamFiber = undefined;
     if (streamFiber && streamFiber.pollUnsafe() === undefined) {
-      yield* Fiber.interrupt(streamFiber);
+      yield* Fiber.interrupt(streamFiber).pipe(Effect.forkIn(adapterScope));
     }
 
     const updatedAt = yield* nowIso;
@@ -3911,10 +3994,35 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (sessions.get(context.session.threadId) === context) {
       sessions.delete(context.session.threadId);
     }
+
+    // An interrupt parks the conversation. Publish its only resumable boundary
+    // after the old runtime is gone, so queued follow-ups cannot race teardown.
+    if (options?.interrupt === true) {
+      if (context.turnState) {
+        yield* completeTurn(
+          context,
+          "interrupted",
+          "Interrupted by caller.",
+          context.pendingInterruptResult,
+        );
+      } else {
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "session.state.changed",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          payload: { state: "ready", reason: "Interrupted by caller; runtime closed for resume." },
+          providerRefs: {},
+        });
+      }
+    }
   });
 
   const requireSession = (
     threadId: ThreadId,
+    allowStopping = false,
   ): Effect.Effect<ClaudeSessionContext, ProviderAdapterError> => {
     const context = sessions.get(threadId);
     if (!context) {
@@ -3925,7 +4033,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         }),
       );
     }
-    if (context.stopped || context.session.status === "closed") {
+    if (!allowStopping && (context.stopped || context.session.status === "closed")) {
       return Effect.fail(
         new ProviderAdapterSessionClosedError({
           provider: PROVIDER,
@@ -4568,6 +4676,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastThreadStartedId: undefined,
         pendingSeedPrompt: seed === undefined ? undefined : formatConversationSeedPrompt(seed),
         stopped: false,
+        pendingInterruptResult: undefined,
+        interruption: undefined,
+        interruptPermit: Semaphore.makeUnsafe(1),
       };
       yield* Ref.set(contextRef, context);
       sessions.set(threadId, context);
@@ -4647,6 +4758,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   );
 
   const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
+    const beforeInterrupt = yield* requireSession(input.threadId);
+    yield* beforeInterrupt.interruptPermit.withPermits(1)(Effect.void);
     const context = yield* requireSession(input.threadId);
     const modelCatalog = yield* modelCatalogEffect;
     const selectedModel =
@@ -4787,11 +4900,37 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const interruptTurn: ClaudeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
     function* (threadId, _turnId) {
-      const context = yield* requireSession(threadId);
-      // interrupt() can acknowledge while resumed background tasks keep the
-      // CLI alive. Stop is a hard session boundary for Claude, so close the
-      // query and let the SDK escalate to SIGKILL when graceful exit fails.
-      yield* stopSessionInternal(context);
+      const context = yield* requireSession(threadId, true);
+      return yield* context.interruptPermit.withPermits(1)(
+        Effect.gen(function* () {
+          if (context.query.interrupt && context.liveTaskIds.size === 0 && !context.stopped) {
+            if (!context.turnState) return;
+            const completion = Deferred.makeUnsafe<void>();
+            const interruption = { completion, result: undefined as SDKResultMessage | undefined };
+            context.interruption = interruption;
+            const interrupted = yield* Effect.tryPromise({
+              try: () => context.query.interrupt!(),
+              catch: (cause) => toRequestError(threadId, "interrupt", cause),
+            }).pipe(
+              Effect.andThen(Deferred.await(completion)),
+              Effect.timeoutOption("3 seconds"),
+              Effect.catch(() => Effect.succeed(Option.none())),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  context.interruption = undefined;
+                }),
+              ),
+            );
+            if (Option.isSome(interrupted) && context.liveTaskIds.size === 0) {
+              yield* completeTurn(context, "interrupted", undefined, interruption.result);
+              return;
+            }
+            context.pendingInterruptResult = interruption.result;
+          }
+          // Background work or a failed native interrupt needs a confirmed process exit.
+          yield* stopSessionInternal(context, { interrupt: true, emitExitEvent: false });
+        }),
+      );
     },
   );
 
@@ -4848,10 +4987,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const stopSession: ClaudeAdapterShape["stopSession"] = Effect.fn("stopSession")(
     function* (threadId) {
-      const context = yield* requireSession(threadId);
-      yield* stopSessionInternal(context, {
-        emitExitEvent: true,
-      });
+      const context = yield* requireSession(threadId, true);
+      yield* context.interruptPermit.withPermits(1)(
+        stopSessionInternal(context, {
+          emitExitEvent: true,
+        }),
+      );
     },
   );
 
@@ -4861,13 +5002,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const hasSession: ClaudeAdapterShape["hasSession"] = (threadId) =>
     Effect.sync(() => {
       const context = sessions.get(threadId);
-      return context !== undefined && !context.stopped;
+      return context !== undefined;
     });
 
   const getSessionRuntimeLiveness: ClaudeAdapterShape["getSessionRuntimeLiveness"] = (threadId) =>
     Effect.sync(() => {
       const context = sessions.get(threadId);
-      if (!context || context.stopped) return "dead";
+      if (!context) return "dead";
+      if (context.stopped) return "unknown";
       // `sessions` is bookkeeping. The SDK stream fiber is the actual
       // provider runtime handle and completes when its child/stream exits.
       return context.streamFiber?.pollUnsafe() === undefined ? "live" : "dead";

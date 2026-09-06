@@ -1,3 +1,4 @@
+import * as QueuedDelivery from "../src/orchestration/QueuedDelivery.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 
@@ -378,6 +379,7 @@ export const makeOrchestrationIntegrationHarness = (
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
+      Layer.provideMerge(QueuedDelivery.layer),
       Layer.provideMerge(checkpointReactorLayer),
       Layer.provideMerge(
         Layer.succeed(ThreadDeletionReactor, {

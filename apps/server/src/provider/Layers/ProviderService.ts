@@ -1,3 +1,4 @@
+import * as Scope from "effect/Scope";
 import { codexUsageFromSnapshot } from "../codexUsage.ts";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
@@ -26,6 +27,7 @@ import {
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type ProviderTurnStartResult,
 } from "@t3tools/contracts";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { causeErrorTag } from "@t3tools/shared/observability";
@@ -625,6 +627,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   // no-op.
   const canonicalEventLogger = options?.canonicalEventLogger ?? eventLoggers.canonical;
 
+  const providerScope = yield* Scope.Scope;
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -803,6 +806,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     event: ProviderRuntimeEvent,
   ): Effect.Effect<void> => {
     const ingest = Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
+      Effect.tap((canonicalEvent) => {
+        const threadId = canonicalEvent.threadId;
+        return threadId === undefined
+          ? Effect.void
+          : Effect.flatMap(nowIso, (observedAt) =>
+              directory.recordActivity(threadId, source.instanceId, observedAt),
+            );
+      }),
       Effect.tap((canonicalEvent) => {
         const availability = availabilityFromRuntimeEvent(canonicalEvent);
         return availability
@@ -1426,20 +1437,45 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       // rather than issuing a new one: sessions that go a long time between
       // browser tool calls used to lose the toolkit outright.
       yield* McpSessionRegistry.touchActiveMcpThread(input.threadId);
-      const turn = yield* routed.adapter.sendTurn(input);
-      yield* directory.upsert({
-        threadId: input.threadId,
-        provider: routed.adapter.provider,
-        providerInstanceId: routed.instanceId,
-        status: "running",
-        ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
-        runtimePayload: {
-          ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-          activeTurnId: turn.turnId,
-          lastRuntimeEvent: "provider.sendTurn",
-          lastRuntimeEventAt: yield* nowIso,
-        },
-      });
+      const acceptance = yield* Deferred.make<ProviderTurnStartResult, ProviderAdapterError>();
+      yield* routed.adapter
+        .sendTurn(input, (result) => Deferred.succeed(acceptance, result).pipe(Effect.asVoid))
+        .pipe(
+          Effect.onExit((exit) => Deferred.done(acceptance, exit).pipe(Effect.asVoid)),
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.void
+              : Effect.logWarning("Provider submission/completion failed", {
+                  threadId: input.threadId,
+                  cause,
+                }),
+          ),
+          Effect.forkIn(providerScope),
+        );
+      const turn = yield* Deferred.await(acceptance);
+      yield* directory
+        .upsert({
+          threadId: input.threadId,
+          provider: routed.adapter.provider,
+          providerInstanceId: routed.instanceId,
+          status: "running",
+          ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+          runtimePayload: {
+            ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+            activeTurnId: turn.turnId,
+            lastRuntimeEvent: "provider.sendTurn",
+            lastRuntimeEventAt: yield* nowIso,
+          },
+        })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Accepted provider input; binding update failed", {
+              threadId: input.threadId,
+              turnId: turn.turnId,
+              error,
+            }),
+          ),
+        );
       yield* analytics.record("provider.turn.sent", {
         provider: routed.adapter.provider,
         model: input.modelSelection?.model,

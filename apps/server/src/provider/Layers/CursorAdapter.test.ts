@@ -168,6 +168,29 @@ const cursorAdapterTestLayer = it.layer(
 );
 
 cursorAdapterTestLayer("CursorAdapterLive", (it) => {
+  it.effect("reports ACP dispatch before a pending prompt completes", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({ T3_ACP_HANG_PROMPT_FOREVER: "1" }),
+      );
+      yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+      const threadId = ThreadId.make("acp-accept-before-complete");
+      yield* adapter.startSession({ threadId, cwd: process.cwd(), runtimeMode: "full-access" });
+      const accepted = yield* Deferred.make<void>();
+      const sending = yield* adapter
+        .sendTurn({ threadId, input: "wait for cancellation" }, () =>
+          Deferred.succeed(accepted, undefined).pipe(Effect.asVoid),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(accepted);
+      assert.equal(sending.pollUnsafe(), undefined);
+      yield* Fiber.interrupt(sending);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("starts a session and maps mock ACP prompt flow to runtime events", () =>
     Effect.gen(function* () {
       const adapter = yield* CursorAdapter;

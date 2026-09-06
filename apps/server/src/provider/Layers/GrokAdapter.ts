@@ -1481,7 +1481,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         }).pipe(Effect.scoped),
       );
 
-    const sendTurn: GrokAdapterShape["sendTurn"] = (input) =>
+    const sendTurn: GrokAdapterShape["sendTurn"] = (input, onAccepted) =>
       Effect.gen(function* () {
         const prepared = yield* withThreadLock(
           input.threadId,
@@ -1721,6 +1721,12 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 Deferred.await(dispatched),
                 Fiber.await(fiber).pipe(Effect.asVoid),
               );
+              if (!(yield* Deferred.isDone(dispatched)))
+                yield* Fiber.join(fiber).pipe(
+                  Effect.mapError((error) =>
+                    mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
+                  ),
+                );
               return { _tag: "Started" as const, fiber };
             }),
           );
@@ -1750,6 +1756,12 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             };
           }
 
+          if (onAccepted)
+            yield* onAccepted({
+              threadId: input.threadId,
+              turnId: prepared.turnId,
+              resumeCursor: sessions.get(input.threadId)?.session.resumeCursor,
+            });
           const result = yield* Fiber.join(promptStart.fiber).pipe(
             Effect.tap((promptResult) =>
               Effect.all(

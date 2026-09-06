@@ -126,7 +126,7 @@ it.layer(NodeServices.layer)("queued delivery receipt attribution", (it) => {
       );
       if (startingSessionSet?.type !== "thread.session-set")
         throw new Error("missing starting event");
-      expect(startingSessionSet.payload.session.queuedDeliveryMessageId).toBe(releasedMessageId);
+      expect(startingSessionSet.payload.session.queuedDeliveryMessageId).toBeNull();
       const afterStarting = yield* projectEvent(readModel, { ...startingSessionSet, sequence: 1 });
 
       // This is the provider-runtime transition that carries the real turn id.
@@ -146,7 +146,20 @@ it.layer(NodeServices.layer)("queued delivery receipt attribution", (it) => {
         readModel: afterStarting,
       });
       const events = Array.isArray(decided) ? decided : [decided];
-      const consumed = events.find((event) => event.type === "thread.turn-start-consumed");
+      expect(events.some((event) => event.type === "thread.turn-start-consumed")).toBe(false);
+      const accepted = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.queue.consume",
+          commandId: CommandId.make("cmd-provider-accepted"),
+          threadId: ThreadId.make("thread-1"),
+          messageId: releasedMessageId,
+          turnId: activeTurnId,
+          createdAt: NOW,
+        },
+        readModel: afterStarting,
+      });
+      const acceptedEvents = Array.isArray(accepted) ? accepted : [accepted];
+      const consumed = acceptedEvents.find((event) => event.type === "thread.turn-start-consumed");
       expect(consumed).toBeDefined();
       if (consumed?.type === "thread.turn-start-consumed") {
         expect(consumed.payload.messageId).toBe(releasedMessageId);

@@ -926,7 +926,7 @@ export function makeCursorAdapter(
         }).pipe(Effect.scoped),
       );
 
-    const sendTurn: CursorAdapterShape["sendTurn"] = (input) =>
+    const sendTurn: CursorAdapterShape["sendTurn"] = (input, onAccepted) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
         // A sendTurn while a prompt is in flight is a steer: the agent folds
@@ -1034,15 +1034,33 @@ export function makeCursorAdapter(
             });
           }
 
-          const result = yield* ctx.acp
-            .prompt({
-              prompt: promptParts,
-            })
+          const dispatched = yield* Deferred.make<void>();
+          const prompt = yield* ctx.acp
+            .prompt(
+              {
+                prompt: promptParts,
+              },
+              { dispatched },
+            )
             .pipe(
               Effect.mapError((error) =>
                 mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
               ),
+              Effect.forkChild,
             );
+
+          yield* Effect.raceFirst(
+            Deferred.await(dispatched),
+            Fiber.await(prompt).pipe(Effect.asVoid),
+          );
+          if (!(yield* Deferred.isDone(dispatched))) yield* Fiber.join(prompt);
+          if (onAccepted)
+            yield* onAccepted({
+              threadId: input.threadId,
+              turnId,
+              resumeCursor: ctx.session.resumeCursor,
+            });
+          const result = yield* Fiber.join(prompt);
 
           const turnRecord = ctx.turns.find((turn) => turn.id === turnId);
           if (turnRecord) {
@@ -1080,6 +1098,25 @@ export function makeCursorAdapter(
             resumeCursor: ctx.session.resumeCursor,
           };
         }).pipe(
+          Effect.tapError((error) =>
+            Effect.gen(function* () {
+              if (ctx.promptsInFlight !== 1 || ctx.session.activeTurnId !== turnId) return;
+              ctx.session = {
+                ...ctx.session,
+                status: "ready",
+                activeTurnId: undefined,
+                updatedAt: yield* nowIso,
+              };
+              yield* offerRuntimeEvent({
+                type: "turn.completed",
+                ...(yield* makeEventStamp()),
+                provider: PROVIDER,
+                threadId: input.threadId,
+                turnId,
+                payload: { state: "failed", errorMessage: error.message },
+              });
+            }),
+          ),
           Effect.ensuring(
             Effect.sync(() => {
               ctx.promptsInFlight = Math.max(0, ctx.promptsInFlight - 1);

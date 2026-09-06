@@ -1,5 +1,10 @@
 import { usageSessionIdentity } from "../usageSessionIdentity.ts";
-import { defaultInstanceIdForDriver, ProviderDriverKind, type ThreadId } from "@t3tools/contracts";
+import {
+  defaultInstanceIdForDriver,
+  ProviderDriverKind,
+  type ProviderInstanceId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -86,6 +91,24 @@ function toRuntimeBinding(
 
 const makeProviderSessionDirectory = Effect.gen(function* () {
   const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+  // Bounded in-memory enrichment: token traffic must not cause SQLite writes.
+  // Eviction/restart falls back to the last persisted binding timestamp.
+  const activity = new Map<ThreadId, { instanceId: ProviderInstanceId; observedAt: string }>();
+  const recordActivity: ProviderSessionDirectoryShape["recordActivity"] = (
+    threadId,
+    instanceId,
+    observedAt,
+  ) =>
+    Effect.sync(() => {
+      const previous = activity.get(threadId);
+      if (previous?.instanceId === instanceId && previous.observedAt >= observedAt) return;
+      activity.delete(threadId);
+      activity.set(threadId, { instanceId, observedAt });
+      if (activity.size > 4096) {
+        const oldest = activity.keys().next().value;
+        if (oldest !== undefined) activity.delete(oldest);
+      }
+    });
 
   const getBinding = (threadId: ThreadId) =>
     repository.getByThreadId({ threadId }).pipe(
@@ -186,13 +209,24 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       Effect.flatMap((rows) =>
         Effect.forEach(
           rows,
-          (row) => toRuntimeBinding(row, "ProviderSessionDirectory.listBindings"),
+          (row) =>
+            toRuntimeBinding(row, "ProviderSessionDirectory.listBindings").pipe(
+              Effect.map((binding) => {
+                const latest = activity.get(binding.threadId);
+                return latest !== undefined &&
+                  latest.instanceId === binding.providerInstanceId &&
+                  latest.observedAt > binding.lastSeenAt
+                  ? { ...binding, lastSeenAt: latest.observedAt }
+                  : binding;
+              }),
+            ),
           { concurrency: "unbounded" },
         ),
       ),
     );
 
   return {
+    recordActivity,
     upsert,
     getProvider,
     getBinding,
