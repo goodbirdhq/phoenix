@@ -1523,6 +1523,9 @@ const ThreadCheckpointRevertCommand = Schema.Struct({
 });
 
 const ThreadSessionStopCommand = Schema.Struct({
+  onlyIfActiveTurnId: Schema.optional(Schema.NullOr(TurnId)),
+  onlyIfSessionEpisode: Schema.optional(Schema.NullOr(IsoDateTime)),
+
   type: Schema.Literal("thread.session.stop"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -1628,6 +1631,7 @@ const ThreadQueuedTurnConsumeCommand = Schema.Struct({
 });
 
 const ThreadQueuedTurnCancelCommand = Schema.Struct({
+  expectedSessionEpisode: Schema.optional(IsoDateTime),
   type: Schema.Literal("thread.turn.queue.cancel"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -2068,6 +2072,9 @@ export const ThreadRevertedPayload = Schema.Struct({
 });
 
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
+  onlyIfActiveTurnId: Schema.optional(Schema.NullOr(TurnId)),
+  onlyIfSessionEpisode: Schema.optional(Schema.NullOr(IsoDateTime)),
+
   threadId: ThreadId,
   createdAt: IsoDateTime,
   // Optional so persisted events from older servers still decode on replay.

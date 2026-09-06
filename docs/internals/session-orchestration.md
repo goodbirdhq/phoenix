@@ -628,20 +628,30 @@ historical compatibility; new sends leave it empty. This receipt means adapter a
 model understanding or completion. Each provider keeps its existing send/acceptance semantics,
 including steering into an existing turn.
 
-`QueuedDelivery` gives provider acceptance, cancellation, and recovery one permit per thread.
-Cancellation before delivery skips the send. If the provider already accepted an input, transient
-receipt-write failures retry that write while holding the permit, never the provider send. A late
-acceptance can correct a cancelled durable receipt; the original cancellation event remains in
-history. Session event workers preserve ordering per thread without blocking other threads behind
-a slow provider. New worker lanes evict idle entries once the cache reaches 256; busy lanes
-remain until they drain. Activity observations have a separate fixed-size cache.
+`QueuedDelivery` serializes delivery admission, cancellation, and recovery per thread. It never
+holds that permit during provider I/O or receipt persistence. Cancellation before admission skips
+the send; cancellation of an admitted attempt cannot retract input already in flight. An accepted
+input retries only its receipt write, with exponential jittered backoff capped at five seconds,
+never the provider send. Late acceptance can correct a cancelled receipt; the cancellation event
+remains in history. Pending attempts prevent concurrent redelivery of the same message.
 
-Claude interruption closes the query, shuts down prompts, and drains its stream before publishing
-a single resumable turn boundary. It does not publish a terminal exit for this intentional pause.
-An interrupt without an active turn still emits a ready boundary after teardown. Explicit stops
-retain terminal behavior. An unacknowledged interrupt timeout never claims the session is ready;
-the queued interrupt deadline remains responsible for escalation. Historical terminal events may
-produce historical notices but cannot cancel work belonging to a resumed episode.
+Cursor and Grok expose ACP prompt dispatch separately from prompt completion. `ProviderService`
+returns acceptance at dispatch while supervising completion in its own scope. A later binding
+metadata write failure cannot erase that acceptance. Other adapters retain their native acceptance
+semantics. No provider status transition acknowledges a queued message, including legacy markers.
+
+Claude first uses native interruption for foreground work and retains the healthy runtime after
+its result boundary. Background work or failed native interruption requires query closure and an
+observed owned-process exit before resuming. SDK iterator cleanup alone is insufficient. Intentional
+interruption does not publish a terminal exit; explicit stops retain terminal behavior. Interrupt
+timeouts escalate plain Stop as well as queued interruptions, guarded by the original turn and
+episode. Unconfirmed interruption or process termination never claims the session is ready.
+Provider interrupt and stop I/O run outside the global command worker. Terminal queue cancellation
+checks the episode inside the decider, so an old notice cannot cancel a resumed episode's work.
+
+Session event workers preserve ordering per thread. New worker lanes evict idle entries once the
+cache reaches 256; busy lanes remain until they drain. Activity observations have a separate
+fixed-size cache.
 
 `lastActivityAt` merges persisted provider-binding time with a bounded in-memory watermark of
 runtime traffic received by Phoenix, scoped to the bound provider instance. Runtime events update

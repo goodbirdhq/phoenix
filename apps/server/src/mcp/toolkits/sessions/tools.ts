@@ -73,7 +73,7 @@ export const SpawnSessionTool = Tool.make("spawn_session", {
 
 export const SendToSessionTool = Tool.make("send_to_session", {
   description:
-    "Send a follow-up user message to a session this session spawned. mode defaults to queue: idle sessions receive it immediately, while busy sessions receive it after the current turn. interrupt ends the current turn before continuing the same FIFO queue; it does not supersede older messages. Claude closes its runtime before resuming queued work. Use ping_session for liveness checks instead of sending reminders. The result reports immediate, queued, or unknown when the send committed but acknowledgement readback was unavailable.",
+    "Send a follow-up user message to a session this session spawned. mode defaults to queue: idle sessions receive it immediately, while busy sessions receive it after the current turn. interrupt ends the current turn before continuing the same FIFO queue; it does not supersede older messages. Providers use their native interruption; Claude confirms process exit when a restart is needed. Use ping_session for liveness checks instead of sending reminders. The result reports immediate, queued, or unknown when the send committed but acknowledgement readback was unavailable.",
   parameters: SendToSessionInput,
   success: SendToSessionResult,
   failure: SessionOrchestrationError,

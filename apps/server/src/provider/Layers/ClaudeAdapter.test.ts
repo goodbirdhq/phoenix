@@ -1,3 +1,4 @@
+import * as Deferred from "effect/Deferred";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -67,6 +68,8 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
   public closeCalls = 0;
   public closeError: unknown | undefined;
+  public interrupt: (() => Promise<void>) | undefined;
+  public waitForExit = async (): Promise<void> => {};
 
   emit(message: SDKMessage): void {
     if (this.done) {
@@ -2210,6 +2213,119 @@ describe("ClaudeAdapterLive", () => {
       );
     },
   );
+
+  it.effect("uses native Claude interruption and retains a healthy foreground runtime", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "work" });
+      harness.query.interrupt = async () => {
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "interrupted",
+          session_id: "native-interrupt",
+          usage: {},
+          modelUsage: {},
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+        } as unknown as SDKMessage);
+      };
+      yield* adapter.interruptTurn(THREAD_ID);
+      assert.equal(harness.query.closeCalls, 0);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), true);
+      const next = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "new direction" });
+      assert.equal(next.threadId, THREAD_ID);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("interrupt waits for owned process exit after the SDK stream has closed", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const entered = Promise.withResolvers<void>();
+      const exited = Promise.withResolvers<void>();
+      harness.query.waitForExit = () => {
+        entered.resolve();
+        return exited.promise;
+      };
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "work" });
+      const interrupt = yield* adapter.interruptTurn(THREAD_ID).pipe(Effect.forkChild);
+      // Closing the SDK iterator must not count as an owned-process exit.
+      yield* Effect.yieldNow;
+      assert.equal(interrupt.pollUnsafe(), undefined);
+      exited.resolve();
+      yield* Fiber.join(interrupt);
+      yield* Effect.promise(() => entered.promise);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "concurrent interrupts finish after native interruption falls back to process exit",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const entered = yield* Deferred.make<void>();
+        harness.query.interrupt = () =>
+          Effect.runPromise(Deferred.succeed(entered, undefined).pipe(Effect.asVoid));
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+        yield* adapter.sendTurn({ threadId: THREAD_ID, input: "work" });
+        const first = yield* adapter.interruptTurn(THREAD_ID).pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const second = yield* adapter.interruptTurn(THREAD_ID).pipe(Effect.forkChild);
+        yield* TestClock.adjust("3 seconds");
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+        assert.equal(harness.query.closeCalls, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("an unconfirmed process exit cannot publish readiness and can be retried", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const entered = yield* Deferred.make<void>();
+      const exited = Promise.withResolvers<void>();
+      harness.query.waitForExit = () => {
+        void Effect.runPromise(Deferred.succeed(entered, undefined));
+        return exited.promise;
+      };
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "work" });
+      const interrupt = yield* adapter
+        .interruptTurn(THREAD_ID)
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust("8 seconds");
+      assert.equal((yield* Fiber.join(interrupt))._tag, "Failure");
+      assert.equal((yield* adapter.listSessions())[0]?.status, "running");
+      exited.resolve();
+      yield* adapter.interruptTurn(THREAD_ID);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("keeps the session available when process close fails", () => {
     const harness = makeHarness();

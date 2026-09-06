@@ -151,7 +151,8 @@ continuing to use tools in the same turn keeps the answer waiting.
 
 Send one complete instruction and use a ping to check progress. Interrupting deliberately stops
 current work; it keeps the existing message order and does not replace earlier instructions.
-Claude closes its running process before resuming the conversation and delivering queued work.
+Claude uses native interruption when possible, retaining the conversation runtime. If background
+work or a failed interrupt requires a restart, Phoenix confirms process exit before resuming.
 An ordinary interrupt does not generate a session death notice.
 
 A delivery receipt confirms that the provider accepted an input for a particular turn. It does not

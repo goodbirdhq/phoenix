@@ -387,6 +387,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
 
   const cancelQueuedTurns = Effect.fn("SessionSpawnReactor.cancelQueuedTurns")(function* (input: {
     readonly threadId: ThreadId;
+    readonly expectedSessionEpisode?: string;
     readonly reason:
       | "session_terminal"
       | "interrupt_timeout"
@@ -408,14 +409,23 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       queued,
       (entry) =>
         Effect.gen(function* () {
-          yield* engine.dispatch({
-            type: "thread.turn.queue.cancel",
-            commandId: yield* serverCommandId("queued-turn-cancel"),
-            threadId: input.threadId,
-            messageId: entry.messageId,
-            reason: input.reason,
-            createdAt: yield* nowIso,
-          });
+          yield* engine
+            .dispatch({
+              type: "thread.turn.queue.cancel",
+              commandId: yield* serverCommandId("queued-turn-cancel"),
+              threadId: input.threadId,
+              messageId: entry.messageId,
+              reason: input.reason,
+              ...(input.expectedSessionEpisode !== undefined
+                ? { expectedSessionEpisode: input.expectedSessionEpisode }
+                : {}),
+              createdAt: yield* nowIso,
+            })
+            .pipe(
+              Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
+                input.expectedSessionEpisode !== undefined ? Effect.void : Effect.fail(error),
+              ),
+            );
         }),
       { concurrency: 1 },
     );
@@ -477,9 +487,9 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
 
   const cancelTerminalQueue = Effect.fn("SessionSpawnReactor.cancelTerminalQueue")(function* (
     threadId: ThreadId,
-    _status: "stopped" | "error",
+    expectedSessionEpisode: string,
   ) {
-    yield* cancelQueuedTurns({ threadId, reason: "session_terminal" });
+    yield* cancelQueuedTurns({ threadId, reason: "session_terminal", expectedSessionEpisode });
   });
 
   /**
@@ -709,7 +719,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         isTerminalStatus(currentSession.status) &&
         (currentSession.episodeStartedAt ?? currentSession.updatedAt) === episodeKey
       ) {
-        yield* cancelTerminalQueue(threadId, session.status);
+        yield* cancelTerminalQueue(threadId, episodeKey);
       }
       if (terminalReportedThreads.get(threadId) === episodeKey) return;
       const exitReason = deriveSessionExitReason(session);
