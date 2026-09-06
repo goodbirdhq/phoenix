@@ -77,7 +77,11 @@ export function UsageQuotas({
   );
   const refreshUnavailableReason = isPending
     ? "Waiting for account status…"
-    : "Manual quota refresh is unavailable for this account. Limits update when its provider reports them.";
+    : driver === "opencode"
+      ? "Balance refresh is not supported by this OpenCode connection. Refresh usage updates token and cost history."
+      : driver === "grok"
+        ? "Grok quota refresh is not yet supported. Refresh usage updates token and cost history."
+        : "Manual quota refresh is unavailable. Check this account’s connection, installation and sign-in status.";
 
   return (
     <section className="space-y-5 rounded-[10px] border bg-muted/30 p-5" aria-label="Usage limits">

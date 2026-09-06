@@ -187,6 +187,17 @@ describe("Usage refresh orchestration", () => {
           provider("fresh"),
           provider("stale"),
           { ...provider("disabled"), enabled: false },
+          { ...provider("codex"), driver: ProviderDriverKind.make("codex") },
+          {
+            ...provider("grok"),
+            driver: ProviderDriverKind.make("grok"),
+            availabilityRefreshSupported: false,
+          },
+          {
+            ...provider("opencode"),
+            driver: ProviderDriverKind.make("opencode"),
+            availabilityRefreshSupported: false,
+          },
         ],
         providers: [
           {
@@ -218,10 +229,12 @@ describe("Usage refresh orchestration", () => {
       "missing",
       "fresh",
       "stale",
+      "codex",
     ]);
     expect(result).toEqual([
       { environmentId: "studio", instanceId: "missing" },
       { environmentId: "studio", instanceId: "stale" },
+      { environmentId: "studio", instanceId: "codex" },
     ]);
   });
 });
