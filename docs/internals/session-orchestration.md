@@ -185,11 +185,11 @@ At reactor startup, Phoenix scans spawned terminal shells as well as queued-deli
 replays this terminal workflow. That closes the crash window between persisting the terminal
 session/report and enqueueing its asynchronous death notice.
 
-## Wedge detection
+## Delivery stall detection
 
-"Delivered but never consumed" is the wedge signature: a session whose queued message reaches
-`releasing` but never starts a turn is not busy, it is stuck — and it looks identical to busy from
-the outside. The raw receipt now crosses the wire whole (`releasingAt` and `redeliveryCount` on
+An unconfirmed release is a delivery diagnostic, not proof of a stuck provider. A message in
+`releasing` has no recorded adapter acceptance yet; provider startup, an in-flight send, or
+receipt persistence can account for the delay. The raw receipt now crosses the wire whole (`releasingAt` and `redeliveryCount` on
 `QueuedDeliveryReceipt`), `ping_session` counts stalled releases and dates the oldest unconsumed
 message. A stale release with no live binding is retried up to the redelivery limit; a release that
 remains stale while its provider binding is still live is cancelled after two minutes rather than
@@ -617,3 +617,35 @@ terminal session transitions are handled by this delivery workflow.
 Web and mobile render queued and releasing delivery markers from the same receipt state. Both
 resolve routed-session titles from one environment-level title map instead of mounting a live shell
 subscription for every historical message.
+
+## Delivery acceptance and interruption
+
+Queued input acceptance is recorded by `ProviderCommandReactor` after `ProviderService.sendTurn`
+returns the adapter's turn ID. The internal `thread.turn.queue.consume` command emits the existing
+`thread.turn-start-consumed` event with the original message ID. Runtime status transitions and
+native background turns do not determine acceptance for new sends. The session marker remains for
+historical compatibility; new sends leave it empty. This receipt means adapter acceptance, not
+model understanding or completion. Each provider keeps its existing send/acceptance semantics,
+including steering into an existing turn.
+
+`QueuedDelivery` gives provider acceptance, cancellation, and recovery one permit per thread.
+Cancellation before delivery skips the send. If the provider already accepted an input, transient
+receipt-write failures retry that write while holding the permit, never the provider send. A late
+acceptance can correct a cancelled durable receipt; the original cancellation event remains in
+history. Session event workers preserve ordering per thread without blocking other threads behind
+a slow provider. New worker lanes evict idle entries once the cache reaches 256; busy lanes
+remain until they drain. Activity observations have a separate fixed-size cache.
+
+Claude interruption closes the query, shuts down prompts, and drains its stream before publishing
+a single resumable turn boundary. It does not publish a terminal exit for this intentional pause.
+An interrupt without an active turn still emits a ready boundary after teardown. Explicit stops
+retain terminal behavior. An unacknowledged interrupt timeout never claims the session is ready;
+the queued interrupt deadline remains responsible for escalation. Historical terminal events may
+produce historical notices but cannot cancel work belonging to a resumed episode.
+
+`lastActivityAt` merges persisted provider-binding time with a bounded in-memory watermark of
+runtime traffic received by Phoenix, scoped to the bound provider instance. Runtime events update
+that watermark without SQLite writes or additional websocket broadcasts. Restart or cache eviction
+falls back to binding time. This is best-effort activity evidence, not a heartbeat or proof of death.
+`stalledDeliveryCount` counts releasing messages without acceptance; use `releasingAt` for delivery
+age, because `oldestUndeliveredMessageAt` includes ordinary queue waiting time.

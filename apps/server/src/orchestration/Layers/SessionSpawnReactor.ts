@@ -1,3 +1,4 @@
+import * as QueuedDelivery from "../QueuedDelivery.ts";
 import {
   CommandId,
   DEFAULT_SESSION_REPORT_DELIVERY,
@@ -63,6 +64,7 @@ type DeathNoticeInput = {
   readonly synthesizedReportId: string | null;
   readonly hadAgentReport: boolean;
   readonly episodeKey: string;
+  readonly endedAt: string;
 };
 
 // A session in one of these states is done producing work for this episode.
@@ -221,6 +223,8 @@ export interface TerminalWorktreeRisk {
  */
 export const formatDeathNotice = (input: {
   readonly childTitle: string;
+  readonly episodeKey: string;
+  readonly endedAt: string;
   readonly childThreadId: ThreadId;
   readonly exitReason: SessionExitReason;
   readonly lastError: string | null;
@@ -231,6 +235,9 @@ export const formatDeathNotice = (input: {
   const lines: Array<string> = [
     `[Phoenix] Spawned session "${input.childTitle}" terminated — exit reason: ${input.exitReason} (${EXIT_REASON_DESCRIPTIONS[input.exitReason]}).`,
   ];
+  lines.push(
+    `Episode ${input.episodeKey} ended at ${input.endedAt}. This notice can arrive after the thread has resumed; inspect its current state before taking action.`,
+  );
   if (input.lastError !== null) {
     lines.push(`Provider error: ${truncate(input.lastError, 400)}`);
   }
@@ -348,6 +355,7 @@ export const buildTerminalReportSummary = (input: {
 export const makeSessionSpawnReactor = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const engine = yield* OrchestrationEngineService;
+  const delivery = yield* QueuedDelivery.QueuedDelivery;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const providerService = yield* ProviderService;
@@ -574,6 +582,8 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         return { isSpawnedChild: false, hadAgentReport: false, reportId: null } as const;
       }
       const episodeStartedAt = input.session.episodeStartedAt ?? null;
+      const episodeKey = episodeStartedAt ?? input.session.updatedAt;
+      const reportId = `session-terminal-report:${input.threadId}:${episodeKey}`;
       const episodeReports =
         episodeStartedAt === null
           ? detail.value.reports
@@ -587,7 +597,9 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       // A prior partial attempt may have persisted the synthesized report but
       // failed before notifying the parent. Reuse it so the notice retains the
       // report-delivery correlation instead of manufacturing another account.
-      const existingSystemReport = episodeReports.find((report) => report.origin === "system");
+      const existingSystemReport = detail.value.reports.find(
+        (report) => report.origin === "system" && report.reportId === reportId,
+      );
       if (existingSystemReport !== undefined) {
         return {
           isSpawnedChild: true,
@@ -604,8 +616,6 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         createdAt: detail.value.createdAt,
         latestTurn: detail.value.latestTurn,
       });
-      const episodeKey = episodeStartedAt ?? input.session.updatedAt;
-      const reportId = `session-terminal-report:${input.threadId}:${episodeKey}`;
       yield* engine
         .dispatch({
           type: "thread.report.post",
@@ -655,6 +665,8 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       childThreadId: input.threadId,
       text: formatDeathNotice({
         childTitle: input.shell.title,
+        episodeKey: input.episodeKey,
+        endedAt: input.endedAt,
         childThreadId: input.threadId,
         exitReason: input.exitReason,
         lastError: input.lastError,
@@ -687,8 +699,18 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       // wakes the parent with the exit reason, the worktree's git state,
       // and where that account lives. Deterministic command ids make this
       // safe both for event replay and startup recovery after a crash.
-      yield* cancelTerminalQueue(threadId, session.status);
       const episodeKey = session.episodeStartedAt ?? session.updatedAt;
+      const current = yield* snapshotQuery.getThreadShellById(threadId);
+      const currentSession = Option.isSome(current) ? current.value.session : null;
+      // A delayed exit remains historical evidence, but cannot cancel work
+      // queued for a newer episode while this worker was waiting on delivery.
+      if (
+        currentSession !== null &&
+        isTerminalStatus(currentSession.status) &&
+        (currentSession.episodeStartedAt ?? currentSession.updatedAt) === episodeKey
+      ) {
+        yield* cancelTerminalQueue(threadId, session.status);
+      }
       if (terminalReportedThreads.get(threadId) === episodeKey) return;
       const exitReason = deriveSessionExitReason(session);
       const outcome = yield* synthesizeTerminalReport({
@@ -717,6 +739,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
           synthesizedReportId: outcome.reportId,
           hadAgentReport: outcome.hadAgentReport,
           episodeKey,
+          endedAt: session.updatedAt,
         });
       } else {
         terminalReportedThreads.set(threadId, episodeKey);
@@ -1123,18 +1146,23 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   });
 
   const processInputSafely = (input: WorkerInput) =>
-    processInput(input).pipe(
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.interrupt;
-        }
-        return Effect.logWarning("session spawn reactor failed to process event", {
-          inputType: input.type,
-          threadId: input.type === "event" ? input.event.payload.threadId : input.threadId,
-          cause: Cause.pretty(cause),
-        });
-      }),
-    );
+    delivery
+      .withPermit(
+        input.type === "event" ? input.event.payload.threadId : input.threadId,
+        processInput(input),
+      )
+      .pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return Effect.interrupt;
+          }
+          return Effect.logWarning("session spawn reactor failed to process event", {
+            inputType: input.type,
+            threadId: input.type === "event" ? input.event.payload.threadId : input.threadId,
+            cause: Cause.pretty(cause),
+          });
+        }),
+      );
 
   deathNoticeWorker = yield* makeDrainableWorker<DeathNoticeInput, never, never>((input) =>
     processDeathNotice(input).pipe(
@@ -1148,7 +1176,11 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       ),
     ),
   );
-  worker = yield* makeDrainableWorker(processInputSafely);
+  worker = yield* QueuedDelivery.makeWorker(
+    (input: WorkerInput) =>
+      input.type === "event" ? input.event.payload.threadId : input.threadId,
+    processInputSafely,
+  );
 
   const start: SessionSpawnReactorShape["start"] = Effect.fn("start")(function* () {
     const domainEvents = yield* engine.subscribeDomainEvents;

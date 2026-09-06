@@ -1,3 +1,4 @@
+import * as QueuedDelivery from "./orchestration/QueuedDelivery.ts";
 import * as UsageAttributionQuery from "./usage/UsageAttributionQuery.ts";
 import { EnvironmentHttpApi } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
@@ -280,6 +281,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(SessionSpawnReactorLive),
+  Layer.provideMerge(QueuedDelivery.layer),
   Layer.provideMerge(ThreadSettlementReactor.layer),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(HandoffBriefLive),

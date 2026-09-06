@@ -494,6 +494,89 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
+  it.each([false, true])(
+    "records provider acceptance by message ID despite status changes (cancelled=%s)",
+    async (cancelled) => {
+      const harness = await createHarness();
+      const threadId = asThreadId("thread-1");
+      const messageId = asMessageId("accepted-message");
+      const now = "2026-01-01T00:00:01.000Z";
+      const session = {
+        threadId,
+        status: "running" as const,
+        providerName: "claudeAgent" as const,
+        runtimeMode: "approval-required" as const,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+      };
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("busy"),
+        threadId,
+        session,
+        createdAt: now,
+      });
+      await harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("queue"),
+        threadId,
+        message: { messageId, role: "user", text: "authorization", attachments: [] },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      });
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("ready"),
+        threadId,
+        session: { ...session, status: "ready" },
+        createdAt: now,
+      });
+      await harness.dispatch({
+        type: "thread.turn.start.queued",
+        commandId: CommandId.make("release"),
+        threadId,
+        messageId,
+        createdAt: now,
+      });
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("native-running"),
+        threadId,
+        session,
+        createdAt: now,
+      });
+      if (cancelled) {
+        await harness.dispatch({
+          type: "thread.turn.queue.cancel",
+          commandId: CommandId.make("cancel"),
+          threadId,
+          messageId,
+          reason: "session_terminal",
+          createdAt: now,
+        });
+      }
+      await harness.dispatch({
+        type: "thread.turn.queue.consume",
+        commandId: CommandId.make("accepted"),
+        threadId,
+        messageId,
+        turnId: asTurnId("accepted-turn"),
+        createdAt: now,
+      });
+      expect(await harness.readQueuedDeliveryReceipts()).toContainEqual(
+        expect.objectContaining({
+          messageId,
+          state: "consumed",
+          consumedByTurnId: asTurnId("accepted-turn"),
+          cancelledAt: null,
+        }),
+      );
+      expect((await harness.readModel()).threads[0]?.session?.activeTurnId).toBeNull();
+    },
+  );
+
   it("applies provider session.state.changed transitions directly", async () => {
     const harness = await createHarness();
     const waitingAt = "2026-01-01T00:00:00.000Z";

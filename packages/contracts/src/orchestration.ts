@@ -1617,6 +1617,16 @@ const ThreadQueuedTurnStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Internal provider acceptance receipt; never a client/manual acknowledgement.
+const ThreadQueuedTurnConsumeCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.queue.consume"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  turnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadQueuedTurnCancelCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.queue.cancel"),
   commandId: CommandId,
@@ -1734,6 +1744,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadQueuedTurnStartCommand,
   ThreadQueuedTurnCancelCommand,
+  ThreadQueuedTurnConsumeCommand,
   ThreadQueuedTurnRequeueCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,

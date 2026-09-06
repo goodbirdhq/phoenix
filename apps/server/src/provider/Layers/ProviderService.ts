@@ -804,6 +804,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   ): Effect.Effect<void> => {
     const ingest = Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
       Effect.tap((canonicalEvent) => {
+        const threadId = canonicalEvent.threadId;
+        return threadId === undefined
+          ? Effect.void
+          : Effect.flatMap(nowIso, (observedAt) =>
+              directory.recordActivity(threadId, source.instanceId, observedAt),
+            );
+      }),
+      Effect.tap((canonicalEvent) => {
         const availability = availabilityFromRuntimeEvent(canonicalEvent);
         return availability
           ? Effect.flatMap(DateTime.now, (now) =>

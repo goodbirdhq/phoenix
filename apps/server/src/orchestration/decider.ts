@@ -1248,6 +1248,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.turn.queue.consume": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      // A successful provider send is authoritative even if cancellation raced
+      // its response. The durable receipt must reflect the input that arrived.
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.turn-start-consumed",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          turnId: command.turnId,
+          consumedAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.turn.queue.cancel": {
       const targetThread = yield* requireThread({
         readModel,

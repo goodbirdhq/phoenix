@@ -687,6 +687,50 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
 
 const routing = makeProviderServiceLayer();
 
+routing.layer("ProviderService runtime activity", (it) => {
+  it.effect("updates activity during a turn without another send or binding write", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("activity-during-turn");
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access",
+      });
+      const before = yield* repository.getByThreadId({ threadId });
+      yield* TestClock.adjust("1 second");
+      const observed = yield* provider.streamEvents.pipe(
+        Stream.filter((event) => event.eventId === "activity-observed"),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      routing.codex.emit({
+        type: "content.delta",
+        eventId: asEventId("activity-observed"),
+        provider: CODEX_DRIVER,
+        threadId,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        payload: { streamKind: "assistant_text", delta: "still working" },
+      });
+      yield* Fiber.join(observed);
+      const binding = (yield* directory.listBindings()).find(
+        (entry) => entry.threadId === threadId,
+      );
+      assert.isTrue(
+        binding !== undefined &&
+          Option.isSome(before) &&
+          binding.lastSeenAt > before.value.lastSeenAt,
+      );
+      assert.deepEqual(yield* repository.getByThreadId({ threadId }), before);
+    }),
+  );
+});
+
 it.effect(
   "ProviderServiceLive uploads feedback through the adapter that recovered the session",
   () =>
@@ -3212,6 +3256,7 @@ const boundedListing = makeProviderServiceLayer({
     getProvider: () => Effect.die("ProviderService.listSessions does not use getProvider"),
     getBinding,
     listThreadIds,
+    recordActivity: () => Effect.void,
     listBindings: () => Effect.die("ProviderService.listSessions does not use listBindings"),
   },
 });

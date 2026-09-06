@@ -78,6 +78,37 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
     }),
   );
 
+  it.effect("reports runtime activity without writing the binding or moving backwards", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const threadId = ThreadId.make("active-thread");
+      const instanceId = ProviderInstanceId.make("claudeAgent");
+      yield* directory.upsert({
+        threadId,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: instanceId,
+      });
+      const before = yield* repository.getByThreadId({ threadId });
+      yield* directory.recordActivity(threadId, instanceId, "2099-01-01T00:00:02.000Z");
+      yield* directory.recordActivity(threadId, instanceId, "2099-01-01T00:00:01.000Z");
+      const binding = (yield* directory.listBindings()).find(
+        (entry) => entry.threadId === threadId,
+      );
+      assert.equal(binding?.lastSeenAt, "2099-01-01T00:00:02.000Z");
+      assert.deepEqual(yield* repository.getByThreadId({ threadId }), before);
+      yield* directory.upsert({
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      });
+      const rebound = (yield* directory.listBindings()).find(
+        (entry) => entry.threadId === threadId,
+      );
+      assert.notEqual(rebound?.lastSeenAt, "2099-01-01T00:00:02.000Z");
+    }),
+  );
+
   it.effect("persists runtime fields and merges payload updates", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;

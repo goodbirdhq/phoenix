@@ -1,3 +1,5 @@
+import { PersistenceSqlError } from "../../persistence/Errors.ts";
+import * as QueuedDelivery from "../QueuedDelivery.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -176,6 +178,7 @@ describe("ProviderCommandReactor", () => {
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
+    readonly deliveryReceiptFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
     readonly serverActivation?: Effect.Effect<void>;
     readonly testClock?: boolean;
@@ -407,6 +410,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provide(SqlitePersistenceMemory),
     );
     let titleRegenerationCompletionDispatchAttempts = 0;
+    let deliveryReceiptAttempts = 0;
     const reactorOrchestrationLayer = Layer.effect(
       OrchestrationEngineService,
       Effect.gen(function* () {
@@ -414,6 +418,17 @@ describe("ProviderCommandReactor", () => {
         return {
           readEvents: engine.readEvents,
           dispatch: (command) => {
+            if (
+              command.type === "thread.turn.queue.consume" &&
+              ++deliveryReceiptAttempts <= (input?.deliveryReceiptFailures ?? 0)
+            ) {
+              return Effect.fail(
+                new PersistenceSqlError({
+                  operation: "test",
+                  detail: "transient receipt write failure",
+                }),
+              );
+            }
             if (command.type === "thread.title.regeneration.complete") {
               titleRegenerationCompletionDispatchAttempts += 1;
               if (
@@ -439,6 +454,7 @@ describe("ProviderCommandReactor", () => {
       makeProviderCommandReactorLive({ interruptTimeoutSeconds: 1 }),
       LimitFailoverReactorLive,
     ).pipe(
+      Layer.provideMerge(QueuedDelivery.layer),
       Layer.provideMerge(reactorOrchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
@@ -573,6 +589,121 @@ describe("ProviderCommandReactor", () => {
       },
     };
   }
+
+  async function queuedDeliveryHarness(status: "ready" | "running", deliveryReceiptFailures = 0) {
+    const activation = await Effect.runPromise(Deferred.make<void>());
+    const harness = await createHarness({
+      serverActivation: Deferred.await(activation),
+      deliveryReceiptFailures,
+    });
+    const threadId = ThreadId.make("thread-1");
+    const now = "2026-01-01T00:00:00.000Z";
+    const messageId = asMessageId("queued-authorization");
+    const session = {
+      threadId,
+      status: "running" as const,
+      providerName: "codex" as const,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtimeMode: "full-access" as const,
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: now,
+    };
+    harness.runtimeSessions.push({
+      threadId,
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: session.providerInstanceId,
+      status: "ready",
+      runtimeMode: "full-access",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const dispatch = (command: Parameters<typeof harness.engine.dispatch>[0]) =>
+      Effect.runPromise(harness.engine.dispatch(command));
+    await dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("queue-busy"),
+      threadId,
+      session,
+      createdAt: now,
+    });
+    await dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("queue-input"),
+      threadId,
+      message: { messageId, role: "user", text: "authorize unit A", attachments: [] },
+      runtimeMode: "full-access",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
+    await dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("queue-ready"),
+      threadId,
+      session: { ...session, status: "ready" },
+      createdAt: now,
+    });
+    await dispatch({
+      type: "thread.turn.start.queued",
+      commandId: CommandId.make("queue-release"),
+      threadId,
+      messageId,
+      createdAt: now,
+    });
+    if (status === "running") {
+      await dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("native-requesting"),
+        threadId,
+        session,
+        createdAt: now,
+      });
+    }
+    return { ...harness, activation, threadId, messageId, dispatch, now };
+  }
+
+  it.each([
+    { status: "ready", failures: 0 },
+    { status: "running", failures: 0 },
+    { status: "running", failures: 1 },
+  ] as const)(
+    "acknowledges queued input at $status after $failures receipt failures without resending",
+    async ({ status, failures }) => {
+      const harness = await queuedDeliveryHarness(status, failures);
+      const events = await Effect.runPromise(
+        harness.engine.subscribeDomainEvents.pipe(Scope.provide(scope!)),
+      );
+      const receipt = Effect.runPromise(
+        events.pipe(
+          Stream.filter((event) => event.type === "thread.turn-start-consumed"),
+          Stream.take(1),
+          Stream.runCollect,
+        ),
+      );
+      await Effect.runPromise(Deferred.succeed(harness.activation, undefined));
+      const [accepted] = await receipt;
+      expect(accepted?.payload).toMatchObject({ messageId: harness.messageId, turnId: "turn-1" });
+      expect(harness.sendTurn).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ input: "authorize unit A" }),
+      );
+    },
+  );
+
+  it("does not restart or send a queued delivery cancelled before command processing", async () => {
+    const harness = await queuedDeliveryHarness("ready");
+    await harness.dispatch({
+      type: "thread.turn.queue.cancel",
+      commandId: CommandId.make("cancel-before-send"),
+      threadId: harness.threadId,
+      messageId: harness.messageId,
+      reason: "session_terminal",
+      createdAt: harness.now,
+    });
+    await Effect.runPromise(Deferred.succeed(harness.activation, undefined));
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.startSession).not.toHaveBeenCalled();
+  });
 
   async function completeProviderTurn(
     harness: Awaited<ReturnType<typeof createHarness>>,
@@ -3339,7 +3470,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("a stop settles the running turn when the provider transport hangs", async () => {
+  it("an unacknowledged interrupt does not release follow-ups when the provider transport hangs", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -3361,9 +3492,8 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // The wedged-transport case that produced the original incident: the
-    // abort call never returns. The user asked to stop; the turn must not
-    // stay "running" forever, and the reactor worker must not jam behind it.
+    // No acknowledgement proves no safe boundary. Report the failure and
+    // leave queued work blocked while the caller/interrupt deadline escalates.
     harness.interruptTurn.mockImplementation(() => Effect.never);
 
     await harness.runEffect(
@@ -3380,8 +3510,8 @@ describe("ProviderCommandReactor", () => {
       const readModel = await harness.readModel();
       const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
       return (
-        thread?.session?.status === "ready" &&
-        thread.session.activeTurnId === null &&
+        thread?.session?.status === "running" &&
+        thread.session.activeTurnId === "turn-1" &&
         (thread.activities.some(
           (activity) =>
             activity.kind === "provider.turn.interrupt.failed" &&

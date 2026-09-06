@@ -1,3 +1,4 @@
+import * as QueuedDelivery from "../QueuedDelivery.ts";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -221,6 +222,7 @@ const makeTestLayer = (providerLayer: Layer.Layer<ProviderService>) => {
     Layer.provideMerge(HandoffBriefLive),
     Layer.provideMerge(ProviderRuntimeIngestionLive),
     Layer.provideMerge(ProviderCommandReactorLive),
+    Layer.provideMerge(QueuedDelivery.layer),
     Layer.provideMerge(RuntimeReceiptBusLive),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(projectionSnapshotLayer),

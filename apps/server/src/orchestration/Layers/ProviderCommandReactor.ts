@@ -1,3 +1,4 @@
+import * as QueuedDelivery from "../QueuedDelivery.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -332,6 +333,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const providerService = yield* ProviderService;
+    const delivery = yield* QueuedDelivery.QueuedDelivery;
     const providerRegistry = yield* ProviderRegistry;
     const gitWorkflow = yield* GitWorkflowService;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -1366,6 +1368,18 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           ),
         );
 
+      if (event.payload.queuedDeliveryMessageId != null) {
+        const current = yield* resolveThread(event.payload.threadId);
+        if (
+          !current?.queuedTurnStarts?.some(
+            (entry) =>
+              entry.messageId === event.payload.queuedDeliveryMessageId &&
+              entry.releasingAt !== undefined,
+          )
+        )
+          return;
+      }
+
       const sendTurnRequest = yield* buildSendTurnRequestForThread({
         threadId: event.payload.threadId,
         messageText: message.text,
@@ -1374,7 +1388,8 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           ? { modelSelection: event.payload.modelSelection }
           : {}),
         interactionMode: event.payload.interactionMode,
-        queuedDeliveryMessageId: event.payload.queuedDeliveryMessageId ?? null,
+        // New sends acknowledge the adapter result, not an unrelated lifecycle event.
+        queuedDeliveryMessageId: null,
         createdAt: event.payload.createdAt,
       }).pipe(
         Effect.map(Option.some),
@@ -1385,9 +1400,51 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         return;
       }
 
-      yield* providerService
-        .sendTurn(sendTurnRequest.value)
-        .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+      yield* Effect.gen(function* () {
+        const messageId = event.payload.queuedDeliveryMessageId;
+        if (messageId != null) {
+          const current = yield* resolveThread(event.payload.threadId);
+          if (
+            !current?.queuedTurnStarts?.some(
+              (entry) => entry.messageId === messageId && entry.releasingAt !== undefined,
+            )
+          )
+            return;
+        }
+        const accepted = yield* providerService.sendTurn(sendTurnRequest.value).pipe(
+          Effect.map(Option.some),
+          Effect.catchCause((cause) =>
+            recoverTurnStartFailure(cause).pipe(Effect.as(Option.none())),
+          ),
+        );
+        if (Option.isNone(accepted) || messageId == null) return;
+        const consumedAt = DateTime.formatIso(yield* DateTime.now);
+        yield* Effect.suspend(() =>
+          orchestrationEngine.dispatch({
+            type: "thread.turn.queue.consume",
+            commandId: CommandId.make(
+              `queued-turn-consumed:${event.payload.threadId}:${messageId}`,
+            ),
+            threadId: event.payload.threadId,
+            messageId,
+            turnId: accepted.value.turnId,
+            createdAt: consumedAt,
+          }),
+        ).pipe(
+          Effect.retry({
+            schedule: Schedule.spaced("250 millis"),
+            while: (error) =>
+              error._tag === "PersistenceSqlError" ||
+              error._tag === "OrchestrationListenerCallbackError",
+          }),
+        );
+      }).pipe(
+        (send) =>
+          event.payload.queuedDeliveryMessageId == null
+            ? send
+            : delivery.withPermit(event.payload.threadId, send),
+        Effect.forkScoped,
+      );
     });
 
     const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
@@ -1449,19 +1506,19 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           }),
         );
 
-      // A stop must always settle in the orchestrator. Adapters only emit
+      // An acknowledged stop must settle in the orchestrator. Adapters only emit
       // lifecycle events when they still know the provider turn id — after a
       // server restart (or any recovered session) they cannot, and with no
       // lifecycle event the session stays "running" forever, stranding queued
-      // messages. Settle on success, on timeout (the user asked to stop; do not
-      // recreate the stuck-forever state), and for phantom sessions whose
-      // runtime died with a previous process.
+      // messages. Settle on success and for phantom sessions whose runtime died
+      // with a previous process. A timeout does not prove teardown finished;
+      // the queued interrupt deadline handles escalation without releasing work.
       //
       // A definite failure keeps the session running: the provider is alive and
       // may still be working, so claiming it idle — or stopped — would invite
       // the next message to interleave with live work. Upstream escalates to a
       // session stop here instead; see docs/operations/upstream-integrations.
-      if (outcome === "failed") {
+      if (outcome === "failed" || outcome === "timed-out") {
         return;
       }
       const phantom = outcome === "phantom";

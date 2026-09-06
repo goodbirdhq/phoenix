@@ -1,3 +1,4 @@
+import * as QueuedDelivery from "../QueuedDelivery.ts";
 import {
   CommandId,
   EventId,
@@ -322,6 +323,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   } as unknown as GitWorkflowService.GitWorkflowService["Service"]);
 
   const reactor = yield* makeSessionSpawnReactor.pipe(
+    Effect.provide(QueuedDelivery.layer),
     Effect.provideService(OrchestrationEngineService, engine),
     Effect.provideService(ProjectionSnapshotQuery, snapshot),
     Effect.provideService(ProjectionTurnRepository, turns),
@@ -682,6 +684,63 @@ describe("SessionSpawnReactor queued delivery", () => {
         ).toHaveLength(2);
         expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(1);
       }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("an old terminal event cannot cancel a resumed session's queued work", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const { commands, queuedRows } = yield* createHarness({
+          status: "running",
+          live: true,
+          updatedAt: NOW,
+          queued: [queued("new-episode")],
+          boundaryEvents: [sessionSetEvent(makeShell(CHILD_ID, "stopped", STALE))],
+        });
+        expect(commands.filter((command) => command.type === "thread.turn.queue.cancel")).toEqual(
+          [],
+        );
+        expect(queuedRows).toHaveLength(1);
+        const notice = commands.find((command) => command.type === "thread.turn.start");
+        expect(notice?.type === "thread.turn.start" && notice.message.text).toContain(
+          `ended at ${STALE}`,
+        );
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("a delayed old report is not reused for the resumed episode", () =>
+    Effect.scoped(
+      createHarness({
+        status: "stopped",
+        updatedAt: NOW,
+        queued: [],
+        boundaryEvents: [sessionSetEvent(makeShell(CHILD_ID, "stopped", NOW))],
+        reports: [
+          {
+            reportId: `session-terminal-report:${CHILD_ID}:${STALE}`,
+            threadId: CHILD_ID,
+            status: "partial",
+            title: "Old episode ended",
+            summary: "Delayed report from before the resume.",
+            artifacts: [],
+            origin: "system",
+            createdAt: NOW,
+          },
+        ],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const posted = commands.filter((command) => command.type === "thread.report.post");
+          expect(posted).toHaveLength(1);
+          expect(posted[0]?.reportId).toBe(`session-terminal-report:${CHILD_ID}:${NOW}`);
+          const notice = commands.find((command) => command.type === "thread.turn.start");
+          expect(notice?.type === "thread.turn.start" && notice.message.messageId).toBe(
+            `session-report-delivery:${CHILD_ID}:session-terminal-report:${CHILD_ID}:${NOW}`,
+          );
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
     ),
   );
 

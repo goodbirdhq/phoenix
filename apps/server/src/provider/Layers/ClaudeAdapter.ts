@@ -3806,7 +3806,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const stopSessionInternal = Effect.fn("stopSessionInternal")(function* (
     context: ClaudeSessionContext,
-    options?: { readonly emitExitEvent?: boolean },
+    options?: { readonly emitExitEvent?: boolean; readonly interrupt?: boolean },
   ) {
     if (context.stopped) return;
 
@@ -3872,7 +3872,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       yield* pending.cancel;
     }
 
-    if (context.turnState) {
+    if (context.turnState && options?.interrupt !== true) {
       yield* completeTurn(context, "interrupted", "Session stopped.");
     }
 
@@ -3910,6 +3910,25 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     if (sessions.get(context.session.threadId) === context) {
       sessions.delete(context.session.threadId);
+    }
+
+    // An interrupt parks the conversation. Publish its only resumable boundary
+    // after the old runtime is gone, so queued follow-ups cannot race teardown.
+    if (options?.interrupt === true) {
+      if (context.turnState) {
+        yield* completeTurn(context, "interrupted", "Interrupted by caller.");
+      } else {
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "session.state.changed",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          payload: { state: "ready", reason: "Interrupted by caller; runtime closed for resume." },
+          providerRefs: {},
+        });
+      }
     }
   });
 
@@ -4791,7 +4810,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // interrupt() can acknowledge while resumed background tasks keep the
       // CLI alive. Stop is a hard session boundary for Claude, so close the
       // query and let the SDK escalate to SIGKILL when graceful exit fails.
-      yield* stopSessionInternal(context);
+      yield* stopSessionInternal(context, { interrupt: true, emitExitEvent: false }).pipe(
+        Effect.uninterruptible,
+      );
     },
   );
 

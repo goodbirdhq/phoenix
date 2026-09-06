@@ -2170,6 +2170,47 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect(
+    "interrupt releases follow-ups only after teardown and does not report a terminal exit",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+        yield* adapter.sendTurn({ threadId: session.threadId, input: "work", attachments: [] });
+        yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.started"),
+          Stream.runDrain,
+        );
+        const episodeEvents = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "session.started"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* adapter.interruptTurn(session.threadId);
+        assert.deepEqual(yield* adapter.listSessions(), []);
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+        const events = yield* Fiber.join(episodeEvents);
+        assert.equal(
+          events.some((event) => event.type === "session.exited"),
+          false,
+        );
+        assert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("keeps the session available when process close fails", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

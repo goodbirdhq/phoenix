@@ -220,14 +220,13 @@ export const QueuedDeliveryReceipt = Schema.Struct({
   messageId: MessageId,
   state: Schema.Literals(["queued", "releasing", "consumed", "cancelled"]),
   requestedAt: IsoDateTime,
-  // When the release began, for receipts still in "releasing". A release
-  // that has sat here while the session claims to be busy is the wedge
-  // signature: delivered, but no turn ever consumed it.
+  // When the release began. A releasing receipt has no recorded acceptance;
+  // its age alone does not establish whether the provider is stuck.
   releasingAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   // How many times delivery was retried after a stale release. The server
-  // cancels the message at the redelivery limit, so a rising count is a
-  // wedged child announcing itself before the cancel lands.
+  // cancels the message at the redelivery limit and notifies the parent.
   redeliveryCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  // The adapter accepted this input for this turn; not proof the model acted on it.
   consumedByTurnId: Schema.NullOr(TurnId),
   consumedAt: Schema.NullOr(IsoDateTime),
   cancelledAt: Schema.NullOr(IsoDateTime),
@@ -581,9 +580,9 @@ export const PingSessionResult = Schema.Struct({
   threadId: ThreadId,
   sessionStatus: Schema.NullOr(OrchestrationSessionStatus),
   settled: Schema.Boolean,
-  // When the child's session last did anything, per the provider session
-  // directory's activity tracking — not a turn boundary, so this moves
-  // during a long-running turn too.
+  // When Phoenix last observed provider activity. Advances during long turns
+  // without per-event persistence; after restart it falls back to the last
+  // binding update. Absence of recent traffic is not proof of a dead session.
   lastActivityAt: Schema.NullOr(IsoDateTime),
   // Native background work alive right now (subagent fleets, workflow runs,
   // watch loops); null when the child is idle or mid-turn with no such work.
@@ -604,14 +603,11 @@ export const PingSessionResult = Schema.Struct({
   mostRecentDeliveryReceipt: Schema.NullOr(QueuedDeliveryReceipt).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  // Deliveries stuck in "releasing": handed to the provider but never
-  // consumed by a turn. One of these aging past ~30s while the session
-  // claims to be busy is the wedge signature — the server retries and then
-  // cancels at its redelivery limit, notifying this parent when it does.
+  // Released deliveries without confirmed provider acceptance. Inspect their
+  // releasingAt and recent activity before diagnosing a stall.
   stalledDeliveryCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
-  // When the oldest not-yet-consumed message (queued or releasing) was
-  // requested. A human's message rots in the same lane as a parent's, so
-  // this timestamp aging is the "someone is talking to a wall" signal.
+  // Request time of the oldest queued or releasing message. Ordinary busy-turn
+  // queue waiting is included, so this is not a delivery-stall duration.
   oldestUndeliveredMessageAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
