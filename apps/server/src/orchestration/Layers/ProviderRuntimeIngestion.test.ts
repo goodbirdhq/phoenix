@@ -492,9 +492,9 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
-  it.each([false, true])(
-    "records provider acceptance by message ID despite status changes (cancelled=%s)",
-    async (cancelled) => {
+  it.each(["releasing", "cancelled", "requeued", "requeued-cancelled"])(
+    "records provider acceptance by message ID despite recovery (%s)",
+    async (recovery) => {
       const harness = await createHarness();
       const threadId = asThreadId("thread-1");
       const messageId = asMessageId("accepted-message");
@@ -545,7 +545,16 @@ describe("ProviderRuntimeIngestion", () => {
         session,
         createdAt: now,
       });
-      if (cancelled) {
+      if (recovery.startsWith("requeued")) {
+        await harness.dispatch({
+          type: "thread.turn.queue.requeue",
+          commandId: CommandId.make("requeue"),
+          threadId,
+          messageId,
+          createdAt: now,
+        });
+      }
+      if (recovery.endsWith("cancelled")) {
         await harness.dispatch({
           type: "thread.turn.queue.cancel",
           commandId: CommandId.make("cancel"),

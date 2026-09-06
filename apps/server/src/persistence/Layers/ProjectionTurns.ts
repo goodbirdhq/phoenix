@@ -224,8 +224,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
             cancelled_at = NULL, cancel_reason = NULL
         WHERE thread_id = ${threadId}
           AND pending_message_id = ${messageId}
-          AND state IN ('releasing', 'cancelled')
-          AND releasing_at IS NOT NULL
+          AND state IN ('queued', 'interrupting', 'releasing', 'cancelled')
       `,
   });
 
