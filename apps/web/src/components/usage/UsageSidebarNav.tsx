@@ -19,7 +19,7 @@ import {
 import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
 import { scopeAccountHistory } from "@t3tools/client-runtime/usage/account-history";
-import { mergeUsage } from "@t3tools/shared/usageMerge";
+import { mergeUsageCost } from "@t3tools/shared/usageMerge";
 import { formatUsd } from "@t3tools/shared/usageFormat";
 import { USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
 import { sidebarQuotaPresentation } from "./usageSidebarPresentation";
@@ -43,10 +43,18 @@ export function UsageSidebarNav() {
       ),
     [environments, history],
   );
+  const costCache = useMemo(() => new Map<string, number | null>(), [history]);
   const costs = useMemo(
     () =>
       new Map(
         accounts.map((account) => {
+          const cacheKey = JSON.stringify([
+            account.driver,
+            account.memberships
+              .map((member) => [member.environmentId, member.provider.instanceId])
+              .toSorted(),
+          ]);
+          if (costCache.has(cacheKey)) return [account.key, costCache.get(cacheKey)!];
           const scoped = history.flatMap((environment) =>
             environment.summary
               ? [
@@ -61,15 +69,14 @@ export function UsageSidebarNav() {
                 ]
               : [],
           );
-          return [
-            account.key,
-            scoped.some((environment) => environment.summary.sources.length > 0)
-              ? mergeUsage(scoped, USAGE_CONTRACT_VERSION).costUsd
-              : null,
-          ];
+          const cost = scoped.some((environment) => environment.summary.sources.length > 0)
+            ? mergeUsageCost(scoped, USAGE_CONTRACT_VERSION)
+            : null;
+          costCache.set(cacheKey, cost);
+          return [account.key, cost];
         }),
       ),
-    [accounts, history],
+    [accounts, history, costCache],
   );
   const [search, setSearch] = useState("");
   const [driverFilter, setDriverFilter] = useState<string | null>(null);
@@ -243,6 +250,7 @@ export function UsageSidebarNav() {
                       const member = account.memberships[0];
                       if (member) select(usageAccountMemberKey(member));
                     }}
+                    aria-label={`${account.name || label}${cost == null ? "" : ` · ${formatUsd(cost)}`}${status ? ` · ${status}` : ""}${quota.bars.map((bar) => ` · ${bar.label} ${Math.round(bar.usedPercent)}% used`).join("")}`}
                     className="h-auto flex-col items-stretch gap-[9px] p-3 text-sidebar-foreground data-[active=true]:bg-sidebar-border"
                   >
                     <span className="flex min-w-0 items-center gap-3">

@@ -35,3 +35,14 @@ it("supports legacy cents, zero-valued proto fields and exhausted allowances", (
   expect(grokUsageFromResponse({ config: { creditUsagePercent: 120 } }, at).status).toBe("limited");
   expect(grokUsageFromResponse({ config: { creditUsagePercent: -1 } }, at).windows).toEqual([]);
 });
+
+it("treats nullable legacy billing values as unknown rather than zero usage", () => {
+  for (const config of [
+    { monthlyLimit: null, used: null },
+    { monthlyLimit: { val: 1000 }, used: null },
+  ]) {
+    const availability = grokUsageFromResponse({ config }, at);
+    expect(availability.status).toBe("unknown");
+    expect(availability.windows).toEqual([]);
+  }
+});

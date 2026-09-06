@@ -334,6 +334,26 @@ const EMPTY_MERGED: MergedUsage = {
   staleEnvironments: [],
 };
 
+/** Account sidebar totals use the same ownership rules without building charts or session indexes. */
+export function mergeUsageCost(
+  environments: readonly EnvironmentUsage[],
+  expectedContractVersion: number,
+): number {
+  const current = environments.filter((environment) =>
+    isCompatibleContractVersion(environment.summary.contractVersion, expectedContractVersion),
+  );
+  const { ownerByFingerprint } = claimSources(current);
+  return current.reduce(
+    (total, environment) =>
+      total +
+      ownedContribution(environment, ownerByFingerprint).buckets.reduce(
+        (sum, bucket) => sum + bucket.costUsd,
+        0,
+      ),
+    0,
+  );
+}
+
 /**
  * Merges every connected environment's summary.
  *

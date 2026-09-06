@@ -2,44 +2,57 @@ import { useState } from "react";
 import { CheckIcon, RefreshCwIcon } from "lucide-react";
 import { Button } from "../ui/button";
 
-/** Keeps completion visible after the request settles without claiming fresh provider data. */
+/** Only a click on this control can produce completion feedback. */
 export function UsageRefreshButton({
   refreshing,
   onRefresh,
   label,
   disabledReason,
+  confirmed = true,
 }: {
   readonly refreshing: boolean;
+  readonly confirmed?: boolean | undefined;
   readonly onRefresh: () => void;
   readonly label: string;
   readonly disabledReason?: string | undefined;
 }) {
   const [previousRefreshing, setPreviousRefreshing] = useState(refreshing);
-  const [checked, setChecked] = useState(false);
+  const [requested, setRequested] = useState(false);
+  const [checked, setChecked] = useState<"confirmed" | "unconfirmed" | null>(null);
   if (previousRefreshing !== refreshing) {
     setPreviousRefreshing(refreshing);
-    setChecked(!refreshing);
+    if (requested && !refreshing) {
+      setChecked(confirmed ? "confirmed" : "unconfirmed");
+      setRequested(false);
+    }
   }
   return (
     <Button
       size="sm"
       variant="outline"
       disabled={refreshing || !!disabledReason}
-      title={disabledReason}
+      aria-description={disabledReason}
       aria-label={label}
       aria-busy={refreshing || undefined}
       onClick={() => {
-        setChecked(false);
+        setRequested(true);
+        setChecked(null);
         onRefresh();
       }}
     >
-      {checked && !disabledReason ? (
+      {checked === "confirmed" && !disabledReason ? (
         <CheckIcon className="size-3.5" />
       ) : (
         <RefreshCwIcon className="size-3.5" />
       )}
       <span role="status">
-        {refreshing ? "Checking…" : checked && !disabledReason ? "Checked" : label}
+        {refreshing
+          ? "Checking…"
+          : checked && !disabledReason
+            ? checked === "confirmed"
+              ? "Checked"
+              : "Could not confirm"
+            : label}
       </span>
     </Button>
   );

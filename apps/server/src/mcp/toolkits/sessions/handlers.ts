@@ -6,7 +6,7 @@ import {
   EventId,
   GitCommandError,
   canRefreshProviderAvailability,
-  isProviderAvailable,
+  canStartProviderSession,
   LIST_SESSIONS_MAX_ENTRIES,
   DEFAULT_SESSION_REPORT_DELIVERY,
   type ListSessionsInput,
@@ -805,12 +805,7 @@ export const make = Effect.gen(function* () {
 
   // Runtime availability alone does not include the configured enabled flag
   // or installation/auth checks. Discovery and spawning must use the same gate.
-  const canStartSession = (provider: ServerProvider): boolean =>
-    provider.enabled &&
-    provider.installed &&
-    provider.status === "ready" &&
-    provider.auth.status !== "unauthenticated" &&
-    isProviderAvailable(provider);
+  const canStartSession = canStartProviderSession;
 
   const listProviders = Effect.fn("SessionsToolkit.listProviders")(function* (input: {
     readonly onlyAvailable?: boolean | undefined;
@@ -1018,7 +1013,7 @@ export const make = Effect.gen(function* () {
     }
     if (!canStartSession(provider)) {
       return yield* new SessionOrchestrationUnavailableError({
-        message: `Provider instance "${instanceId}" is not available (not installed, disabled, or unauthenticated).`,
+        message: `Provider instance "${instanceId}" is not available (disabled, not yet confirmed installed, signed out, in error, or runtime unavailable; check provider status and retry).`,
       });
     }
     const model =

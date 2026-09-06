@@ -104,3 +104,30 @@ describe("usage reports", () => {
     expect(rows.some((row) => row.title === "Unattributed usage")).toBe(true);
   });
 });
+
+it("preserves real unpriced zero-counter records but omits fully synthetic unlinked rows", () => {
+  const model = {
+    ...session.models[0]!,
+    totals: {
+      uncachedInputTokens: 0,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    },
+    costUsd: 0,
+    unpricedRecords: 1,
+  };
+  const real = buildUsageReport(
+    [{ ...session, attribution: "unlinked", models: [model] }],
+    "threads",
+  );
+  expect(real[0]?.models).toEqual(["model"]);
+  expect(real[0]?.unpricedRecords).toBe(1);
+  expect(
+    buildUsageReport(
+      [{ ...session, attribution: "unlinked", models: [{ ...model, model: "<synthetic>" }] }],
+      "threads",
+    ),
+  ).toEqual([]);
+});

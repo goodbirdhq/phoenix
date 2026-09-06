@@ -1776,6 +1776,22 @@ describe("list_session_providers availability refresh (handler)", () => {
     windows: [],
   } as const;
 
+  it.effect("offers a signed-in provider with degraded metadata as available", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler(
+        (handlers) => handlers.list_session_providers({ onlyAvailable: true }),
+        {
+          getProviders: Effect.succeed([
+            { ...providerSnapshot({ instanceId: "warning" }), status: "warning" },
+          ]),
+        },
+      );
+      expect(result.providers.map((provider) => [provider.instanceId, provider.available])).toEqual(
+        [["warning", true]],
+      );
+    }),
+  );
+
   it.effect("never offers a disabled instance, including with onlyAvailable", () =>
     Effect.gen(function* () {
       for (const onlyAvailable of [undefined, false, true]) {

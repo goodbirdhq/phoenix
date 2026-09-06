@@ -50,3 +50,5 @@ confirm remains visible on the Usage page for context, but it does not drive cha
 migration suggestions until a current reading arrives.
 
 Historical usage includes archived and deleted Phoenix threads: removing a conversation does not remove its recorded token usage or API cost.
+
+An account’s **Refresh limits** button checks only that account’s connected environments. The main refresh checks usage history and all eligible accounts. Completion feedback belongs to the action you clicked: failed or unconfirmed reads say **Could not confirm**, while automatic refreshes do not display a manual success check. Known unsupported quota APIs are labelled unavailable; a manual main refresh can check again after a CLI upgrade.

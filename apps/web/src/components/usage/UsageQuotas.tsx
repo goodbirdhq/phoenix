@@ -64,24 +64,36 @@ export function UsageQuotas({
   isPending,
   isRefreshing,
   onRefresh,
+  connected = true,
+  refreshFailed = false,
 }: {
   readonly sources: readonly SubscriptionAvailabilitySource[];
   readonly driver: string;
+  readonly connected?: boolean;
+  readonly refreshFailed?: boolean;
   readonly isPending: boolean;
   readonly isRefreshing: boolean;
   readonly onRefresh: () => void;
 }) {
   const limits = useMemo(() => deriveSubscriptionLimits(sources), [sources]);
-  const canRefresh = sources.some(
-    (source) => source.enabled && source.authenticated && source.availabilityRefreshSupported,
-  );
-  const refreshUnavailableReason = isPending
-    ? "Waiting for account status…"
-    : driver === "opencode"
-      ? "Balance refresh is not supported by this OpenCode connection. Refresh usage updates token and cost history."
-      : driver === "grok"
-        ? "Quota refresh is unavailable on this Grok connection. Check its CLI version and sign-in status."
-        : "Manual quota refresh is unavailable. Check this account’s connection, installation and sign-in status.";
+  const canRefresh =
+    connected &&
+    sources.some(
+      (source) =>
+        source.enabled &&
+        source.authenticated &&
+        source.availabilityRefreshSupported &&
+        source.availability.source !== "unsupported",
+    );
+  const refreshUnavailableReason = !connected
+    ? "Environment offline. Reconnect to refresh limits."
+    : isPending
+      ? "Waiting for account status…"
+      : driver === "opencode"
+        ? "Balance refresh is not supported by this OpenCode connection. Refresh usage updates token and cost history."
+        : driver === "grok"
+          ? "Quota refresh is unavailable on this Grok connection. Check its CLI version and sign-in status."
+          : "Manual quota refresh is unavailable. Check this account’s connection, installation and sign-in status.";
 
   return (
     <section className="space-y-5 rounded-[10px] border bg-muted/30 p-5" aria-label="Usage limits">
@@ -89,6 +101,16 @@ export function UsageQuotas({
         <h2 className="text-sm font-semibold">Usage limits</h2>
         <UsageRefreshButton
           label="Refresh limits"
+          confirmed={
+            !refreshFailed &&
+            connected &&
+            sources.length > 0 &&
+            sources.every(
+              (source) =>
+                source.availability.source === "unsupported" ||
+                (source.availability.status !== "unknown" && !source.availability.stale),
+            )
+          }
           refreshing={isRefreshing}
           onRefresh={onRefresh}
           disabledReason={canRefresh ? undefined : refreshUnavailableReason}

@@ -116,9 +116,13 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
           }),
         ),
       );
-      const hasUnsettledTargetRefresh = hasUnsettledCapacityRefresh(refreshResults);
+      const connected = presentation.connection.phase === "connected";
+      const hasUnsettledTargetRefresh = connected && hasUnsettledCapacityRefresh(refreshResults);
       const isSynchronizingBaseQuery =
-        environmentRefreshTargets.length > 0 && !hasUnsettledTargetRefresh && cachedResult.waiting;
+        connected &&
+        environmentRefreshTargets.length > 0 &&
+        !hasUnsettledTargetRefresh &&
+        cachedResult.waiting;
       const providers = resolveAvailabilityEntries(
         cachedValue?.providers ?? [],
         liveValue?.providers ?? null,
@@ -136,9 +140,8 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
           liveValue === null &&
           (cachedResult.waiting || refreshResults.some((result) => result.waiting)),
         availabilityQueryFailed:
-          liveValue === null &&
-          (cachedResult._tag === "Failure" ||
-            refreshResults.some((result) => result._tag === "Failure")),
+          (liveValue === null && cachedResult._tag === "Failure") ||
+          refreshResults.some((result) => result._tag === "Failure"),
         providerProjectionReady: serverProviders !== null,
       });
       statuses.push({
@@ -149,11 +152,15 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
         // enabled or authenticated. Wait for that projection instead of
         // flashing the final empty state while it is still loading.
         ...presentationState,
-        isRefreshing: refreshResults.some((result) => result.waiting) || isSynchronizingBaseQuery,
+        isRefreshing:
+          connected &&
+          (refreshResults.some((result) => result.waiting) || isSynchronizingBaseQuery),
         hasUnsettledRefresh: hasUnsettledTargetRefresh,
-        isBaseQueryRefreshing: cachedResult.waiting,
+        isBaseQueryRefreshing: connected && cachedResult.waiting,
         refreshingInstanceIds: environmentRefreshTargets.flatMap((target, index) =>
-          refreshResults[index]?.waiting || isSynchronizingBaseQuery ? [target.instanceId] : [],
+          connected && (refreshResults[index]?.waiting || isSynchronizingBaseQuery)
+            ? [target.instanceId]
+            : [],
         ),
         providers,
         serverProviders,
@@ -234,7 +241,7 @@ export interface UsageView {
   /** Rescans historical usage without probing Provider quota. */
   readonly refreshUsage: (input?: UsageSummaryInput) => void;
   /** Revalidates eligible subscription readings without rescanning usage. */
-  readonly refreshCapacity: (target?: CapacityRefreshTarget) => void;
+  readonly refreshCapacity: (targets?: readonly CapacityRefreshTarget[]) => void;
   readonly providerAvailability: readonly EnvironmentProviderAvailabilityStatus[];
   readonly isProviderAvailabilityPending: boolean;
   readonly isCapacityRefreshing: boolean;
@@ -377,10 +384,8 @@ export function useUsage(
   );
 
   const refreshCapacity = useCallback(
-    (target?: CapacityRefreshTarget) =>
-      beginCapacityRefresh(
-        target === undefined ? capacityRefreshTargets(providerAvailability, "all") : [target],
-      ),
+    (targets?: readonly CapacityRefreshTarget[]) =>
+      beginCapacityRefresh(capacityRefreshTargets(providerAvailability, "all", targets)),
     [beginCapacityRefresh, providerAvailability],
   );
 

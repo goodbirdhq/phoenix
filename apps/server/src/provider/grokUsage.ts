@@ -14,8 +14,8 @@ const BillingResponse = Schema.Struct({
           end: Schema.optional(Schema.String),
         }),
       ),
-      monthlyLimit: Schema.optional(Cent),
-      used: Schema.optional(Cent),
+      monthlyLimit: Schema.optional(Schema.NullOr(Cent)),
+      used: Schema.optional(Schema.NullOr(Cent)),
       billingPeriodEnd: Schema.optional(Schema.String),
     }),
   ),
@@ -28,7 +28,7 @@ export function grokUsageFromResponse(response: unknown, observedAt: string): Pr
   const { config } = decodeBillingResponse(response);
   const percent =
     config?.creditUsagePercent ??
-    (config?.monthlyLimit?.val && config.monthlyLimit.val > 0 && config.used !== undefined
+    (config?.monthlyLimit?.val && config.monthlyLimit.val > 0 && config.used != null
       ? ((config.used?.val ?? 0) / config.monthlyLimit.val) * 100
       : undefined);
   const end = config?.currentPeriod?.end ?? config?.billingPeriodEnd;

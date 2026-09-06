@@ -9,7 +9,7 @@ import {
   type ScheduleStoredDefinition,
   type ServerProvider,
   ThreadId,
-  isProviderAvailable,
+  canStartProviderSession,
 } from "@t3tools/contracts";
 import { buildScheduledWorktreeBranchName } from "@t3tools/shared/git";
 import * as DateTime from "effect/DateTime";
@@ -134,15 +134,7 @@ function unavailableProvider(
   const selected = providers.find(
     ({ instanceId }) => instanceId === definition.execution.modelSelection.instanceId,
   );
-  if (
-    selected === undefined ||
-    !selected.enabled ||
-    !selected.installed ||
-    !isProviderAvailable(selected) ||
-    selected.status === "disabled" ||
-    selected.status === "error" ||
-    selected.auth.status === "unauthenticated"
-  ) {
+  if (selected === undefined || !canStartProviderSession(selected)) {
     return "provider_unavailable";
   }
   return selected.models.some(({ slug }) => slug === definition.execution.modelSelection.model)

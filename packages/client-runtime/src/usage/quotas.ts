@@ -1,19 +1,5 @@
 import type { ProviderAvailability, UsageProviderKind } from "@t3tools/contracts";
 
-/** The unscoped main pool is distinct from model-specific allowances. */
-export function primaryUsageWindow(
-  provider: UsageProviderKind,
-  availability: ProviderAvailability,
-) {
-  if (
-    availability.stale ||
-    availability.source === "unsupported" ||
-    availability.status === "unknown"
-  )
-    return undefined;
-  return lastKnownUsageWindow(provider, availability);
-}
-
 /** Selects a reported main pool, including stale readings that must be labelled last known. */
 export function lastKnownUsageWindow(
   provider: UsageProviderKind,
@@ -26,6 +12,7 @@ export function lastKnownUsageWindow(
       (window) => window.kind === preferred && (!window.scope || window.scope === "all-models"),
     ) ??
     availability.windows.find((window) => !window.scope) ??
+    // Never substitute a model-specific pool (such as Spark) for the account allowance.
     availability.windows.find((window) => window.scope === "all-models")
   );
 }

@@ -9,7 +9,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { mergeUsage, type EnvironmentUsage } from "./usageMerge.ts";
+import { mergeUsageCost, mergeUsage, type EnvironmentUsage } from "./usageMerge.ts";
 
 function bucket(overrides: Partial<UsageBucket> = {}): UsageBucket {
   return {
@@ -563,4 +563,29 @@ describe("shared-store session attribution", () => {
       thread,
     });
   });
+});
+
+it("cost-only aggregation agrees with the full merge across duplicated and incompatible stores", () => {
+  const source = { provider: "claude" as const, hostId: "host", homePath: "/claude", id: "store" };
+  const entries: EnvironmentUsage[] = [
+    {
+      environmentId: "a" as EnvironmentId,
+      label: "A",
+      summary: summary([bucket({ sourceId: "store" })], [source]),
+    },
+    {
+      environmentId: "b" as EnvironmentId,
+      label: "B",
+      summary: summary([bucket({ sourceId: "store", costUsd: 999 })], [source]),
+    },
+    {
+      environmentId: "old" as EnvironmentId,
+      label: "Old",
+      summary: summary([bucket({ sourceId: "store", costUsd: 777 })], [source], 0),
+    },
+  ];
+  expect(mergeUsageCost(entries, USAGE_CONTRACT_VERSION)).toBe(10);
+  expect(mergeUsageCost(entries, USAGE_CONTRACT_VERSION)).toBe(
+    mergeUsage(entries, USAGE_CONTRACT_VERSION).costUsd,
+  );
 });

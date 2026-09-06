@@ -1,56 +1,53 @@
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
-import type { ProviderAvailability } from "@t3tools/contracts";
+import type { ProviderAvailability, ProviderAvailabilityWindow } from "@t3tools/contracts";
 import type { V2GetAccountRateLimitsResponse } from "effect-codex-app-server/schema";
 
-/** Full account reads include every metered pool; the legacy pool is an alias, not extra quota. */
-export function codexUsageFromResponse(
-  response: V2GetAccountRateLimitsResponse,
+const record = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+
+/** Shared by sparse notifications and full account reads; model-specific pools stay scoped. */
+function poolWindows(value: unknown, poolId?: string): ProviderAvailabilityWindow[] {
+  const pool = record(value);
+  if (!pool) return [];
+  const id = poolId ?? (typeof pool.limitId === "string" ? pool.limitId : "codex");
+  const scope = id === "codex" ? undefined : id;
+  const name = typeof pool.limitName === "string" ? pool.limitName : scope;
+  return (["primary", "secondary"] as const).flatMap((kind) => {
+    const window = record(pool[kind]);
+    const usedPercent = window?.usedPercent;
+    if (
+      typeof usedPercent !== "number" ||
+      !Number.isFinite(usedPercent) ||
+      usedPercent < 0 ||
+      usedPercent > 100
+    )
+      return [];
+    const reset =
+      typeof window?.resetsAt === "number"
+        ? Option.getOrUndefined(
+            Option.map(DateTime.make(window.resetsAt * 1000), DateTime.formatIso),
+          )
+        : undefined;
+    const duration = window?.windowDurationMins;
+    return [
+      {
+        kind,
+        usedPercent,
+        ...(scope ? { scope, label: kind === "primary" ? name : `${name} · secondary` } : {}),
+        ...(reset ? { resetsAt: reset } : {}),
+        ...(typeof duration === "number" && Number.isInteger(duration) && duration >= 0
+          ? { windowDurationMins: duration }
+          : {}),
+      },
+    ];
+  });
+}
+
+function availability(
+  windows: ProviderAvailabilityWindow[],
   observedAt: string,
 ): ProviderAvailability {
-  const pools = new Map(Object.entries(response.rateLimitsByLimitId ?? {}));
-  const mainId = response.rateLimits.limitId ?? "codex";
-  if (!pools.has(mainId)) pools.set(mainId, response.rateLimits);
-  const windows = [...pools].flatMap(([id, pool]) =>
-    (["primary", "secondary"] as const).flatMap((kind) => {
-      const window = pool[kind];
-      if (
-        !window ||
-        !Number.isFinite(window.usedPercent) ||
-        window.usedPercent < 0 ||
-        window.usedPercent > 100
-      )
-        return [];
-      const reset =
-        window.resetsAt == null
-          ? undefined
-          : Option.getOrUndefined(
-              Option.map(DateTime.make(window.resetsAt * 1000), DateTime.formatIso),
-            );
-      const scope = id === "codex" ? undefined : id;
-      return [
-        {
-          kind,
-          usedPercent: window.usedPercent,
-          ...(scope
-            ? {
-                scope,
-                label:
-                  kind === "primary"
-                    ? (pool.limitName ?? scope)
-                    : `${pool.limitName ?? scope} · secondary`,
-              }
-            : {}),
-          ...(reset ? { resetsAt: reset } : {}),
-          ...(window.windowDurationMins != null &&
-          Number.isInteger(window.windowDurationMins) &&
-          window.windowDurationMins >= 0
-            ? { windowDurationMins: window.windowDurationMins }
-            : {}),
-        },
-      ];
-    }),
-  );
   return {
     source: "codex_app_server",
     observedAt,
@@ -61,4 +58,25 @@ export function codexUsageFromResponse(
         : "unknown",
     windows,
   };
+}
+
+export function codexUsageFromSnapshot(
+  snapshot: unknown,
+  observedAt: string,
+): ProviderAvailability {
+  return availability(poolWindows(snapshot), observedAt);
+}
+
+/** Full reads include every pool; the legacy pool is an alias, not extra quota. */
+export function codexUsageFromResponse(
+  response: V2GetAccountRateLimitsResponse,
+  observedAt: string,
+): ProviderAvailability {
+  const pools = new Map(Object.entries(response.rateLimitsByLimitId ?? {}));
+  const mainId = response.rateLimits.limitId ?? "codex";
+  if (!pools.has(mainId)) pools.set(mainId, response.rateLimits);
+  return availability(
+    [...pools].flatMap(([id, pool]) => poolWindows(pool, id)),
+    observedAt,
+  );
 }

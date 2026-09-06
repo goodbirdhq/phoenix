@@ -2092,7 +2092,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       });
       const account = yield* client.request("account/read", {});
       if (account.account?.type !== "chatgpt") {
-        return codexUsageFromResponse({ rateLimits: {} }, DateTime.formatIso(yield* DateTime.now));
+        return {
+          source: "unsupported" as const,
+          status: "unknown" as const,
+          observedAt: DateTime.formatIso(yield* DateTime.now),
+          windows: [],
+        };
       }
       const response = yield* client.request("account/rateLimits/read", undefined);
       return codexUsageFromResponse(response, DateTime.formatIso(yield* DateTime.now));

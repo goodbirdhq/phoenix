@@ -21,6 +21,7 @@ export function UsageToolbar({
   days,
   onDaysChange,
   refreshing,
+  confirmed,
   onRefresh,
 }: {
   readonly environments: readonly { environmentId: EnvironmentId; label: string }[];
@@ -31,6 +32,7 @@ export function UsageToolbar({
   readonly days: number;
   readonly onDaysChange: (value: number) => void;
   readonly refreshing: boolean;
+  readonly confirmed?: boolean;
   readonly onRefresh: () => void;
 }) {
   return (
@@ -93,7 +95,12 @@ export function UsageToolbar({
           Tokens
         </Toggle>
       </ToggleGroup>
-      <UsageRefreshButton label="Refresh usage" refreshing={refreshing} onRefresh={onRefresh} />
+      <UsageRefreshButton
+        label="Refresh usage"
+        confirmed={confirmed}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+      />
     </div>
   );
 }

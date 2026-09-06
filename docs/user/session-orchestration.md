@@ -140,3 +140,5 @@ Orchestration is bounded so a runaway agent cannot overwhelm your machine:
 
 Settings → General → **Session orchestration** disables the feature for the whole environment. The
 switch applies immediately, including to sessions that are already running.
+
+Provider metadata warnings do not prevent starting a child when the provider is enabled, installed and usable. Disabled providers, signed-out accounts and unavailable or failed runtimes are rejected.

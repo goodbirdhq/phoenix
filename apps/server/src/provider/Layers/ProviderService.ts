@@ -1,3 +1,4 @@
+import { codexUsageFromSnapshot } from "../codexUsage.ts";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -242,7 +243,8 @@ const NATIVE_AVAILABILITY_SOURCES: Partial<
 const isNativeAvailabilitySource = (
   provider: ProviderDriverKind,
   source: ProviderAvailability["source"],
-): boolean => (NATIVE_AVAILABILITY_SOURCES[provider] ?? ["unsupported"]).includes(source);
+): boolean =>
+  source === "unsupported" || (NATIVE_AVAILABILITY_SOURCES[provider] ?? []).includes(source);
 
 // Which channel a silent driver is silent on is one fact, shared with the
 // transports that build the same fallback when an instance cannot answer.
@@ -593,49 +595,7 @@ export const availabilityFromRuntimeEvent = (
       return undefined;
     const snapshot = payload.rateLimits;
     if (typeof snapshot !== "object" || snapshot === null) return undefined;
-    const snapshotFields = snapshot as Record<string, unknown>;
-    const limitId = typeof snapshotFields.limitId === "string" ? snapshotFields.limitId : undefined;
-    const scope = limitId && limitId !== "codex" ? limitId : undefined;
-    const limitName =
-      typeof snapshotFields.limitName === "string" ? snapshotFields.limitName : scope;
-    const windows = (["primary", "secondary"] as const).flatMap((kind) => {
-      const candidate = (snapshot as Record<string, unknown>)[kind];
-      if (typeof candidate !== "object" || candidate === null) return [];
-      const fields = candidate as Record<string, unknown>;
-      const usedPercent = fields.usedPercent;
-      if (typeof usedPercent !== "number" || usedPercent < 0 || usedPercent > 100) return [];
-      const resetsAt = toIsoDateTime(fields.resetsAt);
-      const windowDurationMins = fields.windowDurationMins;
-      return [
-        {
-          kind,
-          ...(scope
-            ? {
-                scope,
-                label:
-                  kind === "primary" ? (limitName ?? scope) : `${limitName ?? scope} · secondary`,
-              }
-            : {}),
-          usedPercent,
-          ...(resetsAt ? { resetsAt } : {}),
-          ...(typeof windowDurationMins === "number" &&
-          Number.isInteger(windowDurationMins) &&
-          windowDurationMins >= 0
-            ? { windowDurationMins }
-            : {}),
-        },
-      ];
-    });
-    return {
-      status: windows.some((window) => window.usedPercent >= 100)
-        ? "limited"
-        : windows.length > 0
-          ? "available"
-          : "unknown",
-      source: "codex_app_server",
-      observedAt: event.createdAt,
-      windows,
-    };
+    return codexUsageFromSnapshot(snapshot, event.createdAt);
   }
   // Claude's SDK event is deliberately less stable than Codex's documented
   // app-server schema. Preserve native provenance and only derive fields the

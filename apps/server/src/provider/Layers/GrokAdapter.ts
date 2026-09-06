@@ -67,6 +67,7 @@ import {
   currentGrokModelIdFromSessionSetup,
   currentGrokReasoningEffortFromSessionSetup,
   makeGrokAcpRuntime,
+  resolveGrokAuthMethodId,
   normalizeGrokReasoningEffort,
   resolveGrokAcpBaseModelId,
 } from "../acp/GrokAcpSupport.ts";
@@ -2146,12 +2147,25 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         });
         yield* runtime.initialize();
         yield* runtime.request("authenticate", {
-          methodId: environment.XAI_API_KEY?.trim() ? "xai.api_key" : "cached_token",
+          methodId: resolveGrokAuthMethodId(environment),
         });
-        const response = yield* runtime.request("_x.ai/billing", {});
-        return yield* Effect.try(() =>
-          grokUsageFromResponse(response, DateTime.formatIso(DateTime.nowUnsafe())),
+        const response = yield* runtime.request("_x.ai/billing", {}).pipe(
+          Effect.map((value) => ({ supported: true as const, value })),
+          Effect.catchTag("AcpRequestError", (error) =>
+            error.code === -32601
+              ? Effect.succeed({ supported: false as const })
+              : Effect.fail(error),
+          ),
         );
+        if (!response.supported)
+          return {
+            source: "unsupported" as const,
+            status: "unknown" as const,
+            observedAt: DateTime.formatIso(yield* DateTime.now),
+            windows: [],
+          };
+        const observedAt = DateTime.formatIso(yield* DateTime.now);
+        return yield* Effect.try(() => grokUsageFromResponse(response.value, observedAt));
       }).pipe(
         Effect.provideService(Crypto.Crypto, crypto),
         Effect.scoped,
