@@ -166,6 +166,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   readonly status: NonNullable<OrchestrationThreadShell["session"]>["status"];
   readonly queued: ReadonlyArray<ProjectionQueuedTurnStart>;
   readonly live?: boolean;
+  readonly pendingMessageId?: MessageId;
   readonly updatedAt?: string;
   readonly boundaryEvents?: ReadonlyArray<OrchestrationEvent>;
   readonly preActivationEvent?: OrchestrationEvent;
@@ -322,7 +323,11 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
     status: () => Effect.die("git status unused in this harness"),
   } as unknown as GitWorkflowService.GitWorkflowService["Service"]);
 
-  const reactor = yield* makeSessionSpawnReactor.pipe(
+  const reactor = yield* Effect.gen(function* () {
+    const delivery = yield* QueuedDelivery.QueuedDelivery;
+    if (input.pendingMessageId) yield* delivery.setPending(CHILD_ID, input.pendingMessageId, true);
+    return yield* makeSessionSpawnReactor;
+  }).pipe(
     Effect.provide(QueuedDelivery.layer),
     Effect.provideService(OrchestrationEngineService, engine),
     Effect.provideService(ProjectionSnapshotQuery, snapshot),
@@ -469,6 +474,25 @@ describe("SessionSpawnReactor queued delivery", () => {
         }),
         Effect.provide(NodeServices.layer),
       ),
+    ),
+  );
+
+  it.effect("does not requeue an input while its acceptance receipt is owned", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const harness = yield* createHarness({
+          status: "ready",
+          queued: [releasing("owned")],
+          pendingMessageId: MessageId.make("queued-owned"),
+        });
+        expect(
+          harness.commands.some(
+            (c) => c.type === "thread.turn.queue.requeue" || c.type === "thread.turn.start.queued",
+          ),
+        ).toBe(false);
+        expect(harness.queuedRows[0]?.state).toBe("releasing");
+      }).pipe(Effect.provide(NodeServices.layer)),
     ),
   );
 

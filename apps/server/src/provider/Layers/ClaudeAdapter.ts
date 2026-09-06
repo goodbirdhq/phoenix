@@ -343,7 +343,12 @@ interface ClaudeSessionContext {
    */
   pendingSeedPrompt: string | undefined;
   stopped: boolean;
-  interruption: Deferred.Deferred<void> | undefined;
+  interruption:
+    | {
+        readonly completion: Deferred.Deferred<void>;
+        result: SDKResultMessage | undefined;
+      }
+    | undefined;
   readonly interruptPermit: Semaphore.Semaphore;
 }
 
@@ -1821,6 +1826,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               stdio: ["pipe", "pipe", "pipe"],
               windowsHide: true,
             });
+            // Custom SDK spawners own stderr draining; unread pipes can block the CLI.
+            child.stderr.on("data", (chunk: Buffer) => input.options.stderr?.(chunk.toString()));
             spawned = true;
             child.once("exit", () => exited.resolve());
             child.once("error", () => {
@@ -2333,6 +2340,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     errorMessage?: string,
     result?: SDKResultMessage,
   ) {
+    // A result alone is not a safe boundary while native cancellation is pending.
+    if (context.interruption) {
+      context.interruption.result = result;
+      yield* Deferred.succeed(context.interruption.completion, undefined);
+      return;
+    }
     const resultContextWindow = maxClaudeContextWindowFromModelUsage(result?.modelUsage);
     if (resultContextWindow !== undefined) {
       context.lastKnownContextWindow = resultContextWindow;
@@ -2497,7 +2510,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       threadId: context.session.threadId,
       turnId: turnState.turnId,
       payload: {
-        state: context.interruption ? "interrupted" : status,
+        state: status,
         ...(result?.stop_reason !== undefined ? { stopReason: result.stop_reason } : {}),
         ...(result?.usage ? { usage: result.usage } : {}),
         ...(result?.modelUsage ? { modelUsage: result.modelUsage } : {}),
@@ -2519,7 +2532,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ...(status === "failed" && errorMessage ? { lastError: errorMessage } : {}),
     };
     yield* updateResumeCursor(context);
-    if (context.interruption) yield* Deferred.succeed(context.interruption, undefined);
   });
 
   const handleStreamEvent = Effect.fn("handleStreamEvent")(function* (
@@ -4734,6 +4746,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
     const context = yield* requireSession(input.threadId);
+    yield* context.interruptPermit.withPermits(1)(Effect.void);
+    yield* requireSession(input.threadId);
     const modelCatalog = yield* modelCatalogEffect;
     const selectedModel =
       input.modelSelection !== undefined && input.modelSelection.instanceId === boundInstanceId
@@ -4878,8 +4892,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         Effect.gen(function* () {
           if (context.query.interrupt && context.liveTaskIds.size === 0 && !context.stopped) {
             if (!context.turnState) return;
-            const completion = yield* Deferred.make<void>();
-            context.interruption = completion;
+            const completion = Deferred.makeUnsafe<void>();
+            const interruption = { completion, result: undefined as SDKResultMessage | undefined };
+            context.interruption = interruption;
             const interrupted = yield* Effect.tryPromise({
               try: () => context.query.interrupt!(),
               catch: (cause) => toRequestError(threadId, "interrupt", cause),
@@ -4893,7 +4908,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                 }),
               ),
             );
-            if (Option.isSome(interrupted) && context.liveTaskIds.size === 0) return;
+            if (Option.isSome(interrupted) && context.liveTaskIds.size === 0) {
+              yield* completeTurn(context, "interrupted", undefined, interruption.result);
+              return;
+            }
           }
           // Background work or a failed native interrupt needs a confirmed process exit.
           yield* stopSessionInternal(context, { interrupt: true, emitExitEvent: false });
@@ -4956,9 +4974,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const stopSession: ClaudeAdapterShape["stopSession"] = Effect.fn("stopSession")(
     function* (threadId) {
       const context = yield* requireSession(threadId, true);
-      yield* stopSessionInternal(context, {
-        emitExitEvent: true,
-      });
+      yield* context.interruptPermit.withPermits(1)(
+        stopSessionInternal(context, {
+          emitExitEvent: true,
+        }),
+      );
     },
   );
 

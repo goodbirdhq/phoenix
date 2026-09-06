@@ -1,16 +1,22 @@
 import { makeDrainableWorker, type DrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Scope from "effect/Scope";
 import * as Exit from "effect/Exit";
-import type { ThreadId } from "@t3tools/contracts";
+import type { MessageId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 
-/** Serializes delivery acceptance with cancellation and recovery for one thread. */
+/** Coordinates delivery admission and in-flight ownership with cancellation and recovery. */
 export class QueuedDelivery extends Context.Service<
   QueuedDelivery,
   {
+    readonly isPending: (threadId: ThreadId, messageId: MessageId) => Effect.Effect<boolean>;
+    readonly setPending: (
+      threadId: ThreadId,
+      messageId: MessageId,
+      pending: boolean,
+    ) => Effect.Effect<void>;
     readonly withPermit: <A, E, R>(
       threadId: ThreadId,
       effect: Effect.Effect<A, E, R>,
@@ -19,6 +25,7 @@ export class QueuedDelivery extends Context.Service<
 >()("t3/orchestration/QueuedDelivery") {}
 
 export const layer = Layer.sync(QueuedDelivery, () => {
+  const pendingInputs = new Set<string>();
   const permits = new Map<ThreadId, { semaphore: Semaphore.Semaphore; users: number }>();
   const withPermit: QueuedDelivery["Service"]["withPermit"] = (threadId, effect) =>
     Effect.acquireUseRelease(
@@ -34,7 +41,17 @@ export const layer = Layer.sync(QueuedDelivery, () => {
           if (--entry.users === 0) permits.delete(threadId);
         }),
     );
-  return { withPermit };
+  return {
+    withPermit,
+    isPending: (threadId, messageId) =>
+      Effect.sync(() => pendingInputs.has(`${threadId}:${messageId}`)),
+    setPending: (threadId, messageId, pending) =>
+      Effect.sync(() => {
+        const key = `${threadId}:${messageId}`;
+        if (pending) pendingInputs.add(key);
+        else pendingInputs.delete(key);
+      }),
+  };
 });
 
 /** Keeps unrelated sessions moving while one provider is accepting an input. */

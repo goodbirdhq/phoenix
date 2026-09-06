@@ -38,6 +38,7 @@ import { buildConversationSeed } from "../../provider/conversationSeed.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import {
   ProviderAdapterRequestError,
+  ProviderAdapterProcessError,
   ProviderAdapterSessionNotFoundError,
 } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
@@ -58,6 +59,7 @@ import {
 } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterSessionNotFoundError = Schema.is(ProviderAdapterSessionNotFoundError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
@@ -1269,8 +1271,6 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       processThreadTitleRegenerationSafely,
     );
 
-    const pendingQueuedInputs = new Set<string>();
-
     const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
       event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
     ) {
@@ -1279,6 +1279,8 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         return;
       }
 
+      const queuedId = event.payload.queuedDeliveryMessageId;
+      if (queuedId != null && (yield* delivery.isPending(event.payload.threadId, queuedId))) return;
       const thread = yield* resolveThread(event.payload.threadId);
       if (!thread) {
         return;
@@ -1416,9 +1418,10 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           )
             return;
         }
-        const deliveryKey = messageId == null ? null : `${event.payload.threadId}:${messageId}`;
-        if (deliveryKey !== null && pendingQueuedInputs.has(deliveryKey)) return;
-        if (deliveryKey !== null) pendingQueuedInputs.add(deliveryKey);
+        if (messageId != null) {
+          if (yield* delivery.isPending(event.payload.threadId, messageId)) return;
+          yield* delivery.setPending(event.payload.threadId, messageId, true);
+        }
         // The permit serializes admission with cancellation, never provider work.
         // A cancelled in-flight attempt can still receive a late acceptance receipt.
         yield* Effect.gen(function* () {
@@ -1456,9 +1459,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           );
         }).pipe(
           Effect.ensuring(
-            Effect.sync(() => {
-              if (deliveryKey !== null) pendingQueuedInputs.delete(deliveryKey);
-            }),
+            messageId == null
+              ? Effect.void
+              : delivery.setPending(event.payload.threadId, messageId, false),
           ),
           Effect.forkScoped,
         );
@@ -1517,6 +1520,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
               return Effect.interrupt;
             }
             const orphaned = hasProviderAdapterSessionNotFoundError(cause);
+            const unconfirmedProcess = cause.reasons.some(
+              (reason) => Cause.isFailReason(reason) && isProviderAdapterProcessError(reason.error),
+            );
             return appendProviderFailureActivity({
               threadId: event.payload.threadId,
               kind: "provider.turn.interrupt.failed",
@@ -1524,7 +1530,15 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
               detail: Cause.pretty(cause),
               turnId: event.payload.turnId ?? null,
               createdAt: event.payload.createdAt,
-            }).pipe(Effect.as(orphaned ? ("phantom" as const) : ("failed" as const)));
+            }).pipe(
+              Effect.as(
+                orphaned
+                  ? ("phantom" as const)
+                  : unconfirmedProcess
+                    ? ("timed-out" as const)
+                    : ("failed" as const),
+              ),
+            );
           }),
         );
 
@@ -1819,6 +1833,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
               : {}),
             runtimeMode: current.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
             activeTurnId: null,
+            episodeStartedAt: current.session?.episodeStartedAt ?? null,
             lastError: current.session?.lastError ?? null,
             ...stopAudit(current),
             graceStopDeadlineAt: null,
@@ -1840,9 +1855,21 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         )
           return;
         if (current.session !== null) {
+          yield* setThreadSession({
+            threadId: current.id,
+            session: { ...current.session, ...stopAudit(current) },
+            createdAt: now,
+          });
           yield* providerService.stopSession({ threadId: current.id });
         }
-        yield* setStoppedSession(current);
+        const afterStop = yield* resolveThread(current.id);
+        if (
+          !afterStop ||
+          (afterStop.session?.episodeStartedAt ?? null) !==
+            (current.session?.episodeStartedAt ?? null)
+        )
+          return;
+        yield* setStoppedSession(afterStop);
       });
 
       if (event.payload.gracePeriodMs == null || thread.session === null) {
@@ -1939,15 +1966,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           yield* processTurnStartRequested(event);
           return;
         case "thread.turn-interrupt-requested":
-          yield* processTurnInterruptRequested(event).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Provider interruption failed", {
-                threadId: event.payload.threadId,
-                cause,
-              }),
-            ),
-            Effect.forkScoped,
-          );
+          yield* processTurnInterruptRequested(event);
           return;
         case "thread.approval-response-requested":
           yield* processApprovalResponseRequested(event);
@@ -1967,7 +1986,6 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
                 createdAt: event.payload.createdAt,
               }),
             ),
-            Effect.forkScoped,
           );
           return;
         case "thread.settled": {
@@ -2051,7 +2069,10 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         }),
       );
 
-    const worker = yield* makeDrainableWorker(processDomainEventSafely);
+    const worker = yield* QueuedDelivery.makeWorker(
+      (event: ProviderIntentEvent) => event.payload.threadId,
+      processDomainEventSafely,
+    );
 
     const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
       yield* rearmGraceStopDeadlines().pipe(

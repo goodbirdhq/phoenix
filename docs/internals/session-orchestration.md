@@ -633,7 +633,10 @@ holds that permit during provider I/O or receipt persistence. Cancellation befor
 the send; cancellation of an admitted attempt cannot retract input already in flight. An accepted
 input retries only its receipt write, with exponential jittered backoff capped at five seconds,
 never the provider send. Late acceptance can correct a cancelled receipt; the cancellation event
-remains in history. Pending attempts prevent concurrent redelivery of the same message.
+remains in history. Pending attempts are shared with recovery, which cannot requeue an owned input. Admission checks
+that ownership before session preparation, avoiding a duplicate request that leaves the session starting.
+Accepted receipts survive requeue and cancellation. Receipt retries remain owned until persistence
+succeeds or the server scope ends: dropping ownership on a retry limit could resend accepted input.
 
 Cursor and Grok expose ACP prompt dispatch separately from prompt completion. `ProviderService`
 returns acceptance at dispatch while supervising completion in its own scope. A later binding
@@ -641,12 +644,15 @@ metadata write failure cannot erase that acceptance. Other adapters retain their
 semantics. No provider status transition acknowledges a queued message, including legacy markers.
 
 Claude first uses native interruption for foreground work and retains the healthy runtime after
-its result boundary. Background work or failed native interruption requires query closure and an
+both its result boundary and native acknowledgement. The result is held internally until that
+handshake completes, so fallback cannot close a follow-up admitted too early. Background work or failed native interruption requires query closure and an
 observed owned-process exit before resuming. SDK iterator cleanup alone is insufficient. Intentional
 interruption does not publish a terminal exit; explicit stops retain terminal behavior. Interrupt
 timeouts escalate plain Stop as well as queued interruptions, guarded by the original turn and
 episode. Unconfirmed interruption or process termination never claims the session is ready.
-Provider interrupt and stop I/O run outside the global command worker. Terminal queue cancellation
+Provider commands use per-thread FIFO workers: lifecycle control and later turn preparation stay
+ordered without blocking unrelated threads. Explicit stop and interruption share Claude teardown
+ownership. Late runtime lifecycle events cannot reopen a confirmed stopped episode. Terminal queue cancellation
 checks the episode inside the decider, so an old notice cannot cancel a resumed episode's work.
 
 Session event workers preserve ordering per thread. New worker lanes evict idle entries once the
@@ -659,3 +665,6 @@ that watermark without SQLite writes or additional websocket broadcasts. Restart
 falls back to binding time. This is best-effort activity evidence, not a heartbeat or proof of death.
 `stalledDeliveryCount` counts releasing messages without acceptance; use `releasingAt` for delivery
 age, because `oldestUndeliveredMessageAt` includes ordinary queue waiting time.
+
+Provider send request metrics measure input acceptance, including ACP dispatch; they do not measure
+model work duration. Completion and failure remain observable through provider runtime events.

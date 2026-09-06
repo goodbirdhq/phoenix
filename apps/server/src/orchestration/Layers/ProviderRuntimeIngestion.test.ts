@@ -391,6 +391,38 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it("a late completion cannot reopen a confirmed stopped episode", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("stopped-episode"),
+      threadId: asThreadId("thread-1"),
+      session: {
+        threadId: asThreadId("thread-1"),
+        status: "stopped",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+        stopRequestedAt: now,
+      },
+      createdAt: now,
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("late-stopped-completion"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("old-turn"),
+      createdAt: now,
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    expect((await harness.readModel()).threads[0]?.session?.status).toBe("stopped");
+  });
+
   it("does not acknowledge a legacy queued marker from an unrelated lifecycle event", async () => {
     const harness = await createHarness();
     const threadId = asThreadId("thread-1");

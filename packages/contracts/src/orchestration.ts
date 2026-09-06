@@ -1523,12 +1523,11 @@ const ThreadCheckpointRevertCommand = Schema.Struct({
 });
 
 const ThreadSessionStopCommand = Schema.Struct({
-  onlyIfActiveTurnId: Schema.optional(Schema.NullOr(TurnId)),
-  onlyIfSessionEpisode: Schema.optional(Schema.NullOr(IsoDateTime)),
-
   type: Schema.Literal("thread.session.stop"),
   commandId: CommandId,
   threadId: ThreadId,
+  onlyIfActiveTurnId: Schema.optional(Schema.NullOr(TurnId)),
+  onlyIfSessionEpisode: Schema.optional(Schema.NullOr(IsoDateTime)),
   createdAt: IsoDateTime,
   stopReason: Schema.optional(SessionStopReason),
   stoppedBy: Schema.optional(SessionStoppedBy),
@@ -1631,10 +1630,10 @@ const ThreadQueuedTurnConsumeCommand = Schema.Struct({
 });
 
 const ThreadQueuedTurnCancelCommand = Schema.Struct({
-  expectedSessionEpisode: Schema.optional(IsoDateTime),
   type: Schema.Literal("thread.turn.queue.cancel"),
   commandId: CommandId,
   threadId: ThreadId,
+  expectedSessionEpisode: Schema.optional(IsoDateTime),
   messageId: MessageId,
   reason: Schema.Literals([
     "session_terminal",

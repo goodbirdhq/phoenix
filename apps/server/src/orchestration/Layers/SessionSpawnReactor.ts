@@ -1073,6 +1073,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
           ),
           (entry) =>
             Effect.gen(function* () {
+              if (yield* delivery.isPending(input.threadId, entry.messageId)) return;
               if (entry.redeliveryCount >= MAX_QUEUED_TURN_REDELIVERIES) {
                 yield* cancelWedgedDelivery({
                   threadId: input.threadId,

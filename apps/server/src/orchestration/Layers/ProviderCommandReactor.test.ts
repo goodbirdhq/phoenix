@@ -42,6 +42,7 @@ import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 import {
   ProviderAdapterRequestError,
+  ProviderAdapterProcessError,
   ProviderAdapterSessionNotFoundError,
 } from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
@@ -3541,6 +3542,134 @@ describe("ProviderCommandReactor", () => {
       const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
       return thread?.session?.status === "ready" && thread.session.activeTurnId === null;
     });
+  });
+
+  it("orders same-thread work behind stop while another thread can send", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const entered = await harness.runEffect(Deferred.make<void>());
+    const release = await harness.runEffect(Deferred.make<void>());
+    const otherSent = await harness.runEffect(Deferred.make<void>());
+    harness.stopSession.mockImplementation(() =>
+      Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+    );
+    harness.sendTurn.mockImplementation((input) =>
+      Effect.gen(function* () {
+        const threadId = (input as { threadId: ThreadId }).threadId;
+        if (threadId === "thread-2") yield* Deferred.succeed(otherSent, undefined);
+        return { threadId, turnId: asTurnId("turn-1") };
+      }),
+    );
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("old-session"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("slow-stop"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
+    );
+    await harness.runEffect(Deferred.await(entered));
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("other-thread"),
+        threadId: ThreadId.make("thread-2"),
+        projectId: asProjectId("project-1"),
+        title: "Other",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    for (const id of ["thread-1", "thread-2"])
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`send-${id}`),
+          threadId: ThreadId.make(id),
+          message: {
+            messageId: MessageId.make(`input-${id}`),
+            role: "user",
+            text: "continue",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+    await harness.runEffect(Deferred.await(otherSent));
+    expect(
+      harness.sendTurn.mock.calls.map(([input]) => (input as { threadId: ThreadId }).threadId),
+    ).toEqual(["thread-2"]);
+    await harness.runEffect(Deferred.succeed(release, undefined));
+    await harness.drain();
+    expect(
+      harness.sendTurn.mock.calls.map(([input]) => (input as { threadId: ThreadId }).threadId),
+    ).toEqual(["thread-2", "thread-1"]);
+  });
+
+  it("an unconfirmed process interrupt escalates to a session stop", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("unconfirmed-session"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    harness.interruptTurn.mockImplementation(() =>
+      Effect.fail(
+        new ProviderAdapterProcessError({
+          provider: "claudeAgent",
+          threadId: ThreadId.make("thread-1"),
+          detail: "Process exit was not confirmed",
+        }),
+      ),
+    );
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("unconfirmed-interrupt"),
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    expect(harness.stopSession).toHaveBeenCalledTimes(1);
+    expect((await harness.readModel()).threads[0]?.session?.status).toBe("stopped");
   });
 
   it("a timed-out plain Stop escalates to a confirmed session stop", async () => {
