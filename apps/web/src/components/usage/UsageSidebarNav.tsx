@@ -1,17 +1,16 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { ChartNoAxesCombinedIcon, SearchIcon, ListFilterIcon, PlusIcon } from "lucide-react";
+import { LayoutGridIcon, SearchIcon, ListFilterIcon, PlusIcon } from "lucide-react";
 import { buildUsageAccounts, usageAccountMemberKey } from "@t3tools/client-runtime/usage/accounts";
 import { subscriptionAvailabilitySources } from "@t3tools/client-runtime/usage/usage-warning";
 import { deriveSubscriptionLimits } from "@t3tools/client-runtime/usage/subscription-availability";
 import { EnvironmentId } from "@t3tools/contracts";
 import { Button } from "../ui/button";
 import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuCheckboxItem } from "../ui/menu";
-import { useProviderAvailability } from "../../state/usage";
+import { useProviderAvailability, useUsageSidebarHistory } from "../../state/usage";
 import {
   SidebarContent,
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
@@ -19,7 +18,11 @@ import {
 } from "../ui/sidebar";
 import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
-import { lastKnownUsageWindow } from "@t3tools/client-runtime/usage/quotas";
+import { scopeAccountHistory } from "@t3tools/client-runtime/usage/account-history";
+import { mergeUsage } from "@t3tools/shared/usageMerge";
+import { formatUsd } from "@t3tools/shared/usageFormat";
+import { USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
+import { sidebarQuotaPresentation } from "./usageSidebarPresentation";
 import { usageProviderKind } from "./usageAccountPresentation";
 
 const AddProviderInstanceDialog = lazy(() =>
@@ -30,7 +33,44 @@ const AddProviderInstanceDialog = lazy(() =>
 
 export function UsageSidebarNav() {
   const environments = useProviderAvailability();
-  const accounts = useMemo(() => buildUsageAccounts(environments, []), [environments]);
+  const history = useUsageSidebarHistory();
+  const accounts = useMemo(
+    () =>
+      buildUsageAccounts(environments, history).toSorted(
+        (a, b) =>
+          ["codex", "claude", "opencode", "grok"].indexOf(usageProviderKind(a.driver)) -
+          ["codex", "claude", "opencode", "grok"].indexOf(usageProviderKind(b.driver)),
+      ),
+    [environments, history],
+  );
+  const costs = useMemo(
+    () =>
+      new Map(
+        accounts.map((account) => {
+          const scoped = history.flatMap((environment) =>
+            environment.summary
+              ? [
+                  {
+                    ...environment,
+                    summary: scopeAccountHistory(
+                      environment.summary,
+                      environment.environmentId,
+                      account,
+                    ),
+                  },
+                ]
+              : [],
+          );
+          return [
+            account.key,
+            scoped.some((environment) => environment.summary.sources.length > 0)
+              ? mergeUsage(scoped, USAGE_CONTRACT_VERSION).costUsd
+              : null,
+          ];
+        }),
+      ),
+    [accounts, history],
+  );
   const [search, setSearch] = useState("");
   const [driverFilter, setDriverFilter] = useState<string | null>(null);
   const [addingTo, setAddingTo] = useState<string | null>(null);
@@ -101,7 +141,7 @@ export function UsageSidebarNav() {
             aria-label="Add provider account"
             onClick={() => setAddingTo(connectedEnvironments[0]!.environmentId)}
           >
-            <PlusIcon className="size-4.5" />
+            <PlusIcon className="size-4.5" style={{ color: "var(--color-sky-600, #0284c7)" }} />
           </Button>
         ) : (
           <Menu>
@@ -116,7 +156,7 @@ export function UsageSidebarNav() {
                 />
               }
             >
-              <PlusIcon className="size-4.5" />
+              <PlusIcon className="size-4.5" style={{ color: "var(--color-sky-600, #0284c7)" }} />
             </MenuTrigger>
             <MenuPopup>
               {connectedEnvironments.map((environment) => (
@@ -132,17 +172,34 @@ export function UsageSidebarNav() {
         )}
       </div>
       <SidebarContent>
-        <SidebarGroup className="px-4 pt-0">
+        <SidebarGroup className="px-2.5 py-3">
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton isActive={!selected} onClick={() => select()}>
-                <ChartNoAxesCombinedIcon />
-                All accounts
+              <SidebarMenuButton
+                isActive={!selected}
+                onClick={() => select()}
+                className="h-auto gap-3 p-3 text-sidebar-foreground data-[active=true]:bg-sidebar-border"
+              >
+                <LayoutGridIcon
+                  className="size-5"
+                  strokeWidth={1.5}
+                  style={{ color: "var(--sidebar-foreground)" }}
+                />
+                <span className="flex flex-col gap-[3px]">
+                  <span className="text-base leading-5 font-medium">All accounts</span>
+                  <span className="text-xs leading-4 font-normal text-sidebar-muted-foreground">
+                    {accounts.length} {accounts.length === 1 ? "account" : "accounts"} ·{" "}
+                    {environments.length}{" "}
+                    {environments.length === 1 ? "environment" : "environments"}
+                  </span>
+                </span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
-          <SidebarGroupLabel className="mt-5">Accounts</SidebarGroupLabel>
-          <SidebarMenu>
+          <div className="px-3 pt-6 pb-3 text-[11px] leading-[14px] tracking-[0.06em] text-sidebar-muted-foreground">
+            PROVIDER ACCOUNTS
+          </div>
+          <SidebarMenu className="gap-1.5">
             {visibleAccounts.map((account) => {
               const kind = usageProviderKind(account.driver);
               const { mark: Mark, color, label } = PROVIDER_PRESENTATION[kind];
@@ -156,8 +213,26 @@ export function UsageSidebarNav() {
                 ),
               );
               const limit = limits[0];
-              const window = limit ? lastKnownUsageWindow(kind, limit.availability) : undefined;
-              const title = account.memberships[0]?.provider.displayName ?? label;
+              const quota = sidebarQuotaPresentation(kind, limit?.availability);
+              const refreshing = account.memberships.some((member) =>
+                environments.some(
+                  (environment) =>
+                    environment.environmentId === member.environmentId &&
+                    environment.refreshingInstanceIds.includes(member.provider.instanceId),
+                ),
+              );
+              const offline = account.memberships.every((member) => member.isConnected === false);
+              const signedOut = account.memberships.every(
+                (member) => member.provider.auth.status !== "authenticated",
+              );
+              const status = offline
+                ? "Environment offline"
+                : refreshing
+                  ? "Checking limits…"
+                  : signedOut
+                    ? "Sign in to view limits"
+                    : quota.status;
+              const cost = costs.get(account.key);
               return (
                 <SidebarMenuItem key={account.key}>
                   <SidebarMenuButton
@@ -168,32 +243,59 @@ export function UsageSidebarNav() {
                       const member = account.memberships[0];
                       if (member) select(usageAccountMemberKey(member));
                     }}
-                    className="h-auto min-h-14 items-start py-2.5"
+                    className="h-auto flex-col items-stretch gap-[9px] p-3 text-sidebar-foreground data-[active=true]:bg-sidebar-border"
                   >
-                    <Mark className="mt-0.5 size-4 shrink-0" />
-                    <span className="flex min-w-0 flex-1 flex-col gap-2">
-                      <span className="truncate">{title}</span>
-                      {window &&
-                        (limit?.isCurrentAvailabilityUnknown || limit?.availability.stale) && (
-                          <span className="text-[10px] text-sidebar-muted-foreground">
-                            Last known · needs refresh
+                    <span className="flex min-w-0 items-center gap-3">
+                      <Mark className="size-5 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate text-sm leading-5 font-medium">
+                        {account.name || label}
+                      </span>
+                      <span
+                        className="w-16 shrink-0 text-right text-xs leading-4 font-normal tabular-nums text-sidebar-muted-foreground"
+                        aria-label={`Estimated API cost for the selected period and environment: ${cost == null ? "unavailable" : formatUsd(cost)}`}
+                      >
+                        {cost == null ? "—" : formatUsd(cost)}
+                      </span>
+                    </span>
+                    <span className="flex flex-col gap-[5px] pl-8 whitespace-normal">
+                      {quota.bars.map((bar) => (
+                        <span className="flex items-center gap-2" key={bar.label}>
+                          <span className="w-[83px] shrink-0 text-[11px] leading-4 font-normal text-sidebar-muted-foreground">
+                            {bar.label}
                           </span>
-                        )}
-                      {window ? (
-                        <span className="flex items-center gap-2">
-                          <span className="h-1 flex-1 overflow-hidden rounded-full bg-sidebar-border">
+                          <span
+                            className="h-1 min-w-0 flex-1 overflow-hidden rounded-[3px] bg-sidebar-border"
+                            role="progressbar"
+                            aria-label={`${account.name} · ${bar.label}`}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={bar.usedPercent}
+                            aria-valuetext={`${Math.round(bar.usedPercent)}% used${limit?.isCurrentAvailabilityUnknown || limit?.availability.stale ? " (last known)" : ""}`}
+                          >
                             <span
-                              className="block h-full rounded-full"
-                              style={{ width: `${window.usedPercent}%`, backgroundColor: color }}
+                              className="block h-full rounded-[3px]"
+                              style={{
+                                width: `${bar.usedPercent}%`,
+                                backgroundColor: bar.spark
+                                  ? "var(--color-sky-600, #0284c7)"
+                                  : color,
+                              }}
                             />
                           </span>
-                          <span className="text-[10px] text-sidebar-muted-foreground tabular-nums">
-                            {Math.round(window.usedPercent)}%
+                          <span className="w-7 shrink-0 text-right text-[11px] leading-4 font-normal tabular-nums text-sidebar-muted-foreground">
+                            {Math.round(bar.usedPercent)}%
                           </span>
                         </span>
-                      ) : (
-                        <span className="text-xs text-sidebar-muted-foreground">
-                          {limit?.isStale ? "Limits need refresh" : "Limits unavailable"}
+                      ))}
+                      {status && (
+                        <span
+                          className={
+                            quota.warning && !offline && !refreshing
+                              ? "text-[11px] leading-4 font-normal text-amber-700 dark:text-amber-500"
+                              : "text-[11px] leading-4 font-normal text-sidebar-muted-foreground"
+                          }
+                        >
+                          {status}
                         </span>
                       )}
                     </span>

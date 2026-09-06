@@ -26,7 +26,7 @@ export function lastKnownUsageWindow(
       (window) => window.kind === preferred && (!window.scope || window.scope === "all-models"),
     ) ??
     availability.windows.find((window) => !window.scope) ??
-    availability.windows[0]
+    availability.windows.find((window) => window.scope === "all-models")
   );
 }
 

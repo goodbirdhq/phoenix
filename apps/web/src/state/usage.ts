@@ -207,6 +207,13 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
   }).pipe(Atom.withLabel(`web-usage:window:${windowKey}`)),
 );
 
+const sidebarHistoryAtom = Atom.make<readonly EnvironmentUsageStatus[]>([]);
+
+/** Shares the page's selected history window without issuing another usage query. */
+export function useUsageSidebarHistory() {
+  return useAtomValue(sidebarHistoryAtom);
+}
+
 export interface UsageView {
   readonly accounts: readonly UsageAccount[];
   readonly merged: MergedUsage;
@@ -266,6 +273,10 @@ export function useUsage(
     () => selectHistoricalUsageEnvironments(allEnvironments, historicalEnvironmentId),
     [allEnvironments, historicalEnvironmentId],
   );
+  useEffect(() => {
+    appAtomRegistry.set(sidebarHistoryAtom, environments);
+  }, [environments]);
+  useEffect(() => () => appAtomRegistry.set(sidebarHistoryAtom, []), []);
   const refreshKey = useAtomValue(activeCapacityRefreshAtom);
   const setRefreshKey = useCallback((value: string | ((current: string) => string)) => {
     appAtomRegistry.set(
