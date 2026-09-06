@@ -6,7 +6,7 @@ import {
   EventId,
   GitCommandError,
   canRefreshProviderAvailability,
-  isProviderAvailable,
+  canStartProviderSession,
   LIST_SESSIONS_MAX_ENTRIES,
   DEFAULT_SESSION_REPORT_DELIVERY,
   type ListSessionsInput,
@@ -803,6 +803,10 @@ export const make = Effect.gen(function* () {
     instanceId: string,
   ): ServerProvider | undefined => providers.find((provider) => provider.instanceId === instanceId);
 
+  // Runtime availability alone does not include the configured enabled flag
+  // or installation/auth checks. Discovery and spawning must use the same gate.
+  const canStartSession = canStartProviderSession;
+
   const listProviders = Effect.fn("SessionsToolkit.listProviders")(function* (input: {
     readonly onlyAvailable?: boolean | undefined;
     readonly refreshAvailability?: boolean | undefined;
@@ -811,8 +815,9 @@ export const make = Effect.gen(function* () {
     const allProviders = yield* providerRegistry.getProviders.pipe(
       Effect.mapError(operationError("Failed to read provider registry")),
     );
-    const providers =
-      input.onlyAvailable === true ? allProviders.filter(isProviderAvailable) : allProviders;
+    const providers = allProviders.filter(
+      (provider) => provider.enabled && (input.onlyAvailable !== true || canStartSession(provider)),
+    );
     return {
       providers: yield* Effect.forEach(
         providers,
@@ -822,7 +827,7 @@ export const make = Effect.gen(function* () {
               instanceId: provider.instanceId,
               driver: provider.driver,
               displayName: provider.displayName ?? provider.driver,
-              available: isProviderAvailable(provider),
+              available: canStartSession(provider),
               availability: withoutAccountSubject(availability),
               models: provider.models.map((model) => ({
                 id: model.slug,
@@ -1006,9 +1011,9 @@ export const make = Effect.gen(function* () {
         message: `Provider instance "${instanceId}" was not found. Call list_session_providers for valid choices.`,
       });
     }
-    if (!isProviderAvailable(provider)) {
+    if (!canStartSession(provider)) {
       return yield* new SessionOrchestrationUnavailableError({
-        message: `Provider instance "${instanceId}" is not available (not installed, disabled, or unauthenticated).`,
+        message: `Provider instance "${instanceId}" is not available (disabled, not yet confirmed installed, signed out, in error, or runtime unavailable; check provider status and retry).`,
       });
     }
     const model =

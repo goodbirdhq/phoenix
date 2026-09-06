@@ -41,7 +41,7 @@ import {
   refreshProviderCapacity,
   resolveAvailabilityEntries,
   selectHistoricalUsageEnvironments,
-  staleCapacityTargets,
+  capacityRefreshTargets,
   type CapacityRefreshTarget,
   type UsageRefreshPorts,
 } from "./usage.logic";
@@ -116,9 +116,13 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
           }),
         ),
       );
-      const hasUnsettledTargetRefresh = hasUnsettledCapacityRefresh(refreshResults);
+      const connected = presentation.connection.phase === "connected";
+      const hasUnsettledTargetRefresh = connected && hasUnsettledCapacityRefresh(refreshResults);
       const isSynchronizingBaseQuery =
-        environmentRefreshTargets.length > 0 && !hasUnsettledTargetRefresh && cachedResult.waiting;
+        connected &&
+        environmentRefreshTargets.length > 0 &&
+        !hasUnsettledTargetRefresh &&
+        cachedResult.waiting;
       const providers = resolveAvailabilityEntries(
         cachedValue?.providers ?? [],
         liveValue?.providers ?? null,
@@ -136,9 +140,8 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
           liveValue === null &&
           (cachedResult.waiting || refreshResults.some((result) => result.waiting)),
         availabilityQueryFailed:
-          liveValue === null &&
-          (cachedResult._tag === "Failure" ||
-            refreshResults.some((result) => result._tag === "Failure")),
+          (liveValue === null && cachedResult._tag === "Failure") ||
+          refreshResults.some((result) => result._tag === "Failure"),
         providerProjectionReady: serverProviders !== null,
       });
       statuses.push({
@@ -149,11 +152,15 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
         // enabled or authenticated. Wait for that projection instead of
         // flashing the final empty state while it is still loading.
         ...presentationState,
-        isRefreshing: refreshResults.some((result) => result.waiting) || isSynchronizingBaseQuery,
+        isRefreshing:
+          connected &&
+          (refreshResults.some((result) => result.waiting) || isSynchronizingBaseQuery),
         hasUnsettledRefresh: hasUnsettledTargetRefresh,
-        isBaseQueryRefreshing: cachedResult.waiting,
+        isBaseQueryRefreshing: connected && cachedResult.waiting,
         refreshingInstanceIds: environmentRefreshTargets.flatMap((target, index) =>
-          refreshResults[index]?.waiting || isSynchronizingBaseQuery ? [target.instanceId] : [],
+          connected && (refreshResults[index]?.waiting || isSynchronizingBaseQuery)
+            ? [target.instanceId]
+            : [],
         ),
         providers,
         serverProviders,
@@ -165,17 +172,19 @@ const providerAvailabilityAtom = Atom.family((refreshKey: string) =>
 );
 
 const NO_CAPACITY_REFRESH_KEY = capacityRefreshKey([]);
+const activeCapacityRefreshAtom = Atom.make(NO_CAPACITY_REFRESH_KEY);
 
 /**
  * The cached per-instance availability reading, for surfaces that want the
  * numbers without the Usage page's summaries.
  *
- * Shares one non-refreshing atom with every reader. Mounting a reader subscribes
+ * Shares the active refresh snapshot with every reader. Mounting a reader subscribes
  * it to availability changes and may start the cached query, but never asks a
  * provider CLI for a forced refresh.
  */
 export function useProviderAvailability(): readonly EnvironmentProviderAvailabilityStatus[] {
-  return useAtomValue(providerAvailabilityAtom(NO_CAPACITY_REFRESH_KEY));
+  const refreshKey = useAtomValue(activeCapacityRefreshAtom);
+  return useAtomValue(providerAvailabilityAtom(refreshKey));
 }
 
 /**
@@ -205,6 +214,13 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
   }).pipe(Atom.withLabel(`web-usage:window:${windowKey}`)),
 );
 
+const sidebarHistoryAtom = Atom.make<readonly EnvironmentUsageStatus[]>([]);
+
+/** Shares the page's selected history window without issuing another usage query. */
+export function useUsageSidebarHistory() {
+  return useAtomValue(sidebarHistoryAtom);
+}
+
 export interface UsageView {
   readonly accounts: readonly UsageAccount[];
   readonly merged: MergedUsage;
@@ -224,8 +240,8 @@ export interface UsageView {
   readonly isUsageRefreshing: boolean;
   /** Rescans historical usage without probing Provider quota. */
   readonly refreshUsage: (input?: UsageSummaryInput) => void;
-  /** Revalidates missing, stale or failed subscription readings without rescanning usage. */
-  readonly refreshCapacity: (target?: CapacityRefreshTarget) => void;
+  /** Revalidates eligible subscription readings without rescanning usage. */
+  readonly refreshCapacity: (targets?: readonly CapacityRefreshTarget[]) => void;
   readonly providerAvailability: readonly EnvironmentProviderAvailabilityStatus[];
   readonly isProviderAvailabilityPending: boolean;
   readonly isCapacityRefreshing: boolean;
@@ -264,19 +280,36 @@ export function useUsage(
     () => selectHistoricalUsageEnvironments(allEnvironments, historicalEnvironmentId),
     [allEnvironments, historicalEnvironmentId],
   );
-  const [refreshKey, setRefreshKey] = useState(NO_CAPACITY_REFRESH_KEY);
+  useEffect(() => {
+    appAtomRegistry.set(sidebarHistoryAtom, environments);
+  }, [environments]);
+  useEffect(() => () => appAtomRegistry.set(sidebarHistoryAtom, []), []);
+  const refreshKey = useAtomValue(activeCapacityRefreshAtom);
+  const setRefreshKey = useCallback((value: string | ((current: string) => string)) => {
+    appAtomRegistry.set(
+      activeCapacityRefreshAtom,
+      typeof value === "function" ? value(appAtomRegistry.get(activeCapacityRefreshAtom)) : value,
+    );
+  }, []);
+  useEffect(
+    () => () => appAtomRegistry.set(activeCapacityRefreshAtom, NO_CAPACITY_REFRESH_KEY),
+    [],
+  );
   const [focusGeneration, setFocusGeneration] = useState(0);
   const attemptedFocusGeneration = useRef(-1);
   const baseRefreshStartedForKey = useRef<string | null>(null);
   const providerAvailability = useAtomValue(providerAvailabilityAtom(refreshKey));
 
-  const beginCapacityRefresh = useCallback((targets: readonly CapacityRefreshTarget[]) => {
-    if (targets.length === 0) return;
-    refreshProviderCapacity(usageRefreshPorts, targets);
-    setRefreshKey((current) =>
-      capacityRefreshKey([...parseCapacityRefreshKey(current), ...targets]),
-    );
-  }, []);
+  const beginCapacityRefresh = useCallback(
+    (targets: readonly CapacityRefreshTarget[]) => {
+      if (targets.length === 0) return;
+      refreshProviderCapacity(usageRefreshPorts, targets);
+      setRefreshKey((current) =>
+        capacityRefreshKey([...parseCapacityRefreshKey(current), ...targets]),
+      );
+    },
+    [setRefreshKey],
+  );
 
   // A refresh query is one-shot. Once every target settles, re-read the normal
   // cached query and return to it; the last known values stayed visible while
@@ -317,7 +350,7 @@ export function useUsage(
       baseRefreshStartedForKey.current = null;
       setRefreshKey(NO_CAPACITY_REFRESH_KEY);
     }
-  }, [providerAvailability, refreshKey]);
+  }, [providerAvailability, refreshKey, setRefreshKey]);
 
   useEffect(() => {
     const onFocus = () => setFocusGeneration((generation) => generation + 1);
@@ -337,7 +370,7 @@ export function useUsage(
       return;
     }
     attemptedFocusGeneration.current = focusGeneration;
-    beginCapacityRefresh(staleCapacityTargets(providerAvailability));
+    beginCapacityRefresh(capacityRefreshTargets(providerAvailability));
   }, [beginCapacityRefresh, focusGeneration, providerAvailability, refreshKey]);
 
   // Refreshing only the derived atom would re-read the per-environment SWR
@@ -351,10 +384,8 @@ export function useUsage(
   );
 
   const refreshCapacity = useCallback(
-    (target?: CapacityRefreshTarget) =>
-      beginCapacityRefresh(
-        target === undefined ? staleCapacityTargets(providerAvailability) : [target],
-      ),
+    (targets?: readonly CapacityRefreshTarget[]) =>
+      beginCapacityRefresh(capacityRefreshTargets(providerAvailability, "all", targets)),
     [beginCapacityRefresh, providerAvailability],
   );
 

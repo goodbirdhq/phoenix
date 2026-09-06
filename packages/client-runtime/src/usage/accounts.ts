@@ -60,7 +60,7 @@ export function buildUsageAccounts(
     );
     const summary = historyByEnvironment.get(environment.environmentId);
     for (const provider of environment.serverProviders ?? []) {
-      if (!USAGE_DRIVERS.has(provider.driver)) continue;
+      if (!provider.enabled || !USAGE_DRIVERS.has(provider.driver)) continue;
       const reading = availabilityByInstance.get(provider.instanceId);
       // Logged-out/unknown instances must not inherit a former login's quota identity.
       const identity =

@@ -21,7 +21,8 @@ export function UsageReport({
   return (
     <View className="gap-4">
       <Text className="text-xs text-foreground-muted">
-        Selected-period API estimates. Unlinked native history remains unattributed.
+        Selected-period API estimates. Unlinked sessions are provider history without a matching
+        Phoenix conversation; their usage is included in totals.
       </Text>
       {merged.sessionDetailUnavailable.length > 0 && (
         <Text className="text-xs text-foreground-muted">

@@ -16,7 +16,7 @@ import {
   refreshProviderCapacity,
   resolveAvailabilityEntries,
   selectHistoricalUsageEnvironments,
-  staleCapacityTargets,
+  capacityRefreshTargets,
   type UsageRefreshPorts,
 } from "./usage.logic";
 
@@ -178,11 +178,27 @@ describe("Usage refresh orchestration", () => {
         skills: [],
         availabilityRefreshSupported: true,
       }) as ServerProvider;
-    const result = staleCapacityTargets([
+    const environments = [
       {
         environmentId,
         isPending: false,
-        serverProviders: [provider("missing"), provider("fresh"), provider("stale")],
+        serverProviders: [
+          provider("missing"),
+          provider("fresh"),
+          provider("stale"),
+          { ...provider("disabled"), enabled: false },
+          { ...provider("codex"), driver: ProviderDriverKind.make("codex") },
+          {
+            ...provider("grok"),
+            driver: ProviderDriverKind.make("grok"),
+            availabilityRefreshSupported: false,
+          },
+          {
+            ...provider("opencode"),
+            driver: ProviderDriverKind.make("opencode"),
+            availabilityRefreshSupported: false,
+          },
+        ],
         providers: [
           {
             instanceId: ProviderInstanceId.make("fresh"),
@@ -206,11 +222,57 @@ describe("Usage refresh orchestration", () => {
           },
         ],
       },
-    ]);
+    ] satisfies Parameters<typeof capacityRefreshTargets>[0];
+    const result = capacityRefreshTargets(environments);
 
+    expect(
+      capacityRefreshTargets(
+        [...environments, { ...environments[0]!, environmentId: EnvironmentId.make("other") }],
+        "all",
+        [{ environmentId, instanceId: ProviderInstanceId.make("fresh") }],
+      ),
+    ).toEqual([{ environmentId, instanceId: ProviderInstanceId.make("fresh") }]);
+    expect(capacityRefreshTargets(environments, "all").map((target) => target.instanceId)).toEqual([
+      "missing",
+      "fresh",
+      "stale",
+      "codex",
+    ]);
     expect(result).toEqual([
       { environmentId: "studio", instanceId: "missing" },
       { environmentId: "studio", instanceId: "stale" },
+      { environmentId: "studio", instanceId: "codex" },
     ]);
   });
+});
+
+it("never schedules a quota probe for a disconnected environment", () => {
+  const targets = capacityRefreshTargets(
+    [
+      {
+        environmentId: EnvironmentId.make("offline"),
+        isConnected: false,
+        isPending: false,
+        providers: [],
+        serverProviders: [
+          {
+            instanceId: ProviderInstanceId.make("codex"),
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            installed: true,
+            version: null,
+            status: "ready",
+            auth: { status: "authenticated" },
+            checkedAt: "2026-09-06T00:00:00.000Z",
+            models: [],
+            slashCommands: [],
+            skills: [],
+            availabilityRefreshSupported: true,
+          },
+        ],
+      },
+    ],
+    "all",
+  );
+  expect(targets).toEqual([]);
 });

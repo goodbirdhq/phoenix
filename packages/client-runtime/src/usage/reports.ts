@@ -50,7 +50,14 @@ export function buildUsageReport(
     .map(([key, group]) => {
       const first = group[0]!;
       const project = first.attribution === "linked" ? first.thread : undefined;
-      const models = group.flatMap((session) => session.models);
+      const models = group
+        .flatMap((session) => session.models)
+        .filter(
+          (model) =>
+            !["synthetic", "<synthetic>"].includes(model.model.trim().toLowerCase()) ||
+            tokens(model) > 0 ||
+            model.costUsd > 0,
+        );
       return {
         key,
         environmentId: first.environmentId,
@@ -61,7 +68,7 @@ export function buildUsageReport(
             : project.projectTitle
           : mode === "projects"
             ? "Unattributed usage"
-            : `Native session · ${first.sessionId}`,
+            : `Unlinked session · ${first.sessionId.slice(0, 8)}`,
         project,
         attribution: project
           ? ("linked" as const)
@@ -80,5 +87,6 @@ export function buildUsageReport(
         unpricedRecords: models.reduce((sum, model) => sum + model.unpricedRecords, 0),
       };
     })
+    .filter((row) => row.models.length > 0 || row.attribution === "linked")
     .sort((a, b) => b.costUsd - a.costUsd || a.key.localeCompare(b.key));
 }

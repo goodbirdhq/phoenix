@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ProviderAvailability } from "@t3tools/contracts";
-import { blockedSessionWindow, primaryUsageWindow } from "@t3tools/client-runtime/usage/quotas";
+import { blockedSessionWindow, lastKnownUsageWindow } from "@t3tools/client-runtime/usage/quotas";
 
 const availability = (windows: ProviderAvailability["windows"]): ProviderAvailability => ({
   status: "available",
@@ -15,25 +15,25 @@ describe("sidebar quota selection", () => {
       { kind: "session", usedPercent: 10 },
       { kind: "weekly", label: "All models", usedPercent: 40 },
     ]);
-    expect(primaryUsageWindow("claude", reading)?.label).toBe("All models");
+    expect(lastKnownUsageWindow("claude", reading)?.label).toBe("All models");
   });
   it("uses the reported Codex primary pool without combining a separate model quota", () => {
     const reading = availability([
       { kind: "model", label: "Spark", usedPercent: 95 },
       { kind: "primary", usedPercent: 20 },
     ]);
-    expect(primaryUsageWindow("codex", reading)?.usedPercent).toBe(20);
+    expect(lastKnownUsageWindow("codex", reading)?.usedPercent).toBe(20);
   });
-  it("does not present a stale or unsupported quota as current", () => {
+  it("keeps stale readings available for labelled display and omits unsupported quotas", () => {
     const reading = availability([{ kind: "weekly", usedPercent: 40 }]);
-    expect(primaryUsageWindow("grok", { ...reading, source: "unsupported" })).toBeUndefined();
+    expect(lastKnownUsageWindow("grok", { ...reading, source: "unsupported" })).toBeUndefined();
     expect(
-      primaryUsageWindow("claude", {
+      lastKnownUsageWindow("claude", {
         ...reading,
         stale: { reason: "refresh_failed", attemptedAt: "2026-09-01T00:00:00.000Z" },
       }),
-    ).toBeUndefined();
-    expect(primaryUsageWindow("opencode", availability([]))).toBeUndefined();
+    ).toEqual(reading.windows[0]);
+    expect(lastKnownUsageWindow("opencode", availability([]))).toBeUndefined();
   });
 });
 
@@ -42,7 +42,7 @@ it("recognizes Claude's explicitly scoped all-models pool", () => {
     { kind: "session", usedPercent: 20 },
     { kind: "weekly", scope: "all-models", usedPercent: 50 },
   ]);
-  expect(primaryUsageWindow("claude", reading)?.usedPercent).toBe(50);
+  expect(lastKnownUsageWindow("claude", reading)?.usedPercent).toBe(50);
 });
 
 it("prioritizes a reached session limit but does not mistake weekly or Spark exhaustion for it", () => {
@@ -71,4 +71,17 @@ it("prioritizes a reached session limit but does not mistake weekly or Spark exh
       stale: { reason: "refresh_failed", attemptedAt: "2026-09-01T00:00:00.000Z" },
     }),
   ).toBeUndefined();
+});
+
+it("retains a failed reading for labelled last-known bars without claiming a session lock", () => {
+  const reading: ProviderAvailability = {
+    ...availability([
+      { kind: "weekly", usedPercent: 40 },
+      { kind: "session", usedPercent: 100 },
+    ]),
+    status: "unknown",
+  };
+  expect(lastKnownUsageWindow("claude", reading)?.usedPercent).toBe(40);
+  expect(blockedSessionWindow("claude", reading)).toBeUndefined();
+  expect(lastKnownUsageWindow("grok", { ...reading, source: "unsupported" })).toBeUndefined();
 });

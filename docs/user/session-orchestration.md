@@ -10,7 +10,9 @@ threads.
 Every session has tools for orchestration alongside its other Phoenix tools:
 
 - **List providers** — enumerate the providers and models this environment can start, so the agent
-  offers real choices instead of guessing.
+  offers real choices instead of guessing. Disabled provider accounts and their models are omitted.
+  Enabled accounts that are not ready are marked offline; agents can request only ready accounts.
+  Starting a child with a disabled account is rejected even if the agent already knows its ID.
 - **List spawned sessions** — see this session's children: status, settled/archived state, whether
   it has posted a report, its worktree, provider/model, and when it was created. Shows active
   (still-counted) children by default — including a settled child whose process has not actually
@@ -138,3 +140,5 @@ Orchestration is bounded so a runaway agent cannot overwhelm your machine:
 
 Settings → General → **Session orchestration** disables the feature for the whole environment. The
 switch applies immediately, including to sessions that are already running.
+
+Provider metadata warnings do not prevent starting a child when the provider is enabled, installed and usable. Disabled providers, signed-out accounts and unavailable or failed runtimes are rejected.

@@ -23,6 +23,7 @@ export interface CapacityRefreshTarget {
 export interface CapacityRefreshEnvironment {
   readonly environmentId: EnvironmentId;
   readonly isPending: boolean;
+  readonly isConnected?: boolean;
   readonly providers: readonly ProviderAvailabilityEntry[];
   readonly serverProviders: readonly ServerProvider[] | null;
 }
@@ -99,19 +100,42 @@ export function capacityRefreshSettlementStep(input: {
   return input.baseQueryWaiting ? "wait-base" : "complete";
 }
 
-export function staleCapacityTargets(
+export function capacityRefreshTargets(
   environments: readonly CapacityRefreshEnvironment[],
+  mode: "stale" | "all" = "stale",
+  scope?: readonly CapacityRefreshTarget[],
 ): readonly CapacityRefreshTarget[] {
   const targets: CapacityRefreshTarget[] = [];
   for (const environment of environments) {
-    if (environment.isPending || environment.serverProviders === null) continue;
+    if (
+      environment.isConnected === false ||
+      environment.isPending ||
+      environment.serverProviders === null
+    )
+      continue;
     const availabilityByInstance = new Map(
       environment.providers.map((entry) => [entry.instanceId, entry.availability]),
     );
     for (const provider of environment.serverProviders) {
       if (!canRefreshProviderAvailability(provider)) continue;
+      if (
+        scope &&
+        !scope.some(
+          (target) =>
+            target.environmentId === environment.environmentId &&
+            target.instanceId === provider.instanceId,
+        )
+      )
+        continue;
       const availability = availabilityByInstance.get(provider.instanceId);
       if (
+        mode === "stale" &&
+        availability?.source === "unsupported" &&
+        availability.observedAt !== undefined
+      )
+        continue;
+      if (
+        mode === "all" ||
         availability === undefined ||
         availability.observedAt === undefined ||
         availability.status === "unknown" ||

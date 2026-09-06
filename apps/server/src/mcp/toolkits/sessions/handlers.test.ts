@@ -1776,6 +1776,72 @@ describe("list_session_providers availability refresh (handler)", () => {
     windows: [],
   } as const;
 
+  it.effect("offers a signed-in provider with degraded metadata as available", () =>
+    Effect.gen(function* () {
+      const result = yield* runHandler(
+        (handlers) => handlers.list_session_providers({ onlyAvailable: true }),
+        {
+          getProviders: Effect.succeed([
+            { ...providerSnapshot({ instanceId: "warning" }), status: "warning" },
+          ]),
+        },
+      );
+      expect(result.providers.map((provider) => [provider.instanceId, provider.available])).toEqual(
+        [["warning", true]],
+      );
+    }),
+  );
+
+  it.effect("never offers a disabled instance, including with onlyAvailable", () =>
+    Effect.gen(function* () {
+      for (const onlyAvailable of [undefined, false, true]) {
+        const result = yield* runHandler(
+          (handlers) => handlers.list_session_providers({ onlyAvailable }),
+          {
+            getProviders: Effect.succeed([
+              providerSnapshot({ instanceId: "enabled" }),
+              providerSnapshot({ instanceId: "disabled", enabled: false }),
+            ]),
+          },
+        );
+        expect(result.providers.map((provider) => provider.instanceId)).toEqual(["enabled"]);
+      }
+    }),
+  );
+
+  it.effect("rejects an explicit disabled instance before creating a child", () =>
+    Effect.gen(function* () {
+      const error = yield* runHandler(
+        (handlers) =>
+          handlers.spawn_session({
+            prompt: "test",
+            providerInstanceId: ProviderInstanceId.make("disabled"),
+          }),
+        {
+          getProviders: Effect.succeed([
+            providerSnapshot({ instanceId: "disabled", enabled: false }),
+          ]),
+          getProjectShellById: () =>
+            Effect.succeed(
+              Option.some({
+                id: pingProjectId,
+                title: "Test project",
+                workspaceRoot: "/repo",
+                defaultModelSelection: null,
+                scripts: [],
+                createdAt: now,
+                updatedAt: now,
+              }),
+            ),
+        },
+      ).pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "SessionOrchestrationUnavailableError",
+        message: expect.stringContaining("disabled"),
+      });
+    }),
+  );
+
   it.effect("only runs the provider CLI for an installed, enabled, signed-in instance", () =>
     Effect.gen(function* () {
       const refreshed: Array<string> = [];
@@ -1800,10 +1866,14 @@ describe("list_session_providers availability refresh (handler)", () => {
       );
 
       expect(refreshed).toEqual(["claude-signed-in"]);
+      expect(
+        result.providers
+          .filter((provider) => provider.available)
+          .map((provider) => provider.instanceId),
+      ).toEqual(["claude-signed-in"]);
       expect(result.providers.map((provider) => provider.instanceId)).toEqual([
         "claude-signed-in",
         "claude-logged-out",
-        "claude-disabled",
         "claude-missing",
       ]);
     }),

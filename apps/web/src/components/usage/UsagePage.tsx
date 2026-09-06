@@ -10,7 +10,11 @@ import { Badge } from "../ui/badge";
 import { UsageAccountHeader } from "./UsageAccountHeader";
 import { UsageEnvironments } from "./UsageEnvironments";
 import { Metric } from "../patterns/Metric";
-import { EnvironmentId, type UsageProviderKind } from "@t3tools/contracts";
+import {
+  canRefreshProviderAvailability,
+  EnvironmentId,
+  type UsageProviderKind,
+} from "@t3tools/contracts";
 import { CheckIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -162,7 +166,7 @@ export function UsagePage() {
   };
   const refreshWindow = () => {
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
-    // Historical usage scans remain independent from provider quota collection.
+    refreshCapacity();
     refreshUsage({
       ...nextWindow,
       includeSessions: pageTab === "projects" || pageTab === "threads",
@@ -182,7 +186,25 @@ export function UsagePage() {
       onMetricChange={setMetric}
       days={windowDays}
       onDaysChange={selectWindow}
-      refreshing={isUsageRefreshing}
+      refreshing={isUsageRefreshing || isCapacityRefreshing}
+      confirmed={
+        !environments.some((environment) => environment.error) &&
+        !providerAvailability.some(
+          (environment) =>
+            environment.hasError ||
+            (environment.isConnected &&
+              environment.providers.some(
+                (entry) =>
+                  environment.serverProviders?.some(
+                    (provider) =>
+                      provider.instanceId === entry.instanceId &&
+                      canRefreshProviderAvailability(provider),
+                  ) &&
+                  entry.availability.source !== "unsupported" &&
+                  (entry.availability.status === "unknown" || entry.availability.stale),
+              )),
+        )
+      }
       onRefresh={refreshWindow}
     />
   );
@@ -306,8 +328,36 @@ export function UsagePage() {
                     driver={selectedAccount.driver}
                     sources={capacitySources}
                     isPending={isProviderAvailabilityPending}
-                    isRefreshing={isCapacityRefreshing}
-                    onRefresh={refreshCapacity}
+                    key={selectedAccount.key}
+                    refreshFailed={selectedAccount.memberships.some((member) =>
+                      providerAvailability.some(
+                        (environment) =>
+                          environment.environmentId === member.environmentId &&
+                          (!environment.isConnected || environment.hasError),
+                      ),
+                    )}
+                    connected={selectedAccount.memberships.some((member) =>
+                      providerAvailability.some(
+                        (environment) =>
+                          environment.environmentId === member.environmentId &&
+                          environment.isConnected,
+                      ),
+                    )}
+                    isRefreshing={selectedAccount.memberships.some((member) =>
+                      providerAvailability.some(
+                        (environment) =>
+                          environment.environmentId === member.environmentId &&
+                          environment.refreshingInstanceIds.includes(member.provider.instanceId),
+                      ),
+                    )}
+                    onRefresh={() =>
+                      refreshCapacity(
+                        selectedAccount.memberships.map((member) => ({
+                          environmentId: EnvironmentId.make(member.environmentId),
+                          instanceId: member.provider.instanceId,
+                        })),
+                      )
+                    }
                   />
                 )}
 
