@@ -2447,3 +2447,42 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }).pipe(TestClock.withLive),
   );
 });
+
+it.effect("refreshes Grok billing without creating a conversation", () =>
+  Effect.gen(function* () {
+    const directory = yield* Effect.promise(() =>
+      NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-quota-")),
+    );
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true })),
+    );
+    const binary = NodePath.join(directory, "grok-probe");
+    const log = NodePath.join(directory, "requests.jsonl");
+    yield* Effect.promise(() =>
+      NodeFSP.writeFile(
+        binary,
+        `#!${process.execPath}
+const fs = require("node:fs");
+require("node:readline").createInterface({input:process.stdin}).on("line", line => {
+ const message = JSON.parse(line);
+ fs.appendFileSync(process.env.PROBE_LOG, JSON.stringify({method:message.method,params:message.params}) + "\\n");
+ if(message.id == null) return;
+ const result = message.method === "initialize" ? {protocolVersion:1,agentCapabilities:{},authMethods:[{id:"cached_token",name:"Cached login"}]}
+ : message.method === "_x.ai/billing" ? {config:{creditUsagePercent:42,currentPeriod:{type:"USAGE_PERIOD_TYPE_WEEKLY"}}} : {};
+ process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:message.id,result}) + "\\n");
+});`,
+        { mode: 0o700 },
+      ),
+    );
+    const adapter = yield* makeTestAdapter(binary, { environment: { PROBE_LOG: log } });
+    const reading = yield* adapter.refreshAvailability!();
+    assert.equal(reading.windows[0]?.usedPercent, 42);
+    const requests = yield* Effect.promise(() => readJsonLines(log));
+    assert.deepEqual(
+      requests.map((row) => row.method),
+      ["initialize", "authenticate", "_x.ai/billing"],
+    );
+    assert.deepEqual(requests[1]?.params, { methodId: "cached_token" });
+    assert.deepEqual(yield* adapter.listSessions(), []);
+  }).pipe(Effect.provide(grokAdapterTestLayer)),
+);

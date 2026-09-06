@@ -80,7 +80,7 @@ export function UsageQuotas({
     : driver === "opencode"
       ? "Balance refresh is not supported by this OpenCode connection. Refresh usage updates token and cost history."
       : driver === "grok"
-        ? "Grok quota refresh is not yet supported. Refresh usage updates token and cost history."
+        ? "Quota refresh is unavailable on this Grok connection. Check its CLI version and sign-in status."
         : "Manual quota refresh is unavailable. Check this account’s connection, installation and sign-in status.";
 
   return (

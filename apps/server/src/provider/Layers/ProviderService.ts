@@ -235,6 +235,7 @@ const NATIVE_AVAILABILITY_SOURCES: Partial<
   Record<string, ReadonlyArray<ProviderAvailability["source"]>>
 > = {
   codex: ["codex_app_server"],
+  grok: ["grok_acp"],
   claudeAgent: ["claude_agent_sdk", "claude_cli_usage"],
 };
 
@@ -254,6 +255,7 @@ const unknownAvailabilityForDriver = ProviderService.unknownAvailabilityForDrive
 // CLI read failed.
 const REFRESH_AVAILABILITY_SOURCES: Partial<Record<string, ProviderAvailability["source"]>> = {
   claudeAgent: "claude_cli_usage",
+  grok: "grok_acp",
 };
 
 /**

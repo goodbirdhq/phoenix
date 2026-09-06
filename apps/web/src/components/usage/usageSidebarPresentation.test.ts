@@ -54,3 +54,20 @@ it("never invents a budget percentage for pay-as-you-go accounts", () => {
   expect(sidebarQuotaPresentation("opencode").bars).toEqual([]);
   expect(sidebarQuotaPresentation("grok").status).toBe("Limits unavailable");
 });
+
+it("shows Grok's reported weekly allowance and retains it as last known after a failed read", () => {
+  const availability: ProviderAvailability = {
+    source: "grok_acp",
+    status: "available",
+    windows: [{ kind: "weekly", usedPercent: 42 }],
+  };
+  expect(sidebarQuotaPresentation("grok", availability)).toEqual({
+    bars: [{ label: "Weekly", usedPercent: 42, spark: false }],
+    status: null,
+    warning: false,
+  });
+  expect(sidebarQuotaPresentation("grok", { ...availability, status: "unknown" })).toMatchObject({
+    bars: [{ label: "Weekly", usedPercent: 42, spark: false }],
+    status: "Last known · needs refresh",
+  });
+});

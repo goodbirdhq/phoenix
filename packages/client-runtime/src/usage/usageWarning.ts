@@ -72,7 +72,9 @@ const emptyAvailabilityForDriver = (driver: string): ProviderAvailability => ({
       ? "codex_app_server"
       : driver === "claudeAgent"
         ? "claude_agent_sdk"
-        : "unsupported",
+        : driver === "grok"
+          ? "grok_acp"
+          : "unsupported",
   windows: [],
 });
 

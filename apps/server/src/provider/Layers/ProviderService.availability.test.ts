@@ -480,3 +480,22 @@ it("keeps Codex Spark updates separate from the main allowance", () => {
       ?.usedPercent,
   ).toBe(40);
 });
+
+it("retains Grok billing for its driver and marks failed refreshes stale", () => {
+  const reading: ProviderAvailability = {
+    source: "grok_acp",
+    status: "available",
+    observedAt: failedAt,
+    windows: [{ kind: "weekly", usedPercent: 42 }],
+  };
+  const provider = ProviderDriverKind.make("grok");
+  expect(availabilityAt({ availability: reading, receivedAtMs: 0 }, provider, 100)).toEqual(
+    reading,
+  );
+  const failed = unknownRefreshAvailability(provider, failedAt);
+  expect(failed.source).toBe("grok_acp");
+  expect(mergeProviderAvailability(reading, failed)).toMatchObject({
+    windows: reading.windows,
+    stale: { reason: "refresh_failed" },
+  });
+});

@@ -38,6 +38,8 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
+import { grokUsageFromResponse } from "../grokUsage.ts";
+
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
@@ -2130,10 +2132,46 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       ),
     );
 
+    const refreshAvailability: NonNullable<GrokAdapterShape["refreshAvailability"]> = () =>
+      Effect.gen(function* () {
+        const cwd = serverConfig.providerStatusCacheDir;
+        yield* fileSystem.makeDirectory(cwd, { recursive: true });
+        const environment = options?.environment ?? hostEnvironment;
+        const runtime = yield* makeGrokAcpRuntime({
+          grokSettings,
+          environment,
+          childProcessSpawner,
+          cwd,
+          clientInfo: { name: "phoenix-usage-probe", version: "0.0.0" },
+        });
+        yield* runtime.initialize();
+        yield* runtime.request("authenticate", {
+          methodId: environment.XAI_API_KEY?.trim() ? "xai.api_key" : "cached_token",
+        });
+        const response = yield* runtime.request("_x.ai/billing", {});
+        return yield* Effect.try(() =>
+          grokUsageFromResponse(response, DateTime.formatIso(DateTime.nowUnsafe())),
+        );
+      }).pipe(
+        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.scoped,
+        Effect.timeout("20 seconds"),
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "refreshAvailability",
+              detail: "Could not refresh Grok account limits.",
+              cause,
+            }),
+        ),
+      );
+
     const streamEvents = Stream.fromPubSub(runtimeEventPubSub);
 
     return {
       provider: PROVIDER,
+      refreshAvailability,
       capabilities: {
         sessionModelSwitch: "in-session",
         promptlessTurnContinuation: true,
