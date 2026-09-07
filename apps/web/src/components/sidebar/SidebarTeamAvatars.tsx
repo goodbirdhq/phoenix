@@ -1,14 +1,6 @@
-import { useMemo, useState, type CSSProperties } from "react";
-import {
-  BotIcon,
-  CheckIcon,
-  ClockIcon,
-  EyeIcon,
-  HourglassIcon,
-  MessageSquareIcon,
-  XIcon,
-  CircleAlertIcon,
-} from "lucide-react";
+import { SessionAvatar } from "./SessionAvatar";
+import { useMemo, useState } from "react";
+import { BotIcon } from "lucide-react";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { type SidebarThreadSummary } from "../../types";
@@ -23,7 +15,7 @@ import { hasUnseenCompletion, resolveSidebarThreadStatus } from "../Sidebar.logi
 import { hasUnseenSidebarWake } from "./SidebarFilters.logic";
 import { cn } from "~/lib/utils";
 
-function SessionIcon({
+export function SessionIcon({
   provider,
   showBadge,
 }: {
@@ -62,60 +54,12 @@ function SessionDetailsRow(props: {
     hasUnseenCompletion({ ...thread, lastVisitedAt: visitedAt }) ||
     hasUnseenSidebarWake(threadWokeAt(thread, { now }), visitedAt);
   const status = effectiveSnoozed(thread, { now }) ? "snoozed" : resolveSidebarThreadStatus(thread);
-  const badges = {
-    approval: { icon: CircleAlertIcon, label: "Decision required", color: "bg-[#B45309]" },
-    input: { icon: MessageSquareIcon, label: "Input required", color: "bg-[#4F46E5]" },
-    failed: { icon: XIcon, label: "Failed", color: "bg-[#B91C1C]" },
-    "awaiting-parent": { icon: HourglassIcon, label: "Waiting on parent", color: "bg-[#4F46E5]" },
-    monitoring: { icon: EyeIcon, label: "Monitoring", color: "bg-[#0284C7]" },
-    snoozed: { icon: ClockIcon, label: "Snoozed", color: "bg-[#71717B]" },
-    ready: { icon: CheckIcon, label: "Ready", color: "bg-[#047857]" },
-  };
-  const badge = status === "working" ? null : badges[status];
   const model = provider?.models.find((entry) => entry.slug === thread.modelSelection.model);
   return (
     <div className="flex shrink-0 items-start gap-2 px-2 py-1.5">
-      <span className="relative flex size-6 shrink-0 items-center justify-center rounded-full border border-sidebar-border bg-popover">
+      <SessionAvatar status={status} size={24}>
         <SessionIcon provider={provider} showBadge={props.showBadge} />
-        {status === "working" ? (
-          <svg
-            role="img"
-            aria-label="Working"
-            viewBox="0 0 30 30"
-            className="pointer-events-none absolute -inset-[3px] size-[30px] text-[#0284C7]"
-          >
-            <circle
-              cx="15"
-              cy="15"
-              r="14"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeDasharray="2 3"
-              opacity="0.3"
-            />
-            <path
-              d="M15 1a14 14 0 0 1 14 14"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              className="origin-center animate-spin motion-reduce:animate-none"
-            />
-          </svg>
-        ) : badge ? (
-          <span
-            role="img"
-            aria-label={badge.label}
-            className={cn(
-              "absolute -right-1 -top-1 z-20 flex size-3.5 items-center justify-center rounded-full border border-popover text-white",
-              badge.color,
-            )}
-          >
-            <badge.icon aria-hidden className="size-2.5" />
-          </span>
-        ) : null}
-      </span>
+      </SessionAvatar>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <Tooltip>
           <TooltipTrigger
@@ -162,12 +106,11 @@ export function SidebarTeamAvatars(props: {
     [providers],
   );
   const hasChildren = members.length > 1;
-  const visible = members.slice(0, 5);
-  const overflow = members.length - visible.length;
-  // Reserve the expanded footprint so the branch never moves. The counter
-  // anchors the right edge while intermediate avatars fan out to its left.
-  const steps = visible.length - 1 + Number(overflow > 0);
-  const width = Math.max(hasChildren ? 42 : 24, 24 + steps * 18);
+  const children = members.slice(1);
+  const visible = children.slice(0, 4);
+  const overflow = children.length - visible.length;
+  const steps = Math.max(0, visible.length - 1 + Number(overflow > 0));
+  const width = 22 + steps * 16;
   const details =
     hoverOpen || detailsOpen ? (
       <div className="flex max-h-80 w-[350px] max-w-[calc(100vw-40px)] flex-col gap-0.5 overflow-y-auto text-xs">
@@ -189,57 +132,39 @@ export function SidebarTeamAvatars(props: {
       </div>
     ) : null;
   const avatars = (
-    <>
+    <span className="relative block h-[22px] w-full">
       {visible.map((thread, index) => {
         const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+        const status = effectiveSnoozed(thread, { now: new Date().toISOString() })
+          ? "snoozed"
+          : resolveSidebarThreadStatus(thread);
         return (
           <span
             key={thread.id}
-            aria-hidden
-            className={cn(
-              "pointer-events-none absolute top-0 flex size-6 items-center justify-center rounded-full border border-sidebar-border bg-sidebar-row-active transition-[left,opacity] duration-150 ease-out motion-reduce:transition-none",
-              index === 0
-                ? "left-[var(--rest-left)] group-hover/sidebar-row:left-[var(--open-left)] group-focus-visible/avatars:left-[var(--open-left)] group-data-[selected=true]/avatars:left-[var(--open-left)]"
-                : "left-[var(--rest-left)] opacity-0 group-hover/sidebar-row:left-[var(--open-left)] group-hover/sidebar-row:opacity-100 group-focus-visible/avatars:left-[var(--open-left)] group-data-[selected=true]/avatars:left-[var(--open-left)] group-focus-visible/avatars:opacity-100 group-data-[selected=true]/avatars:opacity-100",
-            )}
-            style={
-              {
-                "--rest-left": hasChildren ? "calc(100% - 42px)" : "0px",
-                "--open-left": steps === 0 ? "0px" : `calc(${index / steps} * (100% - 24px))`,
-              } as CSSProperties
-            }
+            className="absolute top-0 flex size-[22px] items-center justify-center rounded-full bg-sidebar ring-1 ring-sidebar"
+            style={{ left: steps === 0 ? 0 : `calc((100% - 22px) * ${index / steps})` }}
           >
-            <SessionIcon
-              provider={providers.get(instanceId)}
-              showBadge={instanceBadges.get(instanceId) ?? false}
-            />
+            <SessionAvatar status={status} size={20}>
+              <SessionIcon
+                provider={providers.get(instanceId)}
+                showBadge={instanceBadges.get(instanceId) ?? false}
+              />
+            </SessionAvatar>
           </span>
         );
       })}
-      {hasChildren ? (
-        <span
-          aria-hidden
-          className={cn(
-            "pointer-events-none absolute right-0 top-0 flex size-6 items-center justify-center rounded-full border border-sidebar-border bg-sidebar-row-active text-xs text-sidebar-muted-foreground transition-opacity duration-150 motion-reduce:transition-none",
-            overflow === 0 &&
-              "group-hover/sidebar-row:opacity-0 group-focus-visible/avatars:opacity-0 group-data-[selected=true]/avatars:opacity-0",
-          )}
-        >
-          <span className="group-hover/sidebar-row:hidden group-focus-visible/avatars:hidden group-data-[selected=true]/avatars:hidden">
-            ×{members.length}
-          </span>
-          <span className="hidden group-hover/sidebar-row:inline group-focus-visible/avatars:inline group-data-[selected=true]/avatars:inline">
-            +{overflow}
-          </span>
+      {overflow > 0 ? (
+        <span className="absolute right-0 top-0 flex size-[22px] items-center justify-center rounded-full border-2 border-sidebar bg-muted text-[10px] text-sidebar-muted-foreground">
+          +{overflow}
         </span>
       ) : null}
-    </>
+    </span>
   );
   const button = (
     <button
       type="button"
-      className="group/avatars relative block h-6 shrink-0 cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      style={{ width, maxWidth: "50%" }}
+      className="group/avatars relative block h-[22px] shrink-0 cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      style={{ width, maxWidth: "calc(100% - 6px)" }}
       data-selected={props.selected}
       aria-label={
         hasChildren

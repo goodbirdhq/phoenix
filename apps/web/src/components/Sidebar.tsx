@@ -1,3 +1,4 @@
+import { SessionAvatar } from "./sidebar/SessionAvatar";
 import { autoAnimate } from "@formkit/auto-animate";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
@@ -31,17 +32,18 @@ import {
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
-  ArrowRightIcon,
   FolderTreeIcon,
   EllipsisIcon,
-  AlarmClockIcon,
   CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
   CircleCheckIcon,
-  CircleDashedIcon,
   ClockIcon,
   GitBranchIcon,
+  GitMergeIcon,
+  GitPullRequestIcon,
+  GitPullRequestClosedIcon,
+  HistoryIcon,
   MessageSquareIcon,
   PinIcon,
   PlusIcon,
@@ -123,7 +125,7 @@ import {
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
-import { SidebarTeamAvatars } from "./sidebar/SidebarTeamAvatars";
+import { SessionIcon, SidebarTeamAvatars } from "./sidebar/SidebarTeamAvatars";
 import {
   buildSidebarTeams,
   visibleSidebarTeams,
@@ -160,7 +162,6 @@ import {
   resolveDisplayedThreadPr,
   resolveDisplayedThreadPrProvider,
   setThreadChangeRequestSnapshot,
-  settledPrHoverColorClass,
   terminalStatusFromRunningIds,
   threadChangeRequestSnapshotsAtom,
   type ThreadChangeRequestSnapshot,
@@ -262,6 +263,7 @@ function terminalProcessLabel(count: number): string {
 
 function SidebarThreadTooltip({
   thread,
+  parentTitle,
   projectTitle,
   projectCwd,
   projectFaviconPath,
@@ -275,6 +277,7 @@ function SidebarThreadTooltip({
   terminalProcessCount,
 }: {
   thread: SidebarThreadSummary;
+  parentTitle?: string | null;
   projectTitle: string | null;
   projectCwd: string | null;
   projectFaviconPath: string | null;
@@ -313,6 +316,12 @@ function SidebarThreadTooltip({
                 className="size-3 shrink-0 stroke-muted-foreground"
               />
               <div className="min-w-0 truncate text-foreground/75">{projectTitle}</div>
+            </div>
+          ) : null}
+          {parentTitle ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <FolderTreeIcon className="size-3 shrink-0" />
+              <span className="truncate">From {parentTitle}</span>
             </div>
           ) : null}
           {environmentLabel ? (
@@ -716,18 +725,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   teamExpanded: boolean;
   onToggleTeam: (key: string) => void;
   parentTitle: string | null;
-  // Slim rows are either settled (action: un-settle) or merely quiet
-  // (seen Ready threads — action: settle).
+  // Shelves keep the same row geometry and expose their reverse action on hover.
   variantAction: "settle" | "unsettle" | "unsnooze";
   // False on environments whose server predates thread.settle/unsettle:
   // the lifecycle affordances hide entirely rather than fail on click.
   settlementSupported: boolean;
   // Same contract for thread.snooze/unsnooze.
   snoozeSupported: boolean;
-  // Pinned threads show the same pin marker in active, settled, and snoozed
-  // rows. The marker can unpin the thread when the server supports pinning.
-  pinningSupported: boolean;
-  isPinned: boolean;
   // Present only on pinned cards whose server supports reordering: dnd-kit
   // sortable bag applied to the card root so the whole card drags (the
   // pointer sensor's distance constraint keeps plain clicks working).
@@ -760,7 +764,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onUnsettle: (threadRef: ScopedThreadRef) => void;
   onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
-  onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   changeRequestSnapshot: ThreadChangeRequestSnapshot | null;
   onChangeRequestSnapshot: (
@@ -784,7 +787,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onThreadClick,
     onUnsettle,
     onUnsnooze,
-    onUnpin,
     openPullRequestsInRightPanel,
     renamingTitle,
     thread,
@@ -839,9 +841,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // switching sidebars must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const teamMembers = useMemo(() => props.teamMembers ?? [thread], [props.teamMembers, thread]);
-  const pinnedTeamCount = teamMembers.filter(
-    (member) => member.id !== thread.id && member.pinnedAt != null,
-  ).length;
   const teamStatus = resolveSidebarTeamStatus(thread, teamMembers, props.teamExpanded);
   const status = teamStatus.status;
   // A woken thread reappears at its original position (the sort is
@@ -880,7 +879,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     linkedPullRequestStatus,
   });
   const prStatus = prStatusIndicator(pr, prProvider);
-  const settledPrHoverClass = pr ? settledPrHoverColorClass(pr.state) : undefined;
   useEffect(() => {
     const nextSnapshot = nextThreadChangeRequestSnapshot({
       threadBranch: thread.branch,
@@ -915,9 +913,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     ? getTriggerDisplayModelLabel(selectedModel)
     : thread.modelSelection.model;
 
+  const [avatarDetailsOpen, setAvatarDetailsOpen] = useState(false);
   const detailsTooltip = (
     <SidebarThreadTooltip
       thread={thread}
+      parentTitle={props.parentTitle}
       projectTitle={props.projectTitle}
       projectCwd={props.projectCwd}
       projectFaviconPath={props.projectFaviconPath}
@@ -1023,14 +1023,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     },
     [onUnsnooze, threadRef],
   );
-  const handleUnpinClick = useCallback(
-    (event: ReactMouseEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      onUnpin(threadRef);
-    },
-    [onUnpin, threadRef],
-  );
   const handleSnoozePreset = useCallback(
     (preset: SnoozePreset) => {
       onSnooze(threadRef, preset);
@@ -1075,7 +1067,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const rowSurfaceClassName = cn(
     "group/sidebar-row relative w-full cursor-pointer rounded-lg text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-ring",
     props.isActive
-      ? "border border-sidebar-border bg-sidebar-row-active text-sidebar-foreground"
+      ? "bg-sidebar-row-active text-sidebar-foreground"
       : isSelected
         ? "bg-sidebar-row-selected text-sidebar-foreground"
         : "text-sidebar-foreground hover:bg-sidebar-row-hover",
@@ -1097,8 +1089,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   ) : (
     <span
       className={cn(
-        "min-w-0 flex-1 text-sm leading-5 transition-opacity motion-reduce:transition-none",
-        "truncate tracking-[-0.01em]",
+        "min-w-0 flex-1 text-sm leading-5 transition-opacity motion-reduce:transition-none group-hover/sidebar-row:pr-[72px] group-focus-within/sidebar-row:pr-[72px]",
+        "truncate",
         props.isActive || isSelected || isUnread || isWoke
           ? "font-medium text-sidebar-foreground"
           : "font-normal text-sidebar-muted-foreground group-hover/sidebar-row:text-sidebar-foreground",
@@ -1113,26 +1105,31 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // browser. A plain click still opens T3's pull request view.
   const prBadge =
     prStatus && pr ? (
-      <a
-        href={pr.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={handlePrClick}
-        className={cn(
-          // Sidebar chrome follows the interface font; tabular digits keep the
-          // number from reflowing as PR states stream in.
-          "shrink-0 text-xs tabular-nums hover:underline",
-          variant === "slim" && variantAction === "unsettle"
-            ? props.isActive
-              ? "text-secondary-label"
-              : cn("text-secondary-label transition-colors", settledPrHoverClass)
-            : prStatus.colorClass,
-        )}
-        aria-label={prStatus.tooltip}
-      >
-        #{pr.number}
-      </a>
+      <Tooltip>
+        <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+          <a
+            href={pr.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={handlePrClick}
+            className={cn(
+              "inline-flex shrink-0 rounded-sm focus-visible:ring-2 focus-visible:ring-ring",
+              prStatus.colorClass,
+            )}
+            aria-label={prStatus.tooltip}
+          >
+            {pr.state === "merged" ? (
+              <GitMergeIcon className="size-3.5" />
+            ) : pr.state === "closed" ? (
+              <GitPullRequestClosedIcon className="size-3.5" />
+            ) : (
+              <GitPullRequestIcon className="size-3.5" />
+            )}
+          </a>
+        </TooltipTrigger>
+        <TooltipPopup>{prStatus.tooltip}</TooltipPopup>
+      </Tooltip>
     ) : null;
   const terminalStatusIcon = terminalStatus ? (
     <span
@@ -1144,132 +1141,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       <TerminalIcon className={cn("size-3.5", terminalStatus.pulse && "animate-status-pulse")} />
     </span>
   ) : null;
-  const pinIndicator = props.isPinned ? (
-    props.pinningSupported ? (
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              type="button"
-              aria-label="Unpin thread"
-              onClick={handleUnpinClick}
-              className="inline-flex cursor-pointer items-center rounded-sm text-muted-foreground/65 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          }
-        >
-          <PinIcon aria-hidden className="size-3 shrink-0" />
-        </TooltipTrigger>
-        <TooltipPopup>Unpin thread</TooltipPopup>
-      </Tooltip>
-    ) : (
-      <PinIcon
-        aria-label="Pinned"
-        role="img"
-        className="size-3 shrink-0 text-muted-foreground/65"
-      />
-    )
-  ) : null;
-
-  if (variant === "slim") {
-    return (
-      <li
-        data-thread-item
-        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_52px]"
-      >
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <div
-                ref={rowRef}
-                role="button"
-                tabIndex={0}
-                data-testid="sidebar-row-slim"
-                aria-busy={isRegeneratingTitle || undefined}
-                className={cn(rowSurfaceClassName, "flex flex-col gap-1 px-3 py-1.5")}
-                onClick={handleClick}
-                onDoubleClick={handleDoubleClick}
-                onKeyDown={handleKeyDown}
-                onContextMenu={handleContextMenu}
-              />
-            }
-          >
-            <div className="flex h-5 min-w-0 items-center gap-2">
-              {title}
-              {terminalStatusIcon}
-              {prBadge}
-              {isRegeneratingTitle ? (
-                <span role="status" className="sr-only">
-                  Regenerating title
-                </span>
-              ) : null}
-              {isWoke ? (
-                <button
-                  type="button"
-                  aria-label="Dismiss Woke notification"
-                  onClick={handleAcknowledgeWokeClick}
-                  className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-sm text-xs text-[#B45309] focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-300"
-                >
-                  <AlarmClockIcon className="size-3" />
-                  <span role="status">Woke</span>
-                </button>
-              ) : (
-                <span className="shrink-0 text-xs leading-4 text-sidebar-muted-foreground tabular-nums">
-                  {variantAction === "unsnooze"
-                    ? props.snoozeWakeLabelText
-                    : settledTimeLabel(thread)}
-                </span>
-              )}
-            </div>
-            <div className="flex h-4 min-w-0 items-center gap-2 text-xs leading-4 text-sidebar-muted-foreground">
-              <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                <ProjectFavicon
-                  environmentId={thread.environmentId}
-                  cwd={props.projectCwd ?? ""}
-                  faviconPath={props.projectFaviconPath}
-                  className="size-4 shrink-0"
-                  fallbackIcon={MessageSquareIcon}
-                />
-                {pinIndicator}
-                <span className="min-w-0 truncate">
-                  {props.projectTitle}
-                  {variantAction === "unsnooze" && thread.snoozedUntil
-                    ? ` · Wakes ${snoozeWakeDescription(thread.snoozedUntil, new Date(), props.timestampFormat)}`
-                    : ""}
-                </span>
-              </div>
-              {variantAction === "unsnooze" ? (
-                props.snoozeSupported ? (
-                  <button
-                    type="button"
-                    aria-label="Wake thread now"
-                    onClick={handleUnsnoozeClick}
-                    className="shrink-0 cursor-pointer rounded-sm text-sidebar-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    Wake now
-                  </button>
-                ) : null
-              ) : props.settlementSupported ? (
-                <button
-                  type="button"
-                  aria-label={variantAction === "unsettle" ? "Un-settle thread" : "Settle thread"}
-                  onClick={variantAction === "unsettle" ? handleUnsettleClick : handleSettleClick}
-                  className="shrink-0 cursor-pointer rounded-sm text-sidebar-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {variantAction === "unsettle" ? "Unsettle" : "Settle"}
-                </button>
-              ) : null}
-            </div>
-            {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
-          </TooltipTrigger>
-          {detailsTooltip}
-        </Tooltip>
-      </li>
-    );
-  }
-
   const sortable = props.sortable;
   const isNested = props.hierarchyIndentDepth > 0;
-  const leadingLabel = isNested ? modelLabel : props.projectTitle;
   return (
     <li
       data-thread-item
@@ -1294,8 +1167,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       className={cn(
         "list-none [content-visibility:auto]",
         isNested
-          ? "relative [contain-intrinsic-size:auto_76px] before:absolute before:inset-y-0 before:left-[var(--sidebar-hierarchy-rail)] before:w-px before:bg-sidebar-border before:content-['']"
-          : "[contain-intrinsic-size:auto_76px]",
+          ? "relative [contain-intrinsic-size:auto_66px]"
+          : "[contain-intrinsic-size:auto_66px]",
         sortable?.isDragging && "z-20 opacity-80",
       )}
     >
@@ -1303,9 +1176,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         ref={rowRef}
         role="button"
         tabIndex={0}
-        data-testid="sidebar-row-card"
+        data-testid={variant === "slim" ? "sidebar-row-slim" : "sidebar-row-card"}
         aria-busy={isRegeneratingTitle || undefined}
-        className={rowSurfaceClassName}
+        className={cn(rowSurfaceClassName, isNested && "ml-5 w-[calc(100%-20px)]")}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         onKeyDown={handleKeyDown}
@@ -1313,205 +1186,178 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       >
         <div
           className={cn(
-            "relative z-10 flex flex-col",
-            isNested ? "gap-1 py-1 pr-3" : "gap-1 px-3 py-1",
+            "relative flex min-h-[66px] items-center gap-2.5 py-3 pl-2.5",
+            isNested ? "pr-2.5" : "pr-5",
           )}
-          style={isNested ? { paddingLeft: props.hierarchyIndentDepth === 1 ? 23 : 21 } : undefined}
         >
-          <div className="relative flex h-4 min-w-0 items-center gap-1.5">
-            {!isNested ? (
-              <ProjectFavicon
-                environmentId={thread.environmentId}
-                cwd={props.projectCwd ?? ""}
-                faviconPath={props.projectFaviconPath}
-                className="size-4 shrink-0"
-              />
-            ) : null}
-            <span className="min-w-0 flex-1 truncate text-xs leading-4 text-sidebar-muted-foreground">
-              {leadingLabel}
-            </span>
-            <span
-              className={cn(
-                "flex h-4 min-w-[76px] items-center justify-end gap-1 text-xs leading-4 group-hover/sidebar-row:invisible group-focus-within/sidebar-row:invisible [@media(hover:none)]:visible! [@media(hover:none)]:pr-6",
-                snoozeMenuOpen && "invisible",
-              )}
+          <Tooltip
+            open={avatarDetailsOpen || undefined}
+            onOpenChange={(open) => {
+              if (!open) setAvatarDetailsOpen(false);
+            }}
+          >
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={
+                    reviewAction
+                      ? `${reviewAction.label} in ${teamStatus.target.title}`
+                      : "Session details"
+                  }
+                  className="flex w-8 shrink-0 items-center rounded-full focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (reviewAction)
+                      onThreadActivate(
+                        scopeThreadRef(teamStatus.target.environmentId, teamStatus.target.id),
+                      );
+                    else setAvatarDetailsOpen((open) => !open);
+                  }}
+                />
+              }
             >
-              {isWokeStatus ? (
+              <SessionAvatar
+                status={variantAction === "unsnooze" ? "snoozed" : status}
+                providerBadge={
+                  !thread.spawnedByThreadId ? (
+                    <SessionIcon provider={providerEntry ?? undefined} showBadge={false} />
+                  ) : undefined
+                }
+              >
+                {thread.spawnedByThreadId ? (
+                  <SessionIcon
+                    provider={providerEntry ?? undefined}
+                    showBadge={showInstanceBadge}
+                  />
+                ) : (
+                  <ProjectFavicon
+                    environmentId={thread.environmentId}
+                    cwd={props.projectCwd ?? ""}
+                    faviconPath={props.projectFaviconPath}
+                    className="size-4"
+                  />
+                )}
+              </SessionAvatar>
+            </TooltipTrigger>
+            {detailsTooltip}
+          </Tooltip>
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <div className="relative flex h-5 min-w-0 items-center gap-2">
+              <Tooltip>
+                <TooltipTrigger render={<span className="flex min-w-0 flex-1" />}>
+                  {title}
+                </TooltipTrigger>
+                {detailsTooltip}
+              </Tooltip>
+              <span
+                className={cn(
+                  "w-[30px] shrink-0 text-right text-xs leading-[18px] text-sidebar-muted-foreground group-hover/sidebar-row:invisible group-focus-within/sidebar-row:invisible",
+                  snoozeMenuOpen && "invisible",
+                )}
+              >
+                {isWokeStatus ? (
+                  <button
+                    type="button"
+                    aria-label="Dismiss Woke notification"
+                    onClick={handleAcknowledgeWokeClick}
+                    className="text-amber-700 dark:text-amber-300"
+                  >
+                    Woke
+                  </button>
+                ) : variant === "slim" ? (
+                  variantAction === "unsnooze" ? (
+                    props.snoozeWakeLabelText
+                  ) : (
+                    settledTimeLabel(thread)
+                  )
+                ) : status === "ready" ? (
+                  threadTimeLabel(thread)
+                ) : null}
+              </span>
+              <span
+                className={cn(
+                  "pointer-events-none absolute right-0 -top-0.5 flex h-6 shrink-0 items-center rounded-sm bg-sidebar-row-hover opacity-0 group-focus-within/sidebar-row:pointer-events-auto group-focus-within/sidebar-row:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100 [@media(pointer:coarse)]:[&>*:not(:last-child)]:hidden",
+                  snoozeMenuOpen && "pointer-events-auto opacity-100",
+                )}
+              >
+                {variant === "slim" ? (
+                  <button
+                    type="button"
+                    onClick={
+                      variantAction === "unsnooze" ? handleUnsnoozeClick : handleUnsettleClick
+                    }
+                    aria-label={
+                      variantAction === "unsnooze" ? "Wake thread now" : "Un-settle thread"
+                    }
+                    disabled={
+                      variantAction === "unsnooze"
+                        ? !props.snoozeSupported
+                        : !props.settlementSupported
+                    }
+                    className="px-1 text-xs text-sidebar-muted-foreground hover:text-sidebar-foreground disabled:hidden"
+                  >
+                    {variantAction === "unsnooze" ? "Wake now" : "Unsettle"}
+                  </button>
+                ) : props.settlementSupported ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label="Settle thread"
+                          onClick={handleSettleClick}
+                          className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-foreground"
+                        />
+                      }
+                    >
+                      <CheckIcon className="size-3.5" />
+                    </TooltipTrigger>
+                    <TooltipPopup>Settle thread</TooltipPopup>
+                  </Tooltip>
+                ) : null}
+                {variant !== "slim" && showSnoozeButton ? (
+                  <SnoozePopoverButton
+                    open={snoozeMenuOpen}
+                    onOpenChange={setSnoozeMenuOpen}
+                    onSnooze={handleSnoozePreset}
+                    timestampFormat={props.timestampFormat}
+                  />
+                ) : null}
                 <button
                   type="button"
-                  aria-label="Dismiss Woke notification"
-                  onClick={handleAcknowledgeWokeClick}
-                  className="inline-flex items-center gap-1 text-[#B45309] dark:text-amber-300"
-                >
-                  <AlarmClockIcon className="size-4" />
-                  <span>Woke</span>
-                </button>
-              ) : reviewAction ? (
-                <button
-                  type="button"
-                  aria-label={`${reviewAction.label} in ${teamStatus.target.title}`}
-                  className={cn(
-                    "inline-flex min-w-0 cursor-pointer items-center gap-[5px] font-medium hover:underline",
-                    reviewAction.className,
-                  )}
+                  aria-label="Thread options"
+                  className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-foreground"
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    onThreadActivate(
-                      scopeThreadRef(teamStatus.target.environmentId, teamStatus.target.id),
-                    );
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    onContextMenu(threadRef, { x: rect.right, y: rect.bottom });
                   }}
                 >
-                  <span className="truncate">{reviewAction.label}</span>
-                  <ArrowRightIcon className="size-3 shrink-0" />
+                  <EllipsisIcon className="size-3.5" />
                 </button>
-              ) : status === "working" ? (
-                <span
-                  role="img"
-                  aria-label={`${teamStatus.workingCount} working ${teamStatus.workingCount === 1 ? "session" : "sessions"}`}
-                  className="inline-flex items-center gap-1 text-[#0284C7] dark:text-sky-400"
-                >
-                  {!props.teamExpanded && teamMembers.length > 1 ? (
-                    <span>{teamStatus.workingCount} ×</span>
-                  ) : null}
-                  <CircleDashedIcon aria-hidden className="size-4 text-[#60A5FA]" />
-                </span>
-              ) : status === "awaiting-parent" ? (
-                <span className="truncate text-[#4F46E5] dark:text-indigo-300">
-                  Waiting on parent
-                </span>
-              ) : status === "monitoring" ? (
-                <span className="text-[#0284C7] dark:text-sky-400">Monitoring</span>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-sidebar-muted-foreground">
-                  <CircleCheckIcon
-                    role="img"
-                    aria-label={isUnread ? "Unread completion" : "Ready"}
-                    className="size-4 text-[#047857] dark:text-emerald-300"
-                  />
-                  <span>{threadTimeLabel(thread)}</span>
-                </span>
-              )}
-            </span>
-            <span
-              className={cn(
-                "pointer-events-none absolute right-0 -top-1 flex h-6 shrink-0 items-center rounded-sm opacity-0 group-focus-within/sidebar-row:pointer-events-auto group-focus-within/sidebar-row:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:[&>*:not(:last-child)]:hidden",
-                snoozeMenuOpen && "pointer-events-auto opacity-100",
-              )}
-            >
-              {props.settlementSupported ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        aria-label="Settle thread"
-                        onClick={handleSettleClick}
-                        className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-foreground"
-                      />
-                    }
-                  >
-                    <CheckIcon className="size-3.5" />
-                  </TooltipTrigger>
-                  <TooltipPopup>Settle thread</TooltipPopup>
-                </Tooltip>
-              ) : null}
-              {showSnoozeButton ? (
-                <SnoozePopoverButton
-                  open={snoozeMenuOpen}
-                  onOpenChange={setSnoozeMenuOpen}
-                  onSnooze={handleSnoozePreset}
-                  timestampFormat={props.timestampFormat}
+              </span>
+            </div>
+            <div className="flex h-[18px] min-w-0 items-center gap-1.5 text-xs leading-[18px] text-sidebar-muted-foreground">
+              {prBadge}
+              <span className="min-w-0 flex-1 truncate">{thread.branch ?? "Local checkout"}</span>
+              {terminalStatusIcon}
+              {teamMembers.length > 1 ? (
+                <SidebarTeamAvatars
+                  members={teamMembers}
+                  activeThreadKey={props.activeThreadKey}
+                  providers={props.providerEntryByInstanceId}
+                  expanded={props.teamExpanded}
+                  selected={props.isActive || isSelected}
+                  onToggle={() => props.onToggleTeam(threadKey)}
                 />
               ) : null}
-              <button
-                type="button"
-                aria-label="Thread options"
-                className="inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-foreground"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  onContextMenu(threadRef, { x: rect.right, y: rect.bottom });
-                }}
-              >
-                <EllipsisIcon className="size-3.5" />
-              </button>
-            </span>
-          </div>
-          <div className="relative flex h-5 min-w-0">
-            <Tooltip>
-              <TooltipTrigger render={<span className="flex min-w-0 flex-1" />}>
-                {title}
-              </TooltipTrigger>
-              {detailsTooltip}
-            </Tooltip>
-            {isRegeneratingTitle ? (
-              <span role="status" className="sr-only">
-                Regenerating title
-              </span>
-            ) : null}
-          </div>
-          <div className="flex h-6 min-w-0 items-center gap-1.5 text-xs leading-4 text-sidebar-muted-foreground">
-            {props.isPinned && props.parentTitle ? (
-              <>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        disabled={!props.pinningSupported}
-                        aria-label="Unpin child thread"
-                        onClick={handleUnpinClick}
-                        className="group/origin relative inline-flex size-4 shrink-0 items-center justify-center rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
-                      />
-                    }
-                  >
-                    <FolderTreeIcon className="size-3.5 group-enabled/origin:group-hover/origin:hidden group-enabled/origin:group-focus-visible/origin:hidden" />
-                    <PinIcon className="hidden size-3.5 group-enabled/origin:group-hover/origin:block group-enabled/origin:group-focus-visible/origin:block" />
-                  </TooltipTrigger>
-                  <TooltipPopup>
-                    {props.pinningSupported ? "Unpin child thread" : "Pinned child thread"}
-                  </TooltipPopup>
-                </Tooltip>
-                <span className="min-w-0 flex-1 truncate">From {props.parentTitle}</span>
-              </>
-            ) : (
-              <>
-                {pinIndicator}
-                <span className="min-w-0 flex-1 truncate">{thread.branch ?? "Local checkout"}</span>
-              </>
-            )}
-            {terminalStatusIcon}
-            {prBadge}
-            <SidebarTeamAvatars
-              members={teamMembers}
-              activeThreadKey={props.activeThreadKey}
-              providers={props.providerEntryByInstanceId}
-              expanded={props.teamExpanded}
-              selected={props.isActive || isSelected}
-              onToggle={() => props.onToggleTeam(threadKey)}
-            />
+            </div>
           </div>
         </div>
         {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
       </div>
-      {props.teamExpanded && teamMembers.length > 1 ? (
-        <div className="flex items-center justify-between gap-2 px-3 py-1 text-xs leading-4 text-sidebar-muted-foreground">
-          <span>
-            {teamMembers.length - 1} {teamMembers.length === 2 ? "descendant" : "descendants"}
-            {pinnedTeamCount > 0 ? ` · ${pinnedTeamCount} pinned separately` : ""}
-          </span>
-          <button
-            type="button"
-            className="cursor-pointer rounded-sm hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={() => props.onToggleTeam(threadKey)}
-          >
-            Collapse
-          </button>
-        </div>
-      ) : null}
     </li>
   );
 });
@@ -3630,7 +3476,7 @@ export default function Sidebar() {
         fixedHeader={
           // Lifted above the stage backdrop, whose fade bleeds below the
           // header and would otherwise paint across the search row's outline.
-          <SidebarGroup className="relative z-[1] h-[52px] px-4 py-2.5 pointer-coarse:py-1">
+          <SidebarGroup className="relative z-[1] mt-2 h-[52px] pl-5 pr-[34px] py-2.5 pointer-coarse:py-1">
             <div className="flex items-center gap-1">
               <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1.5 text-sm font-normal text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
                 <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground" />
@@ -3693,7 +3539,7 @@ export default function Sidebar() {
                       <SidebarMenuButton
                         size="icon"
                         type="button"
-                        className="relative size-8 rounded-[8px] border border-[#0284C738] bg-[#0284C71F] pointer-coarse:size-11 pointer-coarse:border-transparent pointer-coarse:bg-transparent pointer-coarse:before:absolute pointer-coarse:before:size-8 pointer-coarse:before:rounded-[8px] pointer-coarse:before:border pointer-coarse:before:border-[#0284C738] pointer-coarse:before:bg-[#0284C71F] pointer-coarse:hover:bg-transparent pointer-coarse:hover:before:bg-[#0284C7]/20 pointer-coarse:[&>svg]:relative text-[#0284C7] hover:bg-[#0284C7]/20 dark:text-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar [&>svg]:size-[18px] [&>svg]:text-current"
+                        className="relative size-8 rounded-md bg-primary text-primary-foreground hover:bg-message-action-hover pointer-coarse:size-11 [&>svg]:size-4 [&>svg]:text-current"
                         onClick={handleNewThreadClick}
                         disabled={projects.length === 0}
                         aria-label="New thread"
@@ -3704,7 +3550,7 @@ export default function Sidebar() {
                   </TooltipTrigger>
                   <TooltipPopup side="right">
                     {projectGroups.length > 1 ? (
-                      <span className="flex flex-col gap-0.5">
+                      <span className="flex flex-col gap-2">
                         <span>
                           {newThreadShortcutLabel
                             ? `New thread (${newThreadShortcutLabel})`
@@ -3729,7 +3575,7 @@ export default function Sidebar() {
           </SidebarGroup>
         }
       >
-        <SidebarGroup className="pl-2.5 pr-[9px] pb-1 pt-0">
+        <SidebarGroup className="pl-[15px] pr-3.5 pb-1 pt-2">
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider
@@ -3742,7 +3588,7 @@ export default function Sidebar() {
                   id="sidebar-thread-search-results"
                   role="listbox"
                   aria-label="Thread search results"
-                  className="flex flex-col gap-0.5"
+                  className="flex flex-col gap-2"
                 >
                   {threadSearchResults.map((thread, index) => {
                     const threadKey = scopedThreadKey(
@@ -3809,7 +3655,7 @@ export default function Sidebar() {
               closeDelay={0}
               timeout={400}
             >
-              <ul ref={attachListAutoAnimateRef} role="list" className="flex flex-col gap-0.5">
+              <ul ref={attachListAutoAnimateRef} role="list" className="flex flex-col gap-2">
                 {(() => {
                   const renderThreadRow = (
                     thread: EnvironmentThreadShell,
@@ -3822,10 +3668,7 @@ export default function Sidebar() {
                     const threadKey = scopedThreadKey(
                       scopeThreadRef(thread.environmentId, thread.id),
                     );
-                    // Settled and snoozed are the ONLY things that collapse a
-                    // row: every other thread is a full card. Density comes
-                    // from users (or the auto rules) actually parking work,
-                    // not from the sidebar second-guessing what still matters.
+                    // Lifecycle selects the section and actions, never the row geometry.
                     const isCard = section === "active" || section === "pinned";
                     const rowVariant = isCard ? "card" : "slim";
                     return (
@@ -3870,11 +3713,6 @@ export default function Sidebar() {
                           serverConfigs.get(thread.environmentId)?.environment.capabilities
                             .threadSnooze === true
                         }
-                        pinningSupported={
-                          serverConfigs.get(thread.environmentId)?.environment.capabilities
-                            .threadPinning === true
-                        }
-                        isPinned={thread.pinnedAt != null}
                         sortable={sortable}
                         snoozeWakeLabelText={
                           section === "snoozed" && thread.snoozedUntil != null
@@ -3926,17 +3764,13 @@ export default function Sidebar() {
                         onUnsettle={attemptUnsettle}
                         onSnooze={attemptSnooze}
                         onUnsnooze={attemptUnsnooze}
-                        onUnpin={attemptUnpin}
                         onAcknowledgeWoke={acknowledgeWoke}
                         changeRequestSnapshot={changeRequestSnapshotByKey.get(threadKey) ?? null}
                         onChangeRequestSnapshot={setThreadChangeRequestSnapshot}
                       />
                     );
                   };
-                  // Draft block above everything, then the pinned block:
-                  // full cards above the inbox, closed by a thin divider (the
-                  // pin glyphs carry the meaning, so no header text). Both
-                  // vanish entirely at count 0.
+                  // Drafts precede pinned and recent sections; empty sections have no heading.
                   // Pinned rows render in the one shared pinned order; only
                   // reorder-capable rows register as sortable (legacy-server
                   // pins render in place as plain rows).
@@ -3953,6 +3787,10 @@ export default function Sidebar() {
                     />,
                     pinnedThreads.length > 0 ? (
                       <li key="pinned-dnd" className="list-none">
+                        <div className="mb-2 flex items-center gap-1.5 px-2.5 pt-3 text-xs leading-[18px] text-sidebar-muted-foreground">
+                          <PinIcon className="size-3.5" />
+                          Pinned
+                        </div>
                         <DndContext
                           sensors={pinnedDndSensors}
                           collisionDetection={closestCenter}
@@ -3970,7 +3808,7 @@ export default function Sidebar() {
                             <ul
                               role="list"
                               aria-label="Pinned threads"
-                              className="flex flex-col gap-0.5"
+                              className="flex flex-col gap-2"
                             >
                               {orderedPinnedThreads.map((thread) => {
                                 const threadKey = scopedThreadKey(
@@ -4017,16 +3855,16 @@ export default function Sidebar() {
                       </li>
                     ) : null,
                   ];
-                  if (pinnedThreads.length > 0) {
+                  if (activeThreadRows.length > 0)
                     items.push(
                       <li
-                        key="pinned-divider"
-                        aria-hidden
-                        data-testid="sidebar-pinned-divider"
-                        className="mx-2.5 my-1.5 h-px list-none bg-sidebar-border/60"
-                      />,
+                        key="recent-heading"
+                        className="flex items-center gap-1.5 px-2.5 pt-3 text-xs leading-[18px] text-sidebar-muted-foreground"
+                      >
+                        <HistoryIcon className="size-3.5" />
+                        Recent
+                      </li>,
                     );
-                  }
                   for (const row of activeThreadRows) {
                     items.push(renderThreadRow(row.thread, "active", undefined, row.indentDepth));
                   }
@@ -4047,19 +3885,17 @@ export default function Sidebar() {
                           onClick={toggleSnoozedShelf}
                           aria-expanded={snoozedShelfExpanded}
                           data-testid="sidebar-snoozed-shelf-toggle"
-                          className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
+                          className="flex w-full cursor-pointer items-center gap-1.5 border-t border-sidebar-border px-2.5 py-3 text-left leading-[18px]"
                         >
-                          <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
-                            {snoozedShelfExpanded
-                              ? "Snoozed"
-                              : `Snoozed (${snoozedThreads.length})`}
+                          <ClockIcon className="size-3.5 text-sidebar-muted-foreground" />
+                          <span className="flex-1 text-xs text-sidebar-muted-foreground">
+                            Snoozed · {snoozedThreads.length}
                           </span>
-                          <span className="h-px flex-1 bg-blue-500/20 dark:bg-blue-400/15" />
                           <ChevronDownIcon
                             aria-hidden
                             className={cn(
-                              "size-3 text-blue-600 transition-transform dark:text-blue-400",
-                              snoozedShelfExpanded && "rotate-180",
+                              "size-3 -rotate-90 text-sidebar-muted-foreground transition-transform",
+                              snoozedShelfExpanded && "rotate-0",
                             )}
                           />
                         </button>
@@ -4081,19 +3917,17 @@ export default function Sidebar() {
                           onClick={toggleSettledShelf}
                           aria-expanded={settledShelfExpanded}
                           data-testid="sidebar-settled-shelf-toggle"
-                          className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
+                          className="flex w-full cursor-pointer items-center gap-1.5 border-t border-sidebar-border px-2.5 py-3 text-left leading-[18px]"
                         >
-                          <span className="text-xs font-medium text-muted-foreground/50">
-                            {settledShelfExpanded
-                              ? "Settled"
-                              : `Settled (${settledThreads.length})`}
+                          <CircleCheckIcon className="size-3.5 text-sidebar-muted-foreground" />
+                          <span className="flex-1 text-xs text-sidebar-muted-foreground">
+                            Settled · {settledThreads.length}
                           </span>
-                          <span className="h-px flex-1 bg-sidebar-border/60" />
                           <ChevronDownIcon
                             aria-hidden
                             className={cn(
-                              "size-3 text-muted-foreground/50 transition-transform",
-                              settledShelfExpanded && "rotate-180",
+                              "size-3 -rotate-90 text-sidebar-muted-foreground transition-transform",
+                              settledShelfExpanded && "rotate-0",
                             )}
                           />
                         </button>
