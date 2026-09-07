@@ -1,3 +1,4 @@
+import { useSessionRefresh } from "./use-session-refresh";
 import type { ThreadListActions } from "./useThreadListActions";
 import {
   LegendList,
@@ -22,7 +23,15 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Platform, Pressable, View } from "react-native";
+import {
+  ActivityIndicator,
+  FlatList,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  View,
+} from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import { useNavigationColors } from "../../components/useNavigationColors";
@@ -186,6 +195,15 @@ function deriveEmptyState(props: {
 
 export function HomeScreen(props: HomeScreenProps) {
   const colors = useNavigationColors();
+  const refresh = useSessionRefresh(props.environments, props.selectedEnvironmentId);
+  const refreshControl = (
+    <RefreshControl
+      {...refresh}
+      tintColor={colors.muted}
+      colors={[colors.accent]}
+      progressBackgroundColor={colors.surface}
+    />
+  );
   const [groupDisplayStates, setGroupDisplayStates] = useState<
     ReadonlyMap<string, HomeGroupDisplayState>
   >(() => new Map());
@@ -966,9 +984,17 @@ export function HomeScreen(props: HomeScreenProps) {
 
   if (!hasAnyThreads) {
     return (
-      <View
-        className="flex-1 items-center justify-center bg-screen px-8"
-        style={{ paddingVertical: 24 }}
+      <ScrollView
+        className="flex-1 bg-screen"
+        alwaysBounceVertical
+        refreshControl={refreshControl}
+        contentContainerStyle={{
+          flexGrow: 1,
+          alignItems: "center",
+          justifyContent: "center",
+          paddingHorizontal: 32,
+          paddingVertical: 24,
+        }}
       >
         <View className="w-full max-w-[430px]">
           <EmptyState
@@ -984,7 +1010,7 @@ export function HomeScreen(props: HomeScreenProps) {
             </View>
           ) : null}
         </View>
-      </View>
+      </ScrollView>
     );
   }
 
@@ -1032,6 +1058,8 @@ export function HomeScreen(props: HomeScreenProps) {
       <View style={{ flex: 1, backgroundColor: colors.screen }}>
         <SwipeableScrollGateProvider enabled={swipeEnabled}>
           <FlatList
+            alwaysBounceVertical
+            refreshControl={refreshControl}
             data={threadListV2Items}
             renderItem={renderV2Item}
             keyExtractor={v2KeyExtractor}
@@ -1080,6 +1108,8 @@ export function HomeScreen(props: HomeScreenProps) {
           `stickyHeaderIndices` if this gets revisited. */}
       <SwipeableScrollGateProvider enabled={swipeEnabled}>
         <LegendList
+          alwaysBounceVertical
+          refreshControl={refreshControl}
           ref={listRef}
           data={listLayout.items}
           renderItem={renderItem}

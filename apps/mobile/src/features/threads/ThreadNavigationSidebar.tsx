@@ -1,3 +1,4 @@
+import { useSessionRefresh } from "../home/use-session-refresh";
 import { HomeHeader } from "../home/HomeHeader";
 import { NavigationFooter } from "../home/NavigationFooter";
 import type { FooterRootNavigation } from "../home/navigation-footer-layout";
@@ -15,7 +16,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
@@ -126,6 +127,7 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
   );
   const { options, setSelectedEnvironmentId, setProjectSortOrder, setThreadSortOrder } =
     useHomeListOptions(availableEnvironmentIds);
+  const refresh = useSessionRefresh(environments, options.selectedEnvironmentId);
   const searchEnvironmentIds = useMemo(
     () =>
       options.selectedEnvironmentId === null
@@ -906,6 +908,15 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
       <SwipeableScrollGateProvider enabled={swipeEnabled}>
         <GestureDetector gesture={sidebarScrollGesture}>
           <LegendList
+            alwaysBounceVertical
+            refreshControl={
+              <RefreshControl
+                {...refresh}
+                tintColor={colors.muted}
+                colors={[colors.accent]}
+                progressBackgroundColor={colors.surface}
+              />
+            }
             data={listItems}
             drawDistance={500}
             estimatedItemSize={74}

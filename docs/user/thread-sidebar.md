@@ -136,6 +136,11 @@ On mobile, Search, Filter and New task sit above the conversation list. The foot
 Pull Requests, Schedules, Usage, Environments and Settings. On wider screens it shows the selected
 destination's name; smaller screens and larger text settings use icons with accessible labels.
 
+Pull down from the top of the mobile conversation list to refresh sessions. This reloads the
+selected environment, or all saved environments when no environment filter is selected. Existing
+conversations remain visible while refreshing. The gesture works on empty lists and in the tablet
+sidebar too.
+
 Swipe a conversation right to reveal Pin or Unpin, then tap the icon to apply it. Recent appears
 below your pinned conversations and disappears when no conversations are pinned. Tap an agent
 group to expand its direct children underneath the parent. Each child can expand its own descendants.
