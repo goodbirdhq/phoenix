@@ -1,4 +1,5 @@
 import type {
+  EnvironmentId,
   PullRequestListCursors,
   PullRequestListEntry,
   PullRequestListInput,
@@ -45,10 +46,19 @@ function appendByKey<A>(
     seen.add(valueKey);
     return arrivedByKey.get(valueKey) ?? value;
   });
-  for (const value of arrived) {
-    if (!seen.has(key(value))) merged.push(value);
+  for (const [valueKey, value] of arrivedByKey) {
+    if (!seen.has(valueKey)) {
+      seen.add(valueKey);
+      merged.push(value);
+    }
   }
   return merged;
+}
+
+function sortByUpdatedAt(
+  entries: ReadonlyArray<PullRequestListEntry>,
+): ReadonlyArray<PullRequestListEntry> {
+  return [...entries].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
 /** A cursor response is only the next slice, so retain earlier slices and replace overlaps. */
@@ -57,9 +67,13 @@ export function applyPullRequestPage(
   page: PullRequestListResult,
   mode: "replace" | "append",
 ): PullRequestPageState {
+  const entries =
+    mode === "replace" ? page.entries : appendByKey(previous.entries, page.entries, entryKey);
   return {
-    entries:
-      mode === "replace" ? page.entries : appendByKey(previous.entries, page.entries, entryKey),
+    // A continuation is sorted only within its own response. Re-sort the
+    // accumulated rows because one repository's next slice can still be
+    // newer than another repository's first slice.
+    entries: sortByUpdatedAt(entries),
     errors:
       mode === "replace"
         ? page.errors
@@ -71,4 +85,36 @@ export function applyPullRequestPage(
 
 export function hasPullRequestContinuation(state: PullRequestPageState): boolean {
   return Object.keys(state.nextCursors).length > 0;
+}
+
+/** Drop saved continuation requests as soon as their environment stops being queryable. */
+export function retainQueryablePullRequestPages<A>(
+  pages: ReadonlyMap<EnvironmentId, A>,
+  queryableEnvironmentIds: ReadonlyArray<EnvironmentId>,
+): ReadonlyMap<EnvironmentId, A> {
+  const queryable = new Set(queryableEnvironmentIds);
+  if ([...pages.keys()].every((environmentId) => queryable.has(environmentId))) return pages;
+  return new Map([...pages].filter(([environmentId]) => queryable.has(environmentId)));
+}
+
+export interface PullRequestQueryObservation<A> {
+  readonly data: A | null;
+  readonly error: string | null;
+  readonly isPending: boolean;
+}
+
+/**
+ * A forced refresh first exposes the query atom's cached snapshot. Hold that
+ * snapshot back until the atom has been refreshed, mask its retained data
+ * while pending, and never replace displayed rows with cached data on failure.
+ */
+export function observeForcedPullRequestRefresh<A>(
+  refreshStarted: boolean,
+  observation: PullRequestQueryObservation<A>,
+): PullRequestQueryObservation<A> | null {
+  if (!refreshStarted) return null;
+  if (observation.isPending) {
+    return { data: null, error: null, isPending: true };
+  }
+  return observation.error === null ? observation : { ...observation, data: null };
 }

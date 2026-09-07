@@ -24,7 +24,9 @@ import {
   applyPullRequestPage,
   EMPTY_PULL_REQUEST_PAGE_STATE,
   hasPullRequestContinuation,
+  observeForcedPullRequestRefresh,
   pullRequestPageInput,
+  retainQueryablePullRequestPages,
   type PullRequestPageState,
 } from "./pull-request-paging";
 
@@ -111,6 +113,10 @@ export function PullRequestsRouteScreen() {
         .map((environment) => environment.environmentId),
     [configs, environments],
   );
+
+  useEffect(() => {
+    setPages((previous) => retainQueryablePullRequestPages(previous, queryEnvironmentIds));
+  }, [queryEnvironmentIds]);
 
   const handleQueryState = useCallback(
     (
@@ -323,7 +329,8 @@ export function PullRequestsRouteScreen() {
         return (
           <Pressable
             accessibilityRole="button"
-            accessibilityState={{ disabled: item.disabled }}
+            accessibilityLabel={label}
+            accessibilityState={{ busy: item.disabled, disabled: item.disabled }}
             disabled={item.disabled}
             onPress={() =>
               startRequest(item.environmentId, item.action === "refresh" ? "replace" : "append")
@@ -413,17 +420,36 @@ function EnvironmentPullRequestsLoader({
       input: pullRequestPageInput(request.cursors),
     }),
   );
-  const refreshedRequestId = useRef<number | null>(null);
+  const triggeredRequestId = useRef<number | null>(null);
+  const [refreshedRequestId, setRefreshedRequestId] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!request.forceRefresh || refreshedRequestId.current === request.id) return;
-    refreshedRequestId.current = request.id;
+    if (!request.forceRefresh || triggeredRequestId.current === request.id) return;
+    triggeredRequestId.current = request.id;
     query.refresh();
+    // State, rather than the ref above, keeps the following effect from
+    // consuming the cached query snapshot captured before refresh().
+    setRefreshedRequestId(request.id);
   }, [query.refresh, request.forceRefresh, request.id]);
 
   useEffect(() => {
-    onState(environmentId, request, query);
-  }, [environmentId, onState, query.data, query.error, query.isPending, request]);
+    if (!request.forceRefresh) {
+      onState(environmentId, request, query);
+      return;
+    }
+    const observation = observeForcedPullRequestRefresh(refreshedRequestId === request.id, query);
+    if (observation !== null) {
+      onState(environmentId, request, observation);
+    }
+  }, [
+    environmentId,
+    onState,
+    query.data,
+    query.error,
+    query.isPending,
+    refreshedRequestId,
+    request,
+  ]);
 
   return null;
 }

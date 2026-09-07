@@ -1,13 +1,23 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { PullRequestListEntry, PullRequestListResult } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type PullRequestListEntry,
+  type PullRequestListResult,
+} from "@t3tools/contracts";
 import {
   applyPullRequestPage,
   EMPTY_PULL_REQUEST_PAGE_STATE,
   hasPullRequestContinuation,
+  observeForcedPullRequestRefresh,
   pullRequestPageInput,
+  retainQueryablePullRequestPages,
 } from "./pull-request-paging";
 
-const entry = (number: number, title = `PR ${number}`): PullRequestListEntry =>
+const entry = (
+  number: number,
+  title = `PR ${number}`,
+  updatedAt = `2026-09-${String(number).padStart(2, "0")}T00:00:00.000Z`,
+): PullRequestListEntry =>
   ({
     provider: "github",
     host: "github.com",
@@ -26,7 +36,7 @@ const entry = (number: number, title = `PR ${number}`): PullRequestListEntry =>
     additions: 0,
     deletions: 0,
     createdAt: "2026-09-07T00:00:00.000Z",
-    updatedAt: "2026-09-07T00:00:00.000Z",
+    updatedAt,
     viewerReviewRequested: false,
     labels: [],
   }) as unknown as PullRequestListEntry;
@@ -69,6 +79,28 @@ describe("mobile pull request paging", () => {
     expect(hasPullRequestContinuation(second)).toBe(false);
   });
 
+  it("re-sorts accumulated repositories and removes overlap within an arrived slice", () => {
+    const first = applyPullRequestPage(
+      EMPTY_PULL_REQUEST_PAGE_STATE,
+      page([
+        entry(4, "Newest in repo A", "2026-09-04T00:00:00.000Z"),
+        entry(1, "Old row in repo B", "2026-09-01T00:00:00.000Z"),
+      ]),
+      "replace",
+    );
+    const second = applyPullRequestPage(
+      first,
+      page([
+        entry(3, "Next in repo A", "2026-09-03T00:00:00.000Z"),
+        entry(3, "Duplicate boundary row", "2026-09-03T00:00:00.000Z"),
+      ]),
+      "append",
+    );
+
+    expect(second.entries.map(({ number }) => number)).toEqual([4, 3, 1]);
+    expect(second.entries[1]?.title).toBe("Duplicate boundary row");
+  });
+
   it("replaces accumulated slices on a bounded refresh", () => {
     const accumulated = applyPullRequestPage(
       EMPTY_PULL_REQUEST_PAGE_STATE,
@@ -83,5 +115,53 @@ describe("mobile pull request paging", () => {
 
     expect(refreshed.entries.map(({ number }) => number)).toEqual([4]);
     expect(hasPullRequestContinuation(refreshed)).toBe(true);
+  });
+
+  it("drops a saved continuation when its environment becomes unqueryable", () => {
+    const online = EnvironmentId.make("online");
+    const disconnected = EnvironmentId.make("disconnected");
+    const pages = new Map([
+      [online, "first-page"],
+      [disconnected, "saved-continuation"],
+    ]);
+
+    const retained = retainQueryablePullRequestPages(pages, [online]);
+
+    expect([...retained]).toEqual([[online, "first-page"]]);
+    expect(retainQueryablePullRequestPages(retained, [online])).toBe(retained);
+  });
+});
+
+describe("forced mobile pull request refresh", () => {
+  it("ignores the cached pre-refresh snapshot and masks cached data while pending", () => {
+    const cached = { data: page([entry(2)]), error: null, isPending: false };
+
+    expect(observeForcedPullRequestRefresh(false, cached)).toBeNull();
+
+    const pending = observeForcedPullRequestRefresh(true, {
+      data: cached.data,
+      error: null,
+      isPending: true,
+    });
+    expect(pending).toEqual({ data: null, error: null, isPending: true });
+  });
+
+  it("reports fresh success but preserves retained rows when refresh fails", () => {
+    const fresh = page([entry(3)]);
+
+    expect(
+      observeForcedPullRequestRefresh(true, {
+        data: fresh,
+        error: null,
+        isPending: false,
+      }),
+    ).toEqual({ data: fresh, error: null, isPending: false });
+    expect(
+      observeForcedPullRequestRefresh(true, {
+        data: page([entry(2)]),
+        error: "Offline",
+        isPending: false,
+      }),
+    ).toEqual({ data: null, error: "Offline", isPending: false });
   });
 });
