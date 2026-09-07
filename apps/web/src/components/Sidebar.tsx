@@ -3480,7 +3480,7 @@ export default function Sidebar() {
         fixedHeader={
           // Lifted above the stage backdrop, whose fade bleeds below the
           // header and would otherwise paint across the search row's outline.
-          <SidebarGroup className="relative z-[1] mt-2 h-[52px] pl-5 pr-6 py-2.5 pointer-coarse:py-1">
+          <SidebarGroup className="relative z-[1] h-10 pl-5 pr-6 py-1">
             <div className="flex items-center gap-1">
               <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1.5 text-sm font-normal text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
                 <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground" />
@@ -3794,7 +3794,7 @@ export default function Sidebar() {
                     />,
                     pinnedThreads.length > 0 ? (
                       <li key="pinned-dnd" className="list-none">
-                        <div className="mb-2 flex items-center gap-1.5 px-2.5 pt-3 text-xs leading-[18px] text-sidebar-muted-foreground">
+                        <div className="mb-2 flex items-center gap-1.5 px-2.5 text-xs leading-[18px] text-sidebar-muted-foreground">
                           <PinIcon className="size-3.5" />
                           Pinned
                         </div>
@@ -3862,7 +3862,7 @@ export default function Sidebar() {
                       </li>
                     ) : null,
                   ];
-                  if (activeThreadRows.length > 0)
+                  if (pinnedThreads.length > 0 && activeThreadRows.length > 0)
                     items.push(
                       <li
                         key="recent-heading"
