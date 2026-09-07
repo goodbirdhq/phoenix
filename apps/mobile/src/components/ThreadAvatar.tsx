@@ -60,9 +60,7 @@ export function ThreadAvatar({
       accessible
       accessibilityLabel={threadIdentityLabel(thread, providerDriver)}
       style={{
-        // Keep the avatar's layout slot at its canonical size. Provider/status
-        // badges intentionally overflow the slot, matching the Paper row and
-        // keeping the title column at x64 for a 30px row avatar.
+        // Provider/status badges intentionally overflow the avatar slot.
         width: size + 2 * scale,
         height: size,
         alignItems: "center",
