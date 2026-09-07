@@ -55,6 +55,7 @@ export function ModalSlideUp(props: {
   );
   const pan = useRef(
     PanResponder.create({
+      onStartShouldSetPanResponder: () => !busy.current,
       onMoveShouldSetPanResponder: (_, gesture) =>
         gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
       onPanResponderRelease: (_, gesture) => {
