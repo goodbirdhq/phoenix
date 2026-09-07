@@ -4,8 +4,8 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { useEffect, useRef, useState } from "react";
-import { useIsFocused } from "@react-navigation/native";
+import { useContext, useEffect, useRef, useState } from "react";
+import { NavigationContext, useIsFocused } from "@react-navigation/native";
 import { AccessibilityInfo, Animated, AppState, Easing, View } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
 import { resolveThreadListV2Status } from "../features/threads/threadListV2";
@@ -49,7 +49,7 @@ export function ThreadAvatar({
   const ring =
     {
       snoozed: colors.snooze,
-      working: colors.accent,
+      working: colors.dark ? "#38bdf8" : colors.accent,
       approval: colors.dark ? "#fbbf24" : "#b45309",
       input: colors.dark ? "#a5b4fc" : "#4f46e5",
       "awaiting-parent": colors.dark ? "#a5b4fc" : "#4f46e5",
@@ -170,9 +170,27 @@ export function ThreadAvatar({
 }
 
 /** Rotate only the arc, on the native driver; identity and attention badges stay still. */
-function WorkingArc({ size, color }: { size: number; color: string }) {
-  const rotation = useRef(new Animated.Value(0)).current;
+function WorkingArc(props: { size: number; color: string }) {
+  const navigation = useContext(NavigationContext);
+  // Global confirmation dialogs live outside the navigation container.
+  return navigation ? <FocusedWorkingArc {...props} /> : <AnimatedWorkingArc {...props} focused />;
+}
+
+function FocusedWorkingArc(props: { size: number; color: string }) {
   const focused = useIsFocused();
+  return <AnimatedWorkingArc {...props} focused={focused} />;
+}
+
+function AnimatedWorkingArc({
+  size,
+  color,
+  focused,
+}: {
+  size: number;
+  color: string;
+  focused: boolean;
+}) {
+  const rotation = useRef(new Animated.Value(0)).current;
   const [active, setActive] = useState(AppState.currentState === "active");
   const [reduceMotion, setReduceMotion] = useState(true);
   useEffect(() => {

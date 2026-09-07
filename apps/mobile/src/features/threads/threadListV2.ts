@@ -402,7 +402,10 @@ export function buildThreadListV2ListItems(input: {
       current = parent;
     }
     if (cyclic) continue;
+    // Only visible roots and pinned rows need eager detail arrays. Nested
+    // rows derive their descendants from the hierarchy when expanded.
     for (const key of ancestors) {
+      if (key !== ancestors.at(-1) && !rowsByKey.get(key)?.item.pinned) continue;
       const group = children.get(key) ?? [];
       group.push(row.item.thread);
       children.set(key, group);

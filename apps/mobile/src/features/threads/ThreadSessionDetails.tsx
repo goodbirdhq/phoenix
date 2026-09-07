@@ -64,7 +64,14 @@ export function ThreadSessionDetails(props: {
           <Pressable
             key={`${thread.environmentId}:${thread.id}`}
             accessibilityRole="button"
-            accessibilityLabel={`Open ${thread.title}. ${providerLabel}, ${thread.modelSelection.model}, ${environmentLabel ?? ""}. ${threadIdentityLabel(thread, provider?.driver ?? null)}`}
+            accessibilityLabel={[
+              `Open ${thread.title}`,
+              providerLabel,
+              environmentLabel,
+              threadIdentityLabel(thread, null),
+            ]
+              .filter(Boolean)
+              .join(". ")}
             onPress={() => {
               props.onClose();
               props.onSelect(thread);
