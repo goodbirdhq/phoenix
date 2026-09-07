@@ -1,9 +1,9 @@
 # Review usage
 
-The Usage page combines Codex, Claude Code, OpenCode, and Grok Build activity from your connected
+The desktop and web Usage page combines Codex, Claude Code, OpenCode, and Grok Build activity from your connected
 environments. It reads the providers' local session history and shows API-equivalent token cost,
 processed tokens, cache savings, provider shares, and model breakdowns. Subscription billing is
-separate from the raw token cost shown here.
+separate from the raw token cost shown here. This guide describes the desktop and web interface; the separate mobile app currently retains its Threads report, which groups native sessions by Phoenix conversation.
 
 Grok Build totals come from persisted session updates. Interactive turns that never wrote a
 completed-turn record will not appear. Each configured Grok instance’s environment overrides determine which history directory is scanned, so instances using separate directories are included. Shared history directories are scanned once.
