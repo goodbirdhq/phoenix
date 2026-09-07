@@ -60,12 +60,14 @@ export function ThreadAvatar({
       accessible
       accessibilityLabel={threadIdentityLabel(thread, providerDriver)}
       style={{
-        width: size + 2 * scale,
+        // Keep the avatar's layout slot at its canonical size. Provider/status
+        // badges intentionally overflow the slot, matching the Paper row and
+        // keeping the title column at x64 for a 30px row avatar.
+        width: size,
         height: size + 4 * scale,
         alignItems: "center",
         justifyContent: "center",
         paddingBottom: 4 * scale,
-        paddingRight: 2 * scale,
       }}
     >
       <View
@@ -115,7 +117,7 @@ export function ThreadAvatar({
         <View
           style={{
             position: "absolute",
-            right: 0,
+            right: -2 * scale,
             bottom: 0,
             width: 14 * scale,
             height: 14 * scale,
@@ -133,7 +135,7 @@ export function ThreadAvatar({
         <View
           style={{
             position: "absolute",
-            right: 0,
+            right: -2 * scale,
             bottom: 0,
             width: 14 * scale,
             height: 14 * scale,
