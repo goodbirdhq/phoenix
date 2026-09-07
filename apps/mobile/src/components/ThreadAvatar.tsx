@@ -64,10 +64,9 @@ export function ThreadAvatar({
         // badges intentionally overflow the slot, matching the Paper row and
         // keeping the title column at x64 for a 30px row avatar.
         width: size,
-        height: size + 4 * scale,
+        height: size,
         alignItems: "center",
         justifyContent: "center",
-        paddingBottom: 4 * scale,
       }}
     >
       <View
@@ -118,7 +117,7 @@ export function ThreadAvatar({
           style={{
             position: "absolute",
             right: -2 * scale,
-            bottom: 0,
+            bottom: -2 * scale,
             width: 14 * scale,
             height: 14 * scale,
             borderRadius: size,
@@ -136,7 +135,7 @@ export function ThreadAvatar({
           style={{
             position: "absolute",
             right: -2 * scale,
-            bottom: 0,
+            bottom: -2 * scale,
             width: 14 * scale,
             height: 14 * scale,
             borderRadius: size,
