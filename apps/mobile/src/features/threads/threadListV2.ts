@@ -236,6 +236,68 @@ export interface ThreadListV2ThreadListItem {
   readonly snoozeWakeLabelText: string | undefined;
 }
 
+/** A visible root's spawned descendants, retaining their immediate-parent shape. */
+export interface ThreadAgentGroupNode {
+  readonly thread: EnvironmentThreadShell;
+  readonly children: ReadonlyArray<ThreadAgentGroupNode>;
+}
+
+/**
+ * Rebuilds immediate parent/child links for the descendants attached to one
+ * visible row. The visible root itself is intentionally absent from `threads`,
+ * so descendants whose parent is not in this collection start a tree. A
+ * missing parent, a cross-environment parent, or any cycle remains visible at
+ * the top level rather than being dropped or recursively rendered forever.
+ */
+export function buildThreadAgentGroupHierarchy(
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+): ReadonlyArray<ThreadAgentGroupNode> {
+  type MutableNode = {
+    readonly thread: EnvironmentThreadShell;
+    readonly children: MutableNode[];
+  };
+  const keyFor = (thread: Pick<EnvironmentThreadShell, "environmentId" | "id">) =>
+    `${thread.environmentId}:${thread.id}`;
+  const nodes = new Map<string, MutableNode>();
+  for (const thread of threads) {
+    nodes.set(keyFor(thread), { thread, children: [] });
+  }
+
+  const parentByChildKey = new Map<string, string>();
+  for (const thread of threads) {
+    if (thread.spawnedByThreadId == null) continue;
+    const childKey = keyFor(thread);
+    const parentKey = `${thread.environmentId}:${thread.spawnedByThreadId}`;
+    if (parentKey !== childKey && nodes.has(parentKey)) {
+      parentByChildKey.set(childKey, parentKey);
+    }
+  }
+
+  const hasAncestorCycle = (startKey: string): boolean => {
+    const visited = new Set<string>();
+    let currentKey: string | undefined = startKey;
+    while (currentKey !== undefined) {
+      if (visited.has(currentKey)) return true;
+      visited.add(currentKey);
+      currentKey = parentByChildKey.get(currentKey);
+    }
+    return false;
+  };
+
+  const roots: MutableNode[] = [];
+  for (const thread of threads) {
+    const childKey = keyFor(thread);
+    const parentKey = parentByChildKey.get(childKey);
+    const parent = parentKey === undefined ? undefined : nodes.get(parentKey);
+    if (parent === undefined || hasAncestorCycle(childKey)) {
+      roots.push(nodes.get(childKey)!);
+    } else {
+      parent.children.push(nodes.get(childKey)!);
+    }
+  }
+  return roots;
+}
+
 export interface ThreadListV2PendingListItem {
   readonly type: "v2-pending";
   readonly key: string;

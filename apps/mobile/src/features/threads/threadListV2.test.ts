@@ -16,6 +16,7 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
+  buildThreadAgentGroupHierarchy,
   resolveThreadListV2Enabled,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
@@ -988,6 +989,17 @@ describe("mobile pinned sections and agent groups", () => {
     const visible = result.filter((row) => row.type === "v2-thread");
     expect(visible.map((row) => row.item.thread.id)).toEqual(["root"]);
     expect(visible[0]?.agentThreads?.map((row) => row.id).sort()).toEqual(["child", "grandchild"]);
+    expect(buildThreadAgentGroupHierarchy(visible[0]?.agentThreads ?? [])).toEqual([
+      {
+        thread: expect.objectContaining({ id: "child" }),
+        children: [
+          {
+            thread: expect.objectContaining({ id: "grandchild" }),
+            children: [],
+          },
+        ],
+      },
+    ]);
   });
   it("keeps pinned children and missing or cyclic parents visible", () => {
     const result = rows([
@@ -1007,5 +1019,16 @@ describe("mobile pinned sections and agent groups", () => {
   it("never groups identically named threads across environments", () => {
     const child = { ...thread("child", "root"), environmentId: EnvironmentId.make("other") };
     expect(rows([thread("root"), child]).filter((row) => row.type === "v2-thread")).toHaveLength(2);
+  });
+  it("keeps malformed descendant links as visible roots instead of nesting a cycle", () => {
+    const hierarchy = buildThreadAgentGroupHierarchy([
+      thread("a", "b"),
+      thread("b", "a"),
+      thread("orphan", "missing"),
+      { ...thread("remote", "a"), environmentId: EnvironmentId.make("other") },
+    ]);
+
+    expect(hierarchy.map((node) => node.thread.id).sort()).toEqual(["a", "b", "orphan", "remote"]);
+    expect(hierarchy.every((node) => node.children.length === 0)).toBe(true);
   });
 });
