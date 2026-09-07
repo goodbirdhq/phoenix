@@ -93,6 +93,23 @@ describe("sidebar teams", () => {
     expect(rows[0]?.thread.spawnedByThreadId).toBe("parent");
   });
 
+  it("keeps team membership but disables expansion when all direct children are pinned", () => {
+    const threads = [parent, { ...child, pinnedAt: "2026-09-05" }, grandchild];
+    const collapsed = visibleSidebarTeams(threads, new Set());
+    const expanded = visibleSidebarTeams(threads, new Set(["local:parent"]));
+    expect(collapsed.find((row) => row.thread.id === "parent")?.hasChildren).toBe(false);
+    expect(collapsed.find((row) => row.thread.id === "child")?.hasChildren).toBe(true);
+    expect(expanded.map((row) => row.thread.id)).toEqual(collapsed.map((row) => row.thread.id));
+    expect(
+      buildSidebarTeams(threads)
+        .get("local:parent")
+        ?.map((entry) => entry.id),
+    ).toEqual(["parent", "child", "grandchild"]);
+    const unpinned = visibleSidebarTeams([parent, child, grandchild], new Set(["local:parent"]));
+    expect(unpinned.find((row) => row.thread.id === "parent")?.hasChildren).toBe(true);
+    expect(unpinned.map((row) => row.thread.id)).toEqual(["parent", "child"]);
+  });
+
   it("keeps completed children visible until lifecycle removes them and releases orphaned children", () => {
     const done = { ...grandchild, hasPendingUserInput: false, backgroundLiveness: undefined };
     const rows = visibleSidebarTeams([child, done], new Set(["local:child"]));

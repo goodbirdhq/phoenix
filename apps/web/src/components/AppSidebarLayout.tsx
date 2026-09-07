@@ -81,6 +81,7 @@ function SidebarControl() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { toggleSidebar } = useSidebar();
   const isSidebarVisible = useSidebarVisibility();
+  const legacySidebarEnabled = useLegacySidebarEnabled();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(
     environmentIdentificationMode === "artwork",
@@ -114,6 +115,11 @@ function SidebarControl() {
     // off their edge and the titlebar reads symmetric.
     <div
       className="pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center"
+      style={
+        isSidebarVisible && !legacySidebarEnabled
+          ? { transform: "translate(22px, 14px)" }
+          : undefined
+      }
       data-sidebar-control=""
     >
       <Tooltip>

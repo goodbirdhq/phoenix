@@ -135,17 +135,32 @@ describe("theme files", () => {
     expect(asHex(dark.error)).not.toBe(asHex(darkDefaults.error));
   });
 
-  it("keeps stock dark controls in the neutral-black surface hierarchy", () => {
-    expectThemeColors(getStandardThemeColors("dark"), {
-      canvas: "#0a0a0a",
-      surface: "#111111",
-      surfaceRaised: "#111111",
-      surfaceOverlay: "#111111",
-      toolbarControl: "#111111",
-      secondary: "#111111",
-      muted: "#111111",
-      accentSurface: "#141414",
+  it("uses the approved default canvas and sidebar hierarchy", () => {
+    expectThemeColors(getStandardThemeColors("light"), {
+      canvas: "#fcfcfc",
+      sidebar: "#fafafa",
+      sidebarRowHover: "#ffffff",
+      messageAction: "#027cbd",
     });
+    expectThemeColors(getStandardThemeColors("dark"), {
+      canvas: "#101012",
+      sidebar: "#18181b",
+      surface: "#18181b",
+      surfaceRaised: "#27272a",
+      surfaceOverlay: "#27272a",
+      toolbarControl: "#27272a",
+      sidebarRowHover: "#27272a",
+      messageAction: "#027cbd",
+    });
+    for (const mode of ["light", "dark"] as const) {
+      const colors = getStandardThemeColors(mode);
+      expect(
+        contrastRatio(colors.messageActionForeground, colors.messageAction),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(colors.sidebarMutedForeground, colors.sidebar)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    }
   });
 
   it("derives readable, distinctive vivid palettes from exact seeds", () => {
