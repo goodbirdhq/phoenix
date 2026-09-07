@@ -39,6 +39,13 @@ const input = {
 };
 
 describe("session refresh completion", () => {
+  it("waits on the unresolved shared singleton and accepts its connected replacement", () => {
+    const initialConnection = AVAILABLE_CONNECTION_STATE;
+    expect(
+      evaluateSessionRefresh({ ...input, initialConnection, state: initialConnection }),
+    ).toEqual({ status: "pending" });
+    expect(evaluateSessionRefresh({ ...input, initialConnection })).toEqual({ status: "ready" });
+  });
   it("accepts a reconnect that reuses the interrupted connecting generation", () => {
     const initialConnection = { ...connected, phase: "connecting" as const };
     expect(evaluateSessionRefresh({ ...input, initialConnection })).toEqual({ status: "ready" });
