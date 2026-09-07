@@ -655,24 +655,25 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       })}
     >
       <ThreadAvatar thread={thread} project={props.project} providerDriver={props.providerDriver} />
-      <View style={{ flex: 1, gap: 6 }}>
+      <View style={{ flex: 1, gap: 5 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Text
             numberOfLines={1}
             style={{
               flex: 1,
-              fontSize: 16,
-              lineHeight: 23,
+              fontSize: 15,
+              lineHeight: 22,
+              fontFamily: "DMSans-Medium",
               color: variant === "slim" ? colors.muted : colors.foreground,
             }}
           >
             {thread.title}
           </Text>
-          <Text style={{ fontSize: 11, color: colors.muted }}>
+          <Text style={{ fontSize: 12, lineHeight: 17, color: colors.muted }}>
             {snoozedRow ? props.snoozeWakeLabelText : timeLabel}
           </Text>
         </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 26 }}>
           {pr ? (
             <IconGitPullRequest size={14} color={pr.state === "open" ? "#047857" : colors.muted} />
           ) : null}

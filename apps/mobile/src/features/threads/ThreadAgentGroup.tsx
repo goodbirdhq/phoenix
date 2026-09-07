@@ -90,12 +90,12 @@ export function ThreadAgentGroup({
         onToggle();
       }}
       hitSlop={10}
-      style={{ flexDirection: "row", alignItems: "center", minHeight: 30 }}
+      style={{ flexDirection: "row", alignItems: "center", minHeight: 26 }}
     >
       {threads.slice(0, 4).map((thread, index) => (
         <View
           key={`${thread.environmentId}:${thread.id}`}
-          style={{ width: 26, height: 30, marginLeft: index ? -6 : 0 }}
+          style={{ width: 26, height: 26, marginLeft: index ? -6 : 0 }}
         >
           <ThreadAvatar thread={thread} project={null} providerDriver={driver(thread)} size={26} />
         </View>

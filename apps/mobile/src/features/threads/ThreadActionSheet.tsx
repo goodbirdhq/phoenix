@@ -154,6 +154,7 @@ export function ThreadActionSheet(props: {
               key={preset.id}
               accessibilityRole="button"
               accessibilityLabel={`${preset.label}, ${preset.whenLabel}`}
+              accessibilityState={{ busy, disabled: busy }}
               disabled={busy}
               onPress={() => void choosePreset(preset.id)}
               style={{

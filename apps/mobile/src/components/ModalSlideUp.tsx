@@ -86,6 +86,7 @@ export function ModalSlideUp(props: {
       >
         <Pressable
           accessibilityLabel="Dismiss dialog"
+          accessibilityState={{ busy: props.busy === true, disabled: props.busy === true }}
           accessibilityRole="button"
           disabled={props.busy}
           onPress={props.onClose}
@@ -172,6 +173,8 @@ export function ModalSlideUp(props: {
           </ScrollView>
           <Pressable
             accessibilityRole="button"
+            accessibilityLabel={props.cancelText ?? "Cancel"}
+            accessibilityState={{ busy: props.busy === true, disabled: props.busy === true }}
             disabled={props.busy}
             onPress={props.onClose}
             style={{
