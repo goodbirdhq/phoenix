@@ -244,7 +244,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
             backgroundColor: pressed ? colors.selected : colors.screen,
           })}
         >
-          <View style={{ width: 30, height: 30, alignItems: "center", justifyContent: "center" }}>
+          <View style={{ width: 32, height: 30, alignItems: "center", justifyContent: "center" }}>
             <View
               style={{
                 width: 24,

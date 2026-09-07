@@ -147,7 +147,11 @@ export function ModalSlideUp(props: {
                 paddingBottom: 16,
               }}
             >
-              <View accessible={false} importantForAccessibility="no-hide-descendants">
+              <View
+                accessible={false}
+                importantForAccessibility="no-hide-descendants"
+                style={{ width: 70, height: 72, alignItems: "center", justifyContent: "center" }}
+              >
                 {props.identity}
               </View>
               <AppText
