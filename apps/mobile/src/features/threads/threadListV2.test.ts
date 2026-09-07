@@ -1020,6 +1020,24 @@ describe("mobile pinned sections and agent groups", () => {
     const child = { ...thread("child", "root"), environmentId: EnvironmentId.make("other") };
     expect(rows([thread("root"), child]).filter((row) => row.type === "v2-thread")).toHaveLength(2);
   });
+  it("counts seven children and two grandchildren once, including separately pinned teams", () => {
+    const input = [
+      thread("root"),
+      ...Array.from({ length: 7 }, (_, i) => thread(`child-${i}`, "root", i === 0)),
+      thread("grandchild-a", "child-0"),
+      thread("grandchild-b", "child-1"),
+    ];
+    const visible = rows(input).filter((row) => row.type === "v2-thread");
+    expect(visible.map((row) => row.item.thread.id)).toEqual(["child-0", "root"]);
+    const root = visible.find((row) => row.item.thread.id === "root")!;
+    expect(root.agentThreads).toHaveLength(9);
+    expect(new Set(root.agentThreads?.map((row) => row.id)).size).toBe(9);
+    const hierarchy = buildThreadAgentGroupHierarchy(root.agentThreads!);
+    expect(hierarchy).toHaveLength(7);
+    expect(hierarchy.flatMap((node) => node.children)).toHaveLength(2);
+    expect(visible[0]?.agentThreads?.map((row) => row.id)).toEqual(["grandchild-a"]);
+    expect(hierarchy.filter((node) => node.thread.pinnedAt == null)).toHaveLength(6);
+  });
   it("keeps malformed descendant links as visible roots instead of nesting a cycle", () => {
     const hierarchy = buildThreadAgentGroupHierarchy([
       thread("a", "b"),

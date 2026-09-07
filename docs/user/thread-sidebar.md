@@ -138,7 +138,13 @@ destination's name; smaller screens and larger text settings use icons with acce
 
 Swipe a conversation right to reveal Pin or Unpin, then tap the icon to apply it. Recent appears
 below your pinned conversations and disappears when no conversations are pinned. Tap an agent
-group to expand its conversations underneath the parent, then tap an agent to open it.
+group to expand its direct children underneath the parent. Each child can expand its own descendants.
+Pinned children appear in the pinned section and remain included in the original team's count and
+details. Tap a session avatar, or long-press its avatar group, for full titles, providers, models and
+environments in Session details. Select a session there to open it.
+
+Mobile working rings rotate around a stationary identity. Rotation pauses with Reduced Motion,
+when the app is inactive, or when its screen is no longer focused.
 
 Swipe left to reveal the tick for Settle and Zzz for Snooze. A full left swipe settles the
 conversation. Settled conversations offer Un-settle, and snoozed conversations offer Wake.

@@ -381,31 +381,34 @@ export function buildThreadListV2ListItems(input: {
       .map((row) => [`${row.item.thread.environmentId}:${row.item.thread.id}`, row]),
   );
   const children = new Map<string, EnvironmentThreadShell[]>();
+  const groupedChildren = new Set<string>();
   for (const row of activeRows) {
-    if (row.type !== "v2-thread" || row.item.pinned) continue;
+    if (row.type !== "v2-thread") continue;
     const ownKey = `${row.item.thread.environmentId}:${row.item.thread.id}`;
     const visited = new Set([ownKey]);
-    let root = row;
-    while (!root.item.pinned && root.item.thread.spawnedByThreadId) {
-      const parentKey = `${root.item.thread.environmentId}:${root.item.thread.spawnedByThreadId}`;
+    const ancestors: string[] = [];
+    let current = row;
+    let cyclic = false;
+    while (current.item.thread.spawnedByThreadId) {
+      const parentKey = `${current.item.thread.environmentId}:${current.item.thread.spawnedByThreadId}`;
       const parent = rowsByKey.get(parentKey);
       if (!parent) break;
       if (visited.has(parentKey)) {
-        root = row;
+        cyclic = true;
         break;
       }
       visited.add(parentKey);
-      root = parent;
+      ancestors.push(parentKey);
+      current = parent;
     }
-    if (root === row) continue;
-    const key = `${root.item.thread.environmentId}:${root.item.thread.id}`;
-    const group = children.get(key) ?? [];
-    group.push(row.item.thread);
-    children.set(key, group);
+    if (cyclic) continue;
+    for (const key of ancestors) {
+      const group = children.get(key) ?? [];
+      group.push(row.item.thread);
+      children.set(key, group);
+    }
+    if (ancestors.length && !row.item.pinned) groupedChildren.add(ownKey);
   }
-  const groupedChildren = new Set(
-    [...children.values()].flat().map((thread) => `${thread.environmentId}:${thread.id}`),
-  );
   const activeItems = activeRows
     .filter(
       (row) =>

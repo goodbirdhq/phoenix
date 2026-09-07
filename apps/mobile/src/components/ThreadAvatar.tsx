@@ -4,7 +4,9 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { useIsFocused } from "@react-navigation/native";
+import { AccessibilityInfo, Animated, AppState, Easing, View } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
 import { resolveThreadListV2Status } from "../features/threads/threadListV2";
 import { ProjectFavicon } from "./ProjectFavicon";
@@ -48,9 +50,9 @@ export function ThreadAvatar({
     {
       snoozed: colors.snooze,
       working: colors.accent,
-      approval: "#b45309",
-      input: "#4f46e5",
-      "awaiting-parent": "#4f46e5",
+      approval: colors.dark ? "#fbbf24" : "#b45309",
+      input: colors.dark ? "#a5b4fc" : "#4f46e5",
+      "awaiting-parent": colors.dark ? "#a5b4fc" : "#4f46e5",
       failed: colors.danger,
       ready: colors.dark ? "#34d399" : "#047857",
     }[status] ?? colors.muted;
@@ -107,10 +109,10 @@ export function ThreadAvatar({
           fill="none"
           stroke={ring}
           strokeWidth={1.5}
-          strokeDasharray={status === "working" ? "2 3" : undefined}
-          opacity={0.8}
+          opacity={status === "working" ? 0.22 : 0.8}
         />
       </Svg>
+      {status === "working" ? <WorkingArc size={size} color={ring} /> : null}
       {providerDriver && project ? (
         <View
           style={{
@@ -129,11 +131,12 @@ export function ThreadAvatar({
         >
           <ProviderIcon provider={providerDriver} size={10 * scale} />
         </View>
-      ) : !project && status !== "working" ? (
+      ) : null}
+      {status !== "working" && status !== "ready" ? (
         <View
           style={{
             position: "absolute",
-            right: 0,
+            left: -2 * scale,
             bottom: -2 * scale,
             width: 14 * scale,
             height: 14 * scale,
@@ -166,9 +169,71 @@ export function ThreadAvatar({
   );
 }
 
+/** Rotate only the arc, on the native driver; identity and attention badges stay still. */
+function WorkingArc({ size, color }: { size: number; color: string }) {
+  const rotation = useRef(new Animated.Value(0)).current;
+  const focused = useIsFocused();
+  const [active, setActive] = useState(AppState.currentState === "active");
+  const [reduceMotion, setReduceMotion] = useState(true);
+  useEffect(() => {
+    let mounted = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((value) => {
+      if (mounted) setReduceMotion(value);
+    });
+    const motion = AccessibilityInfo.addEventListener("reduceMotionChanged", setReduceMotion);
+    const app = AppState.addEventListener("change", (state) => setActive(state === "active"));
+    return () => {
+      mounted = false;
+      motion.remove();
+      app.remove();
+    };
+  }, []);
+  useEffect(() => {
+    rotation.setValue(0);
+    if (!focused || !active || reduceMotion) return;
+    const animation = Animated.loop(
+      Animated.timing(rotation, {
+        toValue: 1,
+        duration: 1200,
+        easing: Easing.linear,
+        useNativeDriver: true,
+        isInteraction: false,
+      }),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [active, focused, reduceMotion, rotation]);
+  return (
+    <Animated.View
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={{
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: size,
+        height: size,
+        transform: [
+          { rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) },
+        ],
+      }}
+    >
+      <Svg width={size} height={size} viewBox="0 0 30 30">
+        <Path
+          d="M15 1.25a13.75 13.75 0 0 1 13.75 13.75"
+          fill="none"
+          stroke={color}
+          strokeWidth={1.8}
+          strokeLinecap="round"
+        />
+      </Svg>
+    </Animated.View>
+  );
+}
+
 // Lucide ISC vectors used by desktop SidebarTeamAvatars.
 const statusBadgePath = {
-  ready: "M20 6 9 17l-5-5",
   failed: "M18 6 6 18m0-12 12 12",
   approval: "M12 8v4m0 4h.01",
   input:

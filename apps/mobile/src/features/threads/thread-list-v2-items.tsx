@@ -27,6 +27,7 @@ import { Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import { ThreadAgentGroup } from "./ThreadAgentGroup";
+import { ThreadSessionDetails } from "./ThreadSessionDetails";
 import { ThreadActionSheet } from "./ThreadActionSheet";
 import { ThreadAvatar, threadIdentityLabel } from "../../components/ThreadAvatar";
 import { useNavigationColors } from "../../components/useNavigationColors";
@@ -39,11 +40,14 @@ import { useThreadPr } from "../../state/use-thread-pr";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import {
+  buildThreadAgentGroupHierarchy,
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
   type ThreadListV2Status,
 } from "./threadListV2";
+import { useProject, useEnvironmentServerConfig } from "../../state/entities";
+import { scopedThreadKey } from "../../lib/scopedEntities";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 
 /**
@@ -301,7 +305,10 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   );
 });
 
-export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
+interface ThreadListV2RowProps {
+  readonly hierarchyDepth?: number;
+  readonly parentProjectId?: EnvironmentThreadShell["projectId"];
+  readonly selectedThreadKey?: string;
   readonly agentThreads?: ReadonlyArray<EnvironmentThreadShell>;
   readonly thread: EnvironmentThreadShell;
   readonly variant: "card" | "slim";
@@ -366,15 +373,28 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly simultaneousSwipeGesture?: ComponentProps<
     typeof ThreadSwipeable
   >["simultaneousWithExternalGesture"];
-}) {
+}
+
+export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2RowProps) {
   const { width: windowWidth } = useWindowDimensions();
   const rowFocusRef = useRef<View>(null);
   const [groupExpanded, setGroupExpanded] = useState(false);
-  const [sheet, setSheet] = useState<"actions" | "snooze" | null>(null);
+  const [sheet, setSheet] = useState<"actions" | "snooze" | "details" | null>(null);
   useEffect(() => {
     setGroupExpanded(false);
     setSheet(null);
   }, [props.thread.environmentId, props.thread.id]);
+  const canExpandAgents = useMemo(
+    () =>
+      buildThreadAgentGroupHierarchy(props.agentThreads ?? []).some(
+        (node) => node.thread.pinnedAt == null,
+      ),
+    [props.agentThreads],
+  );
+  const toggleAgents = () => {
+    if (canExpandAgents) setGroupExpanded((value) => !value);
+    else setSheet("details");
+  };
   const colors = useNavigationColors();
   const {
     thread,
@@ -612,16 +632,21 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       accessibilityRole="button"
       accessibilityState={{
         selected,
-        ...(props.agentThreads?.length ? { expanded: groupExpanded } : {}),
+        ...(canExpandAgents ? { expanded: groupExpanded } : {}),
       }}
       accessibilityActions={[
         { name: "activate", label: "Open conversation" },
         { name: "showActions", label: "Conversation actions" },
+        { name: "showSessionDetails", label: "Session details" },
         ...(props.agentThreads?.length
           ? [
               {
                 name: "toggleAgents",
-                label: groupExpanded ? "Collapse agent group" : "Expand agent group",
+                label: canExpandAgents
+                  ? groupExpanded
+                    ? "Collapse agent group"
+                    : "Expand agent group"
+                  : "Session details",
               },
             ]
           : []),
@@ -629,7 +654,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       onAccessibilityAction={({ nativeEvent }) => {
         close();
         if (nativeEvent.actionName === "showActions") setSheet("actions");
-        else if (nativeEvent.actionName === "toggleAgents") setGroupExpanded((value) => !value);
+        else if (nativeEvent.actionName === "showSessionDetails") setSheet("details");
+        else if (nativeEvent.actionName === "toggleAgents") toggleAgents();
         else if (nativeEvent.actionName === "activate") onSelectThread(thread);
       }}
       onLongPress={() => {
@@ -645,6 +671,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         marginHorizontal: sidebarPane ? 0 : 14,
         marginBottom: 4,
         padding: 10,
+        paddingLeft: 10 + Math.min(props.hierarchyDepth ?? 0, 4) * 20,
         gap: 10,
         flexDirection: "row",
         alignItems: "center",
@@ -652,7 +679,22 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         backgroundColor: selected || pressed ? colors.selected : colors.screen,
       })}
     >
-      <ThreadAvatar thread={thread} project={props.project} providerDriver={props.providerDriver} />
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Session details for ${thread.title}`}
+        hitSlop={6}
+        onPress={(event) => {
+          event.stopPropagation();
+          close();
+          setSheet("details");
+        }}
+      >
+        <ThreadAvatar
+          thread={thread}
+          project={props.parentProjectId === thread.projectId ? null : props.project}
+          providerDriver={props.providerDriver}
+        />
+      </Pressable>
       <View style={{ flex: 1, gap: 5 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Text
@@ -695,8 +737,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             <ThreadAgentGroup
               threads={props.agentThreads}
               expanded={groupExpanded}
-              onToggle={() => setGroupExpanded((value) => !value)}
-              onSelect={onSelectThread}
+              canExpand={canExpandAgents}
+              onToggle={toggleAgents}
+              onDetails={() => setSheet("details")}
+              parentProjectId={thread.projectId}
             />
           ) : null}
           {statusLabel ? (
@@ -753,24 +797,24 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       >
         {(close) => rowContent(close)}
       </ThreadSwipeable>
-      {props.agentThreads?.length && groupExpanded ? (
-        <View
-          style={{
-            marginLeft: sidebarPane ? 44 : 58,
-            marginRight: sidebarPane ? 0 : 14,
-            marginBottom: 8,
-          }}
-        >
-          <ThreadAgentGroup
-            threads={props.agentThreads}
-            expanded={groupExpanded}
-            onToggle={() => setGroupExpanded(false)}
-            onSelect={onSelectThread}
-            detail
-          />
-        </View>
+      {props.agentThreads?.length && canExpandAgents && groupExpanded ? (
+        <ExpandedThreadAgentRows
+          parentProps={props}
+          threads={props.agentThreads}
+          onCollapse={() => setGroupExpanded(false)}
+        />
       ) : null}
-      {sheet ? (
+      {sheet === "details" ? (
+        <ThreadSessionDetails
+          thread={thread}
+          descendants={props.agentThreads ?? []}
+          project={props.project}
+          providerDriver={props.providerDriver}
+          returnFocusRef={rowFocusRef}
+          onClose={() => setSheet(null)}
+          onSelect={onSelectThread}
+        />
+      ) : sheet ? (
         <ThreadActionSheet
           returnFocusRef={rowFocusRef}
           thread={thread}
@@ -798,3 +842,104 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     </>
   );
 });
+
+function ExpandedThreadAgentRows({
+  parentProps,
+  threads,
+  onCollapse,
+}: {
+  parentProps: ThreadListV2RowProps;
+  threads: ReadonlyArray<EnvironmentThreadShell>;
+  onCollapse: () => void;
+}) {
+  const hierarchy = useMemo(() => buildThreadAgentGroupHierarchy(threads), [threads]);
+  const colors = useNavigationColors();
+  const grandchildren = hierarchy.reduce((count, node) => count + node.children.length, 0);
+  const deeperCount = threads.length - hierarchy.length - grandchildren;
+  return (
+    <>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          paddingLeft:
+            (parentProps.pane === "sidebar" ? 12 : 26) +
+            Math.min(parentProps.hierarchyDepth ?? 0, 4) * 20,
+          paddingRight: 24,
+        }}
+      >
+        <Text style={{ flex: 1, fontSize: 12, lineHeight: 18, color: colors.muted }}>
+          {hierarchy.length} {hierarchy.length === 1 ? "child" : "children"}
+          {grandchildren
+            ? ` · ${grandchildren} ${grandchildren === 1 ? "grandchild" : "grandchildren"}`
+            : ""}
+          {deeperCount ? ` · ${deeperCount} deeper` : ""}
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Collapse agents under ${parentProps.thread.title}`}
+          onPress={onCollapse}
+          style={{ minHeight: 44, justifyContent: "center" }}
+        >
+          <Text style={{ fontSize: 12, color: colors.muted }}>Collapse</Text>
+        </Pressable>
+      </View>
+      {hierarchy
+        .filter((node) => node.thread.pinnedAt == null)
+        .map((node) => (
+          <NestedThreadRow
+            key={scopedThreadKey(node.thread.environmentId, node.thread.id)}
+            parentProps={parentProps}
+            node={node}
+          />
+        ))}
+    </>
+  );
+}
+
+function NestedThreadRow({
+  parentProps,
+  node,
+}: {
+  parentProps: ThreadListV2RowProps;
+  node: ReturnType<typeof buildThreadAgentGroupHierarchy>[number];
+}) {
+  const thread = node.thread;
+  const project = useProject({ environmentId: thread.environmentId, projectId: thread.projectId });
+  const config = useEnvironmentServerConfig(thread.environmentId);
+  const descendants = useMemo(() => {
+    const result: EnvironmentThreadShell[] = [];
+    const visit = (child: typeof node) => {
+      result.push(child.thread);
+      child.children.forEach(visit);
+    };
+    node.children.forEach(visit);
+    return result;
+  }, [node]);
+  return (
+    <ThreadListV2Row
+      {...parentProps}
+      thread={thread}
+      agentThreads={descendants}
+      hierarchyDepth={(parentProps.hierarchyDepth ?? 0) + 1}
+      parentProjectId={parentProps.thread.projectId}
+      project={project}
+      projectTitle={project?.title}
+      projectCwd={project?.workspaceRoot}
+      providerDriver={
+        config?.providers.find(
+          (p) =>
+            p.instanceId ===
+            (thread.session?.providerInstanceId ?? thread.modelSelection.instanceId),
+        )?.driver ?? null
+      }
+      selected={parentProps.selectedThreadKey === scopedThreadKey(thread.environmentId, thread.id)}
+      pinned={thread.pinnedAt != null}
+      snoozed={false}
+      snoozeWakeLabelText={undefined}
+      canMovePinnedUp={false}
+      canMovePinnedDown={false}
+      searchMatch={undefined}
+    />
+  );
+}

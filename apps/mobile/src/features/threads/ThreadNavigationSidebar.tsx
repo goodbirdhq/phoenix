@@ -668,6 +668,7 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
               )}
               searchQuery={props.searchQuery}
               pane="sidebar"
+              selectedThreadKey={props.selectedThreadKey ?? undefined}
               selected={
                 scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey
               }
