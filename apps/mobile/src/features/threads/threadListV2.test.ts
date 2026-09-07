@@ -16,6 +16,7 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
+  buildThreadAgentGroupHierarchy,
   resolveThreadListV2Enabled,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
@@ -948,5 +949,104 @@ describe("buildThreadListV2ListItems", () => {
       "v2-settled-shelf",
       "v2-thread",
     ]);
+  });
+});
+
+describe("mobile pinned sections and agent groups", () => {
+  const rows = (threads: EnvironmentThreadShell[], query = "") => {
+    const layout = buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: query,
+      now: NOW,
+    });
+    return buildThreadListV2ListItems({ ...layout, pendingTasks: [] });
+  };
+  const thread = (id: string, parent?: string, pinned = false) =>
+    makeThread({
+      id: ThreadId.make(id),
+      title: id,
+      ...(parent ? { spawnedByThreadId: ThreadId.make(parent) } : {}),
+      ...(pinned ? { pinnedAt: NOW, pinOrder: 0 } : {}),
+    });
+  it("adds Recent only below pinned work and removes both headings after the last unpin", () => {
+    const pinned = rows([thread("pinned", undefined, true), thread("recent")]);
+    expect(pinned.filter((row) => row.type === "v2-section").map((row) => row.label)).toEqual([
+      "Pinned",
+      "Recent",
+    ]);
+    expect(
+      rows([thread("pinned"), thread("recent")]).some((row) => row.type === "v2-section"),
+    ).toBe(false);
+    expect(
+      rows([thread("pinned", undefined, true), thread("recent")], "recent").some(
+        (row) => row.type === "v2-section",
+      ),
+    ).toBe(false);
+  });
+  it("keeps every descendant reachable through the visible root", () => {
+    const result = rows([thread("root"), thread("child", "root"), thread("grandchild", "child")]);
+    const visible = result.filter((row) => row.type === "v2-thread");
+    expect(visible.map((row) => row.item.thread.id)).toEqual(["root"]);
+    expect(visible[0]?.agentThreads?.map((row) => row.id).sort()).toEqual(["child", "grandchild"]);
+    expect(buildThreadAgentGroupHierarchy(visible[0]?.agentThreads ?? [])).toEqual([
+      {
+        thread: expect.objectContaining({ id: "child" }),
+        children: [
+          {
+            thread: expect.objectContaining({ id: "grandchild" }),
+            children: [],
+          },
+        ],
+      },
+    ]);
+  });
+  it("keeps pinned children and missing or cyclic parents visible", () => {
+    const result = rows([
+      thread("root"),
+      thread("pinned", "root", true),
+      thread("orphan", "missing"),
+      thread("a", "b"),
+      thread("b", "a"),
+    ]);
+    expect(
+      result
+        .filter((row) => row.type === "v2-thread")
+        .map((row) => row.item.thread.id)
+        .sort(),
+    ).toEqual(["a", "b", "orphan", "pinned", "root"]);
+  });
+  it("never groups identically named threads across environments", () => {
+    const child = { ...thread("child", "root"), environmentId: EnvironmentId.make("other") };
+    expect(rows([thread("root"), child]).filter((row) => row.type === "v2-thread")).toHaveLength(2);
+  });
+  it("counts seven children and two grandchildren once, including separately pinned teams", () => {
+    const input = [
+      thread("root"),
+      ...Array.from({ length: 7 }, (_, i) => thread(`child-${i}`, "root", i === 0)),
+      thread("grandchild-a", "child-0"),
+      thread("grandchild-b", "child-1"),
+    ];
+    const visible = rows(input).filter((row) => row.type === "v2-thread");
+    expect(visible.map((row) => row.item.thread.id)).toEqual(["child-0", "root"]);
+    const root = visible.find((row) => row.item.thread.id === "root")!;
+    expect(root.agentThreads).toHaveLength(9);
+    expect(new Set(root.agentThreads?.map((row) => row.id)).size).toBe(9);
+    const hierarchy = buildThreadAgentGroupHierarchy(root.agentThreads!);
+    expect(hierarchy).toHaveLength(7);
+    expect(hierarchy.flatMap((node) => node.children)).toHaveLength(2);
+    expect(visible[0]?.agentThreads?.map((row) => row.id)).toEqual(["grandchild-a"]);
+    expect(hierarchy.filter((node) => node.thread.pinnedAt == null)).toHaveLength(6);
+  });
+  it("keeps malformed descendant links as visible roots instead of nesting a cycle", () => {
+    const hierarchy = buildThreadAgentGroupHierarchy([
+      thread("a", "b"),
+      thread("b", "a"),
+      thread("orphan", "missing"),
+      { ...thread("remote", "a"), environmentId: EnvironmentId.make("other") },
+    ]);
+
+    expect(hierarchy.map((node) => node.thread.id).sort()).toEqual(["a", "b", "orphan", "remote"]);
+    expect(hierarchy.every((node) => node.children.length === 0)).toBe(true);
   });
 });

@@ -129,3 +129,28 @@ be selected again. The option is hidden when the connected environment needs a s
 
 Expansion resets when a thread leaves the active or pinned list. Separately pinned descendants
 remain included in their original team’s avatars and details.
+
+## Mobile navigation and quick actions
+
+On mobile, Search, Filter and New task sit above the conversation list. The footer opens Agents,
+Pull Requests, Schedules, Usage, Environments and Settings. On wider screens it shows the selected
+destination's name; smaller screens and larger text settings use icons with accessible labels.
+
+Swipe a conversation right to reveal Pin or Unpin, then tap the icon to apply it. Recent appears
+below your pinned conversations and disappears when no conversations are pinned. Tap an agent
+group to expand its direct children underneath the parent. Each child can expand its own descendants.
+Pinned children appear in the pinned section and remain included in the original team's count and
+details. Tap a session avatar, or long-press its avatar group, for full titles, providers, models and
+environments in Session details. Select a session there to open it.
+
+Mobile working rings rotate around a stationary identity. Rotation pauses with Reduced Motion,
+when the app is inactive, or when its screen is no longer focused.
+
+Swipe left to reveal the tick for Settle and Zzz for Snooze. A full left swipe settles the
+conversation. Settled conversations offer Un-settle, and snoozed conversations offer Wake.
+Available actions depend on the connected server and whether the conversation is currently busy.
+
+Long-press a conversation for its actions. Snooze opens a sheet with available wake times.
+Action and confirmation sheets show the conversation's avatar and keep options below the heading.
+Cancel, the backdrop, a downward drag on the handle, or Android Back dismisses the sheet.
+Deleting requires the explicit Delete conversation button and permanently removes its terminal history.

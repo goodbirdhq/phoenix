@@ -7,6 +7,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   NavigationContext,
+  NavigationContainerRefContext,
   NavigationRouteContext,
   StackActions,
   useNavigation,
@@ -15,6 +16,7 @@ import {
   createContext,
   use,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -45,8 +47,12 @@ import {
   parseActiveThreadPath,
   useHardwareKeyboardCommand,
 } from "../keyboard/hardwareKeyboardCommands";
-import { AndroidHomeFabLayout } from "../home/AndroidHomeFab";
 import { HomeListOptionsProvider } from "../home/home-list-options";
+import {
+  footerRootTarget,
+  type FooterRootNavigation,
+  type FooterRoute,
+} from "../home/navigation-footer-layout";
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
 import { WORKSPACE_PANE_TIMING } from "./workspace-pane-animation";
 import { WorkspaceInspectorPane } from "./workspace-inspector-pane";
@@ -222,6 +228,7 @@ function AdaptiveWorkspaceLayoutContent(
   const { width, height } = useWindowDimensions();
   const pathname = props.pathname;
   const navigation = useNavigation();
+  const rootNavigation = useContext(NavigationContainerRefContext);
   const activeRoleOwner = useRef<symbol | null>(null);
   const [primarySidebarPreferredVisible, setPrimarySidebarPreferredVisible] = useState(true);
   const [supplementaryPanePreferredVisible, setSupplementaryPanePreferredVisible] = useState(true);
@@ -429,24 +436,35 @@ function AdaptiveWorkspaceLayoutContent(
     ],
   );
 
-  const handleOpenSettings = useCallback(() => {
-    navigation.navigate("SettingsSheet", {
-      screen: "SettingsContent",
-      params: { screen: "Settings" },
-    });
-  }, [navigation]);
+  const rootFooterNavigation = useMemo<FooterRootNavigation>(
+    () => ({
+      getState: () =>
+        rootNavigation?.getRootState() ?? navigation.getState() ?? { routes: [{ name: "Home" }] },
+      subscribe: (listener) =>
+        rootNavigation?.addListener("state", listener) ?? navigation.addListener("state", listener),
+      navigate: (route: FooterRoute) => {
+        const target = footerRootTarget(
+          rootNavigation?.getRootState() ?? navigation.getState() ?? { routes: [{ name: "Home" }] },
+          route,
+        );
+        (rootNavigation ?? navigation).dispatch(
+          target.kind === "push"
+            ? StackActions.push(target.name, {
+                screen: target.screen,
+                params: target.params,
+              })
+            : StackActions.popTo(
+                target.name,
+                "screen" in target ? { screen: target.screen, params: target.params } : undefined,
+              ),
+        );
+      },
+    }),
+    [navigation, rootNavigation],
+  );
 
   const handleStartNewTask = useCallback(() => {
     navigation.navigate("NewTaskSheet", { screen: "NewTask" });
-  }, [navigation]);
-
-  // Minted here (root stack navigation) so the sidebar pane stays free of
-  // navigation hooks — on iOS it renders inside an independent nav tree.
-  const handleOpenEnvironmentSettings = useCallback(() => {
-    navigation.navigate("SettingsSheet", {
-      screen: "SettingsContent",
-      params: { screen: "SettingsEnvironments" },
-    });
   }, [navigation]);
 
   const handleNewThreadInProject = useCallback(
@@ -534,20 +552,20 @@ function AdaptiveWorkspaceLayoutContent(
               style={sidebarAnimatedStyle}
             >
               <View className="flex-1" style={{ width: layout.listPaneWidth }}>
-                <AndroidHomeFabLayout onStartNewTask={handleStartNewTask}>
+                <>
                   <ThreadNavigationSidebar
+                    onStartNewTask={handleStartNewTask}
                     width={layout.listPaneWidth}
                     visible={panes.primarySidebarVisible}
                     onRequestVisibility={revealPrimarySidebar}
+                    rootNavigation={rootFooterNavigation}
                     selectedThreadKey={selectedThreadKey}
-                    onOpenSettings={handleOpenSettings}
-                    onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
                     onNewThreadInProject={handleNewThreadInProject}
                     onSelectThread={handleSelectThread}
                     onSearchQueryChange={setPrimarySidebarSearchQuery}
                     searchQuery={primarySidebarSearchQuery}
                   />
-                </AndroidHomeFabLayout>
+                </>
               </View>
             </Animated.View>
           ) : null}
