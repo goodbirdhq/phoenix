@@ -468,7 +468,6 @@ export function HomeScreen(props: HomeScreenProps) {
   const handleMovePinnedThread = props.onMovePinnedThread;
   const handleUnpinThread = props.onUnpinThread;
   const handleRegenerateThreadTitle = props.onRegenerateThreadTitle;
-  const handleDeleteThread = props.onDeleteThread;
   const handleUnsettleThread = props.onUnsettleThread;
   // The settled tail renders in pages; expansion resets when the filter
   // context changes so environment/search flips never inherit a deep page.
