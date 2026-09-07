@@ -1,4 +1,4 @@
-import { useSessionRefresh } from "./use-session-refresh";
+import type { useSessionRefresh } from "./use-session-refresh";
 import type { ThreadListActions } from "./useThreadListActions";
 import {
   LegendList,
@@ -87,6 +87,7 @@ import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-sw
 /* ─── Types ──────────────────────────────────────────────────────────── */
 
 interface HomeScreenProps {
+  readonly refresh: ReturnType<typeof useSessionRefresh>;
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
@@ -195,11 +196,12 @@ function deriveEmptyState(props: {
 
 export function HomeScreen(props: HomeScreenProps) {
   const colors = useNavigationColors();
-  const refresh = useSessionRefresh(props.environments, props.selectedEnvironmentId);
+  const refresh = props.refresh;
   const refreshControl = (
     <RefreshControl
       {...refresh}
-      tintColor={colors.muted}
+      tintColor={colors.accent}
+      accessibilityLabel="Refresh sessions"
       colors={[colors.accent]}
       progressBackgroundColor={colors.surface}
     />

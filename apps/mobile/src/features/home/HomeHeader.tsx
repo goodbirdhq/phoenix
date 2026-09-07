@@ -18,6 +18,8 @@ import {
 } from "./home-list-filter-menu";
 export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 export function HomeHeader(props: {
+  readonly onRefresh: () => void;
+  readonly refreshing: boolean;
   readonly hideNativeHeader?: boolean;
   readonly beforeFocusSearch?: () => void;
   readonly environments: ReadonlyArray<HomeHeaderEnvironment>;
@@ -60,8 +62,14 @@ export function HomeHeader(props: {
         }),
       };
     });
+    handlers.set("refresh-sessions", props.onRefresh);
+    actions.push({
+      id: "refresh-sessions",
+      title: props.refreshing ? "Refreshing sessions…" : "Refresh sessions",
+      attributes: { disabled: props.refreshing || props.environments.length === 0 },
+    });
     return { actions, handlers };
-  }, [menu.items]);
+  }, [menu.items, props.onRefresh, props.refreshing, props.environments.length]);
   return (
     <>
       {props.hideNativeHeader !== false ? (

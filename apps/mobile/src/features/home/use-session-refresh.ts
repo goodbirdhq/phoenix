@@ -9,6 +9,11 @@ import { Alert } from "react-native";
 import { environmentCatalog } from "../../connection/catalog";
 import { environmentShell } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
+import {
+  evaluateSessionRefresh,
+  sessionRefreshTargets,
+  sessionRefreshFailure,
+} from "./session-refresh.logic";
 import { waitForSessionRefresh } from "./session-refresh";
 
 export function useSessionRefresh(
@@ -23,10 +28,7 @@ export function useSessionRefresh(
 
   const onRefresh = useCallback(async () => {
     if (active.current) return;
-    const targets = environments.filter(
-      ({ environmentId }) =>
-        selectedEnvironmentId === null || environmentId === selectedEnvironmentId,
-    );
+    const targets = sessionRefreshTargets(environments, selectedEnvironmentId);
     if (targets.length === 0) return;
     const controller = new AbortController();
     active.current = controller;
@@ -45,7 +47,6 @@ export function useSessionRefresh(
               () => AVAILABLE_CONNECTION_STATE,
             );
           const initialConnection = connection();
-          const initialGeneration = initialConnection.generation;
           const initialSnapshot = Option.getOrNull(registry.get(shellAtom).snapshot);
           return waitForSessionRefresh({
             signal: controller.signal,
@@ -57,33 +58,20 @@ export function useSessionRefresh(
               ];
               return () => cleanups.forEach((cleanup) => cleanup());
             },
-            check: () => {
-              if (registry.get(environmentCatalog.networkStatusValueAtom) === "offline") {
-                return "You are offline. Reconnect to refresh your sessions.";
-              }
-              const state = connection();
-              if (
-                state !== initialConnection &&
-                (state.phase === "blocked" || state.phase === "backoff")
-              ) {
-                return "Could not reach an environment. Pull down to try again.";
-              }
-              if (state.generation <= initialGeneration) return "pending";
-              const shell = registry.get(shellAtom);
-              if (Option.isSome(shell.error)) return shell.error.value;
-              return state.phase === "connected" &&
-                shell.status === "live" &&
-                Option.isSome(shell.snapshot) &&
-                shell.snapshot.value !== initialSnapshot
-                ? "ready"
-                : "pending";
-            },
+            check: () =>
+              evaluateSessionRefresh({
+                networkStatus: registry.get(environmentCatalog.networkStatusValueAtom),
+                initialConnection,
+                state: connection(),
+                initialSnapshot,
+                shell: registry.get(shellAtom),
+              }),
             reconnect: async () => (await retry(environmentId))._tag === "Success",
           });
         }),
       );
-      const failure = results.find((result) => result.status === "rejected");
-      if (failure?.status === "rejected") throw failure.reason;
+      const failure = sessionRefreshFailure(results);
+      if (failure !== null) throw failure;
     } catch (error) {
       if (!controller.signal.aborted) {
         Alert.alert(

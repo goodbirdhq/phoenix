@@ -889,6 +889,7 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
       }}
     >
       <HomeHeader
+        {...refresh}
         hideNativeHeader={false}
         beforeFocusSearch={props.onRequestVisibility}
         environments={environments}
@@ -912,7 +913,8 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
             refreshControl={
               <RefreshControl
                 {...refresh}
-                tintColor={colors.muted}
+                tintColor={colors.accent}
+                accessibilityLabel="Refresh sessions"
                 colors={[colors.accent]}
                 progressBackgroundColor={colors.surface}
               />

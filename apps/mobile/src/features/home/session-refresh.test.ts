@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { waitForSessionRefresh } from "./session-refresh";
+import { SESSION_REFRESH_TIMEOUT_MS, waitForSessionRefresh } from "./session-refresh";
 
 function fixture() {
-  let status = "pending";
+  let status: "pending" | "ready" | string = "pending";
   let notify = () => {};
   const unsubscribe = vi.fn();
   const controller = new AbortController();
@@ -12,7 +12,10 @@ function fixture() {
       notify = check;
       return unsubscribe;
     },
-    check: () => status,
+    check: (): import("./session-refresh.logic").SessionRefreshResult =>
+      status === "pending" || status === "ready"
+        ? { status }
+        : { status: "error" as const, message: status },
     reconnect,
     signal: controller.signal,
   };
@@ -100,11 +103,29 @@ describe("session refresh", () => {
     expect(check).not.toHaveBeenCalled();
   });
 
+  it("allows snapshot synchronization after a slow connection establishment", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const result = waitForSessionRefresh(f.options);
+    await vi.advanceTimersByTimeAsync(16_000);
+    f.emit("ready");
+    await expect(result).resolves.toBeUndefined();
+  });
+
+  it("cleans up if dispatch throws synchronously", async () => {
+    const f = fixture();
+    f.options.reconnect.mockImplementation(() => {
+      throw new Error("Dispatch failed");
+    });
+    await expect(waitForSessionRefresh(f.options)).rejects.toThrow("Dispatch failed");
+    expect(f.unsubscribe).toHaveBeenCalledOnce();
+  });
+
   it("bounds a server that never completes synchronization", async () => {
     vi.useFakeTimers();
     const f = fixture();
     const result = expect(waitForSessionRefresh(f.options)).rejects.toThrow("did not respond");
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(SESSION_REFRESH_TIMEOUT_MS);
     await result;
     expect(f.unsubscribe).toHaveBeenCalledOnce();
   });
