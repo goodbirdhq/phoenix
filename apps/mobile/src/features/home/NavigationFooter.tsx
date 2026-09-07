@@ -21,6 +21,7 @@ import {
   footerShowsLabels,
   footerDestination,
   footerRootTarget,
+  type FooterRootNavigation,
   type FooterRoute,
 } from "./navigation-footer-layout";
 
@@ -35,20 +36,31 @@ const tabs: ReadonlyArray<{ label: string; route: FooterRoute; icon: typeof Agen
 export function NavigationFooter({
   selected: selectedRoute,
   onNavigate,
+  rootNavigation: suppliedRootNavigation,
 }: {
   selected?: string;
   onNavigate?: (route: (typeof tabs)[number]["route"]) => void;
+  rootNavigation?: FooterRootNavigation;
 }) {
   const navigation = useNavigation();
   const rootNavigation = useContext(NavigationContainerRefContext);
+  const getRootState = useCallback(
+    () =>
+      suppliedRootNavigation?.getState() ??
+      rootNavigation?.getRootState() ??
+      navigation.getState() ?? { routes: [{ name: "Home" }] },
+    [navigation, rootNavigation, suppliedRootNavigation],
+  );
   const subscribe = useCallback(
-    (listener: () => void) => rootNavigation?.addListener("state", listener) ?? (() => {}),
-    [rootNavigation],
+    (listener: () => void) =>
+      suppliedRootNavigation?.subscribe(listener) ??
+      rootNavigation?.addListener("state", listener) ??
+      (() => {}),
+    [rootNavigation, suppliedRootNavigation],
   );
   const getDestination = useCallback(() => {
-    const state = rootNavigation?.getRootState();
-    return state ? footerDestination(state) : "Home";
-  }, [rootNavigation]);
+    return footerDestination(getRootState());
+  }, [getRootState]);
   const activeDestination = useSyncExternalStore(subscribe, getDestination, getDestination);
   const selected = selectedRoute ?? activeDestination;
   const colors = useNavigationColors();
@@ -88,10 +100,9 @@ export function NavigationFooter({
               accessibilityState={{ selected: active }}
               onPress={() => {
                 if (onNavigate) onNavigate(route);
+                else if (suppliedRootNavigation) suppliedRootNavigation.navigate(route);
                 else {
-                  const rootState = rootNavigation?.getRootState() ?? navigation.getState();
-                  if (!rootState) return;
-                  const target = footerRootTarget(rootState, route);
+                  const target = footerRootTarget(getRootState(), route);
                   navigation.dispatch(
                     target.kind === "push"
                       ? StackActions.push(target.name, {

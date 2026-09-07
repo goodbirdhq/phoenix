@@ -46,6 +46,11 @@ import {
   useHardwareKeyboardCommand,
 } from "../keyboard/hardwareKeyboardCommands";
 import { HomeListOptionsProvider } from "../home/home-list-options";
+import {
+  footerRootTarget,
+  type FooterRootNavigation,
+  type FooterRoute,
+} from "../home/navigation-footer-layout";
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
 import { WORKSPACE_PANE_TIMING } from "./workspace-pane-animation";
 import { WorkspaceInspectorPane } from "./workspace-inspector-pane";
@@ -428,6 +433,31 @@ function AdaptiveWorkspaceLayoutContent(
     ],
   );
 
+  const rootFooterNavigation = useMemo<FooterRootNavigation>(
+    () => ({
+      getState: () => navigation.getState() ?? { routes: [{ name: "Home" }] },
+      subscribe: (listener) => navigation.addListener("state", listener),
+      navigate: (route: FooterRoute) => {
+        const target = footerRootTarget(
+          navigation.getState() ?? { routes: [{ name: "Home" }] },
+          route,
+        );
+        navigation.dispatch(
+          target.kind === "push"
+            ? StackActions.push(target.name, {
+                screen: target.screen,
+                params: target.params,
+              })
+            : StackActions.popTo(
+                target.name,
+                "screen" in target ? { screen: target.screen, params: target.params } : undefined,
+              ),
+        );
+      },
+    }),
+    [navigation],
+  );
+
   const handleStartNewTask = useCallback(() => {
     navigation.navigate("NewTaskSheet", { screen: "NewTask" });
   }, [navigation]);
@@ -523,6 +553,7 @@ function AdaptiveWorkspaceLayoutContent(
                     width={layout.listPaneWidth}
                     visible={panes.primarySidebarVisible}
                     onRequestVisibility={revealPrimarySidebar}
+                    rootNavigation={rootFooterNavigation}
                     selectedThreadKey={selectedThreadKey}
                     onNewThreadInProject={handleNewThreadInProject}
                     onSelectThread={handleSelectThread}

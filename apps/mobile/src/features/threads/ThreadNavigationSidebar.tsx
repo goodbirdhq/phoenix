@@ -1,5 +1,6 @@
 import { HomeHeader } from "../home/HomeHeader";
 import { NavigationFooter } from "../home/NavigationFooter";
+import type { FooterRootNavigation } from "../home/navigation-footer-layout";
 import { useNavigationColors } from "../../components/useNavigationColors";
 import type {
   EnvironmentProject,
@@ -81,6 +82,7 @@ interface ThreadNavigationSidebarProps {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onRequestVisibility: () => void;
   readonly searchQuery: string;
+  readonly rootNavigation?: FooterRootNavigation;
 }
 
 /** The tablet column shares the phone's navigation controls and list. */
@@ -925,7 +927,7 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
           />
         </GestureDetector>
       </SwipeableScrollGateProvider>
-      <NavigationFooter />
+      <NavigationFooter rootNavigation={props.rootNavigation} />
     </View>
   );
 }

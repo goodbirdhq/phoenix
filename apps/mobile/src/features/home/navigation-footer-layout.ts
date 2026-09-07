@@ -12,7 +12,13 @@ export type FooterRoute =
   | "Settings";
 
 /** Return the root route and nested target for a footer destination. */
-type FooterRootState = { index?: number; routes: readonly { name: string }[] };
+export type FooterRootState = { index?: number; routes: readonly { name: string }[] };
+
+export type FooterRootNavigation = {
+  readonly getState: () => FooterRootState | undefined;
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly navigate: (route: FooterRoute) => void;
+};
 
 export function footerRootTarget(state: FooterRootState, route: FooterRoute) {
   if (route === "Home") return { kind: "popTo" as const, name: "Home" as const };
