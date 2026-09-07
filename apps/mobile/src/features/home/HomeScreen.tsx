@@ -662,11 +662,7 @@ export function HomeScreen(props: HomeScreenProps) {
   );
 
   const renderV2Item = useCallback(
-    ({ item, index }: { readonly item: ThreadListV2ListItem; readonly index: number }) => {
-      const nextItem = threadListV2Items[index + 1];
-      const showTrailingDivider =
-        nextItem?.type === "v2-thread" ||
-        (nextItem?.type === "v2-pending" && !nextItem.showPendingDivider);
+    ({ item }: { readonly item: ThreadListV2ListItem }) => {
       if (item.type === "v2-section") return <ThreadListV2SectionDivider label={item.label} />;
       if (item.type === "v2-pending") {
         const pendingScopeKey = scopedProjectKey(
@@ -719,7 +715,6 @@ export function HomeScreen(props: HomeScreenProps) {
           snoozed={item.item.snoozed}
           pinned={item.item.pinned}
           snoozeWakeLabelText={item.snoozeWakeLabelText}
-          showTrailingDivider={showTrailingDivider}
           project={
             projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
           }
@@ -748,7 +743,6 @@ export function HomeScreen(props: HomeScreenProps) {
           )}
           searchQuery={props.searchQuery}
           onSelectThread={props.onSelectThread}
-          onDeleteThread={handleDeleteThread}
           onConfirmDeleteThread={props.onConfirmDeleteThread}
           onArchiveThread={props.onArchiveThread}
           onRegenerateThreadTitle={handleRegenerateThreadTitle}
@@ -778,7 +772,6 @@ export function HomeScreen(props: HomeScreenProps) {
       );
     },
     [
-      handleDeleteThread,
       arrangedPinnedKeys,
       handleMovePinnedThread,
       handlePinThread,
@@ -803,7 +796,6 @@ export function HomeScreen(props: HomeScreenProps) {
       shelfPreferencesLoaded,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
-      threadListV2Items,
       threadSearchMatchByKey,
       titleRegenerationEnvironmentIds,
       toggleSettledShelf,

@@ -67,12 +67,14 @@ function swipeActionsWidth(hasSecondaryAction: boolean) {
 /** `undefined` keeps the v1 Delete default; `null` means one action only. */
 function resolveSecondaryAction(input: {
   readonly close: () => void;
-  readonly onDelete: () => void;
+  readonly onDelete?: () => void;
   readonly secondaryAction: ThreadSwipeAction | null | undefined;
   readonly threadTitle: string;
 }): ThreadSwipeSecondaryAction | null {
   if (input.secondaryAction === null) return null;
   if (input.secondaryAction === undefined) {
+    const onDelete = input.onDelete;
+    if (onDelete === undefined) return null;
     return {
       accessibilityLabel: `Delete ${input.threadTitle}`,
       backgroundColor: "#ff2d55",
@@ -80,7 +82,7 @@ function resolveSecondaryAction(input: {
       label: "Delete",
       onPress: () => {
         input.close();
-        input.onDelete();
+        onDelete();
       },
     };
   }
@@ -213,31 +215,18 @@ export function useSwipeableScrollGate(options?: {
   };
 }
 
-export function ThreadSwipeable(props: {
+type ThreadSwipeableProps = {
   readonly backgroundColor: ColorValue;
   readonly children: (close: () => void) => ReactNode;
   readonly containerStyle?: StyleProp<ViewStyle>;
   /** Disables NEW swipe activations (e.g. while the list scrolls). */
   readonly enabled?: boolean;
   readonly enableTrackpadSwipe?: boolean;
-  /**
-   * What a full swipe commits. Omitted keeps the v1 Delete behavior only when
-   * the built-in Delete secondary action is in use; custom or absent
-   * secondary actions default to the advertised primary action.
-   */
-  readonly fullSwipeAction?: "delete" | "primary";
   readonly fullSwipeWidth: number;
-  readonly onDelete: () => void;
   readonly onSwipeableClose?: (methods: SwipeableMethods) => void;
   readonly onSwipeableWillOpen?: (methods: SwipeableMethods) => void;
   readonly leadingAction?: ThreadSwipeAction;
   readonly primaryAction: ThreadSwipeAction;
-  /**
-   * Omitted keeps the v1 destructive Delete action. Explicit null opts out of
-   * a secondary action entirely so a gated Snooze can never fall back to an
-   * unadvertised Delete.
-   */
-  readonly secondaryAction?: ThreadSwipeAction | null;
   /**
    * Identity of the content being wrapped. When a recycled list reuses this
    * component for a different item, the swipeable snaps back to closed so an
@@ -248,14 +237,33 @@ export function ThreadSwipeable(props: {
     typeof ReanimatedSwipeable
   >["simultaneousWithExternalGesture"];
   readonly threadTitle: string;
-}) {
+} & (
+  | {
+      /** Omitted keeps the v1 full-swipe Delete behavior. */
+      readonly fullSwipeAction?: "delete";
+      readonly onDelete: () => void;
+      /** Omitted keeps the v1 destructive Delete secondary action. */
+      readonly secondaryAction?: undefined;
+    }
+  | {
+      /** V2 full swipes commit the advertised lifecycle action. */
+      readonly fullSwipeAction: "primary";
+      readonly onDelete?: never;
+      /** Explicit null opts out so gated Snooze never becomes Delete. */
+      readonly secondaryAction: ThreadSwipeAction | null;
+    }
+);
+
+export function ThreadSwipeable(props: ThreadSwipeableProps) {
   const swipeableRef = useRef<SwipeableMethods | null>(null);
   const fullSwipeArmedRef = useRef(false);
-  const hasSecondaryAction = props.secondaryAction !== null;
+  const hasSecondaryAction =
+    props.secondaryAction !== null &&
+    (props.secondaryAction !== undefined || props.onDelete !== undefined);
   const actionsWidth = swipeActionsWidth(hasSecondaryAction);
   const fullSwipeThreshold = Math.max(actionsWidth + 44, props.fullSwipeWidth * 0.58);
   const fullSwipeAction =
-    props.fullSwipeAction ?? (props.secondaryAction === undefined ? "delete" : "primary");
+    props.fullSwipeAction ?? (props.onDelete === undefined ? "primary" : "delete");
   const close = useCallback(() => swipeableRef.current?.close(), []);
   const gateEnabled = use(SwipeableScrollGateContext);
   const resetKey = props.resetKey;
@@ -312,7 +320,7 @@ export function ThreadSwipeable(props: {
           if (fullSwipeAction === "primary") {
             props.primaryAction.onPress();
           } else {
-            props.onDelete();
+            props.onDelete?.();
           }
         }
       }}

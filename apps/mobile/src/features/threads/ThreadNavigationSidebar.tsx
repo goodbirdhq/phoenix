@@ -673,7 +673,6 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
               }
               fullSwipeWidth={props.width - 20}
               onSelectThread={handleSelectThread}
-              onDeleteThread={confirmDeleteThread}
               onConfirmDeleteThread={deleteThread}
               onArchiveThread={archiveThread}
               onRegenerateThreadTitle={regenerateThreadTitle}
