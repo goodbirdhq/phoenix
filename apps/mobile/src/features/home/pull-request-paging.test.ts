@@ -133,17 +133,17 @@ describe("mobile pull request paging", () => {
 });
 
 describe("forced mobile pull request refresh", () => {
-  it("ignores the cached pre-refresh snapshot and masks cached data while pending", () => {
+  it("ignores cached and pending snapshots until the refresh generation completes", () => {
     const cached = { data: page([entry(2)]), error: null, isPending: false };
 
     expect(observeForcedPullRequestRefresh(false, cached)).toBeNull();
-
-    const pending = observeForcedPullRequestRefresh(true, {
-      data: cached.data,
-      error: null,
-      isPending: true,
-    });
-    expect(pending).toEqual({ data: null, error: null, isPending: true });
+    expect(
+      observeForcedPullRequestRefresh(false, {
+        data: cached.data,
+        error: null,
+        isPending: true,
+      }),
+    ).toBeNull();
   });
 
   it("reports fresh success but preserves retained rows when refresh fails", () => {

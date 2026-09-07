@@ -105,16 +105,13 @@ export interface PullRequestQueryObservation<A> {
 
 /**
  * A forced refresh first exposes the query atom's cached snapshot. Hold that
- * snapshot back until the atom has been refreshed, mask its retained data
- * while pending, and never replace displayed rows with cached data on failure.
+ * snapshot back until an atom subscription observes the refresh finish, and
+ * never replace displayed rows with cached data on failure.
  */
 export function observeForcedPullRequestRefresh<A>(
-  refreshStarted: boolean,
+  refreshCompleted: boolean,
   observation: PullRequestQueryObservation<A>,
 ): PullRequestQueryObservation<A> | null {
-  if (!refreshStarted) return null;
-  if (observation.isPending) {
-    return { data: null, error: null, isPending: true };
-  }
+  if (!refreshCompleted) return null;
   return observation.error === null ? observation : { ...observation, data: null };
 }

@@ -1,5 +1,5 @@
 import { LegendList, type LegendListRenderItemProps } from "@legendapp/list/react-native";
-import { useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
 import { createEnvironmentRpcQueryAtomFamily } from "@t3tools/client-runtime/state/runtime";
 import {
   WS_METHODS,
@@ -9,7 +9,7 @@ import {
   type PullRequestListResult,
 } from "@t3tools/contracts";
 import { useNavigation } from "@react-navigation/native";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Linking, Platform, Pressable, View } from "react-native";
 import IconGitPullRequest from "@tabler/icons-react-native/IconGitPullRequest";
 import { connectionAtomRuntime } from "../../connection/runtime";
@@ -329,7 +329,7 @@ export function PullRequestsRouteScreen() {
         return (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={label}
+            accessibilityLabel={item.disabled ? `${label}, loading` : label}
             accessibilityState={{ busy: item.disabled, disabled: item.disabled }}
             disabled={item.disabled}
             onPress={() =>
@@ -414,30 +414,47 @@ function EnvironmentPullRequestsLoader({
     },
   ) => void;
 }) {
-  const query = useEnvironmentQuery(
-    list({
-      environmentId,
-      input: pullRequestPageInput(request.cursors),
-    }),
-  );
+  const atomRegistry = useContext(RegistryContext);
+  const queryAtom = list({ environmentId, input: pullRequestPageInput(request.cursors) });
+  const query = useEnvironmentQuery(queryAtom);
   const triggeredRequestId = useRef<number | null>(null);
-  const [refreshedRequestId, setRefreshedRequestId] = useState<number | null>(null);
+  const waitingRequestId = useRef<number | null>(null);
+  const [completedRequestId, setCompletedRequestId] = useState<number | null>(null);
+
+  const handleQueryResult = useCallback(
+    (result: { readonly waiting: boolean }) => {
+      if (!request.forceRefresh || triggeredRequestId.current !== request.id) return;
+      if (result.waiting) {
+        waitingRequestId.current = request.id;
+      } else if (waitingRequestId.current === request.id) {
+        setCompletedRequestId(request.id);
+      }
+    },
+    [request.forceRefresh, request.id],
+  );
+  useAtomSubscribe(queryAtom, handleQueryResult, { immediate: true });
 
   useEffect(() => {
     if (!request.forceRefresh || triggeredRequestId.current === request.id) return;
     triggeredRequestId.current = request.id;
-    query.refresh();
-    // State, rather than the ref above, keeps the following effect from
-    // consuming the cached query snapshot captured before refresh().
-    setRefreshedRequestId(request.id);
-  }, [query.refresh, request.forceRefresh, request.id]);
+    waitingRequestId.current = null;
+    atomRegistry.refresh(queryAtom);
+    // Async atoms expose `waiting`; a synchronously settled atom does not.
+    // Reading after refresh covers both without relying on React committing an
+    // intermediate render.
+    if (atomRegistry.get(queryAtom).waiting) {
+      waitingRequestId.current = request.id;
+    } else {
+      setCompletedRequestId(request.id);
+    }
+  }, [atomRegistry, queryAtom, request.forceRefresh, request.id]);
 
   useEffect(() => {
     if (!request.forceRefresh) {
       onState(environmentId, request, query);
       return;
     }
-    const observation = observeForcedPullRequestRefresh(refreshedRequestId === request.id, query);
+    const observation = observeForcedPullRequestRefresh(completedRequestId === request.id, query);
     if (observation !== null) {
       onState(environmentId, request, observation);
     }
@@ -447,7 +464,7 @@ function EnvironmentPullRequestsLoader({
     query.data,
     query.error,
     query.isPending,
-    refreshedRequestId,
+    completedRequestId,
     request,
   ]);
 
