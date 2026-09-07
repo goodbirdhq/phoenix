@@ -7,6 +7,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   NavigationContext,
+  NavigationContainerRefContext,
   NavigationRouteContext,
   StackActions,
   useNavigation,
@@ -15,6 +16,7 @@ import {
   createContext,
   use,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -226,6 +228,7 @@ function AdaptiveWorkspaceLayoutContent(
   const { width, height } = useWindowDimensions();
   const pathname = props.pathname;
   const navigation = useNavigation();
+  const rootNavigation = useContext(NavigationContainerRefContext);
   const activeRoleOwner = useRef<symbol | null>(null);
   const [primarySidebarPreferredVisible, setPrimarySidebarPreferredVisible] = useState(true);
   const [supplementaryPanePreferredVisible, setSupplementaryPanePreferredVisible] = useState(true);
@@ -435,14 +438,16 @@ function AdaptiveWorkspaceLayoutContent(
 
   const rootFooterNavigation = useMemo<FooterRootNavigation>(
     () => ({
-      getState: () => navigation.getState() ?? { routes: [{ name: "Home" }] },
-      subscribe: (listener) => navigation.addListener("state", listener),
+      getState: () =>
+        rootNavigation?.getRootState() ?? navigation.getState() ?? { routes: [{ name: "Home" }] },
+      subscribe: (listener) =>
+        rootNavigation?.addListener("state", listener) ?? navigation.addListener("state", listener),
       navigate: (route: FooterRoute) => {
         const target = footerRootTarget(
-          navigation.getState() ?? { routes: [{ name: "Home" }] },
+          rootNavigation?.getRootState() ?? navigation.getState() ?? { routes: [{ name: "Home" }] },
           route,
         );
-        navigation.dispatch(
+        (rootNavigation ?? navigation).dispatch(
           target.kind === "push"
             ? StackActions.push(target.name, {
                 screen: target.screen,
@@ -455,7 +460,7 @@ function AdaptiveWorkspaceLayoutContent(
         );
       },
     }),
-    [navigation],
+    [navigation, rootNavigation],
   );
 
   const handleStartNewTask = useCallback(() => {
