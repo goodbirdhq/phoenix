@@ -24,7 +24,10 @@ import { useAgentNotificationNavigation } from "./features/agent-awareness/notif
 import { ConnectOnboardingRouteScreen } from "./features/cloud/ConnectOnboardingRouteScreen";
 import { useConnectOnboardingNavigation } from "./features/cloud/connectOnboardingNavigation";
 import { ThreadFilesTreeScreen, ThreadFileScreen } from "./features/files/ThreadFilesRouteScreen";
-import { AdaptiveWorkspaceLayout } from "./features/layout/AdaptiveWorkspaceLayout";
+import {
+  AdaptiveWorkspaceLayout,
+  useAdaptiveWorkspaceLayout,
+} from "./features/layout/AdaptiveWorkspaceLayout";
 import { HardwareKeyboardCommandProvider } from "./features/keyboard/HardwareKeyboardCommandProvider";
 import { ReviewCommentComposerSheet } from "./features/review/ReviewCommentComposerSheet";
 import { ReviewSheet } from "./features/review/ReviewSheet";
@@ -149,11 +152,17 @@ const LEGAL_DOCUMENT_HEADER_OPTIONS: AppScreenOptions = {
   presentation: "fullScreenModal",
 };
 
+function SettingsNavigationFooter(props: React.ComponentProps<typeof NavigationFooter>) {
+  const { panes } = useAdaptiveWorkspaceLayout();
+  if (Platform.OS === "android" && panes.primarySidebarVisible) return null;
+  return <NavigationFooter {...props} />;
+}
+
 const SettingsContentStack = createNativeStackNavigator({
   layout: ({ children, state, navigation }) => (
     <View style={{ flex: 1 }}>
       {children}
-      <NavigationFooter
+      <SettingsNavigationFooter
         onNavigate={(route) => navigation.dispatch(CommonActions.navigate({ name: route }))}
         selected={state.routes[state.index]?.name}
       />

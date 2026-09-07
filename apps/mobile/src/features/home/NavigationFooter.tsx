@@ -6,14 +6,14 @@ import {
   EnvironmentsIcon,
   SettingsIcon,
 } from "../../components/NavigationIcons";
-import { useState } from "react";
-import { useNavigation } from "@react-navigation/native";
+import { useCallback, useContext, useState, useSyncExternalStore } from "react";
+import { NavigationContainerRefContext, useNavigation } from "@react-navigation/native";
 import { Pressable, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Updates from "expo-updates";
 import { AppText } from "../../components/AppText";
 import { useNavigationColors } from "../../components/useNavigationColors";
-import { footerShowsLabels } from "./navigation-footer-layout";
+import { footerShowsLabels, footerDestination } from "./navigation-footer-layout";
 
 const tabs = [
   { label: "Agents", route: "Home", icon: AgentsIcon },
@@ -24,13 +24,24 @@ const tabs = [
   { label: "Settings", route: "Settings", icon: SettingsIcon },
 ] as const;
 export function NavigationFooter({
-  selected = "Home",
+  selected: selectedRoute,
   onNavigate,
 }: {
   selected?: string;
   onNavigate?: (route: (typeof tabs)[number]["route"]) => void;
 }) {
   const navigation = useNavigation();
+  const rootNavigation = useContext(NavigationContainerRefContext);
+  const subscribe = useCallback(
+    (listener: () => void) => rootNavigation?.addListener("state", listener) ?? (() => {}),
+    [rootNavigation],
+  );
+  const getDestination = useCallback(() => {
+    const state = rootNavigation?.getRootState();
+    return state ? footerDestination(state) : "Home";
+  }, [rootNavigation]);
+  const activeDestination = useSyncExternalStore(subscribe, getDestination, getDestination);
+  const selected = selectedRoute ?? activeDestination;
   const colors = useNavigationColors();
   const insets = useSafeAreaInsets();
   const { width: windowWidth, fontScale } = useWindowDimensions();
