@@ -245,15 +245,28 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
           })}
         >
           <View style={{ width: 30, height: 30, alignItems: "center", justifyContent: "center" }}>
-            {props.project ? (
-              <ProjectFavicon
-                environmentId={pendingTask.message.environmentId}
-                faviconPath={props.project.faviconPath}
-                projectTitle={projectTitle}
-                size={18}
-                workspaceRoot={props.project.workspaceRoot}
-              />
-            ) : null}
+            <View
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: colors.border,
+                backgroundColor: colors.surface,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {props.project ? (
+                <ProjectFavicon
+                  environmentId={pendingTask.message.environmentId}
+                  faviconPath={props.project.faviconPath}
+                  projectTitle={projectTitle}
+                  size={16}
+                  workspaceRoot={props.project.workspaceRoot}
+                />
+              ) : null}
+            </View>
           </View>
           <View style={{ flex: 1, gap: 5 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
