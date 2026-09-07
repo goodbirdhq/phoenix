@@ -5,7 +5,7 @@ import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
 import { Alert } from "react-native";
 
-import { showConfirmDialog } from "../../components/ConfirmDialogHost";
+import { showConfirmDialog, type ConfirmDialogRequest } from "../../components/ConfirmDialogHost";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThreadSnapshots";
 import {
@@ -192,13 +192,14 @@ function useConfirmDeleteThread(
   executeAction: (action: ThreadListAction, thread: EnvironmentThreadShell) => Promise<boolean>,
 ) {
   return useCallback(
-    (thread: EnvironmentThreadShell) => {
+    (thread: EnvironmentThreadShell, returnFocusRef?: ConfirmDialogRequest["returnFocusRef"]) => {
       showConfirmDialog({
         title: "Delete conversation?",
         message: "This conversation will be permanently deleted, including its terminal history.",
         confirmText: "Delete conversation",
         destructive: true,
         thread,
+        returnFocusRef,
         onConfirm: () => executeAction("delete", thread),
       });
     },

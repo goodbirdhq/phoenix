@@ -104,7 +104,7 @@ interface HomeScreenProps {
   readonly onStartNewTask: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: ThreadListActions["archiveThread"];
-  readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+  readonly onDeleteThread: ThreadListActions["confirmDeleteThread"];
   readonly onConfirmDeleteThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   /** Resolves true iff the settle was dispatched and succeeded. */
   readonly onSettleThread: ThreadListActions["settleThread"];

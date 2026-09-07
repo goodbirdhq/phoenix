@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Pressable } from "react-native";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { Pressable, type View } from "react-native";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import IconTrash from "@tabler/icons-react-native/IconTrash";
 import IconInfoCircle from "@tabler/icons-react-native/IconInfoCircle";
@@ -16,6 +16,7 @@ export type ConfirmDialogRequest = {
   readonly confirmText: string;
   readonly destructive?: boolean;
   readonly thread?: EnvironmentThreadShell;
+  readonly returnFocusRef?: RefObject<View | null>;
   readonly onConfirm: () => void | Promise<boolean>;
   readonly onCancel?: () => void;
 };
@@ -95,6 +96,7 @@ function Confirmation({
         )
       }
       cancelText={request.cancelText}
+      returnFocusRef={request.returnFocusRef}
       busy={busy}
       onClose={() => {
         request.onCancel?.();
@@ -103,6 +105,7 @@ function Confirmation({
       footer={
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel={busy ? `${request.confirmText}, working` : request.confirmText}
           disabled={busy}
           accessibilityState={{ busy, disabled: busy }}
           onPress={() => void confirm()}
