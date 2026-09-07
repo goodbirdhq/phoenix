@@ -1,12 +1,11 @@
 import { NavigationFooter } from "./features/home/NavigationFooter";
-import { footerDestination } from "./features/home/navigation-footer-layout";
+import { footerDestination, type FooterRoute } from "./features/home/navigation-footer-layout";
 import { PullRequestsRouteScreen } from "./features/home/PullRequestsRouteScreen";
 import {
   createPathConfigForStaticNavigation,
   getPathFromState,
   NavigationState,
   StackActions,
-  CommonActions,
   useNavigation,
 } from "@react-navigation/native";
 import {
@@ -14,7 +13,8 @@ import {
   createNativeStackScreen,
   type NativeStackNavigationOptions,
 } from "@react-navigation/native-stack";
-import { useEffect, useRef } from "react";
+import { useCallback, useContext, useEffect, useRef } from "react";
+import { NavigationContainerRefContext } from "@react-navigation/native";
 import { Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useResolveClassNames } from "uniwind";
 
@@ -155,8 +155,19 @@ const LEGAL_DOCUMENT_HEADER_OPTIONS: AppScreenOptions = {
 
 function SettingsNavigationFooter(props: React.ComponentProps<typeof NavigationFooter>) {
   const { panes } = useAdaptiveWorkspaceLayout();
+  const rootNavigation = useContext(NavigationContainerRefContext);
+  const handleNavigate = useCallback(
+    (route: FooterRoute) => {
+      if (route === "Home") {
+        rootNavigation?.dispatch(StackActions.popTo("Home"));
+      } else {
+        props.onNavigate?.(route);
+      }
+    },
+    [props.onNavigate, rootNavigation],
+  );
   if (Platform.OS === "android" && panes.primarySidebarVisible) return null;
-  return <NavigationFooter {...props} />;
+  return <NavigationFooter {...props} onNavigate={handleNavigate} />;
 }
 
 const SettingsContentStack = createNativeStackNavigator({
@@ -164,7 +175,7 @@ const SettingsContentStack = createNativeStackNavigator({
     <View style={{ flex: 1 }}>
       {children}
       <SettingsNavigationFooter
-        onNavigate={(route) => navigation.dispatch(CommonActions.navigate({ name: route }))}
+        onNavigate={(route) => navigation.dispatch(StackActions.popTo(route))}
         selected={footerDestination(state)}
       />
     </View>

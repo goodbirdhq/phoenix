@@ -1,5 +1,65 @@
+import * as NodeModule from "node:module";
 import { describe, expect, it } from "vite-plus/test";
-import { footerShowsLabels, footerDestination } from "./navigation-footer-layout";
+import type {
+  StackNavigationState,
+  StackRouter as StackRouterType,
+  StackActions as StackActionsType,
+} from "@react-navigation/native";
+import { vi } from "vite-plus/test";
+
+function loadRouters() {
+  const require = NodeModule.createRequire(import.meta.url);
+  const nativePackage = require.resolve("@react-navigation/native/package.json");
+  const requireFromNative = NodeModule.createRequire(nativePackage);
+  const corePackage = requireFromNative.resolve("@react-navigation/core/package.json");
+  const requireFromCore = NodeModule.createRequire(corePackage);
+  return requireFromCore("@react-navigation/routers") as {
+    readonly StackActions: typeof StackActionsType;
+    readonly StackRouter: typeof StackRouterType;
+  };
+}
+
+vi.mock("@react-navigation/native", () => {
+  const { StackActions } = loadRouters();
+  return { StackActions };
+});
+
+import {
+  footerShowsLabels,
+  footerDestination,
+  footerRootTarget,
+  type FooterRoute,
+} from "./navigation-footer-layout";
+
+const { StackActions, StackRouter } = loadRouters();
+const routeNames = ["Home", "SettingsSheet", "Thread"];
+const routeParamList = {
+  Home: undefined,
+  SettingsSheet: undefined,
+  Thread: undefined,
+};
+const router = StackRouter({ initialRouteName: "Home" });
+const routerOptions = { routeNames, routeParamList, routeGetIdList: {} };
+
+function footerAction(route: FooterRoute) {
+  return (state: StackNavigationState<Record<string, object | undefined>>) => {
+    const target = footerRootTarget(state, route);
+    const params =
+      "screen" in target ? { screen: target.screen, params: target.params } : undefined;
+    return target.kind === "push"
+      ? StackActions.push(target.name, params)
+      : StackActions.popTo(target.name, params);
+  };
+}
+
+function apply(
+  state: StackNavigationState<Record<string, object | undefined>>,
+  action: Parameters<typeof router.getStateForAction>[1],
+) {
+  const nextState = router.getStateForAction(state, action, routerOptions);
+  expect(nextState).not.toBeNull();
+  return nextState as StackNavigationState<Record<string, object | undefined>>;
+}
 describe("navigation footer label fit", () => {
   it("keeps six accessible icon targets below the agreed breakpoint", () => {
     expect(footerShowsLabels(390, 1)).toBe(false);
@@ -44,5 +104,22 @@ describe("navigation footer destination", () => {
     expect(footerDestination({ routes: [{ name: "SettingsScheduleDetail" }] })).toBe(
       "SettingsSchedules",
     );
+  });
+
+  it("switches root destinations without stacking stale footer routes", () => {
+    const home = router.getInitialState(routerOptions);
+    const settings = apply(home, footerAction("SettingsSchedules")(home));
+    expect(settings.routes.map((route) => route.name)).toEqual(["Home", "SettingsSheet"]);
+
+    const staleThread = apply(settings, StackActions.push("Thread"));
+    const returnedToSettings = apply(staleThread, footerAction("SettingsUsage")(staleThread));
+    expect(returnedToSettings.routes.map((route) => route.name)).toEqual(["Home", "SettingsSheet"]);
+    expect(returnedToSettings.routes.at(-1)?.params).toEqual({
+      screen: "SettingsContent",
+      params: { screen: "SettingsUsage" },
+    });
+
+    const returnedHome = apply(returnedToSettings, footerAction("Home")(returnedToSettings));
+    expect(returnedHome.routes.map((route) => route.name)).toEqual(["Home"]);
   });
 });

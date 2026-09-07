@@ -7,15 +7,24 @@ import {
   SettingsIcon,
 } from "../../components/NavigationIcons";
 import { useCallback, useContext, useState, useSyncExternalStore } from "react";
-import { NavigationContainerRefContext, useNavigation } from "@react-navigation/native";
+import {
+  NavigationContainerRefContext,
+  StackActions,
+  useNavigation,
+} from "@react-navigation/native";
 import { Pressable, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Updates from "expo-updates";
 import { AppText } from "../../components/AppText";
 import { useNavigationColors } from "../../components/useNavigationColors";
-import { footerShowsLabels, footerDestination } from "./navigation-footer-layout";
+import {
+  footerShowsLabels,
+  footerDestination,
+  footerRootTarget,
+  type FooterRoute,
+} from "./navigation-footer-layout";
 
-const tabs = [
+const tabs: ReadonlyArray<{ label: string; route: FooterRoute; icon: typeof AgentsIcon }> = [
   { label: "Agents", route: "Home", icon: AgentsIcon },
   { label: "Pull Requests", route: "SettingsPullRequests", icon: PullRequestsIcon },
   { label: "Schedules", route: "SettingsSchedules", icon: SchedulesIcon },
@@ -79,12 +88,27 @@ export function NavigationFooter({
               accessibilityState={{ selected: active }}
               onPress={() => {
                 if (onNavigate) onNavigate(route);
-                else if (route === "Home") navigation.navigate("Home");
-                else
-                  navigation.navigate("SettingsSheet", {
-                    screen: "SettingsContent",
-                    params: { screen: route },
-                  });
+                else {
+                  const rootState = rootNavigation?.getRootState() ?? navigation.getState();
+                  if (!rootState) return;
+                  const target = footerRootTarget(rootState, route);
+                  navigation.dispatch(
+                    target.kind === "push"
+                      ? StackActions.push(target.name, {
+                          screen: target.screen,
+                          params: target.params,
+                        })
+                      : StackActions.popTo(
+                          target.name,
+                          "screen" in target
+                            ? {
+                                screen: target.screen,
+                                params: target.params,
+                              }
+                            : undefined,
+                        ),
+                  );
+                }
               }}
               style={{
                 minWidth: 44,
