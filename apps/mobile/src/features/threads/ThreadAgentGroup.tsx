@@ -1,4 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { useMemo } from "react";
 import { Pressable, View } from "react-native";
 import { ThreadAvatar } from "../../components/ThreadAvatar";
 import { AppText } from "../../components/AppText";
@@ -30,7 +31,10 @@ export function ThreadAgentGroup({
         (p) =>
           p.instanceId === (thread.session?.providerInstanceId ?? thread.modelSelection.instanceId),
       )?.driver ?? null;
-  const hierarchy = buildThreadAgentGroupHierarchy(threads);
+  const hierarchy = useMemo(
+    () => (detail && expanded ? buildThreadAgentGroupHierarchy(threads) : []),
+    [detail, expanded, threads],
+  );
   const renderDetailNode = (node: ThreadAgentGroupNode, depth: number) => (
     <View key={`${node.thread.environmentId}:${node.thread.id}`} style={{ gap: 4 }}>
       <Pressable

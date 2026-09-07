@@ -612,7 +612,28 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       }
       accessibilityLabel={thread.title}
       accessibilityRole="button"
-      accessibilityState={{ selected }}
+      accessibilityState={{
+        selected,
+        ...(props.agentThreads?.length ? { expanded: groupExpanded } : {}),
+      }}
+      accessibilityActions={[
+        { name: "activate", label: "Open conversation" },
+        { name: "showActions", label: "Conversation actions" },
+        ...(props.agentThreads?.length
+          ? [
+              {
+                name: "toggleAgents",
+                label: groupExpanded ? "Collapse agent group" : "Expand agent group",
+              },
+            ]
+          : []),
+      ]}
+      onAccessibilityAction={({ nativeEvent }) => {
+        close();
+        if (nativeEvent.actionName === "showActions") setSheet("actions");
+        else if (nativeEvent.actionName === "toggleAgents") setGroupExpanded((value) => !value);
+        else if (nativeEvent.actionName === "activate") onSelectThread(thread);
+      }}
       onLongPress={() => {
         close();
         setSheet("actions");

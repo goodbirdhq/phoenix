@@ -114,6 +114,7 @@ export function ThreadActionSheet(props: {
         page === "delete" ? (
           <Pressable
             accessibilityRole="button"
+            accessibilityLabel={busy ? "Deleting conversation" : "Delete conversation"}
             accessibilityState={{ busy, disabled: busy }}
             disabled={busy}
             onPress={() =>
