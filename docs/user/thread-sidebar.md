@@ -97,7 +97,7 @@ and stronger text, including in the session details popover. Working status alon
 a title bold.
 
 Collapsed rows show the most actionable status in their subtree: a decision first, then input,
-then failure, followed by waiting on a parent, working, monitoring, and ready. Use the row’s options menu to review the thread that needs attention or dismiss a Woke notification. Working sessions have a segmented ring;
+then failure, followed by working, monitoring, and ready. Waiting on a parent stays on the child and does not change an ancestor’s status. Use the row’s options menu to review the thread that needs attention or dismiss a Woke notification. Working sessions have a rotating segmented ring (stationary with reduced motion);
 ready threads have a green ring. Expanded rows show their own status, while each child shows
 its own status or summarizes its children if collapsed. Counts always include every descendant,
 including a child that is also pinned, once.

@@ -135,13 +135,11 @@ function SidebarUtilityItem({
   label,
   onClick,
   active = false,
-  activeWidth,
   badge,
   updateCount,
   tooltipContent,
 }: {
   active?: boolean;
-  activeWidth: number;
   badge?: number;
   updateCount?: number;
   tooltipContent?: ReactNode;
@@ -163,7 +161,6 @@ function SidebarUtilityItem({
                     : label
               }
               aria-current={active ? "page" : undefined}
-              style={active ? { width: activeWidth } : undefined}
               onClick={onClick}
               className={cn(
                 "relative h-9 w-9 @max-[316px]/sidebar-footer:w-7! @max-[316px]/sidebar-footer:px-0 group-data-[wide-label=true]/footer:w-8 justify-center rounded-[8px] p-0 text-sidebar-muted-foreground [&>svg]:size-4 [&>svg]:text-current",
@@ -391,7 +388,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           <SidebarUtilityItem
             icon={<CodeXmlIcon strokeWidth={1.7} />}
             label="Agents"
-            activeWidth={84}
             active={currentFooterPage === null}
             onClick={() => {
               closeMobileSidebar();
@@ -402,7 +398,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             <SidebarUtilityItem
               icon={<GitPullRequestIcon />}
               label="Pull Requests"
-              activeWidth={132}
               active={currentFooterPage === "pull-requests"}
               onClick={handlePullRequestsClick}
             />
@@ -410,7 +405,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           <SidebarUtilityItem
             icon={<CalendarClockIcon />}
             label="Schedules"
-            activeWidth={112}
             active={currentFooterPage === "schedules"}
             onClick={handleSchedulesClick}
             badge={scheduleFailureCount}
@@ -419,7 +413,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"
             tooltipContent={<UsageHoverSummary />}
-            activeWidth={84}
             active={currentFooterPage === "usage"}
             onClick={handleUsageClick}
           />
@@ -427,7 +420,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             icon={<ServerIcon />}
             label="Environments"
             updateCount={providerUpdates}
-            activeWidth={132}
             active={currentFooterPage === "environments"}
             onClick={handleEnvironmentsClick}
           />
