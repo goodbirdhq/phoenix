@@ -65,14 +65,18 @@ describe("sidebar teams", () => {
     expect(resolveSidebarTeamStatus(child, [child, grandchild], true).target).toBe(child);
   });
 
-  it("surfaces a descendant waiting on its parent until its team is expanded", () => {
+  it("keeps waiting on parent local to the child while surfacing human input", () => {
     const waiting = { ...child, awaitingParentReplySince: "2026-09-05T12:00:00Z" };
     expect(resolveSidebarTeamStatus(parent, [parent, waiting], false)).toMatchObject({
-      status: "awaiting-parent",
-      target: waiting,
+      status: "working",
+      target: parent,
       workingCount: 1,
     });
     expect(resolveSidebarTeamStatus(parent, [parent, waiting], true).status).toBe("working");
+    const readyParent = { ...parent, backgroundLiveness: undefined };
+    expect(resolveSidebarTeamStatus(readyParent, [readyParent, waiting], false).status).toBe(
+      "ready",
+    );
     expect(resolveSidebarTeamStatus(waiting, [waiting], true).status).toBe("awaiting-parent");
     expect(resolveSidebarTeamStatus(parent, [parent, waiting, grandchild], false).status).toBe(
       "input",
