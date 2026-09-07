@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EnvironmentId, UsageDay } from "@t3tools/contracts";
+import { EnvironmentId, UsageDay, USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
 import { mergeUsage } from "@t3tools/shared/usageMerge";
 import type { EnvironmentUsageBucket } from "@t3tools/shared/usageMerge";
 import { usageChartSeries } from "./chartSeries.ts";
@@ -97,4 +97,50 @@ it("bounds a crowded model legend while retaining every period and provider tota
   expect(rows.at(-1)?.label).toBe("Other codex models");
   expect(rows.reduce((sum, row) => sum + row.values[0]!, 0)).toBe(210);
   expect(rows.every((row) => row.values[1] === 0)).toBe(true);
+});
+
+it("counts native sessions active in each interval independently of conversation creation", () => {
+  const merged = {
+    ...mergeUsage([], USAGE_CONTRACT_VERSION),
+    sessionUsage: [
+      {
+        environmentId: EnvironmentId.make("env"),
+        environmentLabel: "Env",
+        provider: "codex" as const,
+        sourceId: "home",
+        sessionId: "one",
+        firstActivityAt: "2026-09-01T00:00:00Z",
+        lastActivityAt: "2026-09-02T00:00:00Z",
+        models: [],
+        periods: [
+          { period: "2026-09-01", costUsd: 2, totalTokens: 10 },
+          { period: "2026-09-02", costUsd: 3, totalTokens: 15 },
+        ],
+      },
+      {
+        environmentId: EnvironmentId.make("env"),
+        environmentLabel: "Env",
+        provider: "claude" as const,
+        sourceId: "claude",
+        sessionId: "two",
+        firstActivityAt: "2026-09-01T00:00:00Z",
+        lastActivityAt: "2026-09-01T00:00:00Z",
+        models: [],
+        periods: [{ period: "2026-09-01", costUsd: 4, totalTokens: 20 }],
+      },
+    ],
+  };
+  const periods = ["2026-09-01", "2026-09-02"];
+  expect(
+    usageReportSeries(merged, [], periods, "sessions", "cost", "UTC", false)[0]?.values,
+  ).toEqual([2, 1]);
+  expect(
+    usageReportSeries(merged, [], periods, "sessions", "tokens", "UTC", true).map((row) => [
+      row.provider,
+      row.values,
+    ]),
+  ).toEqual([
+    ["codex", [1, 1]],
+    ["claude", [1, 0]],
+  ]);
 });

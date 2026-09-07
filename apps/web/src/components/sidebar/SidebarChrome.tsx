@@ -54,15 +54,17 @@ import { SidebarUpdateArchitectureWarning, SidebarUpdateMenuItem } from "./Sideb
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
+  plain = false,
 }: {
   isElectron: boolean;
+  plain?: boolean;
 }) {
   const legacy = useLegacySidebarEnabled();
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const backdropVariant = resolveSidebarStageBackdropVariant(
     stageLabel,
-    environmentIdentificationMode === "artwork",
+    !plain && environmentIdentificationMode === "artwork",
   );
   const pillLabel =
     environmentIdentificationMode === "pill"
@@ -190,7 +192,16 @@ function SidebarUtilityItem({
             </SidebarMenuButton>
           }
         />
-        <TooltipPopup side="top">{tooltipContent ?? label}</TooltipPopup>
+        <TooltipPopup
+          side="top"
+          className={
+            tooltipContent
+              ? "rounded-[10px] [&_[data-slot=tooltip-viewport]]:p-0 [--viewport-inline-padding:0px]"
+              : undefined
+          }
+        >
+          {tooltipContent ?? label}
+        </TooltipPopup>
       </Tooltip>
     </SidebarMenuItem>
   );
