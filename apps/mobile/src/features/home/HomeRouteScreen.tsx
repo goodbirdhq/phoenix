@@ -1,3 +1,4 @@
+import { useSessionRefresh } from "./use-session-refresh";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
@@ -84,6 +85,7 @@ export function HomeRouteScreen() {
     setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
+  const refresh = useSessionRefresh(environments, selectedEnvironmentId);
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectFilterOptions = useMemo(
     () =>
@@ -138,6 +140,7 @@ export function HomeRouteScreen() {
     <View style={{ flex: 1, backgroundColor: colors.screen }}>
       <>
         <HomeHeader
+          {...refresh}
           environments={environments}
           projects={projectFilterOptions}
           searchQuery={searchQuery}
@@ -154,6 +157,7 @@ export function HomeRouteScreen() {
         />
 
         <HomeScreen
+          refresh={refresh}
           catalogState={catalogState}
           environments={environments}
           onAddConnection={() =>

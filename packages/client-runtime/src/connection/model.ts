@@ -1,6 +1,9 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
+/** Maximum time for one connection establishment attempt. */
+export const CONNECTION_ESTABLISHMENT_TIMEOUT_MS = 15_000;
+
 const ConnectionTargetBase = {
   environmentId: EnvironmentId,
   label: Schema.String,
