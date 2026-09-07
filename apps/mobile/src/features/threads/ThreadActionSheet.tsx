@@ -48,8 +48,8 @@ export function ThreadActionSheet(props: {
   actions: MenuAction[];
   returnFocusRef?: RefObject<View | null>;
   onDelete: () => Promise<boolean>;
-  onAction: (id: string) => void;
-  onSnooze: (until: string) => void | Promise<boolean>;
+  onAction: (id: string) => Promise<boolean>;
+  onSnooze: (until: string) => Promise<boolean>;
   onClose: () => void;
   onView: () => void;
 }) {
@@ -59,6 +59,21 @@ export function ThreadActionSheet(props: {
   const [error, setError] = useState<string | null>(null);
   const [presets, setPresets] = useState(() => resolveSnoozePresets(new Date()));
   const colors = useNavigationColors();
+  const performAction = async (action: () => Promise<boolean>, failureMessage: string) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      if (await action()) props.onClose();
+      else setError(failureMessage);
+    } catch {
+      setError(failureMessage);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
   const choosePreset = async (id: string) => {
     if (inFlight.current) return;
     const preset = resolveSnoozePresets(new Date()).find((p) => p.id === id);
@@ -67,34 +82,10 @@ export function ThreadActionSheet(props: {
       setError("That time has passed. Choose another time.");
       return;
     }
-    inFlight.current = true;
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await props.onSnooze(preset.snoozedUntil);
-      if (result === false) setError("Could not snooze this conversation. Try again.");
-      else props.onClose();
-    } catch {
-      setError("Could not snooze this conversation. Try again.");
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
-  };
-  const deleteConversation = async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true);
-    setError(null);
-    try {
-      if (await props.onDelete()) props.onClose();
-      else setError("Could not delete this conversation. Try again.");
-    } catch {
-      setError("Could not delete this conversation. Try again.");
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
+    await performAction(
+      () => props.onSnooze(preset.snoozedUntil),
+      "Could not snooze this conversation. Try again.",
+    );
   };
   return (
     <ModalSlideUp
@@ -125,7 +116,9 @@ export function ThreadActionSheet(props: {
             accessibilityRole="button"
             accessibilityState={{ busy, disabled: busy }}
             disabled={busy}
-            onPress={() => void deleteConversation()}
+            onPress={() =>
+              void performAction(props.onDelete, "Could not delete this conversation. Try again.")
+            }
             style={{
               minHeight: 48,
               padding: 12,
@@ -179,12 +172,13 @@ export function ThreadActionSheet(props: {
           [{ id: "view", title: "View agent" }, ...props.actions].map((action) => {
             const Icon = icons[action.id as keyof typeof icons] ?? IconSparkles;
             const destructive = action.attributes?.destructive;
-            const disabled = action.attributes?.disabled;
+            const disabled = busy || action.attributes?.disabled === true;
             return (
               <Pressable
                 key={action.id}
                 accessibilityRole="button"
-                accessibilityState={{ disabled }}
+                accessibilityLabel={action.title}
+                accessibilityState={{ disabled, busy }}
                 disabled={disabled}
                 onPress={() => {
                   if (action.id === "snooze") {
@@ -196,9 +190,15 @@ export function ThreadActionSheet(props: {
                     setPage("delete");
                     return;
                   }
-                  props.onClose();
-                  if (action.id === "view") props.onView();
-                  else props.onAction(action.id ?? "");
+                  if (action.id === "view") {
+                    props.onClose();
+                    props.onView();
+                  } else {
+                    void performAction(
+                      () => props.onAction(action.id ?? ""),
+                      `${action.title} failed. Try again.`,
+                    );
+                  }
                 }}
                 style={{
                   minHeight: 48,

@@ -643,7 +643,6 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
               variant={item.item.variant}
               snoozed={item.item.snoozed}
               pinned={item.item.pinned}
-              snoozePresetMinute={nowMinute}
               snoozeWakeLabelText={item.snoozeWakeLabelText}
               project={projectByKey.get(scopeKey) ?? null}
               projectTitle={projectTitleByProjectKey.get(scopeKey)}

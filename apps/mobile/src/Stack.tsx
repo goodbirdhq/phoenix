@@ -1,4 +1,5 @@
 import { NavigationFooter } from "./features/home/NavigationFooter";
+import { footerDestination } from "./features/home/navigation-footer-layout";
 import { PullRequestsRouteScreen } from "./features/home/PullRequestsRouteScreen";
 import {
   createPathConfigForStaticNavigation,
@@ -164,7 +165,7 @@ const SettingsContentStack = createNativeStackNavigator({
       {children}
       <SettingsNavigationFooter
         onNavigate={(route) => navigation.dispatch(CommonActions.navigate({ name: route }))}
-        selected={state.routes[state.index]?.name}
+        selected={footerDestination(state)}
       />
     </View>
   ),

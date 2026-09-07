@@ -1,3 +1,4 @@
+import type { ThreadListActions } from "./useThreadListActions";
 import {
   LegendList,
   type LegendListRef,
@@ -102,25 +103,18 @@ interface HomeScreenProps {
   readonly onOpenSettings: () => void;
   readonly onStartNewTask: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
-  readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
+  readonly onArchiveThread: ThreadListActions["archiveThread"];
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly onConfirmDeleteThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   /** Resolves true iff the settle was dispatched and succeeded. */
-  readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly onSnoozeThread: (
-    thread: EnvironmentThreadShell,
-    snoozedUntil: string,
-    options?: { reportFailure?: boolean },
-  ) => Promise<boolean>;
-  readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
-  readonly onPinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly onUnpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly onMovePinnedThread: (
-    thread: EnvironmentThreadShell,
-    direction: "up" | "down",
-  ) => Promise<boolean>;
-  readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly onSettleThread: ThreadListActions["settleThread"];
+  readonly onSnoozeThread: ThreadListActions["snoozeThread"];
+  readonly onUnsnoozeThread: ThreadListActions["unsnoozeThread"];
+  readonly onUnsettleThread: ThreadListActions["unsettleThread"];
+  readonly onPinThread: ThreadListActions["pinThread"];
+  readonly onUnpinThread: ThreadListActions["unpinThread"];
+  readonly onMovePinnedThread: ThreadListActions["movePinnedThread"];
+  readonly onRegenerateThreadTitle: ThreadListActions["regenerateThreadTitle"];
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
@@ -484,52 +478,13 @@ export function HomeScreen(props: HomeScreenProps) {
   // Settled threads stay in the live shell stream (settled ≠ archived), so
   // the partition works directly off live shells — no snapshot merging or
   // optimistic holds.
-  const handleSettleThread = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      return props.onSettleThread(thread);
-    },
-    [props.onSettleThread],
-  );
-  const handleSnoozeThread = useCallback(
-    (
-      thread: EnvironmentThreadShell,
-      snoozedUntil: string,
-      options?: { reportFailure?: boolean },
-    ) => {
-      return props.onSnoozeThread(thread, snoozedUntil, options);
-    },
-    [props.onSnoozeThread],
-  );
-  const handleUnsnoozeThread = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      return props.onUnsnoozeThread(thread);
-    },
-    [props.onUnsnoozeThread],
-  );
-  const handlePinThread = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      return props.onPinThread(thread);
-    },
-    [props.onPinThread],
-  );
-  const handleMovePinnedThread = useCallback(
-    (thread: EnvironmentThreadShell, direction: "up" | "down") => {
-      return props.onMovePinnedThread(thread, direction);
-    },
-    [props.onMovePinnedThread],
-  );
-  const handleUnpinThread = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      return props.onUnpinThread(thread);
-    },
-    [props.onUnpinThread],
-  );
-  const handleRegenerateThreadTitle = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      return props.onRegenerateThreadTitle(thread);
-    },
-    [props.onRegenerateThreadTitle],
-  );
+  const handleSettleThread = props.onSettleThread;
+  const handleSnoozeThread = props.onSnoozeThread;
+  const handleUnsnoozeThread = props.onUnsnoozeThread;
+  const handlePinThread = props.onPinThread;
+  const handleMovePinnedThread = props.onMovePinnedThread;
+  const handleUnpinThread = props.onUnpinThread;
+  const handleRegenerateThreadTitle = props.onRegenerateThreadTitle;
   const handleDeleteThread = props.onDeleteThread;
   const handleUnsettleThread = props.onUnsettleThread;
   // The settled tail renders in pages; expansion resets when the filter
@@ -781,7 +736,6 @@ export function HomeScreen(props: HomeScreenProps) {
           variant={item.item.variant}
           snoozed={item.item.snoozed}
           pinned={item.item.pinned}
-          snoozePresetMinute={nowMinute}
           snoozeWakeLabelText={item.snoozeWakeLabelText}
           showTrailingDivider={showTrailingDivider}
           project={
