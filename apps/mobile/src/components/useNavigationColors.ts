@@ -2,7 +2,7 @@ import { useResolveClassNames } from "uniwind";
 import { DEFAULT_MOBILE_THEME_ID } from "../lib/mobileTheme";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 
-/** M20 navigation and M08 modal surfaces, shared by both native platforms. */
+/** M01 navigation and M08 modal surfaces, shared by both native platforms. */
 export function useNavigationColors() {
   const { themeAppearance, themeId } = useAppearancePreferences();
   const dark = themeAppearance === "dark";
@@ -26,6 +26,9 @@ export function useNavigationColors() {
     secondary: !paper && typeof selected === "string" ? selected : dark ? "#27272a" : "#fafafa",
     accent: !paper && typeof primary === "string" ? primary : "#0284c7",
     snooze: dark ? "#52525b" : "#71717a",
+    groupCounter: !paper && typeof selected === "string" ? selected : dark ? "#3f3f46" : "#e4e4e7",
+    groupCounterForeground:
+      !paper && typeof foreground === "string" ? foreground : dark ? "#e4e4e7" : "#52525b",
     danger: dark ? "#f87171" : "#b91c1c",
   };
 }

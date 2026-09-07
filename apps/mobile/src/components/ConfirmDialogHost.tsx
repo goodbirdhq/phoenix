@@ -5,7 +5,7 @@ import IconTrash from "@tabler/icons-react-native/IconTrash";
 import IconInfoCircle from "@tabler/icons-react-native/IconInfoCircle";
 import { AppText } from "./AppText";
 import { ModalSlideUp } from "./ModalSlideUp";
-import { ThreadAvatar } from "./ThreadAvatar";
+import { ThreadAvatar, threadIdentityLabel } from "./ThreadAvatar";
 import { useNavigationColors } from "./useNavigationColors";
 import { useProject, useEnvironmentServerConfig } from "../state/entities";
 
@@ -83,6 +83,9 @@ function Confirmation({
     <ModalSlideUp
       title={request.title}
       description={request.thread?.title}
+      identityLabel={
+        request.thread ? threadIdentityLabel(request.thread, provider?.driver ?? null) : undefined
+      }
       identity={
         request.thread ? (
           <ThreadAvatar

@@ -11,6 +11,23 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderIcon } from "./ProviderIcon";
 import { useNavigationColors } from "./useNavigationColors";
 
+/** Spoken identity for rows and dialogs that group the decorative avatar. */
+export function threadIdentityLabel(thread: EnvironmentThreadShell, providerDriver: string | null) {
+  const status = effectiveSnoozed(thread, { now: new Date().toISOString() })
+    ? "snoozed"
+    : resolveThreadListV2Status(thread);
+  const label = {
+    snoozed: "Snoozed",
+    working: "Working",
+    approval: "Awaiting approval",
+    input: "Awaiting input",
+    "awaiting-parent": "Waiting on parent",
+    failed: "Failed",
+    ready: "Ready",
+  }[status];
+  return [label, providerDriver, thread.modelSelection.model].filter(Boolean).join(", ");
+}
+
 /** Reuses the row's real project identity and provider badge at either row or modal size. */
 export function ThreadAvatar({
   thread,
@@ -41,7 +58,7 @@ export function ThreadAvatar({
   return (
     <View
       accessible
-      accessibilityLabel={`${status}${providerDriver ? `, ${providerDriver}` : ""}, ${thread.modelSelection.model}`}
+      accessibilityLabel={threadIdentityLabel(thread, providerDriver)}
       style={{
         width: size + 2 * scale,
         height: size + 4 * scale,

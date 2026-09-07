@@ -28,7 +28,7 @@ import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSw
 
 import { ThreadAgentGroup } from "./ThreadAgentGroup";
 import { ThreadActionSheet } from "./ThreadActionSheet";
-import { ThreadAvatar } from "../../components/ThreadAvatar";
+import { ThreadAvatar, threadIdentityLabel } from "../../components/ThreadAvatar";
 import { useNavigationColors } from "../../components/useNavigationColors";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
@@ -610,7 +610,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       accessibilityHint={
         swipeAccessibilityHint + (props.pinningSupported ? " Swipe right to pin or unpin." : "")
       }
-      accessibilityLabel={thread.title}
+      accessibilityLabel={`${thread.title}. ${threadIdentityLabel(thread, props.providerDriver)}`}
       accessibilityRole="button"
       accessibilityState={{
         selected,
@@ -726,7 +726,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     <>
       <ThreadSwipeable
         backgroundColor={sidebarPane ? drawerColor : screenColor}
-        compactActions={variant === "slim"}
         containerStyle={
           sidebarPane ? { borderRadius: SIDEBAR_V2_ROW_RADIUS, overflow: "hidden" } : undefined
         }

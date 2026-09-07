@@ -22,7 +22,7 @@ import IconChevronRight from "@tabler/icons-react-native/IconChevronRight";
 import IconArrowUp from "@tabler/icons-react-native/IconArrowUp";
 import IconArrowDown from "@tabler/icons-react-native/IconArrowDown";
 import { ModalSlideUp } from "../../components/ModalSlideUp";
-import { ThreadAvatar } from "../../components/ThreadAvatar";
+import { ThreadAvatar, threadIdentityLabel } from "../../components/ThreadAvatar";
 import { AppText } from "../../components/AppText";
 import { useNavigationColors } from "../../components/useNavigationColors";
 
@@ -100,6 +100,7 @@ export function ThreadActionSheet(props: {
       description={
         page !== "actions" ? props.thread.title : (props.thread.branch ?? props.project?.title)
       }
+      identityLabel={threadIdentityLabel(props.thread, props.providerDriver)}
       identity={
         <ThreadAvatar
           thread={props.thread}

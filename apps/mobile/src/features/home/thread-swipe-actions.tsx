@@ -33,7 +33,7 @@ import Animated, {
   useAnimatedStyle,
 } from "react-native-reanimated";
 
-// Wide enough for the longest action label ("Unarchive").
+// Canonical M01 action-panel width.
 const ACTION_ITEM_WIDTH = 74;
 
 export const THREAD_SWIPE_ACTIONS_WIDTH = ACTION_ITEM_WIDTH * 2;
@@ -216,9 +216,6 @@ export function useSwipeableScrollGate(options?: {
 export function ThreadSwipeable(props: {
   readonly backgroundColor: ColorValue;
   readonly children: (close: () => void) => ReactNode;
-  /** Uses action visuals that fit inside compact 44pt rows. The press target
-   * still spans the row's full height and width. */
-  readonly compactActions?: boolean;
   readonly containerStyle?: StyleProp<ViewStyle>;
   /** Disables NEW swipe activations (e.g. while the list scrolls). */
   readonly enabled?: boolean;
@@ -351,7 +348,6 @@ export function ThreadSwipeable(props: {
       renderRightActions={(_progress, translation, methods) => (
         <ThreadSwipeActions
           backgroundColor={props.backgroundColor}
-          compact={props.compactActions === true}
           fullSwipeAction={fullSwipeAction}
           fullSwipeThreshold={fullSwipeThreshold}
           onFullSwipeArmedChange={handleFullSwipeArmedChange}
@@ -383,11 +379,7 @@ function SwipeActionButton(props: {
   readonly accessibilityLabel: string;
   readonly actionsWidth: number;
   readonly backgroundColor: string;
-  readonly compact: boolean;
-  readonly entryRange: readonly [number, number];
-  readonly fullSwipeThreshold: number;
   readonly icon: ComponentProps<typeof SymbolView>["name"];
-  readonly label: string;
   readonly menu?: ThreadSwipeAction["menu"];
   readonly onPress: () => void;
   readonly stretchesOnFullSwipe: boolean;
@@ -462,7 +454,6 @@ function SwipeIcon({ name }: { name: ComponentProps<typeof SymbolView>["name"] }
 
 export function ThreadSwipeActions(props: {
   readonly backgroundColor: ColorValue;
-  readonly compact: boolean;
   readonly fullSwipeAction?: "delete" | "primary";
   readonly fullSwipeThreshold: number;
   readonly onFullSwipeArmedChange: (armed: boolean) => void;
@@ -500,15 +491,7 @@ export function ThreadSwipeActions(props: {
         accessibilityLabel={props.primaryAction.accessibilityLabel}
         actionsWidth={actionsWidth}
         backgroundColor="#0284c7"
-        compact={props.compact}
-        entryRange={
-          secondaryAction === null
-            ? [8, ACTION_ITEM_WIDTH * 0.72]
-            : [ACTION_ITEM_WIDTH * 0.55, THREAD_SWIPE_ACTIONS_WIDTH * 0.85]
-        }
-        fullSwipeThreshold={props.fullSwipeThreshold}
         icon={props.primaryAction.icon}
-        label={props.primaryAction.label}
         onPress={props.primaryAction.onPress}
         stretchesOnFullSwipe={fullSwipeIsPrimary}
         translation={props.translation}
@@ -520,11 +503,7 @@ export function ThreadSwipeActions(props: {
           backgroundColor={
             secondaryAction.label === "Snooze" ? colors.snooze : secondaryAction.backgroundColor
           }
-          compact={props.compact}
-          entryRange={[8, ACTION_ITEM_WIDTH * 0.72]}
-          fullSwipeThreshold={props.fullSwipeThreshold}
           icon={secondaryAction.icon}
-          label={secondaryAction.label}
           menu={secondaryAction.menu}
           onPress={secondaryAction.onPress}
           stretchesOnFullSwipe={!fullSwipeIsPrimary}

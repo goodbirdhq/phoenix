@@ -20,6 +20,7 @@ export function ModalSlideUp(props: {
   title: string;
   description?: string;
   identity: ReactNode;
+  identityLabel?: string;
   children: ReactNode;
   footer?: ReactNode;
   cancelText?: string;
@@ -134,7 +135,9 @@ export function ModalSlideUp(props: {
               ref={heading}
               accessible
               accessibilityRole="header"
-              accessibilityLabel={[props.title, props.description].filter(Boolean).join(". ")}
+              accessibilityLabel={[props.title, props.description, props.identityLabel]
+                .filter(Boolean)
+                .join(". ")}
               style={{
                 alignItems: "center",
                 gap: 8,

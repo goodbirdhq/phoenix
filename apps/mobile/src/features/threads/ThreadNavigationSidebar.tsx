@@ -76,8 +76,6 @@ interface ThreadNavigationSidebarProps {
   readonly width: number;
   readonly visible: boolean;
   readonly selectedThreadKey: string | null;
-  readonly onOpenSettings: () => void;
-  readonly onOpenEnvironmentSettings: () => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
@@ -901,8 +899,6 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
         onProjectChange={setSelectedProjectKey}
         onProjectSortOrderChange={setProjectSortOrder}
         onThreadSortOrderChange={setThreadSortOrder}
-        onOpenSettings={props.onOpenSettings}
-        onOpenEnvironments={props.onOpenEnvironmentSettings}
         onStartNewTask={props.onStartNewTask}
       />
       <SwipeableScrollGateProvider enabled={swipeEnabled}>

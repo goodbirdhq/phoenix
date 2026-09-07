@@ -203,7 +203,7 @@ export function SettledIcon({ size = 20, color }: { size?: number; color: string
   );
 }
 
-// Exact vectors exported from M20 in Phoenix — Product UI.
+// Exact vectors exported from M01 in Phoenix — Product UI.
 export function AgentsIcon({ size = 20, color }: { size?: number; color: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">

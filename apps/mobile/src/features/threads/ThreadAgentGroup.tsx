@@ -1,7 +1,7 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useMemo } from "react";
 import { Pressable, View } from "react-native";
-import { ThreadAvatar } from "../../components/ThreadAvatar";
+import { ThreadAvatar, threadIdentityLabel } from "../../components/ThreadAvatar";
 import { AppText } from "../../components/AppText";
 import { useNavigationColors } from "../../components/useNavigationColors";
 import { useServerConfigs } from "../../state/entities";
@@ -39,7 +39,7 @@ export function ThreadAgentGroup({
     <View key={`${node.thread.environmentId}:${node.thread.id}`} style={{ gap: 4 }}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`Open agent ${node.thread.title}`}
+        accessibilityLabel={`Open agent ${node.thread.title}. ${threadIdentityLabel(node.thread, driver(node.thread))}`}
         onPress={() => onSelect(node.thread)}
         style={{
           marginLeft: Math.min(depth, MAX_AGENT_GROUP_INDENT) * 16,
@@ -90,17 +90,42 @@ export function ThreadAgentGroup({
         onToggle();
       }}
       hitSlop={10}
-      style={{ flexDirection: "row", alignItems: "center", minHeight: 25 }}
+      style={{ flexDirection: "row", alignItems: "center", minHeight: 30 }}
     >
       {threads.slice(0, 4).map((thread, index) => (
-        <View key={`${thread.environmentId}:${thread.id}`} style={{ marginLeft: index ? -7 : 0 }}>
-          <ThreadAvatar thread={thread} project={null} providerDriver={driver(thread)} size={20} />
+        <View
+          key={`${thread.environmentId}:${thread.id}`}
+          style={{ width: 26, height: 30, marginLeft: index ? -6 : 0 }}
+        >
+          <ThreadAvatar thread={thread} project={null} providerDriver={driver(thread)} size={26} />
         </View>
       ))}
       {threads.length > 4 ? (
-        <AppText style={{ fontSize: 11, color: colors.muted, paddingLeft: 4 }}>
-          +{threads.length - 4}
-        </AppText>
+        <View
+          style={{
+            width: 26,
+            height: 26,
+            marginLeft: -6,
+            alignSelf: "flex-start",
+            borderRadius: 13,
+            borderWidth: 2,
+            borderColor: colors.screen,
+            backgroundColor: colors.groupCounter,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <AppText
+            style={{
+              fontSize: 11,
+              lineHeight: 16,
+              fontFamily: "DMSans-Medium",
+              color: colors.groupCounterForeground,
+            }}
+          >
+            +{threads.length - 4}
+          </AppText>
+        </View>
       ) : null}
     </Pressable>
   );
