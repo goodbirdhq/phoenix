@@ -25,7 +25,9 @@ const definitions = [
     cost: 248.4,
     windows: [
       { kind: "primary", usedPercent: 32, resetsAt: "2026-09-07T18:20:00Z" },
+      { kind: "secondary", usedPercent: 48, resetsAt: "2026-09-14T18:20:00Z" },
       { kind: "primary", scope: "spark", usedPercent: 14 },
+      { kind: "secondary", scope: "spark", usedPercent: 21, resetsAt: "2026-09-14T18:20:00Z" },
     ],
   },
   {

@@ -44,6 +44,18 @@ export async function verifyUsageLayout() {
       const panel = quota ?? document.querySelector('section[aria-label="Usage limits"]');
       if (panel?.getBoundingClientRect().height !== 286)
         throw new Error(`${state}: account quota panel changed height`);
+      if (state !== "loading") {
+        const pools = panel?.querySelectorAll('[role="group"]');
+        if (
+          pools?.length !== 2 ||
+          [...pools].some((pool) => pool.querySelectorAll('[role="progressbar"]').length !== 2)
+        )
+          throw new Error(
+            `${state}: primary and secondary windows must stay within their two Codex pools`,
+          );
+        if (panel && panel.scrollHeight > panel.clientHeight)
+          throw new Error(`${state}: Codex limits overflow the fixed panel`);
+      }
       if (state === "loading" && sidebar?.querySelector('[role="progressbar"][aria-valuenow]'))
         throw new Error("Pending limits must not announce a numeric reading");
       results.push({

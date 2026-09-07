@@ -71,7 +71,7 @@ export function UsagePage() {
     isProviderAvailabilityPending,
     isCapacityRefreshing,
   } = useUsage(
-    { ...window, includeSessions: pageTab !== "overview" && pageTab !== "environments" },
+    { ...window, includeSessions: pageTab === "projects" || pageTab === "sessions" },
     historicalEnvironmentId,
     accountKey ?? null,
   );
@@ -143,7 +143,7 @@ export function UsagePage() {
     refreshCapacity();
     refreshUsage({
       ...nextWindow,
-      includeSessions: pageTab !== "overview" && pageTab !== "environments",
+      includeSessions: pageTab === "projects" || pageTab === "sessions",
     });
     setWindowSelection({ days: windowDays, window: nextWindow });
   };

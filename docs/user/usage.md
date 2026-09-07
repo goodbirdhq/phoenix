@@ -34,7 +34,7 @@ Overview charts switch between providers and configured accounts. Use the enviro
 
 The Sessions chart counts active provider sessions in each interval, based on recorded activity. It does not claim to count session creation. A session active on several days appears on each of those days. Older environments without session details keep their overview totals and show a detail-coverage message.
 
-Web and desktop share this layout. Mobile provides the same report tabs and filters with touch controls and the same line/area charts.
+Web and desktop share this layout. Mobile retains its own Usage interface and Threads grouping.
 
 ## Warnings in chat
 

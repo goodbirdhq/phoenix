@@ -140,16 +140,6 @@ export function UsageOverview({
       ),
     [merged, accounts, periods, grouping, metric, search],
   );
-  const modelSessionCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const session of merged.sessionUsage) {
-      for (const model of session.models) {
-        const key = JSON.stringify([session.provider, model.model]);
-        counts.set(key, (counts.get(key) ?? 0) + 1);
-      }
-    }
-    return counts;
-  }, [merged.sessionUsage]);
   return (
     <>
       <section className="flex flex-col gap-4" aria-busy={pending}>
@@ -222,8 +212,8 @@ export function UsageOverview({
           )}
           <table className="w-full table-fixed text-xs">
             <colgroup>
-              <col className="w-[40%]" />
-              <col className="w-[14%]" />
+              <col className={models ? "w-[54%]" : "w-[40%]"} />
+              {!models && <col className="w-[14%]" />}
               <col className="w-[14%]" />
               <col className="w-[16%]" />
               <col className="w-[16%]" />
@@ -233,7 +223,7 @@ export function UsageOverview({
                 <th className="font-medium">
                   {models ? "Model" : grouping === "account" ? "By account" : "By provider"}
                 </th>
-                <th className="text-right font-normal">Sessions</th>
+                {!models && <th className="text-right font-normal">Sessions</th>}
                 <th className="text-right font-normal">Tokens</th>
                 <th className="text-right font-normal">API cost</th>
                 <th className="text-right font-normal">Cost share</th>
@@ -243,7 +233,7 @@ export function UsageOverview({
               {pending ? (
                 [0, 1, 2].map((key) => (
                   <tr key={key} className="h-[47px] border-b border-border/50">
-                    {[0, 1, 2, 3, 4].map((cell) => (
+                    {(models ? [0, 1, 2, 3] : [0, 1, 2, 3, 4]).map((cell) => (
                       <td key={cell}>
                         <div className="h-2 w-3/4 rounded bg-border" />
                       </td>
@@ -252,7 +242,10 @@ export function UsageOverview({
                 ))
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="h-[141px] text-center text-muted-foreground">
+                  <td
+                    colSpan={models ? 4 : 5}
+                    className="h-[141px] text-center text-muted-foreground"
+                  >
                     {search ? "No matching models" : "No usage reported for this selection"}
                   </td>
                 </tr>
@@ -263,11 +256,7 @@ export function UsageOverview({
                   const sessions =
                     grouping === "provider"
                       ? merged.providers.find((p) => p.provider === row.provider)?.sessions
-                      : grouping === "model"
-                        ? merged.sessionDetailUnavailable.length
-                          ? undefined
-                          : modelSessionCounts.get(JSON.stringify([row.provider, row.label]))
-                        : undefined;
+                      : undefined;
                   return (
                     <tr key={row.id} className="h-[47px] border-b border-border/50">
                       <td>
@@ -291,9 +280,11 @@ export function UsageOverview({
                           )}
                         </span>
                       </td>
-                      <td className="text-right tabular-nums">
-                        {sessions === undefined ? "—" : formatCount(sessions)}
-                      </td>
+                      {!models && (
+                        <td className="text-right tabular-nums">
+                          {sessions === undefined ? "—" : formatCount(sessions)}
+                        </td>
+                      )}
                       <td className="text-right tabular-nums">{formatTokens(row.totalTokens)}</td>
                       <td className="text-right font-medium tabular-nums">{formatUsd(cost)}</td>
                       <td className="text-right text-muted-foreground">

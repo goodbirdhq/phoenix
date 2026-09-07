@@ -186,31 +186,35 @@ export function UsageQuotas({
                 {limit.name} · {limit.environmentLabels.join(", ")}
               </h3>
             )}
-            {(limit.isStale || limit.isCurrentAvailabilityUnknown || limit.availability.stale) && (
-              <p role="status" className="text-xs text-muted-foreground">
-                {limit.isStale
-                  ? "Last known reading. Limits need refresh."
-                  : "Current limits could not be confirmed."}
-              </p>
-            )}
+            {connected &&
+              (limit.isStale || limit.isCurrentAvailabilityUnknown || limit.availability.stale) && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  {limit.isStale
+                    ? "Last known reading. Limits need refresh."
+                    : "Current limits could not be confirmed."}
+                </p>
+              )}
             {windows.length && kind === "codex" ? (
               <div className="grid grid-cols-1 gap-9 sm:grid-cols-2">
-                {windows.map((window) => {
-                  const spark = /spark/i.test(`${window.label} ${window.scope}`);
+                {[false, true].map((spark) => {
+                  const pool = windows.filter(
+                    (window) => /spark/i.test(`${window.label} ${window.scope}`) === spark,
+                  );
+                  if (!pool.length) return null;
+                  const label = spark ? "Spark" : "Codex usage";
                   return (
-                    <div key={`${window.kind}:${window.scope ?? ""}`} className="space-y-[9px]">
-                      <QuotaBar
-                        window={window}
-                        color={spark ? "#0284C7" : color}
-                        label={
-                          spark
-                            ? "Spark"
-                            : window.kind === "primary"
-                              ? "Codex usage"
-                              : subscriptionLimitWindowLabel(window)
-                        }
-                        showRemaining
-                      />
+                    <div key={label} role="group" aria-label={label} className="space-y-3">
+                      {pool.map((window) => (
+                        <QuotaBar
+                          key={`${window.kind}:${window.scope ?? ""}`}
+                          window={window}
+                          color={spark ? "#0284C7" : color}
+                          label={
+                            window.kind === "primary" ? label : subscriptionLimitWindowLabel(window)
+                          }
+                          showRemaining
+                        />
+                      ))}
                       {spark && (
                         <p className="text-xs leading-4 text-muted-foreground">
                           Separate allowance for Codex-Spark
