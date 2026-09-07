@@ -25,6 +25,7 @@ import { ActivityIndicator, FlatList, Platform, Pressable, View } from "react-na
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useNavigationColors } from "../../components/useNavigationColors";
 import { AppText as Text } from "../../components/AppText";
 import { EmptyState } from "../../components/EmptyState";
 import type { WorkspaceEnvironment, WorkspaceState } from "../../state/workspaceModel";
@@ -43,6 +44,7 @@ import {
   ThreadListShowMoreRow,
 } from "../threads/thread-list-items";
 import {
+  ThreadListV2SectionDivider,
   ThreadListV2PendingRow,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
@@ -102,11 +104,13 @@ interface HomeScreenProps {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+  readonly onConfirmDeleteThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   /** Resolves true iff the settle was dispatched and succeeded. */
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSnoozeThread: (
     thread: EnvironmentThreadShell,
     snoozedUntil: string,
+    options?: { reportFailure?: boolean },
   ) => Promise<boolean>;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
@@ -196,13 +200,10 @@ function deriveEmptyState(props: {
   };
 }
 
-function HomeTopContentSpacer() {
-  return <View className="h-4" />;
-}
-
 /* ─── Main screen ────────────────────────────────────────────────────── */
 
 export function HomeScreen(props: HomeScreenProps) {
+  const colors = useNavigationColors();
   const [groupDisplayStates, setGroupDisplayStates] = useState<
     ReadonlyMap<string, HomeGroupDisplayState>
   >(() => new Map());
@@ -485,43 +486,47 @@ export function HomeScreen(props: HomeScreenProps) {
   // optimistic holds.
   const handleSettleThread = useCallback(
     (thread: EnvironmentThreadShell) => {
-      void props.onSettleThread(thread);
+      return props.onSettleThread(thread);
     },
     [props.onSettleThread],
   );
   const handleSnoozeThread = useCallback(
-    (thread: EnvironmentThreadShell, snoozedUntil: string) => {
-      void props.onSnoozeThread(thread, snoozedUntil);
+    (
+      thread: EnvironmentThreadShell,
+      snoozedUntil: string,
+      options?: { reportFailure?: boolean },
+    ) => {
+      return props.onSnoozeThread(thread, snoozedUntil, options);
     },
     [props.onSnoozeThread],
   );
   const handleUnsnoozeThread = useCallback(
     (thread: EnvironmentThreadShell) => {
-      void props.onUnsnoozeThread(thread);
+      return props.onUnsnoozeThread(thread);
     },
     [props.onUnsnoozeThread],
   );
   const handlePinThread = useCallback(
     (thread: EnvironmentThreadShell) => {
-      void props.onPinThread(thread);
+      return props.onPinThread(thread);
     },
     [props.onPinThread],
   );
   const handleMovePinnedThread = useCallback(
     (thread: EnvironmentThreadShell, direction: "up" | "down") => {
-      void props.onMovePinnedThread(thread, direction);
+      return props.onMovePinnedThread(thread, direction);
     },
     [props.onMovePinnedThread],
   );
   const handleUnpinThread = useCallback(
     (thread: EnvironmentThreadShell) => {
-      void props.onUnpinThread(thread);
+      return props.onUnpinThread(thread);
     },
     [props.onUnpinThread],
   );
   const handleRegenerateThreadTitle = useCallback(
     (thread: EnvironmentThreadShell) => {
-      void props.onRegenerateThreadTitle(thread);
+      return props.onRegenerateThreadTitle(thread);
     },
     [props.onRegenerateThreadTitle],
   );
@@ -724,6 +729,7 @@ export function HomeScreen(props: HomeScreenProps) {
       const showTrailingDivider =
         nextItem?.type === "v2-thread" ||
         (nextItem?.type === "v2-pending" && !nextItem.showPendingDivider);
+      if (item.type === "v2-section") return <ThreadListV2SectionDivider label={item.label} />;
       if (item.type === "v2-pending") {
         const pendingScopeKey = scopedProjectKey(
           item.pendingTask.message.environmentId,
@@ -771,6 +777,7 @@ export function HomeScreen(props: HomeScreenProps) {
       return (
         <ThreadListV2Row
           thread={thread}
+          agentThreads={item.agentThreads}
           variant={item.item.variant}
           snoozed={item.item.snoozed}
           pinned={item.item.pinned}
@@ -806,6 +813,7 @@ export function HomeScreen(props: HomeScreenProps) {
           searchQuery={props.searchQuery}
           onSelectThread={props.onSelectThread}
           onDeleteThread={handleDeleteThread}
+          onConfirmDeleteThread={props.onConfirmDeleteThread}
           onArchiveThread={props.onArchiveThread}
           onRegenerateThreadTitle={handleRegenerateThreadTitle}
           titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
@@ -994,6 +1002,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onArchiveThread,
       props.onDeletePendingTask,
       props.onDeleteThread,
+      props.onConfirmDeleteThread,
       props.onNewThreadInProject,
       props.onSelectPendingTask,
       props.onSelectThread,
@@ -1055,7 +1064,7 @@ export function HomeScreen(props: HomeScreenProps) {
     );
   }
 
-  const listHeader = Platform.OS === "ios" ? null : <HomeTopContentSpacer />;
+  const listHeader = null;
 
   // Project scoping lives in the header filter menu (no inline chip row on
   // mobile — the menu is the one filter surface).
@@ -1096,7 +1105,7 @@ export function HomeScreen(props: HomeScreenProps) {
 
   if (threadListV2Enabled) {
     return (
-      <View className="flex-1 bg-screen">
+      <View style={{ flex: 1, backgroundColor: colors.screen }}>
         <SwipeableScrollGateProvider enabled={swipeEnabled}>
           <FlatList
             data={threadListV2Items}
@@ -1122,17 +1131,14 @@ export function HomeScreen(props: HomeScreenProps) {
             ListEmptyComponent={v2ListEmpty}
             style={{ flex: 1 }}
             automaticallyAdjustsScrollIndicatorInsets={Platform.OS === "ios"}
-            contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
+            contentInsetAdjustmentBehavior="never"
             showsVerticalScrollIndicator={false}
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
             {...scrollGateHandlers}
             scrollEventThrottle={16}
             contentContainerStyle={{
-              paddingBottom:
-                Platform.OS === "ios"
-                  ? Math.max(insets.bottom, 24) + 96 + iosBottomToolbarClearance
-                  : Math.max(insets.bottom, 16) + 88,
+              paddingBottom: 16,
             }}
           />
         </SwipeableScrollGateProvider>
@@ -1141,7 +1147,7 @@ export function HomeScreen(props: HomeScreenProps) {
   }
 
   return (
-    <View className="flex-1 bg-screen">
+    <View style={{ flex: 1, backgroundColor: colors.screen }}>
       {/* Sticky headers are deliberately not wired up: LegendList's JS sticky
           implementation mispositions pinned headers at mount under iOS
           automatic content insets (headers render one nav-inset too low until

@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
-import { Modal, Pressable, View } from "react-native";
-
-import { cn } from "../lib/cn";
+import { useEffect, useRef, useState } from "react";
+import { Pressable } from "react-native";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import IconTrash from "@tabler/icons-react-native/IconTrash";
+import IconInfoCircle from "@tabler/icons-react-native/IconInfoCircle";
 import { AppText } from "./AppText";
+import { ModalSlideUp } from "./ModalSlideUp";
+import { ThreadAvatar } from "./ThreadAvatar";
+import { useNavigationColors } from "./useNavigationColors";
+import { useProject, useEnvironmentServerConfig } from "../state/entities";
 
 export type ConfirmDialogRequest = {
   readonly title: string;
@@ -10,28 +15,14 @@ export type ConfirmDialogRequest = {
   readonly cancelText?: string;
   readonly confirmText: string;
   readonly destructive?: boolean;
-  readonly onConfirm: () => void;
+  readonly thread?: EnvironmentThreadShell;
+  readonly onConfirm: () => void | Promise<boolean>;
   readonly onCancel?: () => void;
 };
-
 let presentRequest: ((request: ConfirmDialogRequest) => void) | null = null;
-
-/**
- * Imperative confirm dialog, Alert.alert-shaped. Native iOS alerts already
- * match the app (and support per-button destructive red), so this is for
- * Android, where the native dialog can only theme all confirm buttons at
- * once. Requires ConfirmDialogHost to be mounted at the app root.
- */
 export function showConfirmDialog(request: ConfirmDialogRequest): void {
   presentRequest?.(request);
 }
-
-/**
- * Android-style alert dialog matching the native one themed by
- * withAndroidModernAlertDialog — left-aligned text, right-aligned text
- * buttons — with what the native theme can't do: a per-dialog destructive
- * button color and a dimmer message than the title.
- */
 export function ConfirmDialogHost() {
   const [request, setRequest] = useState<ConfirmDialogRequest | null>(null);
   useEffect(() => {
@@ -40,67 +31,115 @@ export function ConfirmDialogHost() {
       presentRequest = null;
     };
   }, []);
-
-  const handleCancel = useCallback(() => {
-    request?.onCancel?.();
-    setRequest(null);
-  }, [request]);
-
-  const handleConfirm = useCallback(() => {
-    request?.onConfirm();
-    setRequest(null);
-  }, [request]);
-
+  return request ? (
+    <Confirmation
+      key={request.thread ? `${request.thread.environmentId}:${request.thread.id}` : request.title}
+      request={request}
+      onClose={() => setRequest(null)}
+    />
+  ) : null;
+}
+function Confirmation({
+  request,
+  onClose,
+}: {
+  request: ConfirmDialogRequest;
+  onClose: () => void;
+}) {
+  const colors = useNavigationColors();
+  const [busy, setBusy] = useState(false);
+  const lock = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  const project = useProject(
+    request.thread
+      ? { environmentId: request.thread.environmentId, projectId: request.thread.projectId }
+      : null,
+  );
+  const config = useEnvironmentServerConfig(request.thread?.environmentId ?? null);
+  const provider = config?.providers.find(
+    (p) =>
+      p.instanceId ===
+      (request.thread?.session?.providerInstanceId ?? request.thread?.modelSelection.instanceId),
+  );
+  const Icon = request.destructive ? IconTrash : IconInfoCircle;
+  const confirm = async () => {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const success = await request.onConfirm();
+      if (success === false) setError("The action could not be completed. Please try again.");
+      else onClose();
+    } catch {
+      setError("The action could not be completed. Please try again.");
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  };
   return (
-    <Modal
-      visible={request !== null}
-      transparent
-      animationType="fade"
-      statusBarTranslucent
-      navigationBarTranslucent
-      onRequestClose={handleCancel}
+    <ModalSlideUp
+      title={request.title}
+      description={request.thread?.title}
+      identity={
+        request.thread ? (
+          <ThreadAvatar
+            thread={request.thread}
+            project={project}
+            providerDriver={provider?.driver ?? null}
+            size={64}
+          />
+        ) : (
+          <Icon size={38} color={request.destructive ? colors.danger : colors.accent} />
+        )
+      }
+      cancelText={request.cancelText}
+      busy={busy}
+      onClose={() => {
+        request.onCancel?.();
+        onClose();
+      }}
+      footer={
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          accessibilityState={{ busy, disabled: busy }}
+          onPress={() => void confirm()}
+          style={{
+            minHeight: 48,
+            padding: 12,
+            borderRadius: 12,
+            backgroundColor: request.destructive ? "#b91c1c" : colors.accent,
+            alignItems: "center",
+            justifyContent: "center",
+            opacity: busy ? 0.6 : 1,
+          }}
+        >
+          <AppText style={{ fontSize: 16, fontFamily: "DMSans-Medium", color: "#ffffff" }}>
+            {busy ? "Working…" : request.confirmText}
+          </AppText>
+        </Pressable>
+      }
     >
-      {request === null ? null : (
-        <View className="flex-1 items-center justify-center bg-backdrop px-8">
-          <View className="w-full rounded-[24px] bg-card px-6 pb-4 pt-5">
-            <AppText className="text-lg font-t3-medium">{request.title}</AppText>
-            {request.message === undefined ? null : (
-              <AppText className="mt-2 text-sm text-foreground-secondary">
-                {request.message}
-              </AppText>
-            )}
-            <View className="mt-5 flex-row justify-end gap-1">
-              <View className="overflow-hidden rounded-full">
-                <Pressable
-                  accessibilityRole="button"
-                  className="min-h-10 items-center justify-center px-4 active:bg-subtle"
-                  onPress={handleCancel}
-                >
-                  <AppText className="text-base font-t3-medium">
-                    {request.cancelText ?? "Cancel"}
-                  </AppText>
-                </Pressable>
-              </View>
-              <View className="overflow-hidden rounded-full">
-                <Pressable
-                  accessibilityRole="button"
-                  className="min-h-10 items-center justify-center px-4 active:bg-subtle"
-                  onPress={handleConfirm}
-                >
-                  <AppText
-                    className={cn(
-                      "text-base font-t3-medium",
-                      request.destructive && "text-danger-foreground",
-                    )}
-                  >
-                    {request.confirmText}
-                  </AppText>
-                </Pressable>
-              </View>
-            </View>
-          </View>
-        </View>
-      )}
-    </Modal>
+      {request.message ? (
+        <AppText
+          style={{
+            paddingHorizontal: 8,
+            paddingBottom: 12,
+            fontSize: 16,
+            lineHeight: 23,
+            color: colors.foreground,
+          }}
+        >
+          {request.message}
+        </AppText>
+      ) : null}
+      {error ? (
+        <AppText accessibilityRole="alert" style={{ padding: 8, color: colors.danger }}>
+          {error}
+        </AppText>
+      ) : null}
+    </ModalSlideUp>
   );
 }

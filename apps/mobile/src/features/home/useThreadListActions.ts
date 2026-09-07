@@ -152,7 +152,8 @@ function useThreadActionExecutor(
                 input: { threadId: thread.id },
               });
         if (result._tag === "Failure") {
-          Alert.alert(actionFailureTitle(action), actionFailureMessage(action, result.cause));
+          if (action !== "delete")
+            Alert.alert(actionFailureTitle(action), actionFailureMessage(action, result.cause));
           return false;
         }
         // Settled threads stay in the live shell stream; only the archive
@@ -184,29 +185,13 @@ function useConfirmDeleteThread(
 ) {
   return useCallback(
     (thread: EnvironmentThreadShell) => {
-      const title = "Delete thread?";
-      const message = `“${thread.title}” will be permanently deleted, including its terminal history.`;
-      if (process.env.EXPO_OS === "ios") {
-        Alert.alert(title, message, [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Delete",
-            style: "destructive",
-            onPress: () => {
-              void executeAction("delete", thread);
-            },
-          },
-        ]);
-        return;
-      }
       showConfirmDialog({
-        title,
-        message,
-        confirmText: "Delete",
+        title: "Delete conversation?",
+        message: "This conversation will be permanently deleted, including its terminal history.",
+        confirmText: "Delete conversation",
         destructive: true,
-        onConfirm: () => {
-          void executeAction("delete", thread);
-        },
+        thread,
+        onConfirm: () => executeAction("delete", thread),
       });
     },
     [executeAction],
@@ -214,10 +199,15 @@ function useConfirmDeleteThread(
 }
 
 export function useThreadListActions(): {
+  readonly deleteThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly archiveThread: (thread: EnvironmentThreadShell) => void;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly snoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => Promise<boolean>;
+  readonly snoozeThread: (
+    thread: EnvironmentThreadShell,
+    snoozedUntil: string,
+    options?: { reportFailure?: boolean },
+  ) => Promise<boolean>;
   readonly unsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -250,7 +240,11 @@ export function useThreadListActions(): {
     [executeAction],
   );
   const snoozeThread = useCallback(
-    async (thread: EnvironmentThreadShell, snoozedUntil: string) => {
+    async (
+      thread: EnvironmentThreadShell,
+      snoozedUntil: string,
+      options?: { reportFailure?: boolean },
+    ) => {
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (snoozeInFlightThreadKeys.current.has(key)) {
         return false;
@@ -258,19 +252,21 @@ export function useThreadListActions(): {
       snoozeInFlightThreadKeys.current.add(key);
       try {
         if (!environmentSupportsSnooze(thread.environmentId)) {
-          Alert.alert(
-            "Could not snooze thread",
-            "This environment's server does not support snoozing yet. Update the server to use Snooze.",
-          );
+          if (options?.reportFailure !== false)
+            Alert.alert(
+              "Could not snooze thread",
+              "This environment's server does not support snoozing yet. Update the server to use Snooze.",
+            );
           return false;
         }
         if (!canSnooze(thread, { now: new Date().toISOString() })) {
-          Alert.alert(
-            "Could not snooze thread",
-            thread.hasPendingApprovals || thread.hasPendingUserInput
-              ? "This thread is waiting on you. Respond to the pending request before snoozing it."
-              : "This thread is still starting a turn. Try again once it's running.",
-          );
+          if (options?.reportFailure !== false)
+            Alert.alert(
+              "Could not snooze thread",
+              thread.hasPendingApprovals || thread.hasPendingUserInput
+                ? "This thread is waiting on you. Respond to the pending request before snoozing it."
+                : "This thread is still starting a turn. Try again once it's running.",
+            );
           return false;
         }
 
@@ -284,12 +280,13 @@ export function useThreadListActions(): {
         });
         if (result._tag === "Failure") {
           const error = Cause.squash(result.cause);
-          Alert.alert(
-            "Could not snooze thread",
-            error instanceof Error && error.message.trim().length > 0
-              ? error.message
-              : "The thread could not be snoozed.",
-          );
+          if (options?.reportFailure !== false)
+            Alert.alert(
+              "Could not snooze thread",
+              error instanceof Error && error.message.trim().length > 0
+                ? error.message
+                : "The thread could not be snoozed.",
+            );
           return false;
         }
         return true;
@@ -532,7 +529,13 @@ export function useThreadListActions(): {
 
   const confirmDeleteThread = useConfirmDeleteThread(executeAction);
 
+  const deleteThread = useCallback(
+    (thread: EnvironmentThreadShell) => executeAction("delete", thread),
+    [executeAction],
+  );
+
   return {
+    deleteThread,
     archiveThread,
     confirmDeleteThread,
     settleThread,

@@ -45,7 +45,6 @@ import {
   parseActiveThreadPath,
   useHardwareKeyboardCommand,
 } from "../keyboard/hardwareKeyboardCommands";
-import { AndroidHomeFabLayout } from "../home/AndroidHomeFab";
 import { HomeListOptionsProvider } from "../home/home-list-options";
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
 import { WORKSPACE_PANE_TIMING } from "./workspace-pane-animation";
@@ -534,8 +533,9 @@ function AdaptiveWorkspaceLayoutContent(
               style={sidebarAnimatedStyle}
             >
               <View className="flex-1" style={{ width: layout.listPaneWidth }}>
-                <AndroidHomeFabLayout onStartNewTask={handleStartNewTask}>
+                <>
                   <ThreadNavigationSidebar
+                    onStartNewTask={handleStartNewTask}
                     width={layout.listPaneWidth}
                     visible={panes.primarySidebarVisible}
                     onRequestVisibility={revealPrimarySidebar}
@@ -547,7 +547,7 @@ function AdaptiveWorkspaceLayoutContent(
                     onSearchQueryChange={setPrimarySidebarSearchQuery}
                     searchQuery={primarySidebarSearchQuery}
                   />
-                </AndroidHomeFabLayout>
+                </>
               </View>
             </Animated.View>
           ) : null}

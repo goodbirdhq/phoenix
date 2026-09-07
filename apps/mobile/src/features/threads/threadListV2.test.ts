@@ -950,3 +950,62 @@ describe("buildThreadListV2ListItems", () => {
     ]);
   });
 });
+
+describe("mobile pinned sections and agent groups", () => {
+  const rows = (threads: EnvironmentThreadShell[], query = "") => {
+    const layout = buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: query,
+      now: NOW,
+    });
+    return buildThreadListV2ListItems({ ...layout, pendingTasks: [] });
+  };
+  const thread = (id: string, parent?: string, pinned = false) =>
+    makeThread({
+      id: ThreadId.make(id),
+      title: id,
+      ...(parent ? { spawnedByThreadId: ThreadId.make(parent) } : {}),
+      ...(pinned ? { pinnedAt: NOW, pinOrder: 0 } : {}),
+    });
+  it("adds Recent only below pinned work and removes both headings after the last unpin", () => {
+    const pinned = rows([thread("pinned", undefined, true), thread("recent")]);
+    expect(pinned.filter((row) => row.type === "v2-section").map((row) => row.label)).toEqual([
+      "Pinned",
+      "Recent",
+    ]);
+    expect(
+      rows([thread("pinned"), thread("recent")]).some((row) => row.type === "v2-section"),
+    ).toBe(false);
+    expect(
+      rows([thread("pinned", undefined, true), thread("recent")], "recent").some(
+        (row) => row.type === "v2-section",
+      ),
+    ).toBe(false);
+  });
+  it("keeps every descendant reachable through the visible root", () => {
+    const result = rows([thread("root"), thread("child", "root"), thread("grandchild", "child")]);
+    const visible = result.filter((row) => row.type === "v2-thread");
+    expect(visible.map((row) => row.item.thread.id)).toEqual(["root"]);
+    expect(visible[0]?.agentThreads?.map((row) => row.id).sort()).toEqual(["child", "grandchild"]);
+  });
+  it("keeps pinned children and missing or cyclic parents visible", () => {
+    const result = rows([
+      thread("root"),
+      thread("pinned", "root", true),
+      thread("orphan", "missing"),
+      thread("a", "b"),
+      thread("b", "a"),
+    ]);
+    expect(
+      result
+        .filter((row) => row.type === "v2-thread")
+        .map((row) => row.item.thread.id)
+        .sort(),
+    ).toEqual(["a", "b", "orphan", "pinned", "root"]);
+  });
+  it("never groups identically named threads across environments", () => {
+    const child = { ...thread("child", "root"), environmentId: EnvironmentId.make("other") };
+    expect(rows([thread("root"), child]).filter((row) => row.type === "v2-thread")).toHaveLength(2);
+  });
+});

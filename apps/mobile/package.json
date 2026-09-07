@@ -70,6 +70,7 @@
     "@t3tools/shared": "workspace:*",
     "@tabler/icons-react-native": "^3.44.0",
     "clsx": "^2.1.1",
+    "core-js": "3.50.0",
     "diff": "8.0.3",
     "effect": "catalog:",
     "expo": "~57.0.18",

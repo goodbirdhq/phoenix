@@ -1,8 +1,11 @@
+import { NavigationFooter } from "./features/home/NavigationFooter";
+import { PullRequestsRouteScreen } from "./features/home/PullRequestsRouteScreen";
 import {
   createPathConfigForStaticNavigation,
   getPathFromState,
   NavigationState,
   StackActions,
+  CommonActions,
   useNavigation,
 } from "@react-navigation/native";
 import {
@@ -147,6 +150,15 @@ const LEGAL_DOCUMENT_HEADER_OPTIONS: AppScreenOptions = {
 };
 
 const SettingsContentStack = createNativeStackNavigator({
+  layout: ({ children, state, navigation }) => (
+    <View style={{ flex: 1 }}>
+      {children}
+      <NavigationFooter
+        onNavigate={(route) => navigation.dispatch(CommonActions.navigate({ name: route }))}
+        selected={state.routes[state.index]?.name}
+      />
+    </View>
+  ),
   initialRouteName: "Settings",
   screenOptions: {
     ...GLASS_HEADER_OPTIONS,
@@ -202,6 +214,11 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "Client Storage",
       },
+    }),
+    SettingsPullRequests: createNativeStackScreen({
+      screen: PullRequestsRouteScreen,
+      linking: "pull-requests",
+      options: { title: "Pull Requests" },
     }),
     SettingsUsage: createNativeStackScreen({
       screen: UsageRouteScreen,
