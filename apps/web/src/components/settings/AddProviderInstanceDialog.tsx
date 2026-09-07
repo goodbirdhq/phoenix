@@ -10,7 +10,10 @@ import {
   type ProviderInstanceConfig,
 } from "@t3tools/contracts";
 
-import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { serverEnvironment } from "../../state/server";
+import { ServerIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Button } from "../ui/button";
@@ -29,7 +32,6 @@ import { RadioGroup } from "../ui/radio-group";
 import { toastManager } from "../ui/toast";
 import { DRIVER_OPTION_BY_VALUE, DRIVER_OPTIONS } from "./providerDriverMeta";
 import { ProviderSettingsForm, deriveProviderSettingsFields } from "./ProviderSettingsForm";
-import { AnimatedHeight } from "../AnimatedHeight";
 import {
   ADD_PROVIDER_WIZARD_STEPS,
   resolveWizardNavigation,
@@ -129,7 +131,8 @@ export function AddProviderInstanceDialog({
   onOpenChange,
 }: AddProviderInstanceDialogProps) {
   const settings = useEnvironmentSettings(environmentId);
-  const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, "add provider instance");
+  const [saving, setSaving] = useState(false);
 
   const [wizardStep, setWizardStep] = useState(0);
   const [driver, setDriver] = useState<ProviderDriverKind>(DEFAULT_DRIVER_KIND);
@@ -187,7 +190,7 @@ export function AddProviderInstanceDialog({
     );
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setHasAttemptedSubmit(true);
     if (instanceIdError !== null) return;
 
@@ -212,7 +215,15 @@ export function AddProviderInstanceDialog({
       [brandedId]: nextInstance,
     };
     try {
-      updateSettings({ providerInstances: nextMap });
+      setSaving(true);
+      const result = await updateSettings({
+        environmentId,
+        input: { patch: { providerInstances: nextMap } },
+      });
+      if (result._tag === "Failure")
+        throw new Error(
+          "The environment could not save this provider. Your draft has been kept; try again.",
+        );
       toastManager.add({
         type: "success",
         title: "Provider instance added",
@@ -225,18 +236,25 @@ export function AddProviderInstanceDialog({
         title: "Could not add provider instance",
         description: error instanceof Error ? error.message : "Update failed.",
       });
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup className="max-w-xl overflow-hidden">
-        <div className="flex min-h-0 flex-col overflow-hidden">
-          <DialogHeader>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!saving) onOpenChange(next);
+      }}
+    >
+      <DialogPopup className="w-[620px] max-w-[calc(100vw-32px)] overflow-hidden rounded-[14px]">
+        <div className="flex h-[618px] max-h-[calc(100dvh-50px)] min-h-0 flex-col overflow-hidden">
+          <DialogHeader className="items-center px-7 pt-7 text-center">
+            <ServerIcon className="size-6 text-sky-600" />
             <DialogTitle>Add provider instance</DialogTitle>
             <DialogDescription>
-              Configure an additional provider instance on {environmentLabel} — for example, a
-              second Codex install pointed at a different workspace.
+              Configure another provider instance on {environmentLabel}.
             </DialogDescription>
             <AddProviderInstanceWizardSteps
               currentStep={wizardStep}
@@ -248,9 +266,9 @@ export function AddProviderInstanceDialog({
 
           <div
             data-slot="dialog-panel"
-            className="space-y-4 bg-zinc-25/80 px-6 py-5 ring-1 ring-black/5 dark:bg-white/2 dark:ring-white/5"
+            className="min-h-0 flex-1 space-y-4 overflow-y-auto px-7 py-5"
           >
-            <AnimatedHeight>
+            <>
               <div className={cn("grid gap-2", wizardStep !== 0 && "hidden")}>
                 <div id="add-instance-driver-label" className="text-sm font-medium text-foreground">
                   Driver
@@ -267,7 +285,7 @@ export function AddProviderInstanceDialog({
                       <RadioPrimitive.Root
                         key={option.value}
                         value={option.value}
-                        className="relative flex cursor-pointer items-center gap-3 rounded-lg bg-card px-3 py-3 text-left text-muted-foreground outline-none ring-1 ring-black/5 hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-primary/8 data-checked:text-foreground data-checked:ring-2 data-checked:ring-primary data-checked:hover:bg-primary/8 dark:bg-white/3 dark:ring-white/5 dark:hover:bg-white/5 dark:data-checked:bg-primary/15 dark:data-checked:ring-primary dark:data-checked:hover:bg-primary/15"
+                        className="relative flex cursor-pointer items-center gap-3 rounded-lg bg-card px-3 py-2 text-left text-muted-foreground outline-none ring-1 ring-black/5 hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-primary/8 data-checked:text-foreground data-checked:ring-2 data-checked:ring-primary data-checked:hover:bg-primary/8 dark:bg-white/3 dark:ring-white/5 dark:hover:bg-white/5 dark:data-checked:bg-primary/15 dark:data-checked:ring-primary dark:data-checked:hover:bg-primary/15"
                       >
                         <IconComponent className="size-4 shrink-0" aria-hidden />
                         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
@@ -295,7 +313,7 @@ export function AddProviderInstanceDialog({
                         value={option.value}
                         disabled
                         className={cn(
-                          "relative flex cursor-not-allowed items-center gap-3 rounded-lg bg-card/60 px-3 py-3 text-left opacity-55 outline-none ring-1 ring-black/5 dark:bg-white/2 dark:ring-white/5",
+                          "relative flex cursor-not-allowed items-center gap-3 rounded-lg bg-card/60 px-3 py-2 text-left opacity-55 outline-none ring-1 ring-black/5 dark:bg-white/2 dark:ring-white/5",
                         )}
                       >
                         <IconComponent
@@ -411,13 +429,14 @@ export function AddProviderInstanceDialog({
                   </p>
                 </div>
               ) : null}
-            </AnimatedHeight>
+            </>
           </div>
 
-          <DialogFooter variant="bare">
+          <DialogFooter variant="bare" className="h-16 shrink-0 border-t border-border px-7 py-4">
             <Button
               variant="outline"
               size="sm"
+              disabled={saving}
               onClick={() => {
                 if (wizardStep === 0) {
                   onOpenChange(false);
@@ -433,8 +452,8 @@ export function AddProviderInstanceDialog({
                 Next
               </Button>
             ) : (
-              <Button size="sm" onClick={handleSave}>
-                Add instance
+              <Button size="sm" disabled={saving} onClick={() => void handleSave()}>
+                {saving ? "Adding…" : "Add instance"}
               </Button>
             )}
           </DialogFooter>

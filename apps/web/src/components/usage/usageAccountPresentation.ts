@@ -14,3 +14,9 @@ export function usageProviderKind(driver: string): UsageProviderKind {
       throw new Error(`Unsupported Usage provider: ${driver}`);
   }
 }
+
+/** Match the account navigation and rollover reading order in Paper. */
+export function compareUsageAccountProviders(a: { driver: string }, b: { driver: string }) {
+  const order = ["codex", "claude", "opencode", "grok"];
+  return order.indexOf(usageProviderKind(a.driver)) - order.indexOf(usageProviderKind(b.driver));
+}

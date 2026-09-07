@@ -10,6 +10,8 @@ export interface UsageReportRow {
   readonly attribution: "linked" | "unlinked" | "ambiguous";
   readonly models: readonly string[];
   readonly sessions: number;
+  readonly lastActivityAt: string;
+  readonly sessionId: string | undefined;
   readonly totalTokens: number;
   readonly cachedInputTokens: number;
   readonly cacheCreationTokens: number;
@@ -31,16 +33,25 @@ function tokens(model: UsageSessionModel): number {
  * a unique recorded link remain visible so the report doesn't lose their cost. */
 export function buildUsageReport(
   sessions: readonly EnvironmentSessionUsage[],
-  mode: "threads" | "projects",
+  mode: "threads" | "projects" | "sessions",
 ): readonly UsageReportRow[] {
   const groups = new Map<string, EnvironmentSessionUsage[]>();
   for (const session of sessions) {
     const thread = session.attribution === "linked" ? session.thread : undefined;
-    const identity = thread
-      ? [session.environmentId, "linked", mode === "threads" ? thread.id : thread.projectId]
-      : mode === "projects"
-        ? [session.environmentId, "unattributed"]
-        : [session.environmentId, "native", session.sourceId, session.provider, session.sessionId];
+    const identity =
+      mode === "sessions"
+        ? [session.environmentId, "native", session.sourceId, session.provider, session.sessionId]
+        : thread
+          ? [session.environmentId, "linked", mode === "threads" ? thread.id : thread.projectId]
+          : mode === "projects"
+            ? [session.environmentId, "unattributed"]
+            : [
+                session.environmentId,
+                "native",
+                session.sourceId,
+                session.provider,
+                session.sessionId,
+              ];
     const key = JSON.stringify(identity);
     const group = groups.get(key);
     if (group) group.push(session);
@@ -63,7 +74,7 @@ export function buildUsageReport(
         environmentId: first.environmentId,
         environmentLabel: first.environmentLabel,
         title: project
-          ? mode === "threads"
+          ? mode !== "projects"
             ? project.title
             : project.projectTitle
           : mode === "projects"
@@ -77,6 +88,11 @@ export function buildUsageReport(
             : ("unlinked" as const),
         models: [...new Set(models.map((model) => model.model))].sort(),
         sessions: group.length,
+        sessionId: mode === "sessions" ? first.sessionId : undefined,
+        lastActivityAt: group.reduce(
+          (latest, session) => (session.lastActivityAt > latest ? session.lastActivityAt : latest),
+          first.lastActivityAt,
+        ),
         totalTokens: models.reduce((sum, model) => sum + tokens(model), 0),
         cachedInputTokens: models.reduce((sum, model) => sum + model.totals.cachedInputTokens, 0),
         cacheCreationTokens: models.reduce(

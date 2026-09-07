@@ -12,29 +12,37 @@ import { usageProviderKind } from "./usageAccountPresentation";
 import { UsageRefreshButton } from "./UsageRefreshButton";
 
 function resetLabel(window: ProviderAvailabilityWindow): string {
-  return window.resetsAt
-    ? `Resets ${new Date(window.resetsAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
-    : "Reset not reported";
+  if (!window.resetsAt) return "Reset not reported";
+  const date = new Date(window.resetsAt);
+  if (!Number.isFinite(date.getTime())) return "Reset not reported";
+  const today = date.toDateString() === new Date().toDateString();
+  return today
+    ? `Resets today, ${date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}`
+    : `Resets ${date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}`;
 }
 
 export function QuotaBar({
   window,
   color,
   prominent = false,
+  label: labelOverride,
+  showRemaining = false,
 }: {
   readonly window: ProviderAvailabilityWindow;
   readonly color: string;
   readonly prominent?: boolean;
+  readonly label?: string;
+  readonly showRemaining?: boolean;
 }) {
-  const label = subscriptionLimitWindowLabel(window);
+  const label = labelOverride ?? subscriptionLimitWindowLabel(window);
   return (
-    <div className="min-w-0 space-y-2">
+    <div className="min-w-0 space-y-[9px]">
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-sm font-medium">{label}</span>
         <span
           className={prominent ? "text-3xl font-semibold tabular-nums" : "text-xs tabular-nums"}
         >
-          {Math.round(window.usedPercent)}%
+          {Math.round(window.usedPercent)}%{showRemaining ? " used" : ""}
         </span>
       </div>
       <div
@@ -53,7 +61,10 @@ export function QuotaBar({
           }}
         />
       </div>
-      <div className="text-xs text-muted-foreground">{resetLabel(window)}</div>
+      <div className="flex justify-between gap-2 text-xs leading-4 text-muted-foreground">
+        <span>{resetLabel(window)}</span>
+        {showRemaining && <span>{Math.max(0, Math.round(100 - window.usedPercent))}% left</span>}
+      </div>
     </div>
   );
 }
@@ -96,9 +107,26 @@ export function UsageQuotas({
           : "Manual quota refresh is unavailable. Check this account’s connection, installation and sign-in status.";
 
   return (
-    <section className="space-y-5 rounded-[10px] border bg-muted/30 p-5" aria-label="Usage limits">
+    <section
+      className="flex h-[286px] flex-col gap-5 overflow-y-auto rounded-[10px] border border-border bg-muted/30 p-5"
+      aria-label="Usage limits"
+    >
       <div className="flex items-center justify-between gap-4">
-        <h2 className="text-sm font-semibold">Usage limits</h2>
+        <div className="flex items-center gap-2.5">
+          <h2 className="text-[15px] leading-[18px] font-semibold">Usage limits</h2>
+          <span className="text-xs text-muted-foreground">
+            {isPending || isRefreshing
+              ? "Checking…"
+              : !connected
+                ? "Offline"
+                : refreshFailed ||
+                    limits.some((limit) => limit.isStale || limit.isCurrentAvailabilityUnknown)
+                  ? "Last known"
+                  : limits.some((limit) => limit.availability.windows.length)
+                    ? "Ready"
+                    : "Unavailable"}
+          </span>
+        </div>
         <UsageRefreshButton
           label="Refresh limits"
           confirmed={
@@ -122,7 +150,26 @@ export function UsageQuotas({
         </p>
       )}
       {isPending && limits.length === 0 && (
-        <p className="text-sm text-muted-foreground">Loading limits…</p>
+        <div
+          role="status"
+          aria-label="Loading limits"
+          className={
+            driver === "codex"
+              ? "grid flex-1 grid-cols-2 gap-9"
+              : "grid flex-1 grid-cols-[1fr_2fr] gap-7"
+          }
+        >
+          <div className="space-y-4">
+            <QuotaSkeleton width="100px" />
+            <QuotaSkeleton width="100px" height={44} />
+            <QuotaSkeleton width="100%" />
+          </div>
+          <div className="space-y-7">
+            <QuotaSkeleton width="100%" />
+            <QuotaSkeleton width="100%" />
+            <QuotaSkeleton width="100%" />
+          </div>
+        </div>
       )}
       {limits.map((limit) => {
         const kind = usageProviderKind(limit.driver);
@@ -139,14 +186,45 @@ export function UsageQuotas({
                 {limit.name} · {limit.environmentLabels.join(", ")}
               </h3>
             )}
-            {(limit.isStale || limit.isCurrentAvailabilityUnknown || limit.availability.stale) && (
-              <p role="status" className="text-xs text-muted-foreground">
-                {limit.isStale
-                  ? "Last known reading. Limits need refresh."
-                  : "Current limits could not be confirmed."}
-              </p>
-            )}
-            {windows.length ? (
+            {connected &&
+              (limit.isStale || limit.isCurrentAvailabilityUnknown || limit.availability.stale) && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  {limit.isStale
+                    ? "Last known reading. Limits need refresh."
+                    : "Current limits could not be confirmed."}
+                </p>
+              )}
+            {windows.length && kind === "codex" ? (
+              <div className="grid grid-cols-1 gap-9 sm:grid-cols-2">
+                {[false, true].map((spark) => {
+                  const pool = windows.filter(
+                    (window) => /spark/i.test(`${window.label} ${window.scope}`) === spark,
+                  );
+                  if (!pool.length) return null;
+                  const label = spark ? "Spark" : "Codex usage";
+                  return (
+                    <div key={label} role="group" aria-label={label} className="space-y-3">
+                      {pool.map((window) => (
+                        <QuotaBar
+                          key={`${window.kind}:${window.scope ?? ""}`}
+                          window={window}
+                          color={spark ? "#0284C7" : color}
+                          label={
+                            window.kind === "primary" ? label : subscriptionLimitWindowLabel(window)
+                          }
+                          showRemaining
+                        />
+                      ))}
+                      {spark && (
+                        <p className="text-xs leading-4 text-muted-foreground">
+                          Separate allowance for Codex-Spark
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : windows.length ? (
               <div className="flex flex-col gap-7 sm:flex-row">
                 {hero && (
                   <div className="sm:w-64 sm:shrink-0 sm:border-r sm:pr-7">
@@ -194,18 +272,25 @@ export function UsageQuotas({
   );
 }
 
-/** Informational hover content; no links or controls that a pointer cannot reach. */
+const NO_PENDING_ENVIRONMENTS: readonly string[] = [];
+
+/** Informational rollover. Known rows retain their geometry while each reading settles. */
 export function UsageQuotaSummary({
   sources,
   accounts,
+  pendingEnvironmentIds = NO_PENDING_ENVIRONMENTS,
+  refreshing = false,
 }: {
   readonly sources: readonly SubscriptionAvailabilitySource[];
   readonly accounts: readonly UsageAccount[];
+  readonly pendingEnvironmentIds?: readonly string[];
+  readonly refreshing?: boolean;
 }) {
-  const limits = useMemo(
+  const rows = useMemo(
     () =>
-      accounts.map((account) => {
-        const reading = deriveSubscriptionLimits(
+      accounts.map((account) => ({
+        account,
+        reading: deriveSubscriptionLimits(
           sources.filter((source) =>
             account.memberships.some(
               (member) =>
@@ -213,90 +298,178 @@ export function UsageQuotaSummary({
                 member.provider.instanceId === source.instanceId,
             ),
           ),
-        )[0];
-        return {
-          key: account.key,
-          name: account.name,
-          driver: String(account.driver),
-          availability: reading?.availability ?? {
-            status: "unknown" as const,
-            source: "unsupported" as const,
-            windows: [],
-          },
-          isStale: reading?.isStale ?? false,
-          isCurrentAvailabilityUnknown: reading?.isCurrentAvailabilityUnknown ?? false,
-        };
-      }),
+        )[0],
+      })),
     [accounts, sources],
   );
+  const checking = refreshing || pendingEnvironmentIds.length > 0;
   return (
-    <div className="w-72 space-y-3 text-left font-normal text-foreground">
-      <div className="border-b pb-2">
-        <div className="text-sm font-semibold">Usage limits</div>
-        <div className="text-xs text-muted-foreground">All environments · percent used</div>
+    <div
+      className="w-[318px] text-left text-foreground font-normal"
+      aria-label="Usage limits"
+      aria-busy={checking}
+    >
+      <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
+        <div className="flex flex-col gap-[3px]">
+          <div className="text-sm leading-5 font-semibold">Usage limits</div>
+          <div className="text-[11px] leading-4 text-muted-foreground">
+            {checking ? "Checking usage…" : "Percent used · last reported"}
+          </div>
+        </div>
+        <span className="text-xs leading-[18px] text-muted-foreground">All environments</span>
       </div>
-      {limits.map((limit) => {
-        const kind = usageProviderKind(limit.driver);
+      {rows.map(({ account, reading }) => {
+        const kind = usageProviderKind(account.driver);
         const { mark: Mark, color } = PROVIDER_PRESENTATION[kind];
+        const availability = reading?.availability;
         const unknown =
-          limit.isStale || limit.isCurrentAvailabilityUnknown || !!limit.availability.stale;
-        const blocked = unknown ? undefined : blockedSessionWindow(kind, limit.availability);
-        const main = lastKnownUsageWindow(kind, limit.availability);
+          reading?.isStale || reading?.isCurrentAvailabilityUnknown || availability?.stale;
+        const main = availability && lastKnownUsageWindow(kind, availability);
+        const pending =
+          !main &&
+          account.memberships.some((member) =>
+            pendingEnvironmentIds.includes(member.environmentId),
+          );
+        const blocked =
+          availability && !unknown ? blockedSessionWindow(kind, availability) : undefined;
         const spark =
-          kind === "codex" && !unknown
-            ? limit.availability.windows.find((window) =>
+          kind === "codex"
+            ? availability?.windows.find((window) =>
                 /spark/i.test(`${window.scope} ${window.label}`),
               )
             : undefined;
+        const session =
+          kind === "claude"
+            ? availability?.windows.find((window) => window.kind === "session" && !window.scope)
+            : undefined;
+        const hasBars = !blocked && (main || (pending && (kind === "codex" || kind === "claude")));
         return (
-          <div className="space-y-1.5" key={limit.key}>
+          <div
+            key={account.key}
+            className="flex flex-col gap-[5px] border-b border-border/50 px-3 py-2 last:border-b-0"
+            style={{ minHeight: kind === "codex" || kind === "claude" ? 85 : 56 }}
+          >
             <div className="flex items-center gap-2">
-              <Mark className="size-4 shrink-0" />
-              <span className="flex-1 truncate text-xs font-medium">{limit.name}</span>
-              {!blocked && main && (
-                <span className="text-xs tabular-nums">{Math.round(main.usedPercent)}%</span>
-              )}
+              <Mark className="size-[18px] shrink-0" />
+              <span className="min-w-0 flex-1 truncate text-[13px] leading-[18px] font-medium">
+                {account.name}
+              </span>
+              <span className="flex w-9 shrink-0 justify-end text-[13px] leading-[18px] tabular-nums">
+                {pending ? (
+                  <QuotaSkeleton width="36px" height={18} />
+                ) : blocked ? null : main ? (
+                  `${Math.round(main.usedPercent)}%`
+                ) : (
+                  "—"
+                )}
+              </span>
             </div>
-            <div className="space-y-1 pl-6">
+            <div className="flex flex-col gap-1 pl-[26px] text-[11px] leading-4 text-muted-foreground">
               {blocked ? (
-                <p className="text-xs text-destructive">
+                <span className="text-destructive">
                   Session limit reached · {resetLabel(blocked)}
-                </p>
-              ) : main ? (
+                </span>
+              ) : hasBars ? (
                 <>
-                  <div className="h-1 overflow-hidden rounded-full bg-border">
+                  <div className="h-[5px] overflow-hidden rounded-[3px] bg-border">
                     <div
-                      className="h-full"
-                      style={{ width: `${main.usedPercent}%`, backgroundColor: color }}
+                      className="h-full rounded-[3px]"
+                      style={{
+                        width: pending ? "0%" : `${main?.usedPercent ?? 0}%`,
+                        backgroundColor: color,
+                      }}
                     />
                   </div>
-                  <div className="text-[11px] text-muted-foreground">
-                    {unknown
-                      ? "Last known · needs refresh"
-                      : `${subscriptionLimitWindowLabel(main)} · ${resetLabel(main)}`}
+                  <div className="flex justify-between gap-1">
+                    <span>
+                      {kind === "codex"
+                        ? "Main allowance"
+                        : main?.kind === "weekly"
+                          ? "Shared weekly"
+                          : main
+                            ? subscriptionLimitWindowLabel(main)
+                            : "Shared weekly"}
+                    </span>
+                    {pending ? (
+                      <QuotaSkeleton width="100px" />
+                    ) : (
+                      <span>
+                        {unknown ? "Last known · needs refresh" : main && resetLabel(main)}
+                      </span>
+                    )}
                   </div>
-                  {spark && (
-                    <div className="text-[11px] text-muted-foreground">
-                      Spark · {Math.round(spark.usedPercent)}% used
+                  {kind === "codex" && (spark || pending) && (
+                    <div className="flex items-center gap-2">
+                      <span className="w-[34px] shrink-0">Spark</span>
+                      <span className="h-[3px] flex-1 rounded-[3px] bg-border">
+                        <span
+                          className="block h-full rounded-[3px] bg-sky-600"
+                          style={{ width: pending ? "0%" : `${spark?.usedPercent ?? 0}%` }}
+                        />
+                      </span>
+                      <span className="flex w-7 shrink-0 justify-end tabular-nums">
+                        {pending ? (
+                          <QuotaSkeleton width="28px" />
+                        ) : (
+                          `${Math.round(spark?.usedPercent ?? 0)}%`
+                        )}
+                      </span>
+                    </div>
+                  )}
+                  {kind === "claude" && (
+                    <div className="min-h-4">
+                      {pending ? (
+                        <QuotaSkeleton width="225px" />
+                      ) : session && session.usedPercent >= 90 ? (
+                        <span className={unknown ? "" : "text-amber-700 dark:text-amber-500"}>
+                          Session {Math.round(session.usedPercent)}% used · {resetLabel(session)}
+                        </span>
+                      ) : null}
                     </div>
                   )}
                 </>
+              ) : pending ? (
+                <QuotaSkeleton width="200px" />
               ) : (
-                <span className="text-xs text-muted-foreground">
+                <span>
                   {unknown
-                    ? "Limits need refresh"
+                    ? "Last known · needs refresh"
                     : kind === "opencode"
                       ? "Pay as you go · balance not reported"
-                      : "Limits not reported"}
+                      : "Limits unavailable"}
                 </span>
               )}
             </div>
           </div>
         );
       })}
-      {limits.length === 0 && (
-        <p className="text-xs text-muted-foreground">No provider readings available</p>
-      )}
+      {rows.length === 0 &&
+        (checking ? (
+          <div role="status" aria-label="Loading accounts" className="space-y-6 p-3">
+            {[0, 1, 2].map((key) => (
+              <div key={key} className="space-y-2">
+                <QuotaSkeleton width="160px" height={18} />
+                <QuotaSkeleton width="100%" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="p-3 text-xs text-muted-foreground">No provider readings available</p>
+        ))}
     </div>
+  );
+}
+
+function QuotaSkeleton({
+  width,
+  height = 16,
+}: {
+  readonly width: string;
+  readonly height?: number;
+}) {
+  return (
+    <span aria-hidden className="flex shrink-0 items-center" style={{ width, height }}>
+      <span className="h-2 w-full rounded-[3px] bg-border" />
+    </span>
   );
 }

@@ -10,7 +10,7 @@ import {
 } from "@t3tools/shared/usageFormat";
 import { LineAreaChart } from "../charts/LineAreaChart";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
-import { Button } from "../ui/button";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 
 export function UsageReportChart({
   mode,
@@ -22,7 +22,7 @@ export function UsageReportChart({
   allAccounts,
   accountDriver,
 }: {
-  readonly mode: "projects" | "threads";
+  readonly mode: "projects" | "sessions";
   readonly merged: MergedUsage;
   readonly periods: readonly string[];
   readonly metric: "cost" | "tokens";
@@ -57,7 +57,7 @@ export function UsageReportChart({
                 : `color-mix(in srgb, ${presentation?.color ?? "var(--primary)"} ${100 - (index % 4) * 18}%, var(--background))`
               : (presentation?.color ?? "var(--primary)"),
           label:
-            mode === "threads" && allAccounts && byProvider
+            mode === "sessions" && allAccounts && byProvider
               ? (presentation?.label ?? row.label)
               : row.label,
         };
@@ -68,42 +68,39 @@ export function UsageReportChart({
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-sm font-medium">
-          {mode === "threads"
-            ? "Sessions created"
+          {mode === "sessions"
+            ? "Active sessions"
             : `Project ${metric === "cost" ? "cost" : "tokens"}`}
         </h2>
-        {mode === "threads" && allAccounts && (
-          <div role="group" aria-label="Session chart breakdown">
-            <Button
-              variant={!byProvider ? "secondary" : "ghost"}
-              size="sm"
-              aria-pressed={!byProvider}
-              onClick={() => setByProvider(false)}
-            >
-              Total
-            </Button>
-            <Button
-              variant={byProvider ? "secondary" : "ghost"}
-              size="sm"
-              aria-pressed={byProvider}
-              onClick={() => setByProvider(true)}
-            >
-              By provider
-            </Button>
-          </div>
+        {mode === "sessions" && allAccounts && (
+          <ToggleGroup
+            aria-label="Session chart breakdown"
+            variant="segmented"
+            value={[byProvider ? "provider" : "total"]}
+            onValueChange={(values) => {
+              if (values[0]) setByProvider(values[0] === "provider");
+            }}
+          >
+            <Toggle value="total">Total</Toggle>
+            <Toggle value="provider">By provider</Toggle>
+          </ToggleGroup>
         )}
       </div>
-      {mode === "threads" && merged.threadCreationReporting === 0 && (
-        <p role="status" className="text-xs text-muted-foreground">
-          Session creation history is not available from these environments.
-        </p>
-      )}
+      {mode === "sessions" &&
+        (merged.sessionDetailUnavailable.length > 0 ||
+          merged.sessionUsage.some((session) => session.periods === undefined)) && (
+          <p role="status" className="text-xs text-muted-foreground">
+            Some environments cannot report session activity detail. Their totals remain in
+            Overview.
+          </p>
+        )}
       <LineAreaChart
         periods={periods}
         series={series}
-        label={mode === "threads" ? "Sessions created over time" : "Project usage over time"}
+        plotHeight={196}
+        label={mode === "sessions" ? "Active sessions over time" : "Project usage over time"}
         format={
-          mode === "threads"
+          mode === "sessions"
             ? (value) => value.toLocaleString()
             : metric === "cost"
               ? formatUsd
@@ -127,9 +124,10 @@ export function UsageReportChart({
             Some older environments cannot provide project trends.
           </p>
         )}
-      {mode === "threads" && (
+      {mode === "sessions" && (
         <p className="text-xs text-muted-foreground">
-          Phoenix threads created during this period, including threads without token usage.
+          Provider sessions with activity in each interval. A session active on multiple days
+          appears on each day; these are not conversation creation counts.
         </p>
       )}
     </section>

@@ -27,7 +27,9 @@ export function LineAreaChart({
   format,
   formatPeriod,
   formatTooltipPeriod = formatPeriod,
+  plotHeight = 224,
 }: {
+  readonly plotHeight?: number;
   readonly periods: readonly string[];
   readonly series: readonly LineAreaSeries[];
   readonly label: string;
@@ -152,7 +154,10 @@ export function LineAreaChart({
     <div className="flex flex-col gap-1">
       <div className="flex gap-2">
         {/* Axis labels sit outside the plot so they stay aligned to gridlines. */}
-        <div className="relative h-56 w-14 shrink-0">
+        <div
+          className="relative shrink-0"
+          style={{ height: plotHeight, width: plotHeight === 224 ? 56 : 40 }}
+        >
           {ticks.map((tick) => (
             <span
               key={tick}
@@ -166,7 +171,8 @@ export function LineAreaChart({
 
         <div
           ref={plotRef}
-          className="relative h-56 min-w-0 flex-1 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="relative min-w-0 flex-1 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          style={{ height: plotHeight }}
           tabIndex={periods.length === 0 ? -1 : 0}
           role="group"
           aria-label={`${label}. Use left and right arrow keys to inspect values.`}

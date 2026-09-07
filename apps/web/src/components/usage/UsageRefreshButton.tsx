@@ -9,8 +9,10 @@ export function UsageRefreshButton({
   label,
   disabledReason,
   confirmed = true,
+  compact = false,
 }: {
   readonly refreshing: boolean;
+  readonly compact?: boolean;
   readonly confirmed?: boolean | undefined;
   readonly onRefresh: () => void;
   readonly label: string;
@@ -29,6 +31,7 @@ export function UsageRefreshButton({
   return (
     <Button
       size="sm"
+      className={compact ? "size-9 shrink-0 p-0" : undefined}
       variant="outline"
       disabled={refreshing || !!disabledReason}
       aria-description={disabledReason}
@@ -45,7 +48,7 @@ export function UsageRefreshButton({
       ) : (
         <RefreshCwIcon className="size-3.5" />
       )}
-      <span role="status">
+      <span role="status" className={compact ? "sr-only" : undefined}>
         {refreshing
           ? "Checking…"
           : checked && !disabledReason
