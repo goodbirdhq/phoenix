@@ -107,11 +107,13 @@ so deep trees keep room for their titles. Completed children remain visible unti
 Hover a row to replace its top-right status with controls, focus them with the keyboard, or use its options menu to settle, snooze,
 pin, or manage the thread. Snooze retains the existing wake presets and Wake now action.
 
-Pinning a child moves its row to the existing pinned section. Its project remains visible and
-**From [parent title]** replaces its branch. Hover the tree icon to unpin it. Pinned threads keep
+Pinning a child moves its row to the existing pinned section. Its project icon and provider badge identify it while its branch remains visible.
+Hover or focus the avatar for its project and parent details; use **More → Unpin** to unpin it. Pinned threads keep
 the order you dragged them into, and can expand their own children. The snoozed shelf stays
 ordered by what wakes next, and the settled tail stays in history order. A child whose parent
 is snoozed, settled, archived, or outside the current project filter returns to the top level.
+When every child is pinned separately, the parent’s avatar group opens team details instead
+of offering an expansion with no rows to reveal.
 Search continues to find collapsed and settled threads.
 
 ## Environment artwork

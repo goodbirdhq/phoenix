@@ -89,6 +89,7 @@ export function SidebarTeamAvatars(props: {
   providers: ReadonlyMap<string, ProviderInstanceEntry>;
   activeThreadKey: string | null;
   expanded: boolean;
+  expandable: boolean;
   selected: boolean;
   onToggle: () => void;
 }) {
@@ -167,21 +168,21 @@ export function SidebarTeamAvatars(props: {
       style={{ width, maxWidth: "calc(100% - 6px)" }}
       data-selected={props.selected}
       aria-label={
-        hasChildren
+        props.expandable
           ? `${props.expanded ? "Collapse" : "Expand"} team, ${members.length} sessions`
-          : "Session details"
+          : "Team details"
       }
-      {...(hasChildren ? { "aria-expanded": props.expanded } : {})}
+      {...(props.expandable ? { "aria-expanded": props.expanded } : {})}
       onPointerDown={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
       onClick={(event) => {
         event.stopPropagation();
-        if (hasChildren) props.onToggle();
+        if (props.expandable) props.onToggle();
         else setDetailsOpen((open) => !open);
       }}
     />
   );
-  if (!hasChildren)
+  if (!props.expandable)
     return (
       <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
         <Tooltip open={hoverOpen && !detailsOpen} onOpenChange={setHoverOpen}>

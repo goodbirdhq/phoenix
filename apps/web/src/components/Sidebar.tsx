@@ -723,6 +723,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   hierarchyIndentDepth: number;
   teamMembers?: readonly SidebarThreadSummary[] | undefined;
   teamExpanded: boolean;
+  teamExpandable: boolean;
   onToggleTeam: (key: string) => void;
   parentTitle: string | null;
   // Shelves keep the same row geometry and expose their reverse action on hover.
@@ -1220,12 +1221,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               <SessionAvatar
                 status={variantAction === "unsnooze" ? "snoozed" : status}
                 providerBadge={
-                  !thread.spawnedByThreadId ? (
+                  !isNested ? (
                     <SessionIcon provider={providerEntry ?? undefined} showBadge={false} />
                   ) : undefined
                 }
               >
-                {thread.spawnedByThreadId ? (
+                {isNested ? (
                   <SessionIcon
                     provider={providerEntry ?? undefined}
                     showBadge={showInstanceBadge}
@@ -1243,7 +1244,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             {detailsTooltip}
           </Tooltip>
           <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <div className="relative flex h-5 min-w-0 items-center gap-2">
+            <div className="relative flex h-5 min-w-0 items-center gap-2 [@media(pointer:coarse)]:pr-8">
               <Tooltip>
                 <TooltipTrigger render={<span className="flex min-w-0 flex-1" />}>
                   {title}
@@ -1349,6 +1350,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   activeThreadKey={props.activeThreadKey}
                   providers={props.providerEntryByInstanceId}
                   expanded={props.teamExpanded}
+                  expandable={props.teamExpandable}
                   selected={props.isActive || isSelected}
                   onToggle={() => props.onToggleTeam(threadKey)}
                 />
@@ -2083,6 +2085,13 @@ export default function Sidebar() {
             isLastChild: true,
           })),
     [teamThreads, expandedTeamKeys, sessionHierarchyEnabled],
+  );
+  const expandableTeamKeys = useMemo(
+    () =>
+      new Set(
+        visibleTeamRows.filter((row) => row.hasChildren).map((row) => sidebarTeamKey(row.thread)),
+      ),
+    [visibleTeamRows],
   );
   const { activeThreadRows, pinnedChildRows } = useMemo(() => {
     const active = [] as typeof visibleTeamRows;
@@ -3686,7 +3695,10 @@ export default function Sidebar() {
                         teamMembers={
                           isCard && sessionHierarchyEnabled ? teamsByKey.get(threadKey) : undefined
                         }
-                        teamExpanded={expandedTeamKeys.has(threadKey)}
+                        teamExpanded={
+                          expandableTeamKeys.has(threadKey) && expandedTeamKeys.has(threadKey)
+                        }
+                        teamExpandable={expandableTeamKeys.has(threadKey)}
                         onToggleTeam={toggleTeam}
                         parentTitle={
                           thread.spawnedByThreadId
