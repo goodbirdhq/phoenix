@@ -131,3 +131,17 @@ it("preserves real unpriced zero-counter records but omits fully synthetic unlin
     ),
   ).toEqual([]);
 });
+
+it("keeps provider sessions separate when they belong to the same conversation", () => {
+  const rows = buildUsageReport(
+    [session, { ...session, sessionId: "second", lastActivityAt: "2026-09-02T00:00:00Z" }],
+    "sessions",
+  );
+  expect(rows).toHaveLength(2);
+  expect(new Set(rows.map((row) => row.sessionId))).toEqual(new Set(["native", "second"]));
+  expect(rows.reduce((total, row) => total + row.costUsd, 0)).toBe(4);
+  expect(rows.every((row) => row.sessions === 1 && row.project?.id === "thread")).toBe(true);
+  expect(
+    buildUsageReport([session, { ...session, sessionId: "second" }], "projects")[0]?.sessions,
+  ).toBe(2);
+});

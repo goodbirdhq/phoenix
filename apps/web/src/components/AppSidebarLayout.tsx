@@ -1,3 +1,4 @@
+import "./usage/usage.css";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
@@ -77,13 +78,13 @@ function readInitialThreadSidebarWidth(): number {
   }
 }
 
-function SidebarControl() {
+function SidebarControl({ plain = false }: { plain?: boolean }) {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { toggleSidebar } = useSidebar();
   const isSidebarVisible = useSidebarVisibility();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(
-    environmentIdentificationMode === "artwork",
+    !plain && environmentIdentificationMode === "artwork",
   );
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle");
 
@@ -229,7 +230,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         side="left"
         collapsible="offcanvas"
         data-app-sidebar=""
-        className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
+        className={cn(
+          "border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
+          isOnUsage && "usage-surface usage-sidebar",
+        )}
         resizable={{
           maxWidth: sidebarMaximumWidth,
           minWidth: THREAD_SIDEBAR_MIN_WIDTH,
@@ -249,7 +253,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           </>
         ) : isOnUsage ? (
           <>
-            <SidebarChromeHeader isElectron={isElectron} />
+            <SidebarChromeHeader isElectron={isElectron} plain />
             <Suspense fallback={null}>
               <UsageSidebarNav />
             </Suspense>
@@ -262,7 +266,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <SidebarRail onDoubleClick={resetSidebarWidth} />
       </Sidebar>
       {children}
-      <SidebarControl />
+      <SidebarControl plain={isOnUsage} />
     </SidebarProvider>
   );
 }

@@ -1,0 +1,21 @@
+@import "@fontsource-variable/inter";
+
+.usage-surface {
+  font-family: "Inter Variable", var(--font-sans);
+}
+
+/* Paper's default light palette. Named themes and dark mode retain their tokens. */
+html:not(.dark):not([data-theme-id]) .usage-surface {
+  --background: #fff;
+  --foreground: #27272a;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #27272a;
+  --sidebar-muted-foreground: #71717b;
+  --sidebar-border: #e4e4e7;
+  --muted-foreground: #71717b;
+  --border: #e4e4e7;
+  --contrast-foreground: #27272a;
+  --color-sky-600: #0284c7;
+  --color-amber-700: #b45309;
+  --surface-grain: none;
+}

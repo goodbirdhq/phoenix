@@ -1,14 +1,12 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { UsageRefreshButton } from "./UsageRefreshButton";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import type { UsageChartMetric } from "@t3tools/client-runtime/usage/chart-series";
 
 const PERIODS = [
   { days: 1, label: "Past 24h" },
-  { days: 7, label: "7 days" },
-  { days: 30, label: "30 days" },
-  { days: 90, label: "90 days" },
+  { days: 7, label: "Last 7 days" },
+  { days: 30, label: "Last 30 days" },
+  { days: 90, label: "Last 90 days" },
 ];
 
 /** One wrapping toolbar serves desktop and narrow layouts. */
@@ -16,8 +14,6 @@ export function UsageToolbar({
   environments,
   environmentId,
   onEnvironmentChange,
-  metric,
-  onMetricChange,
   days,
   onDaysChange,
   refreshing,
@@ -27,8 +23,6 @@ export function UsageToolbar({
   readonly environments: readonly { environmentId: EnvironmentId; label: string }[];
   readonly environmentId: EnvironmentId | null;
   readonly onEnvironmentChange: (value: EnvironmentId | null) => void;
-  readonly metric: UsageChartMetric;
-  readonly onMetricChange: (value: UsageChartMetric) => void;
   readonly days: number;
   readonly onDaysChange: (value: number) => void;
   readonly refreshing: boolean;
@@ -78,24 +72,8 @@ export function UsageToolbar({
           ))}
         </SelectPopup>
       </Select>
-      <ToggleGroup
-        aria-label="Usage metric"
-        aria-orientation={undefined}
-        variant="segmented"
-        value={[metric]}
-        onValueChange={(next) => {
-          const value = next[0];
-          if (value === "cost" || value === "tokens") onMetricChange(value);
-        }}
-      >
-        <Toggle value="cost" className="text-foreground">
-          Cost
-        </Toggle>
-        <Toggle value="tokens" className="text-foreground">
-          Tokens
-        </Toggle>
-      </ToggleGroup>
       <UsageRefreshButton
+        compact
         label="Refresh usage"
         confirmed={confirmed}
         refreshing={refreshing}

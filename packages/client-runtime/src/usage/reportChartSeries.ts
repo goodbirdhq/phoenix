@@ -14,7 +14,7 @@ export function usageReportSeries(
   merged: MergedUsage,
   accounts: readonly UsageAccount[],
   periods: readonly string[],
-  mode: "projects" | "threads",
+  mode: "projects" | "threads" | "sessions",
   metric: "cost" | "tokens",
   timeZone: string,
   byProvider: boolean,
@@ -54,6 +54,18 @@ export function usageReportSeries(
           period.period,
           metric === "cost" ? period.costUsd : period.totalTokens,
         );
+    }
+  } else if (mode === "sessions") {
+    for (const session of merged.sessionUsage) {
+      for (const period of session.periods ?? []) {
+        add(
+          byProvider ? session.provider : "total",
+          byProvider ? session.provider : "Active sessions",
+          byProvider ? session.provider : null,
+          period.period,
+          1,
+        );
+      }
     }
   } else {
     const byMember = new Map(
@@ -99,7 +111,12 @@ export function usageReportSeries(
     : [
         {
           id: "empty",
-          label: mode === "threads" ? "Sessions created" : "Usage",
+          label:
+            mode === "threads"
+              ? "Sessions created"
+              : mode === "sessions"
+                ? "Active sessions"
+                : "Usage",
           provider: null,
           values: periods.map(() => 0),
         },

@@ -5,14 +5,14 @@ import { PencilIcon } from "lucide-react";
 import { PageHeading } from "../patterns/PageHeading";
 import { ConcealedValue } from "../patterns/ConcealedValue";
 import { Button } from "../ui/button";
-import { Dialog, DialogPopup, DialogTitle, DialogHeader, DialogPanel } from "../ui/dialog";
+import { useAtomValue } from "@effect/atom-react";
+import { serverEnvironment } from "../../state/server";
+import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { Select, SelectTrigger, SelectValue, SelectPopup, SelectItem } from "../ui/select";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
 import { usageProviderKind } from "./usageAccountPresentation";
-const ProviderSettingsPanel = lazy(() =>
-  import("../settings/ProviderSettingsPanel").then((module) => ({
-    default: module.ProviderSettingsPanel,
-  })),
+const UsageProviderDialog = lazy(() =>
+  import("./UsageProviderDialog").then((module) => ({ default: module.UsageProviderDialog })),
 );
 
 export function UsageAccountHeader({
@@ -22,6 +22,7 @@ export function UsageAccountHeader({
   readonly account: UsageAccount;
   readonly actions?: ReactNode;
 }) {
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<UsageAccountMembership | null>(null);
   const provider = account.memberships[0]?.provider;
   const { label, mark: Mark } = PROVIDER_PRESENTATION[usageProviderKind(account.driver)];
@@ -101,30 +102,35 @@ export function UsageAccountHeader({
       <Dialog
         open={editing !== null}
         onOpenChange={(open) => {
-          if (!open) setEditing(null);
+          if (!open && !saving) setEditing(null);
         }}
       >
-        <DialogPopup className="max-w-5xl">
-          <DialogHeader>
-            <DialogTitle>Edit provider · {editing?.environmentLabel}</DialogTitle>
-          </DialogHeader>
-          <DialogPanel className="p-0">
-            {editing && (
-              <Suspense
-                fallback={
-                  <p className="p-6 text-sm text-muted-foreground">Loading provider settings…</p>
-                }
-              >
-                <ProviderSettingsPanel
-                  key={JSON.stringify([editing.environmentId, editing.provider.instanceId])}
-                  initialEnvironmentId={EnvironmentId.make(editing.environmentId)}
-                  initialInstanceId={editing.provider.instanceId}
-                />
-              </Suspense>
-            )}
-          </DialogPanel>
-        </DialogPopup>
+        {editing && (
+          <Suspense fallback={<ProviderDialogLoading />}>
+            <LoadedProviderDialog
+              key={JSON.stringify([editing.environmentId, editing.provider.instanceId])}
+              environmentId={EnvironmentId.make(editing.environmentId)}
+              instanceId={editing.provider.instanceId}
+              driver={editing.provider.driver}
+              onClose={() => setEditing(null)}
+              onSavingChange={setSaving}
+            />
+          </Suspense>
+        )}
       </Dialog>
     </>
   );
+}
+
+function ProviderDialogLoading() {
+  return (
+    <DialogPopup className="usage-surface h-[651px] w-[620px] max-h-[calc(100dvh-48px)] max-w-[calc(100vw-32px)] rounded-[14px]">
+      <DialogTitle>Provider settings</DialogTitle>
+      <p role="status">Loading provider settings…</p>
+    </DialogPopup>
+  );
+}
+function LoadedProviderDialog(props: React.ComponentProps<typeof UsageProviderDialog>) {
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
+  return settings ? <UsageProviderDialog {...props} /> : <ProviderDialogLoading />;
 }

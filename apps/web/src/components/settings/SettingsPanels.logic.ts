@@ -9,6 +9,7 @@ import type {
   SidebarProjectGroupingMode,
   UnifiedSettings,
 } from "@t3tools/contracts";
+import { defaultInstanceIdForDriver } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import {
   getBackgroundActivityBaseProfile,
@@ -244,6 +245,24 @@ export function formatDiagnosticsDescription(input: {
   }
 
   return `${mode}.`;
+}
+
+/** The editor must start with the effective configuration, including legacy default slots. */
+export function resolveProviderInstanceSettings(
+  settings: Pick<ServerSettings, "providers" | "providerInstances">,
+  instanceId: ProviderInstanceId,
+  driver: ProviderDriverKind,
+): ProviderInstanceConfig | undefined {
+  const explicit = settings.providerInstances[instanceId];
+  if (explicit) return explicit;
+  if (instanceId !== defaultInstanceIdForDriver(driver)) return undefined;
+  const providers: Readonly<
+    Record<string, ServerSettings["providers"][keyof ServerSettings["providers"]] | undefined>
+  > = settings.providers;
+  const legacy = providers[driver];
+  if (!legacy) return undefined;
+  const { enabled, ...config } = legacy;
+  return { driver, enabled, config };
 }
 
 export function buildProviderInstanceUpdatePatch(input: {
