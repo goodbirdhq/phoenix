@@ -23,7 +23,7 @@ import {
   useState,
   type ComponentProps,
 } from "react";
-import { Platform, Pressable, useWindowDimensions, View } from "react-native";
+import { Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import { ThreadAgentGroup } from "./ThreadAgentGroup";
@@ -193,67 +193,22 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   readonly pane?: "screen" | "sidebar";
   /** Draws the "Pending" divider above the first queued row. */
   readonly showPendingDivider: boolean;
-  /** Keeps row hairlines inside a section; section headers draw their own rule. */
-  readonly showTrailingDivider?: boolean;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
 }) {
   const { pendingTask, onSelectPendingTask, onDeletePendingTask } = props;
   const colors = useNavigationColors();
-  const pressedBackgroundColor = colors.selected;
-  const drawerColor = colors.screen;
   const sidebarPane = props.pane === "sidebar";
   const projectTitle =
     props.projectTitle ?? props.project?.title ?? pendingTask.creation.projectTitle ?? "";
   const branch = pendingTask.creation.branch;
+  const detail = [branch ?? projectTitle, props.environmentLabel].filter(Boolean).join(" · ");
 
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "delete") onDeletePendingTask(pendingTask);
     },
     [onDeletePendingTask, pendingTask],
-  );
-
-  const rowContent = (
-    <>
-      <View className="flex-row items-center gap-1.5">
-        {props.project ? (
-          <ProjectFavicon
-            environmentId={pendingTask.message.environmentId}
-            faviconPath={props.project.faviconPath}
-            size={15}
-            projectTitle={projectTitle}
-            workspaceRoot={props.project.workspaceRoot}
-          />
-        ) : null}
-        <Text className="flex-1 text-sm font-t3-medium text-foreground-muted" numberOfLines={1}>
-          {projectTitle}
-        </Text>
-        <Text className="text-xs text-foreground-tertiary">Queued</Text>
-      </View>
-      {/* One line, unlike the two an active row allows: a queued title is
-          derived from the whole prompt rather than written as a title, so the
-          second line is usually a stray word or emoji rather than meaning. */}
-      <Text className="mt-1 text-base font-t3-medium text-foreground" numberOfLines={1}>
-        {pendingTask.title}
-      </Text>
-      {branch || props.environmentLabel ? (
-        <Text className="mt-1 text-xs text-foreground-muted" numberOfLines={1}>
-          {branch ? (
-            <Text
-              className="text-xs text-foreground-muted"
-              style={{ fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }}
-            >
-              {branch}
-            </Text>
-          ) : null}
-          {branch && props.environmentLabel ? "  ·  " : null}
-          {props.environmentLabel ? (
-            <Text className="text-xs text-foreground-tertiary">{props.environmentLabel}</Text>
-          ) : null}
-        </Text>
-      ) : null}
-    </>
   );
 
   return (
@@ -267,31 +222,66 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
         shouldOpenOnLongPress
       >
         <Pressable
+          accessibilityActions={[{ name: "delete", label: "Delete queued task" }]}
           accessibilityHint="Opens the queued task for editing"
-          accessibilityLabel={pendingTask.title}
+          accessibilityLabel={[pendingTask.title, "Queued", projectTitle, props.environmentLabel]
+            .filter(Boolean)
+            .join(", ")}
           accessibilityRole="button"
+          onAccessibilityAction={({ nativeEvent }) => {
+            if (nativeEvent.actionName === "delete") onDeletePendingTask(pendingTask);
+          }}
           onPress={() => onSelectPendingTask(pendingTask)}
-          style={
-            sidebarPane
-              ? ({ pressed }) => ({
-                  backgroundColor: pressed ? pressedBackgroundColor : drawerColor,
-                  borderRadius: SIDEBAR_V2_ROW_RADIUS,
-                  paddingHorizontal: 12,
-                  paddingVertical: 10,
-                })
-              : ({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })
-          }
+          style={({ pressed }) => ({
+            minHeight: 74,
+            marginHorizontal: sidebarPane ? 0 : 14,
+            marginBottom: 4,
+            padding: 10,
+            gap: 10,
+            flexDirection: "row",
+            alignItems: "center",
+            borderRadius: 12,
+            backgroundColor: pressed ? colors.selected : colors.screen,
+          })}
         >
-          {sidebarPane ? (
-            rowContent
-          ) : (
-            <View className="bg-screen">
-              <View className="px-5 py-2.5">{rowContent}</View>
-              {props.showTrailingDivider !== false ? (
-                <View className="ml-5 h-px bg-border-subtle" />
+          <View style={{ width: 30, height: 30, alignItems: "center", justifyContent: "center" }}>
+            {props.project ? (
+              <ProjectFavicon
+                environmentId={pendingTask.message.environmentId}
+                faviconPath={props.project.faviconPath}
+                projectTitle={projectTitle}
+                size={18}
+                workspaceRoot={props.project.workspaceRoot}
+              />
+            ) : null}
+          </View>
+          <View style={{ flex: 1, gap: 5 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Text
+                numberOfLines={1}
+                style={{
+                  flex: 1,
+                  fontSize: 15,
+                  lineHeight: 22,
+                  fontFamily: "DMSans-Medium",
+                  color: colors.foreground,
+                }}
+              >
+                {pendingTask.title}
+              </Text>
+              <Text style={{ fontSize: 12, lineHeight: 17, color: colors.muted }}>Queued</Text>
+            </View>
+            <View style={{ minHeight: 26, justifyContent: "center" }}>
+              {detail ? (
+                <Text
+                  numberOfLines={1}
+                  style={{ fontSize: 13, lineHeight: 19, color: colors.muted }}
+                >
+                  {detail}
+                </Text>
               ) : null}
             </View>
-          )}
+          </View>
         </Pressable>
       </ControlPillMenu>
     </>
