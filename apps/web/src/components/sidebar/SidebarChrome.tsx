@@ -26,7 +26,7 @@ import { isElectron } from "../../env";
 import { isMacPlatform } from "../../lib/utils";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator, MenuShortcut } from "../ui/menu";
-import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../../hooks/useSettings";
 import { APP_BASE_NAME } from "~/branding";
 import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
@@ -57,6 +57,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 }: {
   isElectron: boolean;
 }) {
+  const legacy = useLegacySidebarEnabled();
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const backdropVariant = resolveSidebarStageBackdropVariant(
@@ -71,7 +72,10 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   return (
     <SidebarHeader
       className={cn(
-        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0",
+        "@container/sidebar-header relative shrink-0 flex-row items-center px-3 pb-0 md:px-0",
+        legacy
+          ? "h-[var(--workspace-topbar-height)] pt-0"
+          : "h-[calc(var(--workspace-topbar-height)+14px)] pt-3.5",
         isElectron && "drag-region",
       )}
     >
@@ -84,7 +88,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           backdropVariant && resolveSidebarStageFocusRingOffsetClass(backdropVariant),
         )}
       />
-      <SidebarBrand onBackdrop={backdropVariant !== null} />
+      <SidebarBrand onBackdrop={backdropVariant !== null} legacy={legacy} />
       {pillLabel ? (
         <Badge
           className="relative z-10 ml-1 hidden rounded-full px-1.5 text-muted-foreground @[15rem]/sidebar-header:inline-flex"
@@ -99,12 +103,15 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   );
 });
 
-function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
+function SidebarBrand({ onBackdrop, legacy }: { onBackdrop: boolean; legacy: boolean }) {
   return (
     <Link
       aria-label="Go to threads"
       className={cn(
-        "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex",
+        "relative z-10 hidden h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex",
+        legacy
+          ? "ml-[var(--workspace-titlebar-content-left)]"
+          : "ml-[calc(var(--workspace-titlebar-content-left)+22px)]",
         onBackdrop ? "text-white" : "text-foreground",
       )}
       to="/"
@@ -422,7 +429,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
-    <SidebarFooter className="border-t-0 p-2.5">
+    <SidebarFooter className="border-t-0 px-[11px] py-2.5">
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />

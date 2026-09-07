@@ -79,17 +79,17 @@ When a session spawns other sessions, the sidebar can nest them instead of listi
 flat. Turn on **Sidebar session hierarchy** in Settings, under General. The switch only appears
 while **Session orchestration** is on, because nothing spawns children without it.
 
-On web and desktop, each thread has a provider avatar beside its branch. With hierarchy
-on, the avatar is followed by a circular × total that includes the parent and all descendants.
-Hover the conversation row or keyboard-focus the group to reveal up to five avatars, parent first. The counter shows
-how many sessions remain hidden, or disappears when all are visible. The group collapses again
-when you leave the row, unless the conversation is selected. Selected conversations keep their avatars expanded. Reduced-motion preferences disable the expansion animation.
+On web and desktop, a project avatar leads each row, with its provider in a small badge.
+Spawned sessions use the provider as their main avatar. Status rings and left-hand badges identify
+working, ready, failed, decision, input, waiting, monitoring and snoozed sessions.
 
-Click the group to expand or collapse the children. A thread without children has one avatar;
-click it for session details. Hover the group to see each member's icon, title, provider and model.
-Working sessions have an outer spinner in the details popover. Badges identify failures,
-decision or input requests, waiting on a parent, monitoring, ready and snoozed sessions.
-Hover a thread title for its branch and worktree details.
+With hierarchy on, up to four child avatars appear beside the branch, followed by a circular
+counter for additional children. Click the group to expand or collapse descendants. Hover it to
+see session titles, providers and models. Hover a title or avatar for session details; click a
+single session avatar to reveal its details, or an attention badge to open the session needing review.
+
+Pull requests appear as a state icon before the branch, with their number and title in the tooltip.
+Click the icon to open the pull request. Pinning stays in the thread menu.
 
 Thread rows use compact spacing and truncate long titles. Read, unselected titles use regular
 weight and muted text. Unread results, newly woken threads and selected threads use medium weight
@@ -97,8 +97,8 @@ and stronger text, including in the session details popover. Working status alon
 a title bold.
 
 Collapsed rows show the most actionable status in their subtree: a decision first, then input,
-then failure, followed by waiting on a parent, working, monitoring, and ready. Use the row’s options menu to review the thread that needs attention or dismiss a Woke notification. Working teams show the number of working sessions before the dotted indicator;
-ready threads show a green check. Expanded rows show their own status, while each child shows
+then failure, followed by waiting on a parent, working, monitoring, and ready. Use the row’s options menu to review the thread that needs attention or dismiss a Woke notification. Working sessions have a segmented ring;
+ready threads have a green ring. Expanded rows show their own status, while each child shows
 its own status or summarizes its children if collapsed. Counts always include every descendant,
 including a child that is also pinned, once.
 
@@ -107,11 +107,13 @@ so deep trees keep room for their titles. Completed children remain visible unti
 Hover a row to replace its top-right status with controls, focus them with the keyboard, or use its options menu to settle, snooze,
 pin, or manage the thread. Snooze retains the existing wake presets and Wake now action.
 
-Pinning a child moves its row to the existing pinned section. Its project remains visible and
-**From [parent title]** replaces its branch. Hover the tree icon to unpin it. Pinned threads keep
+Pinning a child moves its row to the existing pinned section. Its project icon and provider badge identify it while its branch remains visible.
+Hover or focus the avatar for its project and parent details; use **More → Unpin** to unpin it. Pinned threads keep
 the order you dragged them into, and can expand their own children. The snoozed shelf stays
 ordered by what wakes next, and the settled tail stays in history order. A child whose parent
 is snoozed, settled, archived, or outside the current project filter returns to the top level.
+When every child is pinned separately, the parent’s avatar group opens team details instead
+of offering an expansion with no rows to reveal.
 Search continues to find collapsed and settled threads.
 
 ## Environment artwork
@@ -126,4 +128,4 @@ To generate a fresh title from the conversation, open a thread's context menu an
 be selected again. The option is hidden when the connected environment needs a server update.
 
 Expansion resets when a thread leaves the active or pinned list. Separately pinned descendants
-are identified in the expanded team count, even though their rows live in the pinned section.
+remain included in their original team’s avatars and details.
