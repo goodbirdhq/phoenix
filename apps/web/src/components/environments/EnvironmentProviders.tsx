@@ -51,16 +51,25 @@ export function EnvironmentProviders({
   const settings = useEnvironmentSettings(environmentId);
   const [search, setSearch] = useState("");
   const query = search.trim().toLowerCase();
-  const enabledProviders = providers?.filter((provider) =>
-    isProviderInstanceEnabled(settings, provider),
-  );
+  const enabledProviders = providers
+    ?.filter((provider) => isProviderInstanceEnabled(settings, provider))
+    .map((provider) => ({
+      ...provider,
+      versionLabel: provider.version ?? (provider.installed ? "Unknown" : "Not installed"),
+      instanceLabel:
+        provider.instanceId === defaultInstanceIdForDriver(provider.driver)
+          ? "Default instance"
+          : "Named instance",
+    }));
   const visibleProviders = enabledProviders?.filter((provider) =>
     [
       provider.displayName,
       DRIVER_OPTION_BY_VALUE[provider.driver]?.label,
       provider.driver,
       provider.instanceId,
-      provider.version,
+      provider.versionLabel,
+      provider.instanceLabel,
+      provider.message,
       provider.status,
       provider.auth.status,
       provider.auth.email,
@@ -230,16 +239,12 @@ export function EnvironmentProviders({
                         {provider.displayName ?? definition?.label ?? provider.driver}
                       </p>
                       <p className="mt-0.5 text-xs leading-4 text-muted-foreground">
-                        {provider.instanceId === defaultInstanceIdForDriver(provider.driver)
-                          ? "Default instance"
-                          : "Named instance"}
+                        {provider.instanceLabel}
                       </p>
                     </div>
                   </div>
                 </TableCell>
-                <TableCell>
-                  {provider.version ?? (provider.installed ? "Unknown" : "Not installed")}
-                </TableCell>
+                <TableCell>{provider.versionLabel}</TableCell>
                 <TableCell>
                   <span className="flex items-center gap-3 capitalize">
                     <span

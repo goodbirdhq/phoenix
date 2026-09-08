@@ -13,6 +13,7 @@ import {
   defaultInstanceIdForDriver,
 } from "@t3tools/contracts";
 
+import { useEnvironmentSessionState } from "../../state/session";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
@@ -138,6 +139,8 @@ export function AddProviderInstanceDialog({
   environmentLabel,
   onOpenChange,
 }: AddProviderInstanceDialogProps) {
+  const session = useEnvironmentSessionState(environmentId);
+  const canEdit = session.data?.scopes?.includes("orchestration:operate") ?? false;
   const settings = useEnvironmentSettings(environmentId);
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
   const disabledProviders =
@@ -202,6 +205,7 @@ export function AddProviderInstanceDialog({
   };
 
   const enableExisting = async (provider: ServerProvider) => {
+    if (!canEdit || saving) return;
     const instance = resolveProviderInstanceSettings(
       settings,
       provider.instanceId,
@@ -236,6 +240,7 @@ export function AddProviderInstanceDialog({
   };
 
   const handleSave = async () => {
+    if (!canEdit || saving) return;
     setHasAttemptedSubmit(true);
     if (instanceIdError !== null) return;
 
@@ -299,7 +304,9 @@ export function AddProviderInstanceDialog({
             <ServerIcon className="size-6 text-sky-600" />
             <DialogTitle>Add provider instance</DialogTitle>
             <DialogDescription>
-              Configure another provider instance on {environmentLabel}.
+              {canEdit
+                ? `Configure another provider instance on ${environmentLabel}.`
+                : `Operate tasks permission is required to add or enable providers on ${environmentLabel}.`}
             </DialogDescription>
             <AddProviderInstanceWizardSteps
               currentStep={wizardStep}
@@ -341,7 +348,7 @@ export function AddProviderInstanceDialog({
                           <Button
                             size="sm"
                             variant="outline"
-                            disabled={saving}
+                            disabled={saving || !canEdit}
                             onClick={() => void enableExisting(provider)}
                             aria-label={`Enable ${provider.displayName ?? definition?.label ?? provider.driver} (${provider.instanceId})`}
                           >
@@ -534,7 +541,7 @@ export function AddProviderInstanceDialog({
                 Next
               </Button>
             ) : (
-              <Button size="sm" disabled={saving} onClick={() => void handleSave()}>
+              <Button size="sm" disabled={saving || !canEdit} onClick={() => void handleSave()}>
                 {saving ? "Adding…" : "Add instance"}
               </Button>
             )}

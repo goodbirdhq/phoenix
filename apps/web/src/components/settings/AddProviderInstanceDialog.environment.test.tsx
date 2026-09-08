@@ -8,6 +8,8 @@ const settingsHooks = vi.hoisted(() => ({
   read: vi.fn(() => ({ providerInstances: {} })),
   update: vi.fn<(input: unknown) => Promise<{ _tag: "Success" | "Failure" }>>(),
   toast: vi.fn(),
+  session: vi.fn(() => ({ data: { scopes: ["orchestration:operate"] } })),
+  providers: vi.fn((): unknown[] => []),
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -30,7 +32,8 @@ vi.mock("../../hooks/useSettings", () => ({
 }));
 
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => settingsHooks.update }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: settingsHooks.providers }));
+vi.mock("../../state/session", () => ({ useEnvironmentSessionState: settingsHooks.session }));
 vi.mock("../../state/server", () => ({
   serverEnvironment: {
     updateSettings: Symbol("updateSettings"),
@@ -55,6 +58,8 @@ describe("AddProviderInstanceDialog environment routing", () => {
   beforeEach(() => {
     hooks.reset();
     vi.clearAllMocks();
+    settingsHooks.session.mockReturnValue({ data: { scopes: ["orchestration:operate"] } });
+    settingsHooks.providers.mockReturnValue([]);
   });
 
   function scenario() {
@@ -85,6 +90,32 @@ describe("AddProviderInstanceDialog environment routing", () => {
     click("Next");
     return { render, click, onOpenChange };
   }
+
+  it("rejects creation and restoration in a read-only target environment", () => {
+    settingsHooks.session.mockReturnValue({ data: { scopes: ["orchestration:read"] } });
+    settingsHooks.providers.mockReturnValue([
+      { instanceId: "codex_work", driver: "codex", enabled: false, displayName: "Work" },
+    ]);
+    const onOpenChange = vi.fn();
+    hooks.beginRender();
+    const initial = AddProviderInstanceDialog({
+      open: true,
+      environmentId: remoteEnvironmentId,
+      environmentLabel: "Remote",
+      onOpenChange,
+    });
+    const restore = visitElements(
+      initial,
+      (element) => element.props["aria-label"] === "Enable Work (codex_work)",
+    )!;
+    expect(restore.props.disabled).toBe(true);
+    (restore.props.onClick as () => void)();
+    const dialog = scenario();
+    dialog.click("Add instance");
+    expect(settingsHooks.update).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(dialog.onOpenChange).not.toHaveBeenCalled();
+  });
 
   it("routes the save to the supplied environment and waits for acknowledgement before closing", async () => {
     const ack = acknowledgement<{ _tag: "Success" }>();

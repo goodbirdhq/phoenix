@@ -146,20 +146,38 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
       </div>
     );
   const snapshot = access.data?.type === "snapshot" ? access.data.payload : null;
-  const visibleClients = snapshot?.clientSessions.filter((client) =>
+  const clients = snapshot?.clientSessions.map((client) => ({
+    ...client,
+    lastSeenLabel: client.connected
+      ? "Connected"
+      : client.lastConnectedAt
+        ? new Date(DateTime.toEpochMillis(client.lastConnectedAt)).toLocaleString()
+        : "Not connected yet",
+  }));
+  const links = snapshot?.pairingLinks.map((link) => ({
+    ...link,
+    expiryLabel: new Date(DateTime.toEpochMillis(link.expiresAt)).toLocaleString(),
+  }));
+  const visibleClients = clients?.filter((client) =>
     [
       client.client.label ?? client.client.os ?? "Client",
       client.client.os,
       client.client.browser ?? client.method,
-      client.connected ? "Connected" : "Not connected",
+      client.lastSeenLabel,
       client.current ? "This client" : permissionSummary(client.scopes),
     ]
       .join(" ")
       .toLowerCase()
       .includes(clientSearch.trim().toLowerCase()),
   );
-  const visibleLinks = snapshot?.pairingLinks.filter((link) =>
-    [link.label ?? "Pairing link", permissionSummary(link.scopes), "Ready to pair"]
+  const visibleLinks = links?.filter((link) =>
+    [
+      link.label ?? "Pairing link",
+      permissionSummary(link.scopes),
+      "permissions",
+      "Ready to pair",
+      link.expiryLabel,
+    ]
       .join(" ")
       .toLowerCase()
       .includes(linkSearch.trim().toLowerCase()),
@@ -240,13 +258,7 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
                     </div>
                   </div>
                 </TableCell>
-                <TableCell>
-                  {client.connected
-                    ? "Connected"
-                    : client.lastConnectedAt
-                      ? new Date(DateTime.toEpochMillis(client.lastConnectedAt)).toLocaleString()
-                      : "Not connected yet"}
-                </TableCell>
+                <TableCell>{client.lastSeenLabel}</TableCell>
                 <TableCell className="text-muted-foreground">
                   {client.current ? "This client" : permissionSummary(client.scopes)}
                 </TableCell>
@@ -331,9 +343,7 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
                     {permissionSummary(link.scopes)} permissions
                   </p>
                 </TableCell>
-                <TableCell>
-                  {new Date(DateTime.toEpochMillis(link.expiresAt)).toLocaleString()}
-                </TableCell>
+                <TableCell>{link.expiryLabel}</TableCell>
                 <TableCell>
                   <span className="text-emerald-700 dark:text-emerald-400">Ready to pair</span>
                 </TableCell>
