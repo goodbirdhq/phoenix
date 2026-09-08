@@ -97,6 +97,7 @@ describe("source control environment atoms", () => {
           effect,
         ) => Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
         const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
+          setAutoConnect: () => Effect.void,
           run,
         } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
         const removed = new Array<string>();

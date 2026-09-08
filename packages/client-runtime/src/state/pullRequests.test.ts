@@ -13,6 +13,7 @@ import {
   type PreparedConnection,
   type SupervisorConnectionState,
 } from "../connection/model.ts";
+import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
@@ -90,13 +91,27 @@ it.effect("refreshes pull request activity after a comment is updated", () =>
         retryNow: Effect.void,
       } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
       const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
+        entries: yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
+          new Map([[TARGET.environmentId, { target: TARGET, profile: Option.none() }]]),
+        ),
+        networkStatus: yield* SubscriptionRef.make<"online" | "offline" | "unknown">("online"),
+        start: Effect.void,
+        register: () => Effect.void,
+        registerPlatform: () => Effect.void,
+        reconcilePlatform: () => Effect.void,
+        remove: () => Effect.void,
+        removeRelayEnvironments: () => Effect.void,
+        retryNow: () => Effect.void,
+        setAutoConnect: () => Effect.void,
+        state: () => SubscriptionRef.get(supervisor.state),
+        stateChanges: () => SubscriptionRef.changes(supervisor.state),
         run: (_environmentId, effect) =>
           Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
         runStream: (_environmentId, stream) =>
           Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
         followStream: (_environmentId, stream) =>
           Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-      } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+      });
       const runtime = Atom.runtime(
         Layer.merge(
           Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),

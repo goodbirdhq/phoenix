@@ -567,3 +567,28 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
   });
 });
+
+describe("environment appearance preferences", () => {
+  it("defaults older clients to no custom appearance and round-trips all icon choices", () => {
+    expect(decodeClientSettings({}).environmentAppearance).toEqual({});
+    const environmentAppearance = {
+      laptop: { icon: "laptop", alias: "My laptop" },
+      desktop: { icon: "desktop", alias: "Workstation" },
+      server: { icon: "server", alias: "Build" },
+    };
+    expect(
+      decodeClientSettings(encodeClientSettings(decodeClientSettings({ environmentAppearance })))
+        .environmentAppearance,
+    ).toEqual(environmentAppearance);
+    expect(decodeClientSettingsPatch({ environmentAppearance }).environmentAppearance).toEqual(
+      environmentAppearance,
+    );
+  });
+  it("rejects unsupported icons at the persistence boundary", () => {
+    expect(() =>
+      decodeClientSettingsPatch({
+        environmentAppearance: { example: { icon: "cloud", alias: "Example" } },
+      }),
+    ).toThrow();
+  });
+});

@@ -806,10 +806,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     Effect.withSpan("EnvironmentSupervisor.disconnect"),
   );
 
-  const retryNow = Ref.set(resetRetryState, true).pipe(
-    Effect.andThen(signal({ _tag: "RetryRequested" })),
-    Effect.withSpan("EnvironmentSupervisor.retryNow"),
-  );
+  const retryNow = Effect.gen(function* () {
+    const previous = yield* Ref.getAndUpdate(intent, (current) => ({ ...current, desired: true }));
+    yield* Ref.set(resetRetryState, true);
+    yield* signal({ _tag: previous.desired ? "RetryRequested" : "ConnectRequested" });
+  }).pipe(Effect.withSpan("EnvironmentSupervisor.retryNow"));
 
   yield* Effect.addFinalizer(() => Queue.shutdown(signals).pipe(Effect.andThen(clearLease)));
 

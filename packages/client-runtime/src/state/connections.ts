@@ -7,7 +7,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
-import { AVAILABLE_CONNECTION_STATE } from "../connection/model.ts";
+import { AVAILABLE_CONNECTION_STATE, ConnectionBlockedError } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import {
   createAtomCommandScheduler,
@@ -115,6 +115,46 @@ export function createEnvironmentCatalogAtoms<R, E>(
         Effect.flatMap((registry) => registry.retryNow(environmentId)),
       ),
   });
+  const setAutoConnect = createRuntimeCommand(runtime, {
+    label: "environment-catalog:auto-connect",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: ({
+      environmentId,
+      autoConnect,
+    }: {
+      environmentId: EnvironmentIdType;
+      autoConnect: boolean;
+    }) =>
+      EnvironmentRegistry.EnvironmentRegistry.pipe(
+        Effect.flatMap((registry) => registry.setAutoConnect(environmentId, autoConnect)),
+      ),
+  });
+  const disconnect = createRuntimeCommand(runtime, {
+    label: "environment-catalog:disconnect",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: (environmentId: EnvironmentIdType) =>
+      EnvironmentRegistry.EnvironmentRegistry.pipe(
+        Effect.flatMap((registry) =>
+          registry.run(
+            environmentId,
+            EnvironmentSupervisor.EnvironmentSupervisor.pipe(
+              Effect.flatMap((supervisor) =>
+                supervisor.target._tag === "PrimaryConnectionTarget"
+                  ? Effect.fail(
+                      new ConnectionBlockedError({
+                        reason: "configuration",
+                        detail: "The primary environment cannot be disconnected here.",
+                      }),
+                    )
+                  : supervisor.disconnect,
+              ),
+            ),
+          ),
+        ),
+      ),
+  });
 
   return {
     catalogAtom,
@@ -126,5 +166,7 @@ export function createEnvironmentCatalogAtoms<R, E>(
     remove,
     removeRelayEnvironments,
     retryNow,
+    disconnect,
+    setAutoConnect,
   };
 }

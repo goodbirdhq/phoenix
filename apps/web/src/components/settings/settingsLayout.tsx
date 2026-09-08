@@ -131,6 +131,7 @@ export function useRelativeTimeTick(intervalMs = 1_000) {
 
 export function SettingsSection({
   title,
+  description,
   icon,
   headerAction,
   children,
@@ -138,6 +139,7 @@ export function SettingsSection({
   ...sectionProps
 }: ComponentPropsWithoutRef<"section"> & {
   title: string;
+  description?: ReactNode;
   icon?: ReactNode;
   headerAction?: ReactNode;
   children: ReactNode;
@@ -147,18 +149,32 @@ export function SettingsSection({
   return (
     <section
       {...sectionProps}
+      data-settings-section=""
       ref={targetRef}
       tabIndex={sectionProps.id ? -1 : sectionProps.tabIndex}
       className={cn("space-y-3", className)}
     >
-      <div className="flex min-h-8 items-center justify-between gap-4 px-3 sm:px-4">
-        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-[-0.025em] text-foreground">
-          {icon}
-          {title}
-        </h2>
+      <div
+        data-settings-section-header=""
+        className="flex min-h-8 items-center justify-between gap-4 px-3 sm:px-4"
+      >
+        <div>
+          <h2 className="flex items-center gap-2 text-lg font-semibold tracking-[-0.025em] text-foreground">
+            {icon}
+            {title}
+          </h2>
+          {description && (
+            <p className="mt-1 text-xs leading-[18px] text-muted-foreground">{description}</p>
+          )}
+        </div>
         <div className="flex min-h-7 min-w-7 items-center justify-end">{headerAction}</div>
       </div>
-      <div className="relative space-y-1 overflow-visible text-foreground">{children}</div>
+      <div
+        data-settings-section-body=""
+        className="relative space-y-1 overflow-visible text-foreground"
+      >
+        {children}
+      </div>
     </section>
   );
 }
@@ -219,6 +235,7 @@ export function SettingsRow({
   return (
     <div
       {...rowProps}
+      data-settings-row=""
       ref={targetRef}
       tabIndex={rowProps.id ? -1 : rowProps.tabIndex}
       className={cn("rounded-xl px-3 sm:px-4", children ? "pt-3 pb-1" : "py-3", className)}
@@ -291,10 +308,12 @@ export function SettingsPageContainer({
   children,
   className,
   width = "readable",
+  embedded = false,
 }: {
   children: ReactNode;
   className?: string;
   width?: WorkspacePageWidth;
+  embedded?: boolean;
 }) {
   const navigate = useNavigate();
   const hash = useLocation({ select: (location) => location.hash });
@@ -302,6 +321,15 @@ export function SettingsPageContainer({
   const clearTargetHash = useCallback(() => {
     void navigate({ hash: "", replace: true, resetScroll: false, hashScrollIntoView: false });
   }, [navigate]);
+
+  if (embedded)
+    return (
+      <SettingsSearchTargetProvider targetId={targetId} onTargetHandled={clearTargetHash}>
+        <div data-settings-layout="environment" className={className}>
+          {children}
+        </div>
+      </SettingsSearchTargetProvider>
+    );
 
   return (
     <SettingsSearchTargetProvider targetId={targetId} onTargetHandled={clearTargetHash}>

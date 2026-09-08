@@ -1,8 +1,10 @@
+import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentIcon } from "../environments/EnvironmentIcon";
 import type { UsageAccount } from "@t3tools/client-runtime/usage/accounts";
 import type { MergedUsage } from "@t3tools/shared/usageMerge";
 import { formatTokens, formatUsd, formatDateTimeShort } from "@t3tools/shared/usageFormat";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../ui/table";
-import { ServerIcon, InfoIcon } from "lucide-react";
+import { InfoIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
 
 export function UsageEnvironments({
@@ -86,7 +88,10 @@ export function UsageEnvironments({
               <TableRow key={id}>
                 <TableCell className="h-20 text-sm">
                   <span className="flex items-center gap-3">
-                    <ServerIcon className="size-[18px] text-muted-foreground" />
+                    <EnvironmentIcon
+                      environmentId={EnvironmentId.make(id)}
+                      className="size-[18px] text-muted-foreground"
+                    />
                     {members[0]?.environmentLabel}
                   </span>
                 </TableCell>

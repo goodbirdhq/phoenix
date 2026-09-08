@@ -1,3 +1,4 @@
+import "./environments/environments.css";
 import "./usage/usage.css";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
@@ -47,6 +48,12 @@ const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "90px";
 
 // The settings nav (and the Clerk profile surfaces behind it) only renders on
 // settings routes; lazy-loading it keeps that subtree out of the startup chunk.
+const EnvironmentsSidebar = lazy(() =>
+  import("./environments/EnvironmentsSidebar").then((module) => ({
+    default: module.EnvironmentsSidebar,
+  })),
+);
+
 const UsageSidebarNav = lazy(() =>
   import("./usage/UsageSidebarNav").then((module) => ({ default: module.UsageSidebarNav })),
 );
@@ -78,7 +85,13 @@ function readInitialThreadSidebarWidth(): number {
   }
 }
 
-function SidebarControl({ plain = false }: { plain?: boolean }) {
+function SidebarControl({
+  plain = false,
+  compact = false,
+}: {
+  plain?: boolean;
+  compact?: boolean;
+}) {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { toggleSidebar } = useSidebar();
   const isSidebarVisible = useSidebarVisibility();
@@ -118,7 +131,7 @@ function SidebarControl({ plain = false }: { plain?: boolean }) {
       className="pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center"
       style={
         isSidebarVisible && !legacySidebarEnabled
-          ? { transform: "translate(22px, 14px)" }
+          ? { transform: compact ? "translate(22px, 0px)" : "translate(22px, 14px)" }
           : undefined
       }
       data-sidebar-control=""
@@ -163,8 +176,19 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   // sidebar is active.
   const pathname = useLocation({ select: (location) => location.pathname });
   const isOnUsage = pathname === "/usage";
+  const isOnEnvironments = pathname === "/environments";
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
+  const [environmentSidebarWidth, setEnvironmentSidebarWidth] = useState(() => {
+    try {
+      const saved = getLocalStorageItem("phoenix:environment-sidebar-width", Schema.Finite);
+      if (saved !== null && saved >= THREAD_SIDEBAR_MIN_WIDTH)
+        return Math.min(saved, resolveThreadSidebarMaximumWidth(window.innerWidth));
+    } catch (error) {
+      console.error("Could not read persisted environment sidebar width.", error);
+    }
+    return 344;
+  });
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // Subscribed rather than read once: the clamp must track live window size,
   // and a clamped drag ends with an unchanged width, which skips the re-render
@@ -172,6 +196,15 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
   const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth);
   const resetSidebarWidth = () => {
+    if (isOnEnvironments) {
+      try {
+        removeLocalStorageItem("phoenix:environment-sidebar-width");
+      } catch (error) {
+        console.error("Could not clear persisted environment sidebar width.", error);
+      }
+      setEnvironmentSidebarWidth(344);
+      return;
+    }
     try {
       removeLocalStorageItem(THREAD_SIDEBAR_WIDTH_STORAGE_KEY);
     } catch (error) {
@@ -186,7 +219,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       : false;
   });
   const sidebarProviderStyle = {
-    "--sidebar-width": `${sidebarWidth}px`,
+    "--sidebar-width": `${isOnEnvironments ? environmentSidebarWidth : sidebarWidth}px`,
     ...(isMacosDesktop && !isWindowFullscreen
       ? { "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET }
       : {}),
@@ -238,7 +271,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         data-app-sidebar=""
         className={cn(
           "border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
-          isOnUsage && "usage-surface usage-sidebar",
+          (isOnUsage || isOnEnvironments) && "usage-surface usage-sidebar",
+          isOnEnvironments && "environment-surface",
         )}
         resizable={{
           maxWidth: sidebarMaximumWidth,
@@ -246,8 +280,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
             nextWidth <= currentWidth ||
             wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-          storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-          onResize: setSidebarWidth,
+          storageKey: isOnEnvironments
+            ? "phoenix:environment-sidebar-width"
+            : THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+          onResize: isOnEnvironments ? setEnvironmentSidebarWidth : setSidebarWidth,
         }}
       >
         {isOnSettings ? (
@@ -255,6 +291,13 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
             <SidebarChromeHeader isElectron={isElectron} />
             <Suspense fallback={null}>
               <SettingsSidebarNav pathname={pathname} />
+            </Suspense>
+          </>
+        ) : isOnEnvironments ? (
+          <>
+            <SidebarChromeHeader isElectron={isElectron} plain compact />
+            <Suspense fallback={null}>
+              <EnvironmentsSidebar />
             </Suspense>
           </>
         ) : isOnUsage ? (
@@ -272,7 +315,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <SidebarRail onDoubleClick={resetSidebarWidth} />
       </Sidebar>
       {children}
-      <SidebarControl plain={isOnUsage} />
+      <SidebarControl plain={isOnUsage || isOnEnvironments} compact={isOnEnvironments} />
     </SidebarProvider>
   );
 }

@@ -1,29 +1,11 @@
-import {
-  formatHostMetricBytes,
-  formatHostMetricPercent,
-  formatHostUptime,
-  hostMetricTrendBuckets,
-  hostMetricWarnings,
-  mergeHostMetricSamples,
-  storageLabel,
-} from "@t3tools/client-runtime/host-metrics";
-import type {
-  EnvironmentId,
-  HostMetricsHistorySample,
-  HostMetricsSnapshot,
-} from "@t3tools/contracts";
-import { Link } from "@tanstack/react-router";
-import {
-  ActivityIcon,
-  CircleAlertIcon,
-  ClockIcon,
-  CpuIcon,
-  HardDriveIcon,
-  MemoryStickIcon,
-  RefreshCwIcon,
-  ServerIcon,
-} from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { environmentConnectionKind } from "./environmentConnectionKind";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { environmentCatalog } from "../../connection/catalog";
+import { mergeHostMetricSamples } from "@t3tools/client-runtime/host-metrics";
+import type { EnvironmentId, HostMetricsHistorySample } from "@t3tools/contracts";
+import { Link, useSearch, useNavigate } from "@tanstack/react-router";
+import { ServerIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
@@ -34,7 +16,18 @@ import {
   useHostMetricsOverview,
   useLiveHostMetrics,
 } from "../../state/hostMetrics";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { usePrimaryEnvironmentId, useEnvironment } from "../../state/environments";
+import { useClientSettings } from "../../hooks/useSettings";
+import { EnvironmentIcon } from "./EnvironmentIcon";
+import { EnvironmentProjects } from "./EnvironmentProjects";
+import { EnvironmentProviders } from "./EnvironmentProviders";
+import { EditEnvironmentDialog } from "./EditEnvironmentDialog";
+import { EnvironmentHeading } from "./EnvironmentHeading";
+import { EnvironmentOverview } from "./EnvironmentOverview";
+import { EnvironmentTabs } from "./EnvironmentTabs";
+import { EnvironmentConnections } from "./EnvironmentConnections";
+import { EnvironmentAccess } from "./EnvironmentAccess";
+import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "../../workspaceTitlebar";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
 import { Button } from "../ui/button";
@@ -48,9 +41,6 @@ function environmentStateLabel(status: EnvironmentHostMetricsStatus): string {
     }
     return status.connectionPhase === "error" ? "Connection failed" : "Offline";
   }
-  if (!status.supportsHostMetrics) return "Update required";
-  if (status.error) return status.error;
-  if (!status.snapshot) return "Loading metrics";
   return "Connected";
 }
 
@@ -61,41 +51,34 @@ function orderEnvironments(
   return environments.toSorted((left, right) => {
     if (left.environmentId === currentEnvironmentId) return -1;
     if (right.environmentId === currentEnvironmentId) return 1;
-    const leftConnected = left.connectionPhase === "connected";
-    const rightConnected = right.connectionPhase === "connected";
-    if (leftConnected !== rightConnected) return leftConnected ? -1 : 1;
     return left.label.localeCompare(right.label);
   });
 }
 
 export function EnvironmentsPage() {
   const environments = useHostMetricsOverview();
+  const route = useSearch({ from: "/environments" });
+  const navigate = useNavigate();
+  const appearance = useClientSettings((s) => s.environmentAppearance);
   const activeEnvironmentId = useActiveEnvironmentId();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const currentEnvironmentId = activeEnvironmentId ?? primaryEnvironmentId;
+  const currentEnvironmentId = primaryEnvironmentId ?? activeEnvironmentId;
   const ordered = useMemo(
     () => orderEnvironments(environments, currentEnvironmentId),
     [currentEnvironmentId, environments],
   );
-  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(
-    () => currentEnvironmentId,
-  );
-
-  useEffect(() => {
-    const selectionExists = ordered.some(
-      (environment) => environment.environmentId === selectedEnvironmentId,
-    );
-    if (selectionExists) return;
-    const next =
-      ordered.find((environment) => environment.environmentId === currentEnvironmentId) ??
-      ordered[0] ??
-      null;
-    setSelectedEnvironmentId(next?.environmentId ?? null);
-  }, [currentEnvironmentId, ordered, selectedEnvironmentId]);
-
+  const selectedEnvironmentId =
+    ordered.find((e) => e.environmentId === route.environment)?.environmentId ??
+    currentEnvironmentId ??
+    ordered[0]?.environmentId ??
+    null;
+  const selectedPresentation = useEnvironment(selectedEnvironmentId);
   const selected =
     ordered.find((environment) => environment.environmentId === selectedEnvironmentId) ?? null;
-  const canReadSelected = selected?.connectionPhase === "connected" && selected.supportsHostMetrics;
+  const canReadSelected =
+    (!route.tab || route.tab === "overview") &&
+    selected?.connectionPhase === "connected" &&
+    selected.supportsHostMetrics;
   const live = useLiveHostMetrics(selectedEnvironmentId, canReadSelected);
   const history = useHostMetricsHistory(selectedEnvironmentId, canReadSelected);
   const [liveSamples, setLiveSamples] = useState<readonly HostMetricsHistorySample[]>([]);
@@ -119,151 +102,162 @@ export function EnvironmentsPage() {
     [history.data?.samples, liveSamples],
   );
   const snapshot = live.data ?? selected?.snapshot ?? null;
-  const selectEnvironment = (environmentId: EnvironmentId) => {
-    setSelectedEnvironmentId(environmentId);
-  };
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground isolate">
+    <SidebarInset className="usage-surface environment-surface h-dvh min-h-0 overflow-hidden bg-background text-foreground isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <PageHeader />
-        <div className="grid min-h-0 flex-1 lg:grid-cols-[19rem_minmax(0,1fr)]">
-          <aside className="min-h-0 border-b border-border/60 bg-muted/10 lg:border-r lg:border-b-0">
-            <ScrollArea className="max-h-52 lg:h-full lg:max-h-none">
-              <div className="space-y-1 p-3">
-                {ordered.length === 0 ? (
-                  <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-                    No environments configured.
-                  </p>
-                ) : null}
-                {ordered.map((environment) => (
-                  <EnvironmentRow
-                    key={environment.environmentId}
-                    environment={environment}
-                    selected={environment.environmentId === selectedEnvironmentId}
-                    current={environment.environmentId === currentEnvironmentId}
-                    onSelect={() => selectEnvironment(environment.environmentId)}
+        <PageHeader
+          label={selected ? appearance[selected.environmentId]?.alias || selected.label : undefined}
+        />
+        <div className="min-h-0 flex-1">
+          <ScrollArea className="h-full min-h-0">
+            <main className="mx-auto w-full max-w-[1440px] space-y-6 px-4 py-8 sm:px-8">
+              {selected && (
+                <>
+                  <EnvironmentHeading
+                    title={appearance[selected.environmentId]?.alias || selected.label}
+                    icon={
+                      <EnvironmentIcon
+                        environmentId={selected.environmentId}
+                        className="size-7 text-muted-foreground"
+                      />
+                    }
+                    description={`${selectedPresentation && environmentConnectionKind(selectedPresentation) === "Local" ? "Local environment" : "Remote environment"}${selected.platform ? ` · ${selected.platform.os} · ${selected.platform.arch}` : ""}${selected.environmentId === primaryEnvironmentId ? " · Current" : ""}`}
+                    status={environmentStateLabel(selected)}
+                    connected={selected.connectionPhase === "connected"}
+                    actions={
+                      <Button
+                        data-environment-control
+                        variant="outline"
+                        size="sm"
+                        className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px] shadow-none"
+                        onClick={() =>
+                          void navigate({ to: "/environments", search: { ...route, edit: true } })
+                        }
+                      >
+                        Edit environment
+                      </Button>
+                    }
                   />
-                ))}
-              </div>
-            </ScrollArea>
-          </aside>
-          <ScrollArea className="min-h-0">
-            <main className="mx-auto w-full max-w-5xl px-5 py-6 sm:px-7">
-              {selected === null ? (
-                <EmptyDetail />
-              ) : snapshot === null ? (
-                <UnavailableDetail environment={selected} />
-              ) : (
-                <EnvironmentDetail
-                  environment={selected}
-                  snapshot={snapshot}
-                  samples={samples}
-                  live={live.data !== null}
-                  canViewProcessDetails={selected.environmentId === primaryEnvironmentId}
-                  refreshing={live.isPending || history.isPending}
-                  onRefresh={() => {
-                    live.refresh();
-                    history.refresh();
-                  }}
-                />
+                </>
               )}
+              <EnvironmentTabs
+                value={route.tab ?? "overview"}
+                onChange={(tab) =>
+                  void navigate({ to: "/environments", search: { ...route, tab } })
+                }
+              >
+                {selected === null ? (
+                  <EmptyDetail />
+                ) : route.tab === "projects" && selected.connectionPhase === "connected" ? (
+                  <EnvironmentProjects
+                    key={selected.environmentId}
+                    environmentId={selected.environmentId}
+                    label={appearance[selected.environmentId]?.alias || selected.label}
+                  />
+                ) : route.tab === "providers" && selected.connectionPhase === "connected" ? (
+                  <EnvironmentProviders
+                    label={appearance[selected.environmentId]?.alias || selected.label}
+                    key={selected.environmentId}
+                    environmentId={selected.environmentId}
+                  />
+                ) : route.tab === "connections" && selectedPresentation ? (
+                  <EnvironmentConnections
+                    key={selected.environmentId}
+                    environment={{
+                      ...selectedPresentation,
+                      label:
+                        appearance[selectedPresentation.environmentId]?.alias ||
+                        selectedPresentation.label,
+                    }}
+                  />
+                ) : route.tab === "access" && selected.connectionPhase === "connected" ? (
+                  <EnvironmentAccess
+                    key={selected.environmentId}
+                    environmentId={selected.environmentId}
+                  />
+                ) : selected.connectionPhase !== "connected" || snapshot === null ? (
+                  <UnavailableDetail environment={selected} />
+                ) : (
+                  <EnvironmentOverview
+                    environment={selected}
+                    snapshot={snapshot}
+                    samples={samples}
+                    live={live.data !== null}
+                    processDetails={
+                      selected.environmentId === primaryEnvironmentId ? (
+                        <Button
+                          data-environment-control
+                          size="sm"
+                          variant="outline"
+                          className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px] shadow-none"
+                          render={<Link to="/settings/diagnostics" />}
+                        >
+                          View process details
+                        </Button>
+                      ) : undefined
+                    }
+                    refreshing={history.isPending && history.data === null}
+                    onRefresh={() => {
+                      live.refresh();
+                      history.refresh();
+                    }}
+                  />
+                )}
+              </EnvironmentTabs>
             </main>
           </ScrollArea>
         </div>
       </div>
+      {route.add && (
+        <AddEnvironmentDialog
+          onClose={() =>
+            void navigate({ to: "/environments", search: { ...route, add: undefined } })
+          }
+          onAdded={(environment) =>
+            void navigate({ to: "/environments", search: { tab: "overview", environment } })
+          }
+        />
+      )}
+      {route.edit && selectedPresentation && (
+        <EditEnvironmentDialog
+          key={selectedPresentation.environmentId}
+          environment={{
+            ...selectedPresentation,
+            label:
+              appearance[selectedPresentation.environmentId]?.alias || selectedPresentation.label,
+          }}
+          onClose={() =>
+            void navigate({ to: "/environments", search: { ...route, edit: undefined } })
+          }
+        />
+      )}
     </SidebarInset>
   );
 }
 
-function PageHeader() {
+function PageHeader({ label }: { label?: string | undefined }) {
   return (
     <header
       className={cn(
-        "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center border-b border-border/60 px-3 transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none sm:px-5",
+        "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center border-b border-border/60 px-8 transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none",
         isElectron &&
           "drag-region h-[52px] min-h-[52px] wco:h-[env(titlebar-area-height)] wco:min-h-[env(titlebar-area-height)]",
         COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
       )}
     >
       <WorkspaceBreadcrumb ariaLabel="Environments breadcrumb">
-        <WorkspaceBreadcrumbItem current>Environments</WorkspaceBreadcrumbItem>
+        <WorkspaceBreadcrumbItem current={!label}>Environments</WorkspaceBreadcrumbItem>
+        {label && (
+          <>
+            <li aria-hidden className="text-muted-foreground">
+              /
+            </li>
+            <WorkspaceBreadcrumbItem current>{label}</WorkspaceBreadcrumbItem>
+          </>
+        )}
       </WorkspaceBreadcrumb>
     </header>
-  );
-}
-
-function EnvironmentRow({
-  environment,
-  selected,
-  current,
-  onSelect,
-}: {
-  environment: EnvironmentHostMetricsStatus;
-  selected: boolean;
-  current: boolean;
-  onSelect: () => void;
-}) {
-  const snapshot = environment.snapshot;
-  const primaryStorage = snapshot?.storage.find((item) => item.status === "available");
-  const state = environmentStateLabel(environment);
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={cn(
-        "w-full cursor-pointer rounded-lg border px-3 py-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-        selected
-          ? "border-border bg-background shadow-xs"
-          : "border-transparent hover:border-border/60 hover:bg-background/65",
-      )}
-    >
-      <div className="flex items-start gap-2.5">
-        <ServerIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium">{environment.label}</span>
-            {current ? (
-              <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Current
-              </span>
-            ) : null}
-          </div>
-          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                environment.connectionPhase === "connected"
-                  ? "bg-emerald-500"
-                  : "bg-muted-foreground/45",
-              )}
-            />
-            {state}
-          </div>
-          {snapshot ? (
-            <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[10px] tabular-nums text-muted-foreground">
-              <span>
-                CPU{" "}
-                {snapshot.cpu.status === "unavailable"
-                  ? "Unavailable"
-                  : formatHostMetricPercent(snapshot.cpu.utilizationPercent)}
-              </span>
-              <span>
-                RAM{" "}
-                {snapshot.memory.status === "available"
-                  ? snapshot.memory.availabilityKind === "available"
-                    ? formatHostMetricPercent(snapshot.memory.utilizationPercent)
-                    : `${formatHostMetricBytes(snapshot.memory.availableBytes)} free`
-                  : "Unavailable"}
-              </span>
-              <span>
-                Disk {formatHostMetricPercent(primaryStorage?.utilizationPercent ?? null)}
-              </span>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </button>
   );
 }
 
@@ -277,387 +271,64 @@ function EmptyDetail() {
 }
 
 function UnavailableDetail({ environment }: { environment: EnvironmentHostMetricsStatus }) {
+  const navigate = useNavigate();
+  const retry = useAtomCommand(environmentCatalog.retryNow, "reconnect environment");
+  const [busy, setBusy] = useState(false);
   return (
     <div className="py-24 text-center">
       <ServerIcon className="mx-auto size-8 text-muted-foreground/45" />
-      <h1 className="mt-4 text-lg font-semibold">{environment.label}</h1>
+      <h2 className="mt-4 text-lg font-semibold">
+        {environment.connectionPhase === "connected"
+          ? "Metrics unavailable"
+          : environment.connectionPhase === "connecting" ||
+              environment.connectionPhase === "reconnecting"
+            ? "Connecting to environment"
+            : "Environment offline"}
+      </h2>
       <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
-        {environmentStateLabel(environment) === "Update required"
+        {environment.connectionPhase === "connected" && !environment.supportsHostMetrics
           ? "Update Phoenix on this environment to view host performance metrics."
           : environment.connectionPhase === "connected"
             ? "This environment could not report metrics."
-            : "Reconnect this environment to view live machine pressure."}
+            : "Reconnect this environment to view its projects, providers, access and live metrics."}
       </p>
-    </div>
-  );
-}
-
-function EnvironmentDetail({
-  environment,
-  snapshot,
-  samples,
-  live,
-  canViewProcessDetails,
-  refreshing,
-  onRefresh,
-}: {
-  environment: EnvironmentHostMetricsStatus;
-  snapshot: HostMetricsSnapshot;
-  samples: readonly HostMetricsHistorySample[];
-  live: boolean;
-  canViewProcessDetails: boolean;
-  refreshing: boolean;
-  onRefresh: () => void;
-}) {
-  const warnings = hostMetricWarnings(snapshot, samples);
-  const cpuWarning = warnings.some((warning) => warning.resource === "cpu");
-  const memoryWarning = warnings.some((warning) => warning.resource === "memory");
-  const platform = environment.platform;
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">{environment.label}</h1>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
-              <span className="size-1.5 rounded-full bg-emerald-500" />
-              {live ? "Live" : "Latest"}
-            </span>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {platform ? `${platform.os} · ${platform.arch} · ` : ""}
-            {snapshot.inventory.logicalCpuCount > 0
-              ? `${snapshot.inventory.logicalCpuCount} logical cores`
-              : "CPU inventory unavailable"}
-            {snapshot.inventory.totalMemoryBytes > 0
-              ? ` · ${formatHostMetricBytes(snapshot.inventory.totalMemoryBytes)} RAM`
-              : ""}
-          </p>
-        </div>
+      <div className="mt-6 flex justify-center gap-3">
         <Button
-          size="icon"
           variant="outline"
-          onClick={onRefresh}
-          aria-label="Refresh environment metrics"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await retry(environment.environmentId);
+            } finally {
+              setBusy(false);
+            }
+          }}
         >
-          <RefreshCwIcon className={cn("size-4", refreshing && "opacity-50")} />
+          {busy ? "Reconnecting…" : "Retry connection"}
         </Button>
-      </div>
-
-      {warnings.length > 0 ? (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/8 px-4 py-3">
-          {warnings.map((warning) => (
-            <div
-              key={`${warning.resource}:${warning.message}`}
-              className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200"
-            >
-              <CircleAlertIcon className="mt-0.5 size-4 shrink-0" />
-              <span>{warning.message}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <section className="grid overflow-hidden rounded-xl border border-border/70 bg-card md:grid-cols-3">
-        <ResourceCard
-          icon={<CpuIcon className="size-4" />}
-          label="Host CPU"
-          value={
-            snapshot.cpu.status === "unavailable"
-              ? "Unavailable"
-              : formatHostMetricPercent(snapshot.cpu.utilizationPercent)
+        <Button
+          variant="outline"
+          onClick={() =>
+            void navigate({
+              to: "/environments",
+              search: { environment: environment.environmentId, tab: "connections" },
+            })
           }
-          progress={snapshot.cpu.status === "available" ? snapshot.cpu.utilizationPercent : null}
-          warning={cpuWarning}
-          detail={
-            snapshot.cpu.status === "unavailable"
-              ? (snapshot.cpu.statusReason ?? "CPU metrics unavailable.")
-              : `Phoenix ${snapshot.phoenix.cpuMachinePercent === null ? "unavailable" : formatHostMetricPercent(snapshot.phoenix.cpuMachinePercent)} · ${(snapshot.phoenix.cpuCorePercent / 100).toFixed(1)} cores`
-          }
-        />
-        <ResourceCard
-          icon={<MemoryStickIcon className="size-4" />}
-          label="Host memory"
-          value={
-            snapshot.memory.status === "available"
-              ? snapshot.memory.availabilityKind === "available"
-                ? formatHostMetricPercent(snapshot.memory.utilizationPercent)
-                : `${formatHostMetricBytes(snapshot.memory.availableBytes)} free`
-              : "Unavailable"
-          }
-          progress={
-            snapshot.memory.status === "available" &&
-            snapshot.memory.availabilityKind === "available"
-              ? snapshot.memory.utilizationPercent
-              : null
-          }
-          warning={memoryWarning}
-          detail={
-            snapshot.memory.status === "available"
-              ? snapshot.memory.availabilityKind === "available"
-                ? `${formatHostMetricBytes(snapshot.memory.availableBytes)} available · Phoenix ${formatHostMetricBytes(snapshot.phoenix.residentBytes)}`
-                : `Free memory; reclaimable caches are not counted · Phoenix ${formatHostMetricBytes(snapshot.phoenix.residentBytes)}`
-              : (snapshot.memory.statusReason ?? "Memory metrics unavailable.")
-          }
-        />
-        <ResourceCard
-          icon={<ActivityIcon className="size-4" />}
-          label="Phoenix footprint"
-          value={`${snapshot.phoenix.processCount}`}
-          detail={`${snapshot.phoenix.processCount === 1 ? "process" : "processes"} · ${formatHostMetricBytes(snapshot.phoenix.ioReadBytesPerSecond + snapshot.phoenix.ioWriteBytesPerSecond)}/s I/O`}
-        />
-      </section>
-
-      <TrendChart samples={samples} />
-
-      <section>
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-          Storage
-        </h2>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {snapshot.storage.map((storage) => (
-            <StorageCard key={storage.kind} storage={storage} />
-          ))}
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-border/70 bg-card">
-        <div className="grid sm:grid-cols-2">
-          <Fact
-            icon={<ClockIcon />}
-            label="System uptime"
-            value={formatHostUptime(snapshot.inventory.systemUptimeSeconds)}
-          />
-          <Fact
-            icon={<ServerIcon />}
-            label="Phoenix uptime"
-            value={formatHostUptime(snapshot.inventory.serverUptimeSeconds)}
-          />
-          {environment.serverVersion ? (
-            <Fact icon={<ServerIcon />} label="Phoenix version" value={environment.serverVersion} />
-          ) : null}
-          {snapshot.cpu.loadAverage1m !== null ? (
-            <Fact
-              icon={<ActivityIcon />}
-              label="Load average"
-              value={`${snapshot.cpu.loadAverage1m.toFixed(2)} · ${snapshot.cpu.loadAverage5m?.toFixed(2)} · ${snapshot.cpu.loadAverage15m?.toFixed(2)}`}
-            />
-          ) : null}
-          {snapshot.administrativeDetails ? (
-            <>
-              <Fact
-                icon={<CpuIcon />}
-                label="Processor"
-                value={snapshot.administrativeDetails.cpuModel}
-              />
-              <Fact
-                icon={<ActivityIcon />}
-                label="System version"
-                value={`${snapshot.administrativeDetails.osVersion} · ${snapshot.administrativeDetails.kernelRelease}`}
-              />
-            </>
-          ) : null}
-        </div>
-        <div className="border-t border-border/60 px-4 py-3 text-xs text-muted-foreground sm:px-5">
-          Phoenix metrics describe this environment’s process tree. Host metrics describe the
-          machine as this environment sees it.
-          {snapshot.phoenix.sourceStatus !== "healthy"
-            ? ` Process collector: ${snapshot.phoenix.sourceStatus}.`
-            : ""}
-          {canViewProcessDetails ? (
-            <Link
-              to="/settings/diagnostics"
-              className="ml-2 font-medium text-foreground hover:underline"
-            >
-              View process details
-            </Link>
-          ) : null}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function ResourceCard({
-  icon,
-  label,
-  value,
-  detail,
-  progress,
-  warning = false,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  detail: string;
-  progress?: number | null;
-  warning?: boolean;
-}) {
-  return (
-    <div className="border-t border-border/60 p-5 first:border-t-0 md:border-t-0 md:border-l md:first:border-l-0">
-      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-        {icon} {label}
-      </div>
-      <div
-        className={cn(
-          "mt-3 font-mono text-3xl font-semibold tabular-nums",
-          warning && "text-amber-600 dark:text-amber-300",
-        )}
-      >
-        {value}
-      </div>
-      {progress !== undefined && progress !== null ? (
-        <div
-          className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted"
-          role="progressbar"
-          aria-valuenow={progress}
-          aria-valuemin={0}
-          aria-valuemax={100}
         >
-          <div
-            className={cn("h-full rounded-full", warning ? "bg-amber-500" : "bg-foreground/70")}
-            style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-          />
-        </div>
-      ) : null}
-      <p className="mt-2 truncate text-[11px] text-muted-foreground">{detail}</p>
-    </div>
-  );
-}
-
-function StorageCard({ storage }: { storage: HostMetricsSnapshot["storage"][number] }) {
-  if (storage.status === "unavailable") {
-    return (
-      <div className="rounded-lg border border-border/70 bg-card p-4">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <HardDriveIcon className="size-4 text-muted-foreground" />
-          {storageLabel(storage)}
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">{storage.reason}</p>
-      </div>
-    );
-  }
-  const low =
-    storage.availableBytes / storage.totalBytes < 0.1 || storage.availableBytes < 10 * 1_024 ** 3;
-  return (
-    <div className="rounded-lg border border-border/70 bg-card p-4">
-      <div className="flex items-center justify-between gap-3">
-        <span className="flex items-center gap-2 text-sm font-medium">
-          <HardDriveIcon className="size-4 text-muted-foreground" />
-          {storageLabel(storage)}
-        </span>
-        <span
-          className={cn(
-            "font-mono text-sm tabular-nums",
-            low && "text-amber-600 dark:text-amber-300",
-          )}
+          Connection details
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() =>
+            void navigate({
+              to: "/environments",
+              search: { environment: environment.environmentId, edit: true },
+            })
+          }
         >
-          {formatHostMetricPercent(storage.utilizationPercent)}
-        </span>
-      </div>
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
-        <div
-          className={cn("h-full rounded-full", low ? "bg-amber-500" : "bg-foreground/70")}
-          style={{ width: `${storage.utilizationPercent}%` }}
-        />
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        {formatHostMetricBytes(storage.availableBytes)} free of{" "}
-        {formatHostMetricBytes(storage.totalBytes)}
-      </p>
-    </div>
-  );
-}
-
-function TrendChart({ samples }: { samples: readonly HostMetricsHistorySample[] }) {
-  const buckets = hostMetricTrendBuckets(samples, 120);
-  const populatedCount = buckets.filter((bucket) => bucket.sample !== null).length;
-  const path = (valueOf: (sample: HostMetricsHistorySample) => number | null) => {
-    let drawing = false;
-    return buckets
-      .map((bucket, index) => {
-        const value = bucket.sample === null ? null : valueOf(bucket.sample);
-        if (value === null) {
-          drawing = false;
-          return "";
-        }
-        const command = drawing ? "L" : "M";
-        drawing = true;
-        const x = buckets.length <= 1 ? 0 : (index / (buckets.length - 1)) * 100;
-        return `${command}${x},${100 - Math.min(100, Math.max(0, value))}`;
-      })
-      .join(" ");
-  };
-  return (
-    <section className="rounded-xl border border-border/70 bg-card p-4 sm:p-5">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h2 className="text-sm font-medium">Recent pressure</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Up to 15 minutes, held in memory only
-          </p>
-        </div>
-        <div className="flex gap-3 text-[10px] text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <span className="size-2 rounded-full bg-foreground" />
-            CPU
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="size-2 rounded-full bg-sky-500" />
-            RAM
-          </span>
-        </div>
-      </div>
-      {populatedCount < 2 ? (
-        <div className="flex h-28 items-center justify-center text-xs text-muted-foreground">
-          Collecting trend data…
-        </div>
-      ) : (
-        <svg
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-          className="mt-4 h-28 w-full overflow-visible"
-          role="img"
-          aria-label="CPU and memory utilization over the last 15 minutes"
-        >
-          <line
-            x1="0"
-            y1="50"
-            x2="100"
-            y2="50"
-            className="stroke-border"
-            vectorEffect="non-scaling-stroke"
-          />
-          <path
-            d={path((sample) => sample.cpuUtilizationPercent)}
-            fill="none"
-            className="stroke-foreground"
-            strokeWidth="1.5"
-            vectorEffect="non-scaling-stroke"
-          />
-          <path
-            d={path((sample) => sample.memoryUtilizationPercent)}
-            fill="none"
-            className="stroke-sky-500"
-            strokeWidth="1.5"
-            vectorEffect="non-scaling-stroke"
-          />
-        </svg>
-      )}
-    </section>
-  );
-}
-
-function Fact({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-  return (
-    <div className="flex items-start gap-3 border-t border-border/60 px-4 py-4 first:border-t-0 sm:border-l sm:px-5 sm:[&:nth-child(-n+2)]:border-t-0 sm:[&:nth-child(odd)]:border-l-0 [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
-      <span>{icon}</span>
-      <div className="min-w-0">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-          {label}
-        </div>
-        <div className="mt-1 truncate text-sm">{value}</div>
+          Edit environment
+        </Button>
       </div>
     </div>
   );
