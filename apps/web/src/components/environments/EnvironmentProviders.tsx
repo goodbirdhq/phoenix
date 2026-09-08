@@ -1,3 +1,4 @@
+import { EnvironmentTableSearch } from "./EnvironmentTableSearch";
 import { Link } from "@tanstack/react-router";
 import { resolveAppModelSelectionState } from "../../modelSelection";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
@@ -30,6 +31,7 @@ import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
   buildProviderInstanceUpdatePatch,
+  isProviderInstanceEnabled,
   resolveProviderInstanceSettings,
 } from "../settings/SettingsPanels.logic";
 import {
@@ -46,11 +48,40 @@ export function EnvironmentProviders({
   label: string;
 }) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
+  const settings = useEnvironmentSettings(environmentId);
+  const [search, setSearch] = useState("");
+  const query = search.trim().toLowerCase();
+  const enabledProviders = providers
+    ?.filter((provider) => isProviderInstanceEnabled(settings, provider))
+    .map((provider) => ({
+      ...provider,
+      versionLabel: provider.version ?? (provider.installed ? "Unknown" : "Not installed"),
+      instanceLabel:
+        provider.instanceId === defaultInstanceIdForDriver(provider.driver)
+          ? "Default instance"
+          : "Named instance",
+    }));
+  const visibleProviders = enabledProviders?.filter((provider) =>
+    [
+      provider.displayName,
+      DRIVER_OPTION_BY_VALUE[provider.driver]?.label,
+      provider.driver,
+      provider.instanceId,
+      provider.versionLabel,
+      provider.instanceLabel,
+      provider.message,
+      provider.status,
+      provider.auth.status,
+      provider.auth.email,
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(query),
+  );
   const environment = useEnvironment(environmentId);
   const session = useEnvironmentSessionState(environmentId);
   const canEdit = session.data?.scopes?.includes("orchestration:operate") ?? false;
   const refresh = useAtomCommand(serverEnvironment.refreshProviders, "refresh providers");
-  const settings = useEnvironmentSettings(environmentId);
   const updateSettings = useAtomCommand(
     serverEnvironment.updateSettings,
     "update provider instance",
@@ -78,15 +109,14 @@ export function EnvironmentProviders({
             instanceId: provider.instanceId,
             driver: provider.driver,
             isDefault: provider.instanceId === defaultInstanceIdForDriver(provider.driver),
-            ...(provider.enabled &&
-            resolveAppModelSelectionState(settings, providers ?? []).instanceId ===
-              provider.instanceId
+            ...(resolveAppModelSelectionState(settings, providers ?? []).instanceId ===
+            provider.instanceId
               ? {
                   textGenerationModelSelection:
                     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
                 }
               : {}),
-            instance: { ...saved, enabled: !provider.enabled },
+            instance: { ...saved, enabled: false },
           }),
         },
       });
@@ -137,7 +167,8 @@ export function EnvironmentProviders({
             Provider instances, credentials and configuration on this machine.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <EnvironmentTableSearch label="Search providers" value={search} onChange={setSearch} />
           <Button
             data-environment-control
             variant="outline"
@@ -189,7 +220,7 @@ export function EnvironmentProviders({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {providers?.map((provider) => {
+          {visibleProviders?.map((provider) => {
             const definition = DRIVER_OPTION_BY_VALUE[provider.driver];
             const Mark = definition?.icon;
             const candidate = candidates.find((c) => c.driver === provider.driver);
@@ -204,20 +235,16 @@ export function EnvironmentProviders({
                   <div className="flex items-center gap-3">
                     {Mark && <Mark className="size-5 shrink-0" />}
                     <div>
-                      <p className="text-[13px] leading-[19px] font-medium">
+                      <p className="text-[13px] leading-[18px] font-medium">
                         {provider.displayName ?? definition?.label ?? provider.driver}
                       </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {provider.instanceId === defaultInstanceIdForDriver(provider.driver)
-                          ? "Default instance"
-                          : "Named instance"}
+                      <p className="mt-0.5 text-xs leading-4 text-muted-foreground">
+                        {provider.instanceLabel}
                       </p>
                     </div>
                   </div>
                 </TableCell>
-                <TableCell>
-                  {provider.version ?? (provider.installed ? "Unknown" : "Not installed")}
-                </TableCell>
+                <TableCell>{provider.versionLabel}</TableCell>
                 <TableCell>
                   <span className="flex items-center gap-3 capitalize">
                     <span
@@ -234,7 +261,9 @@ export function EnvironmentProviders({
                 <TableCell>
                   <span className="capitalize">{provider.auth.status}</span>
                   {provider.auth.email && (
-                    <p className="mt-1 text-xs text-muted-foreground">{provider.auth.email}</p>
+                    <p className="mt-0.5 text-xs leading-4 text-muted-foreground">
+                      {provider.auth.email}
+                    </p>
                   )}
                 </TableCell>
                 <TableCell className="text-right">
@@ -275,11 +304,9 @@ export function EnvironmentProviders({
                         size="sm"
                         variant="link"
                         disabled={!canEdit || mutationBusy}
-                        onClick={() =>
-                          provider.enabled ? setEditing(provider) : void toggleEnabled(provider)
-                        }
+                        onClick={() => setEditing(provider)}
                       >
-                        {provider.enabled ? "Configure →" : "Enable →"}
+                        Configure →
                       </Button>
                     )}
                     <span className="flex-1" />
@@ -304,7 +331,7 @@ export function EnvironmentProviders({
                           disabled={!canEdit || mutationBusy}
                           onClick={() => void toggleEnabled(provider)}
                         >
-                          {provider.enabled ? "Disable" : "Enable"}
+                          Disable
                         </MenuItem>
                         {provider.instanceId !== defaultInstanceIdForDriver(provider.driver) && (
                           <MenuItem
@@ -321,10 +348,14 @@ export function EnvironmentProviders({
               </TableRow>
             );
           })}
-          {!providers?.length && (
+          {!visibleProviders?.length && (
             <TableRow>
               <TableCell colSpan={5} className="text-center text-muted-foreground">
-                {providers === null ? "Loading providers…" : "No providers configured."}
+                {providers === null
+                  ? "Loading providers…"
+                  : enabledProviders?.length
+                    ? "No providers match your search."
+                    : "No enabled providers. Add a provider to get started."}
               </TableCell>
             </TableRow>
           )}

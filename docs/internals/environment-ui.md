@@ -22,9 +22,16 @@ and the shared dialog designs when changing this destination.
   loads the already installed standard variable font; ordinary copy uses the reference's system
   font. Scope these rules to the environment surface so Usage and other destinations retain their
   typography.
-- Tables use the shared table components, quiet 40 px headers, 80 px data rows, a secondary line
-  under names, horizontal separators and aligned action columns. Keep wide tables horizontally
+- Tables use the shared table components, quiet 31 px headers and a 47 px row baseline matching Usage. Allow rows to grow for a secondary line
+  under names; use horizontal separators and aligned action columns. Keep wide tables horizontally
   scrollable on narrow windows. Do not bring checkout or branch controls into the project table.
+- Every table has a visible, labeled search field in its heading toolbar, following Usage.
+  Keep it available for empty tables, filter each table independently, and distinguish no matches
+  from no data. Search never changes the scope of destructive actions such as Revoke other clients.
+- Project rows use the shared `ProjectFavicon`, including custom images and the folder fallback.
+  Reserve a consistent 20 px image slot before the name and path.
+- Provider tables show enabled accounts only. Disabled accounts can be restored through Add provider,
+  preserving their saved configuration; they do not occupy rows in the active account table.
 - Use 36 px text controls, restrained borders, and the shared dialog components. Environment editing
   has General, Access and Advanced tabs. Provider editing reuses the existing shared draft and
   General, Environment variables, Configuration and Models tabs. Immediate access actions do not

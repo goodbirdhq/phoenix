@@ -1,3 +1,4 @@
+import { EnvironmentTableSearch } from "./EnvironmentTableSearch";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { useState } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -11,6 +12,7 @@ import { useEnvironmentSessionState } from "../../state/session";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../ui/table";
 import { Button } from "../ui/button";
+import { ProjectFavicon } from "../ProjectFavicon";
 
 export function EnvironmentProjects({
   environmentId,
@@ -43,26 +45,20 @@ export function EnvironmentProjects({
             registered on this environment
           </p>
         </div>
-        <Button
-          data-environment-control
-          size="sm"
-          className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px]"
-          disabled={!canEdit}
-          onClick={() => openCommandPalette({ open: "add-project", environmentId })}
-        >
-          Add project
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <EnvironmentTableSearch label="Search projects" value={search} onChange={setSearch} />
+          <Button
+            data-environment-control
+            size="sm"
+            className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px]"
+            disabled={!canEdit}
+            onClick={() => openCommandPalette({ open: "add-project", environmentId })}
+          >
+            Add project
+          </Button>
+        </div>
       </div>
       <div className="space-y-3">
-        <label className="flex h-[42px] items-center rounded-lg border px-3 text-muted-foreground">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            aria-label="Search projects"
-            placeholder="Search projects…"
-            className="min-w-0 flex-1 bg-transparent text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
-        </label>
         <Table className="environment-table">
           <TableHeader>
             <TableRow>
@@ -81,20 +77,30 @@ export function EnvironmentProjects({
               return (
                 <TableRow key={p.id}>
                   <TableCell>
-                    <p className="text-[13px] font-medium">{p.title}</p>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <p
-                            tabIndex={0}
-                            className="mt-1 max-w-[32rem] truncate text-xs text-muted-foreground"
-                          />
-                        }
-                      >
-                        {p.workspaceRoot}
-                      </TooltipTrigger>
-                      <TooltipPopup>{p.workspaceRoot}</TooltipPopup>
-                    </Tooltip>
+                    <div className="flex items-center gap-3">
+                      <ProjectFavicon
+                        environmentId={environmentId}
+                        cwd={p.workspaceRoot}
+                        faviconPath={p.faviconPath}
+                        className="size-5"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-[13px] leading-[18px] font-medium">{p.title}</p>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <p
+                                tabIndex={0}
+                                className="mt-0.5 max-w-[32rem] truncate text-xs leading-4 text-muted-foreground"
+                              />
+                            }
+                          >
+                            {p.workspaceRoot}
+                          </TooltipTrigger>
+                          <TooltipPopup>{p.workspaceRoot}</TooltipPopup>
+                        </Tooltip>
+                      </div>
+                    </div>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{counts.get(p.id) ?? 0}</TableCell>
                   <TableCell>

@@ -6,11 +6,15 @@ import type {
   PreviewViewportSetting,
   ProviderInstanceId,
   ServerSettings,
+  ServerProvider,
   SidebarProjectGroupingMode,
   UnifiedSettings,
 } from "@t3tools/contracts";
 import { defaultInstanceIdForDriver } from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import {
+  DEFAULT_UNIFIED_SETTINGS,
+  resolveProviderInstanceEnabled,
+} from "@t3tools/contracts/settings";
 import {
   getBackgroundActivityBaseProfile,
   normalizeBackgroundActivitySettings,
@@ -263,6 +267,15 @@ export function resolveProviderInstanceSettings(
   if (!legacy) return undefined;
   const { enabled, ...config } = legacy;
   return { driver, enabled, config };
+}
+
+/** Runtime availability can report disabled even when the saved account is enabled. */
+export function isProviderInstanceEnabled(
+  settings: Pick<ServerSettings, "providers" | "providerInstances">,
+  provider: Pick<ServerProvider, "instanceId" | "driver" | "enabled">,
+): boolean {
+  const saved = resolveProviderInstanceSettings(settings, provider.instanceId, provider.driver);
+  return saved ? resolveProviderInstanceEnabled(saved) : provider.enabled;
 }
 
 export function buildProviderInstanceUpdatePatch(input: {

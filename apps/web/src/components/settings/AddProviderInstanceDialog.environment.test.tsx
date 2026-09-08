@@ -1,13 +1,17 @@
 import { visitElements } from "../../test/reactElementTree";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ProviderDriverKind, type ProviderInstanceConfig } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 
 const settingsHooks = vi.hoisted(() => ({
-  read: vi.fn(() => ({ providerInstances: {} })),
+  read: vi.fn((): { providerInstances: Record<string, ProviderInstanceConfig> } => ({
+    providerInstances: {},
+  })),
   update: vi.fn<(input: unknown) => Promise<{ _tag: "Success" | "Failure" }>>(),
   toast: vi.fn(),
+  session: vi.fn(() => ({ data: { scopes: ["orchestration:operate"] } })),
+  providers: vi.fn((): unknown[] => []),
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -30,8 +34,13 @@ vi.mock("../../hooks/useSettings", () => ({
 }));
 
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => settingsHooks.update }));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: settingsHooks.providers }));
+vi.mock("../../state/session", () => ({ useEnvironmentSessionState: settingsHooks.session }));
 vi.mock("../../state/server", () => ({
-  serverEnvironment: { updateSettings: Symbol("updateSettings") },
+  serverEnvironment: {
+    updateSettings: Symbol("updateSettings"),
+    providersValueAtom: vi.fn(),
+  },
 }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: settingsHooks.toast } }));
 
@@ -51,9 +60,12 @@ describe("AddProviderInstanceDialog environment routing", () => {
   beforeEach(() => {
     hooks.reset();
     vi.clearAllMocks();
+    settingsHooks.session.mockReturnValue({ data: { scopes: ["orchestration:operate"] } });
+    settingsHooks.providers.mockReturnValue([]);
+    settingsHooks.read.mockReturnValue({ providerInstances: {} });
   });
 
-  function scenario() {
+  function scenario(label = "Work") {
     const onOpenChange = vi.fn();
     const render = () => {
       hooks.beginRender();
@@ -75,12 +87,47 @@ describe("AddProviderInstanceDialog environment routing", () => {
     };
     const field = visitElements(render(), (element) => element.props.placeholder === "e.g. Work")!;
     (field.props.onChange as (event: { target: { value: string } }) => void)({
-      target: { value: "Work" },
+      target: { value: label },
     });
     click("Next");
     click("Next");
     return { render, click, onOpenChange };
   }
+
+  it("rejects creation and restoration in a read-only target environment", () => {
+    settingsHooks.session.mockReturnValue({ data: { scopes: ["orchestration:read"] } });
+    settingsHooks.providers.mockReturnValue([
+      { instanceId: "codex_work", driver: "codex", enabled: false, displayName: "Work" },
+    ]);
+    settingsHooks.read.mockReturnValue({
+      providerInstances: {
+        codex_work: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: false,
+          config: { homePath: "/saved/work" },
+        },
+      },
+    });
+    const onOpenChange = vi.fn();
+    hooks.beginRender();
+    const initial = AddProviderInstanceDialog({
+      open: true,
+      environmentId: remoteEnvironmentId,
+      environmentLabel: "Remote",
+      onOpenChange,
+    });
+    const restore = visitElements(
+      initial,
+      (element) => element.props["aria-label"] === "Enable Work (codex_work)",
+    )!;
+    expect(restore.props.disabled).toBe(true);
+    (restore.props.onClick as () => void)();
+    const dialog = scenario("Another");
+    dialog.click("Add instance");
+    expect(settingsHooks.update).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(dialog.onOpenChange).not.toHaveBeenCalled();
+  });
 
   it("routes the save to the supplied environment and waits for acknowledgement before closing", async () => {
     const ack = acknowledgement<{ _tag: "Success" }>();
