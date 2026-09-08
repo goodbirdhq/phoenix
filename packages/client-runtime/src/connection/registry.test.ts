@@ -1,3 +1,5 @@
+import { registerPairingConnection } from "./onboarding.ts";
+import { remoteHttpClientLayer } from "../rpc/http.ts";
 import {
   type DesktopSshEnvironmentTarget,
   EnvironmentId,
@@ -952,6 +954,70 @@ describe("EnvironmentRegistry", () => {
       }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
   );
+
+  for (const autoConnect of [true, false]) {
+    it.effect(`pairing establishes one session with autoConnect=${autoConnect}`, () =>
+      Effect.gen(function* () {
+        const connectionId = `bearer:${BEARER_TARGET.environmentId}`;
+        const target = new BearerConnectionTarget({ ...BEARER_TARGET, connectionId });
+        const profile = new BearerConnectionProfile({
+          ...BEARER_PROFILE,
+          connectionId,
+          autoConnect,
+        });
+        const harness = yield* makeHarness(
+          autoConnect ? [] : [target],
+          autoConnect ? [] : [profile],
+        );
+        const http = remoteHttpClientLayer(((input) => {
+          const url = String(input);
+          if (url.endsWith("/.well-known/t3/environment"))
+            return Promise.resolve(
+              Response.json({
+                environmentId: target.environmentId,
+                label: target.label,
+                platform: { os: "linux", arch: "x64" },
+                serverVersion: "0.0.0-test",
+                capabilities: { repositoryIdentity: true },
+              }),
+            );
+          if (url.endsWith("/oauth/token"))
+            return Promise.resolve(
+              Response.json({
+                access_token: "new-token",
+                issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+                token_type: "Bearer",
+                expires_in: 3600,
+                scope: "orchestration:read",
+              }),
+            );
+          return Promise.reject(new Error(`Unexpected request: ${url}`));
+        }) satisfies typeof fetch);
+        yield* Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+          yield* registry.start;
+          const environmentId = yield* registerPairingConnection({
+            host: "https://bearer.example.test",
+            pairingCode: "test-code",
+          });
+          yield* awaitConnectionState(
+            registry,
+            environmentId,
+            (state) => state.phase === "connected",
+          );
+          expect(yield* Ref.get(harness.sessions)).toHaveLength(1);
+          expect(yield* Ref.get(harness.releasedSessions)).toBe(0);
+        }).pipe(
+          Effect.provide(Layer.mergeAll(harness.layer, http)),
+          Effect.provideService(ClientCapabilities.ClientPresentation, {
+            metadata: { label: "Test", deviceType: "desktop", os: "linux" },
+            scopes: [],
+          }),
+          Effect.scoped,
+        );
+      }),
+    );
+  }
 
   it.effect("preserves auto-connect when pairing replaces an existing credential", () =>
     Effect.gen(function* () {

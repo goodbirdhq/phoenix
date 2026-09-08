@@ -123,7 +123,12 @@ export const registerPairingConnection = Effect.fn(
   const registration = yield* preparePairingRegistration(input);
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   yield* registry.register(registration);
-  yield* registry.retryNow(registration.target.environmentId);
+  const entry = (yield* SubscriptionRef.get(registry.entries)).get(
+    registration.target.environmentId,
+  );
+  if (entry && Option.isSome(entry.profile) && entry.profile.value.autoConnect === false) {
+    yield* registry.retryNow(registration.target.environmentId);
+  }
   return registration.target.environmentId;
 });
 
@@ -240,7 +245,12 @@ export const registerSshConnection = Effect.fn(
   const registration = yield* prepareSshRegistration(input);
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   yield* registry.register(registration);
-  yield* registry.retryNow(registration.target.environmentId);
+  const entry = (yield* SubscriptionRef.get(registry.entries)).get(
+    registration.target.environmentId,
+  );
+  if (entry && Option.isSome(entry.profile) && entry.profile.value.autoConnect === false) {
+    yield* registry.retryNow(registration.target.environmentId);
+  }
   return registration.target.environmentId;
 });
 
