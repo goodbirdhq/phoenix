@@ -3,11 +3,14 @@
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { CheckIcon } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
 import {
   ProviderInstanceId,
   ProviderDriverKind,
   type EnvironmentId,
   type ProviderInstanceConfig,
+  type ServerProvider,
+  defaultInstanceIdForDriver,
 } from "@t3tools/contracts";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
@@ -38,6 +41,10 @@ import {
   type WizardNavigation,
 } from "./AddProviderInstanceDialog.logic";
 import { AddProviderInstanceWizardSteps } from "./AddProviderInstanceWizardSteps";
+import {
+  buildProviderInstanceUpdatePatch,
+  resolveProviderInstanceSettings,
+} from "./SettingsPanels.logic";
 
 const PROVIDER_ACCENT_SWATCHES = [
   "#2563eb",
@@ -131,6 +138,8 @@ export function AddProviderInstanceDialog({
   onOpenChange,
 }: AddProviderInstanceDialogProps) {
   const settings = useEnvironmentSettings(environmentId);
+  const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
+  const disabledProviders = providers?.filter((provider) => !provider.enabled) ?? [];
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, "add provider instance");
   const [saving, setSaving] = useState(false);
 
@@ -188,6 +197,40 @@ export function AddProviderInstanceDialog({
         instanceIdError,
       }),
     );
+  };
+
+  const enableExisting = async (provider: ServerProvider) => {
+    const instance = resolveProviderInstanceSettings(
+      settings,
+      provider.instanceId,
+      provider.driver,
+    );
+    if (!instance) return;
+    setSaving(true);
+    try {
+      const result = await updateSettings({
+        environmentId,
+        input: {
+          patch: buildProviderInstanceUpdatePatch({
+            settings,
+            instanceId: provider.instanceId,
+            driver: provider.driver,
+            isDefault: provider.instanceId === defaultInstanceIdForDriver(provider.driver),
+            instance: { ...instance, enabled: true },
+          }),
+        },
+      });
+      if (result._tag === "Failure") throw new Error("Could not enable this provider. Try again.");
+      onOpenChange(false);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not enable provider",
+        description: error instanceof Error ? error.message : "Update failed.",
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSave = async () => {
@@ -270,6 +313,38 @@ export function AddProviderInstanceDialog({
           >
             <>
               <div className={cn("grid gap-2", wizardStep !== 0 && "hidden")}>
+                {disabledProviders.length > 0 && (
+                  <section aria-label="Disabled provider accounts" className="mb-3 space-y-2">
+                    <h3 className="text-sm font-medium">Enable an existing account</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Keep its saved configuration, or add a new instance below.
+                    </p>
+                    {disabledProviders.map((provider) => {
+                      const definition = DRIVER_OPTION_BY_VALUE[provider.driver];
+                      const Mark = definition?.icon;
+                      return (
+                        <div
+                          key={provider.instanceId}
+                          className="flex items-center gap-3 border-b py-2"
+                        >
+                          {Mark && <Mark className="size-4 shrink-0" />}
+                          <span className="min-w-0 flex-1 truncate text-sm">
+                            {provider.displayName ?? definition?.label ?? provider.driver}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={saving}
+                            onClick={() => void enableExisting(provider)}
+                            aria-label={`Enable ${provider.displayName ?? definition?.label ?? provider.driver}`}
+                          >
+                            Enable
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </section>
+                )}
                 <div id="add-instance-driver-label" className="text-sm font-medium text-foreground">
                   Driver
                 </div>

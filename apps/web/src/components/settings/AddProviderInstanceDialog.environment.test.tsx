@@ -30,8 +30,12 @@ vi.mock("../../hooks/useSettings", () => ({
 }));
 
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => settingsHooks.update }));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
 vi.mock("../../state/server", () => ({
-  serverEnvironment: { updateSettings: Symbol("updateSettings") },
+  serverEnvironment: {
+    updateSettings: Symbol("updateSettings"),
+    providersValueAtom: vi.fn(),
+  },
 }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: settingsHooks.toast } }));
 

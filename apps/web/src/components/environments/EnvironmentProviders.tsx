@@ -46,6 +46,7 @@ export function EnvironmentProviders({
   label: string;
 }) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
+  const enabledProviders = providers?.filter((provider) => provider.enabled);
   const environment = useEnvironment(environmentId);
   const session = useEnvironmentSessionState(environmentId);
   const canEdit = session.data?.scopes?.includes("orchestration:operate") ?? false;
@@ -189,7 +190,7 @@ export function EnvironmentProviders({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {providers?.map((provider) => {
+          {enabledProviders?.map((provider) => {
             const definition = DRIVER_OPTION_BY_VALUE[provider.driver];
             const Mark = definition?.icon;
             const candidate = candidates.find((c) => c.driver === provider.driver);
@@ -204,10 +205,10 @@ export function EnvironmentProviders({
                   <div className="flex items-center gap-3">
                     {Mark && <Mark className="size-5 shrink-0" />}
                     <div>
-                      <p className="text-[13px] leading-[19px] font-medium">
+                      <p className="text-[13px] leading-[18px] font-medium">
                         {provider.displayName ?? definition?.label ?? provider.driver}
                       </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
+                      <p className="mt-0.5 text-xs leading-4 text-muted-foreground">
                         {provider.instanceId === defaultInstanceIdForDriver(provider.driver)
                           ? "Default instance"
                           : "Named instance"}
@@ -234,7 +235,9 @@ export function EnvironmentProviders({
                 <TableCell>
                   <span className="capitalize">{provider.auth.status}</span>
                   {provider.auth.email && (
-                    <p className="mt-1 text-xs text-muted-foreground">{provider.auth.email}</p>
+                    <p className="mt-0.5 text-xs leading-4 text-muted-foreground">
+                      {provider.auth.email}
+                    </p>
                   )}
                 </TableCell>
                 <TableCell className="text-right">
@@ -275,11 +278,9 @@ export function EnvironmentProviders({
                         size="sm"
                         variant="link"
                         disabled={!canEdit || mutationBusy}
-                        onClick={() =>
-                          provider.enabled ? setEditing(provider) : void toggleEnabled(provider)
-                        }
+                        onClick={() => setEditing(provider)}
                       >
-                        {provider.enabled ? "Configure →" : "Enable →"}
+                        Configure →
                       </Button>
                     )}
                     <span className="flex-1" />
@@ -321,10 +322,12 @@ export function EnvironmentProviders({
               </TableRow>
             );
           })}
-          {!providers?.length && (
+          {!enabledProviders?.length && (
             <TableRow>
               <TableCell colSpan={5} className="text-center text-muted-foreground">
-                {providers === null ? "Loading providers…" : "No providers configured."}
+                {providers === null
+                  ? "Loading providers…"
+                  : "No enabled providers. Add a provider to get started."}
               </TableCell>
             </TableRow>
           )}

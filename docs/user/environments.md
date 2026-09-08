@@ -43,11 +43,12 @@ variables. Connection endpoints appear in the sidebar and Connections tab.
 The web and desktop Environments page has five tabs. Selecting an environment here does not switch
 an open conversation to another machine.
 
-- **Projects** lists that environment's workspaces, root paths and thread counts. Search by name or
+- **Projects** lists that environment's workspaces with their project images, root paths and thread counts. Search by name or
   path, or choose **Add project** to register a workspace on the selected environment. Open a workspace
   to start a thread, or open its project settings. Branch and checkout management stays in the
   workspace's source control tools.
-- **Providers** shows provider accounts, installed versions, status and authentication. Configure an
+- **Providers** shows enabled provider accounts, installed versions, status and authentication.
+  Use **Add provider** to create an account or enable a disabled account with its saved configuration. Configure an
   account using General, Environment variables, Configuration and Models tabs. Save applies the
   shared draft; Cancel discards it. Runtime updates are available when the provider supports them.
   Changing provider configuration requires Operate tasks permission.

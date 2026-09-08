@@ -11,6 +11,7 @@ import { useEnvironmentSessionState } from "../../state/session";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../ui/table";
 import { Button } from "../ui/button";
+import { ProjectFavicon } from "../ProjectFavicon";
 
 export function EnvironmentProjects({
   environmentId,
@@ -81,20 +82,30 @@ export function EnvironmentProjects({
               return (
                 <TableRow key={p.id}>
                   <TableCell>
-                    <p className="text-[13px] font-medium">{p.title}</p>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <p
-                            tabIndex={0}
-                            className="mt-1 max-w-[32rem] truncate text-xs text-muted-foreground"
-                          />
-                        }
-                      >
-                        {p.workspaceRoot}
-                      </TooltipTrigger>
-                      <TooltipPopup>{p.workspaceRoot}</TooltipPopup>
-                    </Tooltip>
+                    <div className="flex items-center gap-3">
+                      <ProjectFavicon
+                        environmentId={environmentId}
+                        cwd={p.workspaceRoot}
+                        faviconPath={p.faviconPath}
+                        className="size-5"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-[13px] leading-[18px] font-medium">{p.title}</p>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <p
+                                tabIndex={0}
+                                className="mt-0.5 max-w-[32rem] truncate text-xs leading-4 text-muted-foreground"
+                              />
+                            }
+                          >
+                            {p.workspaceRoot}
+                          </TooltipTrigger>
+                          <TooltipPopup>{p.workspaceRoot}</TooltipPopup>
+                        </Tooltip>
+                      </div>
+                    </div>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{counts.get(p.id) ?? 0}</TableCell>
                   <TableCell>
