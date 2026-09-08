@@ -250,3 +250,12 @@ export function scheduleHistoryStartedLabel(
     ? `Started at ${started.split(" · ")[1]}`
     : `Started ${started}`;
 }
+
+export function scheduleHistoryFailureDetails(
+  entry: Extract<ScheduleHistoryEntry, { type: "failed" }>,
+  timeZone: string,
+) {
+  const first = scheduleDisplayTimestamp(entry.firstFailedAt, timeZone);
+  const last = scheduleDisplayTimestamp(entry.lastFailedAt, timeZone);
+  return `${entry.code} · ${first === last ? first : `${first} – ${last}`}`;
+}

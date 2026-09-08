@@ -10,6 +10,7 @@ import {
   chooseScheduleModelSelection,
   compareScheduleSidebarRows,
   schedulePromptExplanation,
+  scheduleHistoryFailureDetails,
   scheduleDisplayTimestamp,
   scheduleRepeatSummary,
   latestScheduleHistoryListText,
@@ -207,7 +208,7 @@ describe("Schedule editor logic", () => {
 });
 
 describe("Schedule attention and history", () => {
-  const failed = (occurrenceId: string): ScheduleHistoryEntry => ({
+  const failed = (occurrenceId: string): Extract<ScheduleHistoryEntry, { type: "failed" }> => ({
     type: "failed",
     occurrenceId: OccurrenceId.make(occurrenceId),
     scheduledFor: "2026-08-19T09:00:00.000Z",
@@ -217,6 +218,32 @@ describe("Schedule attention and history", () => {
     count: 2,
     firstFailedAt: "2026-08-19T09:00:01.000Z",
     lastFailedAt: "2026-08-19T09:05:01.000Z",
+  });
+
+  it("preserves failure codes and actual retry times in the owning time zone", () => {
+    const entry = {
+      ...failed("00000000-0000-0000-0000-00000000000a"),
+      scheduledFor: "2026-08-19T07:00:00.000Z",
+      firstFailedAt: "2026-08-19T07:20:00.000Z",
+      lastFailedAt: "2026-08-19T07:40:00.000Z",
+    };
+    const details = scheduleHistoryFailureDetails(entry, "Europe/Berlin");
+    expect(details).toContain("trigger_failed");
+    expect(details).toContain("09:20");
+    expect(details).toContain("09:40");
+    expect(details).not.toContain("09:00");
+    expect(
+      scheduleHistoryFailureDetails(
+        { ...entry, lastFailedAt: entry.firstFailedAt },
+        "Europe/Berlin",
+      ),
+    ).not.toContain(" – ");
+    expect(
+      scheduleHistoryFailureDetails(
+        { ...entry, lastFailedAt: "2026-08-20T07:40:00.000Z" },
+        "Europe/Berlin",
+      ),
+    ).toContain("20 Aug");
   });
 
   it("keys acknowledgement to the latest failed Occurrence", () => {

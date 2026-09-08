@@ -16,6 +16,7 @@ import {
   scheduleDisplayTimestamp,
   scheduleHistoryScheduledLabel,
   scheduleHistoryStartedLabel,
+  scheduleHistoryFailureDetails,
 } from "./SchedulesPage.logic";
 
 export function ScheduleHistoryTable({
@@ -76,11 +77,20 @@ export function ScheduleHistoryTable({
             </TableCell>
             {!compact && (
               <TableCell className="pr-4">
-                {entry.type === "triggered"
-                  ? scheduleHistoryStartedLabel(entry, timeZone)
-                  : entry.type === "failed"
-                    ? `${entry.message} · ${entry.count} ${entry.count === 1 ? "attempt" : "attempts"}`
-                    : `${entry.countIsLowerBound ? "At least " : ""}${entry.count.toLocaleString()} older occurrences · through ${scheduleDisplayTimestamp(entry.lastScheduledFor, timeZone)}`}
+                {entry.type === "triggered" ? (
+                  scheduleHistoryStartedLabel(entry, timeZone)
+                ) : entry.type === "failed" ? (
+                  <>
+                    <p>
+                      {entry.message} · {entry.count} {entry.count === 1 ? "attempt" : "attempts"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {scheduleHistoryFailureDetails(entry, timeZone)}
+                    </p>
+                  </>
+                ) : (
+                  `${entry.countIsLowerBound ? "At least " : ""}${entry.count.toLocaleString()} older occurrences · through ${scheduleDisplayTimestamp(entry.lastScheduledFor, timeZone)}`
+                )}
               </TableCell>
             )}
             <TableCell className="text-right">
