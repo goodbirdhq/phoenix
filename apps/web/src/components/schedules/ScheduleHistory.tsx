@@ -5,13 +5,16 @@ import type {
   ScheduleHistoryEntry,
   ThreadId,
 } from "@t3tools/contracts";
-import { formatScheduleTimestamp } from "@t3tools/client-runtime/schedules";
 import { useEffect, useState } from "react";
 import { useEnvironmentQuery } from "../../state/query";
 import { scheduleEnvironment } from "../../state/schedules";
 import { Button } from "../ui/button";
 import { Table, TableHeader, TableHead, TableRow, TableBody, TableCell } from "../ui/table";
-import { prependOlderScheduleHistory, scheduleHistoryEntryKey } from "./SchedulesPage.logic";
+import {
+  prependOlderScheduleHistory,
+  scheduleHistoryEntryKey,
+  scheduleDisplayTimestamp,
+} from "./SchedulesPage.logic";
 
 export function ScheduleHistoryTable({
   entries,
@@ -33,8 +36,8 @@ export function ScheduleHistoryTable({
   return (
     <Table className="schedule-history">
       <colgroup>
-        <col style={{ width: compact ? "auto" : "220px" }} />
-        <col style={{ width: "130px" }} />
+        <col style={{ width: compact ? "auto" : "230px" }} />
+        <col style={{ width: compact ? "150px" : "130px" }} />
         {!compact && <col />}
         <col style={{ width: "140px" }} />
       </colgroup>
@@ -52,7 +55,7 @@ export function ScheduleHistoryTable({
         {entries.toReversed().map((entry) => (
           <TableRow key={scheduleHistoryEntryKey(entry)}>
             <TableCell>
-              {formatScheduleTimestamp(
+              {scheduleDisplayTimestamp(
                 entry.type === "skipped"
                   ? entry.firstScheduledFor
                   : entry.type === "failed"
@@ -81,10 +84,10 @@ export function ScheduleHistoryTable({
             {!compact && (
               <TableCell className="pr-4">
                 {entry.type === "triggered"
-                  ? `Started ${formatScheduleTimestamp(entry.triggeredAt, timeZone)}`
+                  ? `Started ${scheduleDisplayTimestamp(entry.triggeredAt, timeZone)}`
                   : entry.type === "failed"
                     ? `${entry.message} · ${entry.count} ${entry.count === 1 ? "attempt" : "attempts"}`
-                    : `${entry.countIsLowerBound ? "At least " : ""}${entry.count.toLocaleString()} older occurrences · through ${formatScheduleTimestamp(entry.lastScheduledFor, timeZone)}`}
+                    : `${entry.countIsLowerBound ? "At least " : ""}${entry.count.toLocaleString()} older occurrences · through ${scheduleDisplayTimestamp(entry.lastScheduledFor, timeZone)}`}
               </TableCell>
             )}
             <TableCell className="text-right">
@@ -92,7 +95,7 @@ export function ScheduleHistoryTable({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-auto px-0 text-[13px]"
+                  className="h-[22px] p-0 text-[13px] leading-[22px]"
                   onClick={() => onOpenThread(entry.threadId)}
                 >
                   Open thread →
@@ -146,10 +149,10 @@ export function ScheduleHistory({
     setRequested(null);
   }, [requested, history.data, detail.id]);
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
         <h2 className="text-xl font-semibold">Occurrence history</h2>
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="mt-1 text-xs text-muted-foreground">
           {timeZone} · Newest first · Triggered means the thread accepted its first turn.
         </p>
       </div>

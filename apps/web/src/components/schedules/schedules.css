@@ -1,14 +1,15 @@
-.schedule-surface {
-  font-family: "Environment Inter", "Inter Variable", system-ui, sans-serif;
-  font-synthesis: none;
+.schedule-surface,
+.schedule-sidebar {
+  font-family: -apple-system, BlinkMacSystemFont, "Environment Inter", sans-serif;
 }
 .schedule-surface .schedule-control {
-  height: 36px;
+  height: 38px;
   padding-inline: 12px;
   border-radius: 8px;
   font-size: 13px;
-  line-height: 19px;
+  line-height: 20px;
   box-shadow: none;
+  font-weight: 400;
 }
 .schedule-history {
   min-width: 680px;
@@ -25,6 +26,7 @@
 }
 .schedule-history td {
   padding: 20px 0;
+  font-size: 13px;
   white-space: normal;
   overflow-wrap: anywhere;
 }
@@ -34,7 +36,6 @@
 .schedule-history td:first-child {
   font-size: 14px;
 }
-.schedule-editor input:not([type="checkbox"]),
 .schedule-editor select {
   height: 40px;
   border-radius: 8px;
@@ -43,6 +44,10 @@ html:not(.dark):not([data-theme-id]) .schedule-surface {
   --primary: #0284c7;
   --primary-foreground: #fff;
   --input: var(--border);
+  --foreground: #27272a;
+  --muted-foreground: #71717a;
+  --border: #e4e4e7;
+  --muted: #f4f4f5;
 }
 
 .schedule-editor input:not([type="checkbox"]),
@@ -50,4 +55,100 @@ html:not(.dark):not([data-theme-id]) .schedule-surface {
   font-size: 13px;
   line-height: 22px;
   box-shadow: none;
+}
+
+.schedule-heading {
+  align-items: center;
+}
+.schedule-heading h1 {
+  gap: 8px;
+  letter-spacing: normal;
+}
+.schedule-heading h1 + div,
+.schedule-surface .text-xs {
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.schedule-history-link {
+  height: 22px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 22px;
+  font-weight: 400;
+}
+
+.schedule-history button {
+  height: 22px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 22px;
+  font-weight: 400;
+}
+
+.schedule-editor [data-slot="input-control"] {
+  box-shadow: none;
+}
+.schedule-editor [data-slot="input-control"]::before {
+  box-shadow: none;
+}
+.schedule-editor input:not([type="checkbox"]) {
+  height: 38px;
+}
+.schedule-editor [role="tablist"] {
+  height: 46px;
+}
+.schedule-editor [role="tab"] {
+  height: 38px;
+}
+.schedule-editor [data-slot="select-trigger"] {
+  height: 40px;
+  font-size: 13px;
+}
+
+.schedule-editor [data-slot="textarea-control"] {
+  min-height: 76px;
+  padding: 0;
+  box-shadow: none;
+}
+.schedule-editor [data-slot="textarea-control"]::before {
+  box-shadow: none;
+}
+.schedule-editor textarea {
+  min-height: 74px;
+  padding: 12px 16px;
+}
+
+html:not(.dark):not([data-theme-id]) .schedule-surface .text-muted-foreground {
+  color: #71717a;
+}
+
+.schedule-delete {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px;
+  box-shadow: 0 12px 30px #18181b24;
+}
+.schedule-delete [data-slot="alert-dialog-header"] {
+  gap: 4px;
+  padding: 0;
+  text-align: left;
+}
+.schedule-delete [data-slot="alert-dialog-title"] {
+  font-size: 16px;
+  line-height: 22px;
+}
+.schedule-delete [data-slot="alert-dialog-description"] {
+  font-size: 12px;
+  line-height: 18px;
+}
+.schedule-delete [data-slot="alert-dialog-footer"] {
+  padding: 0;
+}
+.schedule-delete button {
+  min-height: 32px;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 400;
 }

@@ -1,8 +1,6 @@
-import { describeScheduleCadence } from "@t3tools/shared/scheduleCadence";
 import {
   aggregateSchedules,
   defaultScheduleOneTimeInput,
-  formatScheduleTimestamp,
   inspectCronTiming,
   scheduleWallTimeInputForInstant,
   zonedWallTimeToInstant,
@@ -13,6 +11,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   CalendarClockIcon,
+  CalendarIcon,
   HistoryIcon,
   LayoutGridIcon,
   PlusIcon,
@@ -35,7 +34,11 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useProjects } from "../../state/entities";
 import { useClientSettings } from "../../hooks/useSettings";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "../../workspaceTitlebar";
-import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
+import {
+  WorkspaceBreadcrumb,
+  WorkspaceBreadcrumbItem,
+  WorkspaceBreadcrumbSeparator,
+} from "../WorkspaceBreadcrumb";
 import { PageHeading } from "../patterns/PageHeading";
 import { EnvironmentIcon } from "../environments/EnvironmentIcon";
 import { getDriverOption } from "../settings/providerDriverMeta";
@@ -55,7 +58,11 @@ import { toastManager } from "../ui/toast";
 import { ScheduleActions, useSchedulePermission } from "./ScheduleActions";
 import { ScheduleHistory, ScheduleHistoryTable } from "./ScheduleHistory";
 import { ScheduleEditor, emptyDraft, type ScheduleEditorDraft } from "./ScheduleEditor";
-import { scheduleFailureAttentionVersion } from "./SchedulesPage.logic";
+import {
+  scheduleFailureAttentionVersion,
+  scheduleDisplayTimestamp,
+  scheduleRepeatSummary,
+} from "./SchedulesPage.logic";
 import "./schedules.css";
 
 const retainedDrafts = new Map<string, ScheduleEditorDraft>();
@@ -112,8 +119,11 @@ export function SchedulesPage() {
         )}
       >
         <WorkspaceBreadcrumb ariaLabel="Schedules breadcrumb">
-          <WorkspaceBreadcrumbItem>Schedules</WorkspaceBreadcrumbItem>
-          <WorkspaceBreadcrumbItem current>
+          <WorkspaceBreadcrumbItem className="font-normal text-foreground">
+            Schedules
+          </WorkspaceBreadcrumbItem>
+          <WorkspaceBreadcrumbSeparator />
+          <WorkspaceBreadcrumbItem current className="text-xs font-normal text-muted-foreground">
             {editor
               ? route.edit
                 ? "Edit schedule"
@@ -292,8 +302,9 @@ function ScheduleDetailView({
   return (
     <>
       <PageHeading
+        className="schedule-heading"
         title={row.name}
-        icon={<CalendarClockIcon strokeWidth={1.7} />}
+        icon={<CalendarIcon strokeWidth={1.7} />}
         description={
           <span className="flex flex-wrap items-center gap-1.5">
             <EnvironmentIcon environmentId={row.environmentId} className="size-4" />
@@ -341,36 +352,24 @@ function ScheduleDetailView({
           </TabsTrigger>
         </TabsList>
         <TabsContent value="overview" className="space-y-6">
-          <div className="grid gap-6 border-b pb-6 sm:grid-cols-3">
+          <div className="grid gap-8 border-b pt-1 pb-5 sm:grid-cols-3">
             <ScheduleStat
               label="Next occurrence"
-              icon={<CalendarClockIcon />}
+              icon={<CalendarIcon strokeWidth={1.7} />}
               value={
                 row.state !== "enabled"
                   ? row.state.charAt(0).toUpperCase() + row.state.slice(1)
                   : row.nextOccurrenceAt
-                    ? new Intl.DateTimeFormat(undefined, {
-                        weekday: "short",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        hourCycle: "h23",
-                        timeZone: row.timeZone,
-                      }).format(new Date(row.nextOccurrenceAt))
+                    ? scheduleDisplayTimestamp(row.nextOccurrenceAt, row.timeZone)
                     : "Unavailable"
               }
-              description={row.timeZone}
+              description={row.state === "paused" ? "No upcoming occurrences" : row.timeZone}
             />
             <ScheduleStat
               label="Repeats"
               icon={<RepeatIcon />}
-              value={
-                row.timing.type === "one-time"
-                  ? "One time"
-                  : describeScheduleCadence(row.timing, row.timeZone)
-              }
-              description={
-                row.timing.type === "cron" ? row.timing.expression : "Runs once at the saved time"
-              }
+              value={scheduleRepeatSummary(row.timing, row.timeZone).value}
+              description={scheduleRepeatSummary(row.timing, row.timeZone).description}
             />
             <ScheduleStat
               label="Last occurrence"
@@ -386,7 +385,7 @@ function ScheduleDetailView({
               }
               description={
                 latest
-                  ? formatScheduleTimestamp(
+                  ? scheduleDisplayTimestamp(
                       latest.type === "triggered"
                         ? latest.triggeredAt
                         : latest.type === "failed"
@@ -398,10 +397,10 @@ function ScheduleDetailView({
               }
             />
           </div>
-          <section className="space-y-3">
-            <h2 className="text-sm font-semibold">Prompt</h2>
+          <section className="space-y-2.5">
+            <h2 className="text-sm leading-[22px] font-semibold">Prompt</h2>
             {detail ? (
-              <p className="rounded-lg border bg-muted/20 p-5 text-sm leading-[22px] whitespace-pre-wrap break-words">
+              <p className="rounded-lg border bg-muted/20 px-5 py-4 text-sm leading-[22px] whitespace-pre-wrap break-words">
                 {detail.prompt}
               </p>
             ) : (
@@ -412,16 +411,19 @@ function ScheduleDetailView({
               thread.
             </p>
           </section>
-          <section className="space-y-4">
-            <h2 className="text-sm font-semibold">Execution</h2>
-            <dl className="grid gap-x-6 gap-y-5 sm:grid-cols-3">
+          <section className="space-y-3">
+            <h2 className="text-sm leading-[22px] font-semibold">Execution</h2>
+            <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-3">
               <ExecutionField label="Provider & model">
                 <span className="flex items-center gap-2">
                   {ProviderIcon && <ProviderIcon className="size-4 shrink-0" />}
                   {provider?.displayName ??
                     providerMeta?.label ??
                     row.execution.modelSelection.instanceId}{" "}
-                  · {row.execution.modelSelection.model}
+                  ·{" "}
+                  {provider?.models.find(
+                    (model) => model.slug === row.execution.modelSelection.model,
+                  )?.name ?? row.execution.modelSelection.model}
                 </span>
               </ExecutionField>
               <ExecutionField label="Permissions">
@@ -460,11 +462,12 @@ function ScheduleDetailView({
             </p>
           )}
           <section>
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Recent history</h2>
+            <div className="mb-6 flex items-center justify-between">
+              <h2 className="text-sm leading-[22px] font-semibold">Recent history</h2>
               <Button
                 variant="ghost"
                 size="sm"
+                className="schedule-history-link text-muted-foreground"
                 onClick={() =>
                   void navigate({
                     to: "/schedules",
@@ -540,21 +543,21 @@ function ScheduleStat({
   description: string;
 }) {
   return (
-    <dl className="space-y-3">
+    <dl className="space-y-1.5">
       <dt className="flex items-center gap-2 text-xs text-muted-foreground [&_svg]:size-4">
         {icon}
         {label}
       </dt>
-      <dd className="text-2xl leading-9 font-semibold tracking-tight">{value}</dd>
+      <dd className="text-2xl leading-9 font-semibold">{value}</dd>
       <dd className="text-xs text-muted-foreground">{description}</dd>
     </dl>
   );
 }
 function ExecutionField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="min-w-0 space-y-2">
+    <div className="min-w-0 space-y-[3px]">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="text-[13px] break-words">{children}</dd>
+      <dd className="text-[13px] leading-[22px] break-words">{children}</dd>
     </div>
   );
 }
@@ -734,8 +737,9 @@ function ScheduleEditorJourney({
   return (
     <>
       <PageHeading
+        className="schedule-heading"
         title={editing ? "Edit schedule" : duplicating ? "Duplicate schedule" : "Create schedule"}
-        icon={<CalendarClockIcon />}
+        icon={<CalendarIcon strokeWidth={1.7} />}
         actions={
           <Button variant="ghost" className="w-fit px-0" disabled={pending} onClick={onBack}>
             <ArrowLeftIcon className="size-4" />

@@ -3,6 +3,7 @@ import type { AggregatedScheduleRow } from "@t3tools/client-runtime/schedules";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   MoreHorizontalIcon,
+  ChevronDownIcon,
   PauseIcon,
   PlayIcon,
   PencilIcon,
@@ -128,17 +129,16 @@ export function ScheduleActions({
         disabled={busy || !permission.allowed}
         onClick={() => void mutate(row.state === "paused" ? "schedule.resume" : "schedule.pause")}
       >
-        {row.state === "paused" ? (
-          <PlayIcon className="size-4" />
-        ) : (
-          <PauseIcon className="size-4" />
-        )}
         {row.state === "paused" ? "Resume schedule" : "Pause schedule"}
       </Button>
     ) : null;
   return (
     <>
-      <div className="flex shrink-0 items-center gap-2">
+      <div
+        className={
+          compact ? "flex shrink-0 items-center gap-2" : "flex shrink-0 items-center gap-3"
+        }
+      >
         <Button
           variant="outline"
           size={compact ? "icon" : "default"}
@@ -147,8 +147,7 @@ export function ScheduleActions({
           disabled={busy || !permission.allowed}
           onClick={() => void mutate("schedule.run-now")}
         >
-          <PlayIcon className="size-4" />
-          {!compact && "Run now"}
+          {compact ? <PlayIcon className="size-4" /> : "Run now"}
         </Button>
         {!compact && (
           <Button
@@ -157,7 +156,6 @@ export function ScheduleActions({
             disabled={busy || !permission.allowed}
             onClick={() => openEditor(false)}
           >
-            <PencilIcon className="size-4" />
             Edit schedule
           </Button>
         )}
@@ -174,8 +172,13 @@ export function ScheduleActions({
               />
             }
           >
-            <MoreHorizontalIcon className="size-4" />
-            {!compact && "More"}
+            {compact ? (
+              <MoreHorizontalIcon className="size-4" />
+            ) : (
+              <>
+                More <ChevronDownIcon className="size-3" />
+              </>
+            )}
           </MenuTrigger>
           <MenuPopup align="end" className="w-56">
             <MenuItem
@@ -228,15 +231,15 @@ export function ScheduleActions({
           if (!busy) setDeleting(open);
         }}
       >
-        <AlertDialogPopup className="schedule-surface rounded-[14px] sm:max-w-[430px]">
+        <AlertDialogPopup className="schedule-surface schedule-delete rounded-[14px] sm:max-w-[430px]">
           <AlertDialogHeader>
-            <span className="mb-2 flex size-9 items-center justify-center rounded-lg bg-destructive/5 text-destructive">
+            <span className="mb-3 flex size-[38px] items-center justify-center rounded-lg bg-destructive/5 text-destructive">
               <Trash2Icon className="size-4" />
             </span>
-            <AlertDialogTitle className="text-base">Delete “{row.name}”?</AlertDialogTitle>
+            <AlertDialogTitle>Delete schedule?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the schedule and its history from {row.environmentLabel}. Threads and
-              worktrees it created remain.
+              “{row.name}” and its schedule history will be deleted. Existing threads and worktrees
+              will remain. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {error && (

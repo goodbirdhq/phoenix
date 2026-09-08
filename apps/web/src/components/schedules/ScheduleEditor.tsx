@@ -2,7 +2,6 @@ import {
   cronBuilderExpression,
   currentScheduleTimeZone,
   defaultScheduleOneTimeInput,
-  formatScheduleTimestamp,
   inspectCronTiming,
 } from "@t3tools/client-runtime/schedules";
 import { isProviderAvailable, type ModelSelection } from "@t3tools/contracts";
@@ -30,6 +29,7 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import {
   modelSelectionValue,
+  scheduleDisplayTimestamp,
   reconcileScheduleEditorDefaults,
   schedulePauseFieldLabel,
   scheduleWorktreeCapability,
@@ -82,7 +82,7 @@ function FilterSelect(props: {
   readonly disabled?: boolean;
 }) {
   return (
-    <label className="space-y-1 text-xs text-muted-foreground">
+    <label className="flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground">
       <span className="flex items-center gap-1.5">
         {props.icon}
         {props.label}
@@ -238,7 +238,7 @@ export function ScheduleEditor(props: {
               <Textarea
                 required
                 maxLength={120000}
-                className="min-h-24"
+                className="min-h-[76px]"
                 value={props.draft.prompt}
                 onChange={(event) => patchDraft({ prompt: event.target.value })}
               />
@@ -275,221 +275,238 @@ export function ScheduleEditor(props: {
               <option value="one-time">One time</option>
               <option value="cron">Recurring</option>
             </FilterSelect>
-            {props.draft.timingType === "cron" && (
-              <Tabs
-                className="md:col-span-2"
-                value={cronEditorMode}
-                onValueChange={(v) => setCronEditorMode(v === "manual" ? "manual" : "builder")}
-              >
-                <TabsList
-                  className="w-fit gap-1 rounded-lg border-0 bg-muted p-1 [&_button]:rounded-md [&_button]:border-0 [&_button]:px-3 [&_button]:py-2 [&_button[data-active]]:bg-background"
-                  aria-label="Recurring rule editor"
+            <div className="grid gap-x-5 gap-y-3 md:col-span-2 md:grid-cols-2">
+              {props.draft.timingType === "cron" && (
+                <Tabs
+                  className="md:col-span-2"
+                  value={cronEditorMode}
+                  onValueChange={(v) => setCronEditorMode(v === "manual" ? "manual" : "builder")}
                 >
-                  <TabsTrigger value="builder">
-                    <CalendarClockIcon className="size-4" />
-                    Visual builder
-                  </TabsTrigger>
-                  <TabsTrigger value="manual">
-                    <CodeIcon className="size-4" />
-                    Manual cron
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-            )}
-            {props.draft.timingType === "one-time" ? (
-              <EditorField label="Date and time">
+                  <TabsList
+                    className="w-fit gap-1 rounded-lg border-0 bg-muted p-1 [&_button]:rounded-md [&_button]:border-0 [&_button]:px-3 [&_button]:py-2 [&_button[data-active]]:bg-background"
+                    aria-label="Recurring rule editor"
+                  >
+                    <TabsTrigger value="builder">
+                      <CalendarClockIcon className="size-4" />
+                      Visual builder
+                    </TabsTrigger>
+                    <TabsTrigger value="manual">
+                      <CodeIcon className="size-4" />
+                      Manual cron
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              )}
+              {props.draft.timingType === "one-time" ? (
+                <EditorField label="Date and time">
+                  <Input
+                    nativeInput
+                    required
+                    type="datetime-local"
+                    value={props.draft.runAt}
+                    onChange={(event) => patchDraft({ runAt: event.target.value })}
+                  />
+                </EditorField>
+              ) : (
+                <EditorField label="Recurring rule">
+                  {cronEditorMode === "builder" ? (
+                    <select
+                      aria-label="Recurring Schedule preset"
+                      className="h-10 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground"
+                      value={props.draft.cron}
+                      onChange={(event) => patchDraft({ cron: event.target.value })}
+                    >
+                      <option value={cronBuilderExpression({ cadence: "minutes", interval: 5 })}>
+                        Every 5 minutes
+                      </option>
+                      <option value={cronBuilderExpression({ cadence: "minutes", interval: 15 })}>
+                        Every 15 minutes
+                      </option>
+                      <option value={cronBuilderExpression({ cadence: "hourly", minute: 0 })}>
+                        Every hour
+                      </option>
+                      <option value="0 9 * * 1-5">Weekdays at 9:00</option>
+                      <option
+                        value={cronBuilderExpression({
+                          cadence: "weekly",
+                          weekday: 1,
+                          hour: 9,
+                          minute: 0,
+                        })}
+                      >
+                        Mondays at 9:00
+                      </option>
+                      {![
+                        "*/5 * * * *",
+                        "*/15 * * * *",
+                        "0 * * * *",
+                        "0 9 * * 1-5",
+                        "0 9 * * 1",
+                      ].includes(props.draft.cron) ? (
+                        <option value={props.draft.cron}>Custom saved rule</option>
+                      ) : null}
+                    </select>
+                  ) : (
+                    <Input
+                      required
+                      aria-label="Cron expression"
+                      value={props.draft.cron}
+                      onChange={(event) => patchDraft({ cron: event.target.value })}
+                    />
+                  )}
+                </EditorField>
+              )}
+              <EditorField label="Time zone">
                 <Input
-                  nativeInput
                   required
-                  type="datetime-local"
-                  value={props.draft.runAt}
-                  onChange={(event) => patchDraft({ runAt: event.target.value })}
+                  value={props.draft.timeZone}
+                  onChange={(event) => patchDraft({ timeZone: event.target.value })}
                 />
               </EditorField>
-            ) : (
-              <EditorField label="Recurring rule">
-                {cronEditorMode === "builder" ? (
-                  <select
-                    aria-label="Recurring Schedule preset"
-                    className="h-10 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground"
-                    value={props.draft.cron}
-                    onChange={(event) => patchDraft({ cron: event.target.value })}
-                  >
-                    <option value={cronBuilderExpression({ cadence: "minutes", interval: 5 })}>
-                      Every 5 minutes
-                    </option>
-                    <option value={cronBuilderExpression({ cadence: "minutes", interval: 15 })}>
-                      Every 15 minutes
-                    </option>
-                    <option value={cronBuilderExpression({ cadence: "hourly", minute: 0 })}>
-                      Every hour
-                    </option>
-                    <option value="0 9 * * 1-5">Weekdays at 9:00</option>
-                    <option
-                      value={cronBuilderExpression({
-                        cadence: "weekly",
-                        weekday: 1,
-                        hour: 9,
-                        minute: 0,
-                      })}
-                    >
-                      Mondays at 9:00
-                    </option>
-                    {![
-                      "*/5 * * * *",
-                      "*/15 * * * *",
-                      "0 * * * *",
-                      "0 9 * * 1-5",
-                      "0 9 * * 1",
-                    ].includes(props.draft.cron) ? (
-                      <option value={props.draft.cron}>Custom saved rule</option>
-                    ) : null}
-                  </select>
-                ) : (
-                  <Input
-                    required
-                    aria-label="Cron expression"
-                    value={props.draft.cron}
-                    onChange={(event) => patchDraft({ cron: event.target.value })}
-                  />
-                )}
-                <p className="mt-1 font-mono text-xs text-muted-foreground">{props.draft.cron}</p>
-                {cronInspection?.error ? (
-                  <p className="mt-1 text-xs text-destructive">{cronInspection.error}</p>
-                ) : null}
-                {cronInspection?.highFrequency ? (
-                  <p className="mt-1 text-xs text-warning-foreground">
-                    A five-minute cadence can create up to 288 threads per day. Phoenix does not
-                    automatically delete Threads or worktrees.
-                  </p>
-                ) : null}
-              </EditorField>
-            )}
-            <EditorField label="IANA time zone">
-              <Input
-                required
-                value={props.draft.timeZone}
-                onChange={(event) => patchDraft({ timeZone: event.target.value })}
-              />
-              {cronInspection?.valid ? (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Next:{" "}
-                  {cronInspection.occurrences
-                    .map((value) => formatScheduleTimestamp(value, props.draft.timeZone))
-                    .join(" · ")}
-                </p>
-              ) : null}
-            </EditorField>
-            <div className="space-y-2 border-t pt-4 md:col-span-2">
-              <h2 className="text-base font-semibold">Execution</h2>
-              <p className="text-xs text-muted-foreground">
-                These choices are saved with the schedule, even if project defaults change.
-              </p>
+              {props.draft.timingType === "cron" && (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 md:col-span-2">
+                  <code className="rounded-md bg-muted/40 px-2.5 py-1.5 text-[13px] leading-4">
+                    {props.draft.cron}
+                  </code>
+                  {cronInspection?.valid && (
+                    <p className="text-xs text-muted-foreground">
+                      Next:{" "}
+                      {cronInspection.occurrences
+                        .map((value) => scheduleDisplayTimestamp(value, props.draft.timeZone))
+                        .join(" · ")}
+                    </p>
+                  )}
+                  {cronInspection?.error && (
+                    <p className="w-full text-xs text-destructive">{cronInspection.error}</p>
+                  )}
+                  {cronInspection?.highFrequency && (
+                    <p className="w-full text-xs text-warning-foreground">
+                      A five-minute cadence can create up to 288 threads per day. Phoenix does not
+                      automatically delete threads or worktrees.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
-            <div className="space-y-1 text-xs text-muted-foreground">
-              <span>Provider and model</span>
-              <Select
-                value={modelSelectionValue(props.draft.modelSelection)}
-                disabled={props.pending}
-                onValueChange={(value) =>
+            <div className="grid gap-x-5 gap-y-4 md:col-span-2 md:grid-cols-2">
+              <div className="space-y-4 border-t pt-4 md:col-span-2">
+                <h2 className="text-base leading-[22px] font-semibold">Execution</h2>
+                <p className="text-xs text-muted-foreground">
+                  These choices are saved with the schedule, even if project defaults change.
+                </p>
+              </div>
+              <div className="flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground">
+                <span>Provider and model</span>
+                <Select
+                  value={modelSelectionValue(props.draft.modelSelection)}
+                  disabled={props.pending}
+                  onValueChange={(value) =>
+                    patchDraft({
+                      modelSelection:
+                        modelOptions.find((o) => o.value === value)?.selection ?? null,
+                    })
+                  }
+                >
+                  <SelectTrigger
+                    aria-label="Provider and model"
+                    className="h-10 text-[13px] shadow-none"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      {ProviderIcon && <ProviderIcon className="size-4" />}
+                      <span className="truncate">
+                        {modelOptions.find(
+                          (o) => o.value === modelSelectionValue(props.draft.modelSelection),
+                        )?.label ??
+                          (props.draft.modelSelection
+                            ? `Unavailable · ${props.draft.modelSelection.instanceId} · ${props.draft.modelSelection.model}`
+                            : "Select model")}
+                      </span>
+                    </span>
+                  </SelectTrigger>
+                  <SelectPopup className="schedule-surface" alignItemWithTrigger={false}>
+                    {modelOptions.map((model) => {
+                      const Icon = model.icon;
+                      return (
+                        <SelectItem key={model.value} value={model.value}>
+                          <span className="flex items-center gap-2">
+                            {Icon && <Icon className="size-4" />}
+                            {model.label}
+                          </span>
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectPopup>
+                </Select>
+              </div>
+              <FilterSelect
+                label="Permission mode"
+                value={props.draft.runtimeMode}
+                onChange={(runtimeMode) =>
+                  patchDraft({ runtimeMode: runtimeMode as ScheduleEditorDraft["runtimeMode"] })
+                }
+              >
+                <option value="approval-required">Approval required</option>
+                <option value="auto-accept-edits">Auto-accept edits</option>
+                <option value="auto">Auto</option>
+                <option value="full-access">Full access</option>
+              </FilterSelect>
+              <FilterSelect
+                label="Interaction"
+                value={props.draft.interactionMode}
+                onChange={(interactionMode) =>
                   patchDraft({
-                    modelSelection: modelOptions.find((o) => o.value === value)?.selection ?? null,
+                    interactionMode: interactionMode as ScheduleEditorDraft["interactionMode"],
                   })
                 }
               >
-                <SelectTrigger
-                  aria-label="Provider and model"
-                  className="h-10 text-[13px] shadow-none"
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    {ProviderIcon && <ProviderIcon className="size-4" />}
-                    <span className="truncate">
-                      {modelOptions.find(
-                        (o) => o.value === modelSelectionValue(props.draft.modelSelection),
-                      )?.label ??
-                        (props.draft.modelSelection
-                          ? `Unavailable · ${props.draft.modelSelection.instanceId} · ${props.draft.modelSelection.model}`
-                          : "Select model")}
-                    </span>
-                  </span>
-                </SelectTrigger>
-                <SelectPopup className="schedule-surface" alignItemWithTrigger={false}>
-                  {modelOptions.map((model) => {
-                    const Icon = model.icon;
-                    return (
-                      <SelectItem key={model.value} value={model.value}>
-                        <span className="flex items-center gap-2">
-                          {Icon && <Icon className="size-4" />}
-                          {model.label}
-                        </span>
-                      </SelectItem>
-                    );
-                  })}
-                </SelectPopup>
-              </Select>
-            </div>
-            <FilterSelect
-              label="Permission mode"
-              value={props.draft.runtimeMode}
-              onChange={(runtimeMode) =>
-                patchDraft({ runtimeMode: runtimeMode as ScheduleEditorDraft["runtimeMode"] })
-              }
-            >
-              <option value="approval-required">Approval required</option>
-              <option value="auto-accept-edits">Auto-accept edits</option>
-              <option value="auto">Auto</option>
-              <option value="full-access">Full access</option>
-            </FilterSelect>
-            <FilterSelect
-              label="Interaction"
-              value={props.draft.interactionMode}
-              onChange={(interactionMode) =>
-                patchDraft({
-                  interactionMode: interactionMode as ScheduleEditorDraft["interactionMode"],
-                })
-              }
-            >
-              <option value="default">Build</option>
-              <option value="plan">Plan</option>
-            </FilterSelect>
-            <FilterSelect
-              label="Workspace"
-              value={props.draft.workspaceMode}
-              onChange={(workspaceMode) =>
-                patchDraft({
-                  workspaceMode: workspaceMode as ScheduleEditorDraft["workspaceMode"],
-                  workspaceCustomized: true,
-                })
-              }
-            >
-              <option disabled={!worktreeCapability.allowed} value="worktree">
-                New worktree
-              </option>
-              <option value="local">Shared project workspace</option>
-            </FilterSelect>
-            {props.draft.workspaceMode === "worktree" ? (
-              <EditorField label="Base branch">
-                <Input
-                  required
-                  value={props.draft.baseBranch}
-                  onChange={(event) => patchDraft({ baseBranch: event.target.value })}
-                />
-              </EditorField>
-            ) : null}
-            {!worktreeCapability.allowed ? (
-              <p
-                className={cn(
-                  "text-xs md:col-span-2",
-                  worktreeUnavailable ? "text-destructive" : "text-muted-foreground",
-                )}
+                <option value="default">Build</option>
+                <option value="plan">Plan</option>
+              </FilterSelect>
+              <FilterSelect
+                label="Workspace"
+                value={props.draft.workspaceMode}
+                onChange={(workspaceMode) =>
+                  patchDraft({
+                    workspaceMode: workspaceMode as ScheduleEditorDraft["workspaceMode"],
+                    workspaceCustomized: true,
+                  })
+                }
               >
-                {vcsRefs.data?.isRepo === false
-                  ? "This Project is not backed by a Git repository. Use the shared project workspace."
-                  : vcsProbePending
-                    ? "Checking whether this Project is a Git repository. The shared project workspace remains available."
-                    : "Phoenix could not confirm this Project is a Git repository. Use the shared project workspace."}
-              </p>
-            ) : null}
+                <option disabled={!worktreeCapability.allowed} value="worktree">
+                  New worktree
+                </option>
+                <option value="local">Shared project workspace</option>
+              </FilterSelect>
+              {props.draft.workspaceMode === "worktree" ? (
+                <EditorField label="Base branch">
+                  <Input
+                    required
+                    value={props.draft.baseBranch}
+                    onChange={(event) => patchDraft({ baseBranch: event.target.value })}
+                  />
+                </EditorField>
+              ) : null}
+              {props.draft.workspaceMode === "worktree" && worktreeCapability.allowed && (
+                <p className="self-center text-xs text-muted-foreground">
+                  A fresh worktree is created for each occurrence. Git projects use the remote
+                  default branch initially.
+                </p>
+              )}
+              {!worktreeCapability.allowed ? (
+                <p
+                  className={cn(
+                    "text-xs md:col-span-2",
+                    worktreeUnavailable ? "text-destructive" : "text-muted-foreground",
+                  )}
+                >
+                  {vcsRefs.data?.isRepo === false
+                    ? "This Project is not backed by a Git repository. Use the shared project workspace."
+                    : vcsProbePending
+                      ? "Checking whether this Project is a Git repository. The shared project workspace remains available."
+                      : "Phoenix could not confirm this Project is a Git repository. Use the shared project workspace."}
+                </p>
+              ) : null}
+            </div>
             <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-2 border-t bg-background py-4 md:col-span-2">
               {schedulePauseFieldLabel(props.editing) ? (
                 <label className="mr-auto flex items-center gap-2 text-[13px]">
@@ -537,7 +554,9 @@ function EditorField(props: {
   readonly className?: string;
 }) {
   return (
-    <label className={cn("space-y-1 text-xs text-muted-foreground", props.className)}>
+    <label
+      className={cn("flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground", props.className)}
+    >
       <span>{props.label}</span>
       {props.children}
     </label>

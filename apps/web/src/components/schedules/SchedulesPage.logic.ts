@@ -1,4 +1,5 @@
-import type { ModelSelection, ScheduleHistoryEntry } from "@t3tools/contracts";
+import { describeScheduleCadence } from "@t3tools/shared/scheduleCadence";
+import type { ModelSelection, ScheduleHistoryEntry, ScheduleTiming } from "@t3tools/contracts";
 import {
   preferredScheduleBaseBranch,
   resolveScheduleWorkspaceModeDefault,
@@ -146,3 +147,48 @@ export {
   prependOlderScheduleHistory,
   scheduleHistoryEntryKey,
 } from "@t3tools/client-runtime/schedules";
+
+/** Compact destination timestamp; keep the year when it would otherwise be ambiguous. */
+export function scheduleDisplayTimestamp(
+  value: string,
+  timeZone: string,
+  now = new Date(),
+): string {
+  try {
+    const date = new Date(value);
+    const year = new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone });
+    const parts = new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone,
+    }).formatToParts(date);
+    const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value;
+    const day = `${part("weekday")}, ${part("day")} ${part("month")}${year.format(date) !== year.format(now) ? ` ${year.format(date)}` : ""}`;
+    const time = new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone,
+    }).format(date);
+    return `${day} · ${time}`;
+  } catch {
+    return value;
+  }
+}
+
+export function scheduleRepeatSummary(timing: ScheduleTiming, timeZone: string) {
+  if (timing.type === "one-time")
+    return { value: "One time", description: "Runs once at the saved time" };
+  const cadence = describeScheduleCadence(timing, timeZone);
+  const split =
+    /^(Weekdays|Every day|Mondays|Tuesdays|Wednesdays|Thursdays|Fridays|Saturdays|Sundays) at (\d{2}:\d{2})$/u.exec(
+      cadence,
+    );
+  return split
+    ? {
+        value: split[1]!,
+        description: `At ${split[2]}${split[1] === "Weekdays" ? " · Mon–Fri" : ""}`,
+      }
+    : { value: cadence, description: timing.expression };
+}

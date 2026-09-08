@@ -8,6 +8,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   chooseScheduleModelSelection,
+  scheduleDisplayTimestamp,
+  scheduleRepeatSummary,
   latestScheduleHistoryListText,
   latestScheduleHistorySummary,
   prependOlderScheduleHistory,
@@ -300,5 +302,32 @@ describe("Schedule attention and history", () => {
       second,
       third,
     ]);
+  });
+});
+
+describe("schedule destination labels", () => {
+  it("formats in the owning environment time zone across midnight and daylight saving", () => {
+    const now = new Date("2026-09-08T00:00:00Z");
+    expect(scheduleDisplayTimestamp("2026-09-07T07:00:00Z", "Europe/Berlin", now)).toBe(
+      "Mon, 7 Sep · 09:00",
+    );
+    expect(scheduleDisplayTimestamp("2026-09-07T23:30:00Z", "Europe/Berlin", now)).toBe(
+      "Tue, 8 Sep · 01:30",
+    );
+    expect(scheduleDisplayTimestamp("2026-12-07T07:00:00Z", "Europe/Berlin", now)).toBe(
+      "Mon, 7 Dec · 08:00",
+    );
+    expect(scheduleDisplayTimestamp("2025-09-07T07:00:00Z", "Europe/Berlin", now)).toBe(
+      "Sun, 7 Sep 2025 · 09:00",
+    );
+    expect(scheduleDisplayTimestamp("unavailable", "Europe/Berlin", now)).toBe("unavailable");
+  });
+  it("separates a known cadence from its time without guessing custom cron semantics", () => {
+    expect(
+      scheduleRepeatSummary({ type: "cron", expression: "0 9 * * 1-5" }, "Europe/Berlin"),
+    ).toEqual({ value: "Weekdays", description: "At 09:00 · Mon–Fri" });
+    expect(
+      scheduleRepeatSummary({ type: "cron", expression: "*/16 * * * *" }, "Europe/Berlin"),
+    ).toEqual({ value: "*/16 * * * *", description: "*/16 * * * *" });
   });
 });

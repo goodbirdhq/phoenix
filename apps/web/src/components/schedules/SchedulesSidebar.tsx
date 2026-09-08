@@ -21,6 +21,7 @@ import {
   ClockIcon,
   ListFilterIcon,
   PauseIcon,
+  RepeatIcon,
   PlusIcon,
   SearchIcon,
   WifiOffIcon,
@@ -215,7 +216,7 @@ export function SchedulesSidebar() {
           <PlusIcon className="size-[18px]" />
         </Button>
       </div>
-      <SidebarContent>
+      <SidebarContent className="schedule-sidebar">
         <div className="px-2.5 py-2">
           {!isReady && (
             <p role="status" className="p-3 text-sm text-muted-foreground">
@@ -388,7 +389,12 @@ function ScheduleSidebarRow({
       : null,
   );
   const Icon = row.online ? stateIcons[row.state] : WifiOffIcon;
-  const next = row.nextOccurrenceAt ? new Date(row.nextOccurrenceAt) : null;
+  const nextAt =
+    row.nextOccurrenceAt ??
+    (row.state === "failed" && row.latestHistory?.type === "failed"
+      ? row.latestHistory.scheduledFor
+      : null);
+  const next = nextAt ? new Date(nextAt) : null;
   return (
     <div
       className={cn(
@@ -442,13 +448,24 @@ function ScheduleSidebarRow({
             </span>
             <span
               className={cn(
-                "block truncate text-[11px] text-muted-foreground",
+                "flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground",
                 row.state === "failed" && "text-destructive",
               )}
             >
-              {row.state === "failed"
-                ? "Failed trigger"
-                : describeScheduleCadence(row.timing, row.timeZone)}
+              {row.online && row.state === "enabled" ? (
+                <RepeatIcon className="size-3 shrink-0" />
+              ) : (
+                <Icon className="size-3 shrink-0" />
+              )}
+              <span className="truncate">
+                {!row.online
+                  ? `${title(row.state)} · Cached schedule`
+                  : row.state === "failed"
+                    ? row.latestHistory?.type === "failed"
+                      ? `Failed · ${row.latestHistory.count} ${row.latestHistory.count === 1 ? "attempt" : "attempts"}`
+                      : "Failed trigger"
+                    : describeScheduleCadence(row.timing, row.timeZone)}
+              </span>
             </span>
           </span>
           <span className="flex w-[46px] shrink-0 self-stretch flex-col items-end text-right text-[11px] leading-4 text-muted-foreground">
