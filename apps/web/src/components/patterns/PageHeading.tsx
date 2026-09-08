@@ -6,14 +6,16 @@ export function PageHeading({
   icon,
   description,
   actions,
+  className,
 }: {
+  readonly className?: string;
   readonly title: string;
   readonly icon?: ReactNode;
   readonly description?: ReactNode;
   readonly actions?: ReactNode;
 }) {
   return (
-    <header className="flex flex-wrap items-start justify-between gap-4">
+    <header className={`flex flex-wrap items-start justify-between gap-4 ${className ?? ""}`}>
       <div className="min-w-0 space-y-1.5">
         <h1 className="flex items-center gap-2.5 text-[28px] leading-9 font-semibold tracking-[-0.025em] text-foreground">
           {icon && (

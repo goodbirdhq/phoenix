@@ -54,6 +54,9 @@ const EnvironmentsSidebar = lazy(() =>
   })),
 );
 
+const SchedulesSidebar = lazy(() =>
+  import("./schedules/SchedulesSidebar").then((module) => ({ default: module.SchedulesSidebar })),
+);
 const UsageSidebarNav = lazy(() =>
   import("./usage/UsageSidebarNav").then((module) => ({ default: module.UsageSidebarNav })),
 );
@@ -175,6 +178,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   // Settings routes show the settings nav in place of whichever thread
   // sidebar is active.
   const pathname = useLocation({ select: (location) => location.pathname });
+  const isOnSchedules = pathname === "/schedules";
   const isOnUsage = pathname === "/usage";
   const isOnEnvironments = pathname === "/environments";
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
@@ -196,7 +200,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
   const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth);
   const resetSidebarWidth = () => {
-    if (isOnEnvironments) {
+    if (isOnEnvironments || isOnSchedules) {
       try {
         removeLocalStorageItem("phoenix:environment-sidebar-width");
       } catch (error) {
@@ -219,7 +223,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       : false;
   });
   const sidebarProviderStyle = {
-    "--sidebar-width": `${isOnEnvironments ? environmentSidebarWidth : sidebarWidth}px`,
+    "--sidebar-width": `${isOnEnvironments || isOnSchedules ? environmentSidebarWidth : sidebarWidth}px`,
     ...(isMacosDesktop && !isWindowFullscreen
       ? { "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET }
       : {}),
@@ -271,8 +275,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         data-app-sidebar=""
         className={cn(
           "border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
-          (isOnUsage || isOnEnvironments) && "usage-surface usage-sidebar",
-          isOnEnvironments && "environment-surface",
+          (isOnUsage || isOnEnvironments || isOnSchedules) && "usage-surface usage-sidebar",
+          (isOnEnvironments || isOnSchedules) && "environment-surface",
         )}
         resizable={{
           maxWidth: sidebarMaximumWidth,
@@ -280,10 +284,12 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
             nextWidth <= currentWidth ||
             wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-          storageKey: isOnEnvironments
-            ? "phoenix:environment-sidebar-width"
-            : THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-          onResize: isOnEnvironments ? setEnvironmentSidebarWidth : setSidebarWidth,
+          storageKey:
+            isOnEnvironments || isOnSchedules
+              ? "phoenix:environment-sidebar-width"
+              : THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+          onResize:
+            isOnEnvironments || isOnSchedules ? setEnvironmentSidebarWidth : setSidebarWidth,
         }}
       >
         {isOnSettings ? (
@@ -298,6 +304,13 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
             <SidebarChromeHeader isElectron={isElectron} plain compact />
             <Suspense fallback={null}>
               <EnvironmentsSidebar />
+            </Suspense>
+          </>
+        ) : isOnSchedules ? (
+          <>
+            <SidebarChromeHeader isElectron={isElectron} plain compact />
+            <Suspense fallback={null}>
+              <SchedulesSidebar />
             </Suspense>
           </>
         ) : isOnUsage ? (
@@ -315,7 +328,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <SidebarRail onDoubleClick={resetSidebarWidth} />
       </Sidebar>
       {children}
-      <SidebarControl plain={isOnUsage || isOnEnvironments} compact={isOnEnvironments} />
+      <SidebarControl
+        plain={isOnUsage || isOnEnvironments || isOnSchedules}
+        compact={isOnEnvironments || isOnSchedules}
+      />
     </SidebarProvider>
   );
 }
