@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   backgroundActivitySharedPolicySettings,
   buildProviderInstanceUpdatePatch,
+  isProviderInstanceEnabled,
   resolveProviderInstanceSettings,
   formatDiagnosticsDescription,
   getChangedBrowserSettingLabels,
@@ -343,5 +344,47 @@ describe("effective provider configuration for editors", () => {
     expect(
       resolveProviderInstanceSettings(settings, ProviderInstanceId.make("codex_deleted"), driver),
     ).toBeUndefined();
+  });
+});
+
+describe("configured provider visibility", () => {
+  const driver = ProviderDriverKind.make("codex");
+  const instanceId = ProviderInstanceId.make("codex_work");
+  const unavailable = { instanceId, driver, enabled: false };
+
+  it("keeps enabled accounts recoverable when the runtime is unavailable", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [instanceId]: { driver, enabled: true, config: { binaryPath: "/missing/codex" } },
+      },
+    };
+    expect(isProviderInstanceEnabled(settings, unavailable)).toBe(true);
+  });
+
+  it("uses saved disabled state even if a stale runtime snapshot remains enabled", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: { [instanceId]: { driver, enabled: false, config: {} } },
+    };
+    expect(isProviderInstanceEnabled(settings, { ...unavailable, enabled: true })).toBe(false);
+  });
+
+  it("resolves legacy defaults and falls back to snapshots for unknown instances", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, enabled: true },
+      },
+    };
+    expect(
+      isProviderInstanceEnabled(settings, {
+        ...unavailable,
+        instanceId: ProviderInstanceId.make("codex"),
+      }),
+    ).toBe(true);
+    expect(isProviderInstanceEnabled(settings, unavailable)).toBe(false);
+    expect(isProviderInstanceEnabled(settings, { ...unavailable, enabled: true })).toBe(true);
   });
 });

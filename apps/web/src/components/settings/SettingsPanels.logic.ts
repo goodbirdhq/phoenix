@@ -6,6 +6,7 @@ import type {
   PreviewViewportSetting,
   ProviderInstanceId,
   ServerSettings,
+  ServerProvider,
   SidebarProjectGroupingMode,
   UnifiedSettings,
 } from "@t3tools/contracts";
@@ -263,6 +264,17 @@ export function resolveProviderInstanceSettings(
   if (!legacy) return undefined;
   const { enabled, ...config } = legacy;
   return { driver, enabled, config };
+}
+
+/** Runtime availability can report disabled even when the saved account is enabled. */
+export function isProviderInstanceEnabled(
+  settings: Pick<ServerSettings, "providers" | "providerInstances">,
+  provider: Pick<ServerProvider, "instanceId" | "driver" | "enabled">,
+): boolean {
+  return (
+    resolveProviderInstanceSettings(settings, provider.instanceId, provider.driver)?.enabled ??
+    provider.enabled
+  );
 }
 
 export function buildProviderInstanceUpdatePatch(input: {

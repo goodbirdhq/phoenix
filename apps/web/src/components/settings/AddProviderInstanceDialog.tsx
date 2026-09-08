@@ -43,6 +43,7 @@ import {
 import { AddProviderInstanceWizardSteps } from "./AddProviderInstanceWizardSteps";
 import {
   buildProviderInstanceUpdatePatch,
+  isProviderInstanceEnabled,
   resolveProviderInstanceSettings,
 } from "./SettingsPanels.logic";
 
@@ -139,7 +140,8 @@ export function AddProviderInstanceDialog({
 }: AddProviderInstanceDialogProps) {
   const settings = useEnvironmentSettings(environmentId);
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
-  const disabledProviders = providers?.filter((provider) => !provider.enabled) ?? [];
+  const disabledProviders =
+    providers?.filter((provider) => !isProviderInstanceEnabled(settings, provider)) ?? [];
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, "add provider instance");
   const [saving, setSaving] = useState(false);
 
@@ -328,15 +330,20 @@ export function AddProviderInstanceDialog({
                           className="flex items-center gap-3 border-b py-2"
                         >
                           {Mark && <Mark className="size-4 shrink-0" />}
-                          <span className="min-w-0 flex-1 truncate text-sm">
-                            {provider.displayName ?? definition?.label ?? provider.driver}
-                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm">
+                              {provider.displayName ?? definition?.label ?? provider.driver}
+                            </p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              {provider.instanceId}
+                            </p>
+                          </div>
                           <Button
                             size="sm"
                             variant="outline"
                             disabled={saving}
                             onClick={() => void enableExisting(provider)}
-                            aria-label={`Enable ${provider.displayName ?? definition?.label ?? provider.driver}`}
+                            aria-label={`Enable ${provider.displayName ?? definition?.label ?? provider.driver} (${provider.instanceId})`}
                           >
                             Enable
                           </Button>

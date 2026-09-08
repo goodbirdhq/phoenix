@@ -31,6 +31,7 @@ import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
   buildProviderInstanceUpdatePatch,
+  isProviderInstanceEnabled,
   resolveProviderInstanceSettings,
 } from "../settings/SettingsPanels.logic";
 import {
@@ -47,9 +48,12 @@ export function EnvironmentProviders({
   label: string;
 }) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
+  const settings = useEnvironmentSettings(environmentId);
   const [search, setSearch] = useState("");
   const query = search.trim().toLowerCase();
-  const enabledProviders = providers?.filter((provider) => provider.enabled);
+  const enabledProviders = providers?.filter((provider) =>
+    isProviderInstanceEnabled(settings, provider),
+  );
   const visibleProviders = enabledProviders?.filter((provider) =>
     [
       provider.displayName,
@@ -69,7 +73,6 @@ export function EnvironmentProviders({
   const session = useEnvironmentSessionState(environmentId);
   const canEdit = session.data?.scopes?.includes("orchestration:operate") ?? false;
   const refresh = useAtomCommand(serverEnvironment.refreshProviders, "refresh providers");
-  const settings = useEnvironmentSettings(environmentId);
   const updateSettings = useAtomCommand(
     serverEnvironment.updateSettings,
     "update provider instance",
@@ -97,7 +100,7 @@ export function EnvironmentProviders({
             instanceId: provider.instanceId,
             driver: provider.driver,
             isDefault: provider.instanceId === defaultInstanceIdForDriver(provider.driver),
-            ...(provider.enabled &&
+            ...(saved.enabled &&
             resolveAppModelSelectionState(settings, providers ?? []).instanceId ===
               provider.instanceId
               ? {
@@ -105,7 +108,7 @@ export function EnvironmentProviders({
                     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
                 }
               : {}),
-            instance: { ...saved, enabled: !provider.enabled },
+            instance: { ...saved, enabled: !saved.enabled },
           }),
         },
       });
@@ -324,7 +327,7 @@ export function EnvironmentProviders({
                           disabled={!canEdit || mutationBusy}
                           onClick={() => void toggleEnabled(provider)}
                         >
-                          {provider.enabled ? "Disable" : "Enable"}
+                          Disable
                         </MenuItem>
                         {provider.instanceId !== defaultInstanceIdForDriver(provider.driver) && (
                           <MenuItem
