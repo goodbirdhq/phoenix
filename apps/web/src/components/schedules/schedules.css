@@ -159,8 +159,11 @@ html:not(.dark):not([data-theme-id]) .schedule-surface .text-muted-foreground:no
   background: color-mix(in srgb, currentColor 5%, transparent);
 }
 
-.schedule-surface .schedule-failure .text-xs {
-  line-height: 18px;
+html:not(.dark):not([data-theme-id]) .schedule-prompt {
+  background: #fafafa;
+}
+html:not(.dark):not([data-theme-id]) .schedule-failure {
+  background: #fef2f2;
 }
 html:not(.dark):not([data-theme-id]) .schedule-surface .text-destructive,
 html:not(.dark):not([data-theme-id]) .schedule-failure {

@@ -66,7 +66,7 @@ export function SchedulesSidebar() {
   const { isReady, environments } = useWebEnvironmentSchedules();
   const projects = useProjects();
   const appearance = useClientSettings((s) => s.environmentAppearance);
-  const route = useSearch({ from: "/schedules" });
+  const route = useSearch({ strict: false });
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const [query, setQuery] = useState("");

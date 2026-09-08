@@ -334,7 +334,9 @@ function ScheduleDetailView({
         <div role="status" className="rounded-lg bg-muted p-4 text-sm">
           <p className="font-medium">{row.environmentLabel} is offline</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Showing the last cached data. Reconnect to edit, run, or load older history.
+            {detail
+              ? "Showing the last cached data. Reconnect to edit, run, or load older history."
+              : "Showing the saved summary. Reconnect to load the prompt and history, or make changes."}
           </p>
         </div>
       )}
@@ -430,11 +432,11 @@ function ScheduleDetailView({
           <section className="space-y-2.5">
             <h2 className="text-sm leading-[22px] font-semibold">Prompt</h2>
             {detail ? (
-              <p className="rounded-lg border bg-muted/20 px-5 py-4 text-sm leading-[22px] whitespace-pre-wrap break-words">
+              <p className="schedule-prompt rounded-lg border bg-muted/20 px-5 py-4 text-sm leading-[22px] whitespace-pre-wrap break-words">
                 {detail.prompt}
               </p>
             ) : (
-              <QueryMessage error={error} refresh={refresh} />
+              <QueryMessage error={error} refresh={refresh} online={row.online} />
             )}
             <p className="text-xs text-muted-foreground">
               {schedulePromptExplanation(row.state, latest?.type ?? null)}
@@ -502,7 +504,7 @@ function ScheduleDetailView({
               </Button>
             </div>
             {row.state === "failed" && latest?.type === "failed" ? (
-              <div role="status" className="schedule-failure space-y-2 rounded-lg border p-4">
+              <div role="status" className="schedule-failure space-y-1.5 rounded-lg border p-4">
                 <p className="text-sm leading-[22px] font-semibold">Could not create the thread</p>
                 <p className="text-[13px] leading-[22px]">
                   {latest.code} · {latest.message}
@@ -521,7 +523,7 @@ function ScheduleDetailView({
                 compact
               />
             ) : (
-              <QueryMessage error={error} refresh={refresh} />
+              <QueryMessage error={error} refresh={refresh} online={row.online} />
             )}
           </section>
           {row.state === "failed" && (
@@ -553,21 +555,31 @@ function ScheduleDetailView({
               onOpenThread={openThread}
             />
           ) : (
-            <QueryMessage error={error} refresh={refresh} />
+            <QueryMessage error={error} refresh={refresh} online={row.online} />
           )}
         </TabsContent>
       </Tabs>
     </>
   );
 }
-function QueryMessage({ error, refresh }: { error: string | null; refresh: () => void }) {
+function QueryMessage({
+  error,
+  refresh,
+  online,
+}: {
+  error: string | null;
+  refresh: () => void;
+  online: boolean;
+}) {
   return (
     <div
-      role={error ? "alert" : "status"}
+      role={online && error ? "alert" : "status"}
       className="flex items-center gap-3 py-5 text-sm text-muted-foreground"
     >
-      {error ?? "Loading schedule details…"}
-      {error && (
+      {!online
+        ? "These details are not cached. Reconnect to load them."
+        : (error ?? "Loading schedule details…")}
+      {online && error && (
         <Button variant="outline" size="sm" onClick={refresh}>
           Try again
         </Button>

@@ -55,7 +55,7 @@ export function ScheduleActions({
   const permission = useSchedulePermission(row);
   const dispatch = useAtomCommand(scheduleEnvironment.dispatch);
   const navigate = useNavigate();
-  const route = useSearch({ from: "/schedules" });
+  const route = useSearch({ strict: false });
   const locked = useRef(false);
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -117,7 +117,7 @@ export function ScheduleActions({
       search: {
         environment: row.environmentId,
         schedule: row.id,
-        tab: route.tab ?? "overview",
+        tab: route.tab === "history" ? "history" : "overview",
         ...(duplicate ? { duplicate: true } : { edit: true }),
       },
     });
