@@ -301,6 +301,7 @@ describe("cached VCS refs", () => {
           effect,
         ) => Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
         const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
+          setAutoConnect: () => Effect.void,
           run,
         } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
         const clears = yield* Ref.make(0);

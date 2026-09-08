@@ -94,6 +94,18 @@ describe("reduceCommandPaletteUiState", () => {
     });
   });
 
+  it("retains an explicitly selected environment when opening Add project", () => {
+    const environmentId = EnvironmentId.make("remote-build-server");
+    const state = reduceCommandPaletteUiState(closedState, {
+      _tag: "OpenAddProject",
+      environmentId,
+    });
+    expect(state.openIntent).toEqual({ kind: "add-project", environmentId });
+    expect(
+      reduceCommandPaletteUiState(state, { _tag: "SetOpen", open: false }).openIntent,
+    ).toBeNull();
+  });
+
   it("preserves the mode on close and resets it on open", () => {
     const filesOpen = reduceCommandPaletteUiState(closedState, {
       _tag: "ToggleMode",

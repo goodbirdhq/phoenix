@@ -261,6 +261,13 @@ export const ClientSettingsSchema = Schema.Struct({
   environmentEditorHandoffs: Schema.Record(EnvironmentId, EnvironmentEditorHandoff).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  environmentAppearance: Schema.Record(
+    EnvironmentId,
+    Schema.Struct({
+      icon: Schema.Literals(["laptop", "desktop", "server"]),
+      alias: Schema.String,
+    }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   glassOpacity: GlassOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_GLASS_OPACITY)),
   ),
@@ -1038,6 +1045,15 @@ export const ClientSettingsPatch = Schema.Struct({
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
   environmentEditorHandoffs: Schema.optionalKey(
     Schema.Record(EnvironmentId, EnvironmentEditorHandoff),
+  ),
+  environmentAppearance: Schema.optionalKey(
+    Schema.Record(
+      EnvironmentId,
+      Schema.Struct({
+        icon: Schema.Literals(["laptop", "desktop", "server"]),
+        alias: Schema.String,
+      }),
+    ),
   ),
   glassOpacity: Schema.optionalKey(GlassOpacity),
   fontSizeInterface: Schema.optionalKey(InterfaceFontSize),

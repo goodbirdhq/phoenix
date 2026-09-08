@@ -630,6 +630,7 @@ describe("vcsActionState", () => {
           stream,
         ) => Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
         const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
+          setAutoConnect: () => Effect.void,
           run,
           runStream,
         } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);

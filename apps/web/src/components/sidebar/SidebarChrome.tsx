@@ -55,9 +55,11 @@ import { SidebarUpdateArchitectureWarning, SidebarUpdateMenuItem } from "./Sideb
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
   plain = false,
+  compact = false,
 }: {
   isElectron: boolean;
   plain?: boolean;
+  compact?: boolean;
 }) {
   const legacy = useLegacySidebarEnabled();
   const stageLabel = useEnvironmentStageLabel();
@@ -75,7 +77,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     <SidebarHeader
       className={cn(
         "@container/sidebar-header relative shrink-0 flex-row items-center px-3 pb-0 md:px-0",
-        legacy
+        legacy || compact
           ? "h-[var(--workspace-topbar-height)] pt-0"
           : "h-[calc(var(--workspace-topbar-height)+14px)] pt-3.5",
         isElectron && "drag-region",

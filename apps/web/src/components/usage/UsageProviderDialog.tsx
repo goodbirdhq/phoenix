@@ -9,6 +9,10 @@ import {
 } from "@t3tools/contracts";
 import {
   EyeIcon,
+  SettingsIcon,
+  BracesIcon,
+  SlidersHorizontalIcon,
+  BoxIcon,
   EyeOffIcon,
   StarIcon,
   ArrowUpIcon,
@@ -195,10 +199,22 @@ export function UsageProviderDialog({
         </DialogHeader>
         <Tabs defaultValue="general" className="flex min-h-0 flex-1 flex-col">
           <TabsList className="shrink-0 gap-5 px-7">
-            <TabsTrigger value="general">General</TabsTrigger>
-            <TabsTrigger value="environment">Environment variables</TabsTrigger>
-            <TabsTrigger value="configuration">Configuration</TabsTrigger>
-            <TabsTrigger value="models">Models</TabsTrigger>
+            <TabsTrigger value="general">
+              <SettingsIcon className="size-3.5" />
+              General
+            </TabsTrigger>
+            <TabsTrigger value="environment">
+              <BracesIcon className="size-3.5" />
+              Environment variables
+            </TabsTrigger>
+            <TabsTrigger value="configuration">
+              <SlidersHorizontalIcon className="size-3.5" />
+              Configuration
+            </TabsTrigger>
+            <TabsTrigger value="models">
+              <BoxIcon className="size-3.5" />
+              Models
+            </TabsTrigger>
           </TabsList>
           <div className="min-h-0 flex-1 overflow-y-auto px-7 pb-5">
             <TabsContent value="general" className="space-y-5">

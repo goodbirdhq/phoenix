@@ -113,7 +113,8 @@ describe("connection onboarding", () => {
           : String(tokenRequest?.init.body);
       const tokenParams = new URLSearchParams(tokenBody);
       expect(tokenParams.get("subject_token")).toBe("pairing-token");
-      expect(tokenParams.get("scope")).toBe(AuthStandardClientScopes.join(" "));
+      // The pairing link controls the grant, including read-only and administrative links.
+      expect(tokenParams.has("scope")).toBe(false);
       expect(tokenParams.get("client_label")).toBe("Phoenix Test");
     }),
   );

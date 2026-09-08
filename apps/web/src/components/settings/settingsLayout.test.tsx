@@ -20,7 +20,7 @@ describe("settings search targets", () => {
       </SettingsSearchTargetProvider>,
     );
 
-    expect(markup).toContain('id="word-wrap" tabindex="-1"');
+    expect(markup).toMatch(/<div\b[^>]*\bid="word-wrap"[^>]*\btabindex="-1"/);
     expect(markup).not.toContain("data-settings-search-target");
     expect(markup).not.toContain("settings-search-target-pulse");
   });

@@ -100,6 +100,7 @@ const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness"
     stream,
   ) => Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
   const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
+    setAutoConnect: () => Effect.void,
     run,
     followStream,
     stateChanges: () => SubscriptionRef.changes(supervisorState),
