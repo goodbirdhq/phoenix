@@ -1,3 +1,4 @@
+import { EnvironmentTableSearch } from "./EnvironmentTableSearch";
 import { Link } from "@tanstack/react-router";
 import { resolveAppModelSelectionState } from "../../modelSelection";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
@@ -46,7 +47,24 @@ export function EnvironmentProviders({
   label: string;
 }) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
+  const [search, setSearch] = useState("");
+  const query = search.trim().toLowerCase();
   const enabledProviders = providers?.filter((provider) => provider.enabled);
+  const visibleProviders = enabledProviders?.filter((provider) =>
+    [
+      provider.displayName,
+      DRIVER_OPTION_BY_VALUE[provider.driver]?.label,
+      provider.driver,
+      provider.instanceId,
+      provider.version,
+      provider.status,
+      provider.auth.status,
+      provider.auth.email,
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(query),
+  );
   const environment = useEnvironment(environmentId);
   const session = useEnvironmentSessionState(environmentId);
   const canEdit = session.data?.scopes?.includes("orchestration:operate") ?? false;
@@ -138,7 +156,8 @@ export function EnvironmentProviders({
             Provider instances, credentials and configuration on this machine.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <EnvironmentTableSearch label="Search providers" value={search} onChange={setSearch} />
           <Button
             data-environment-control
             variant="outline"
@@ -190,7 +209,7 @@ export function EnvironmentProviders({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {enabledProviders?.map((provider) => {
+          {visibleProviders?.map((provider) => {
             const definition = DRIVER_OPTION_BY_VALUE[provider.driver];
             const Mark = definition?.icon;
             const candidate = candidates.find((c) => c.driver === provider.driver);
@@ -322,12 +341,14 @@ export function EnvironmentProviders({
               </TableRow>
             );
           })}
-          {!enabledProviders?.length && (
+          {!visibleProviders?.length && (
             <TableRow>
               <TableCell colSpan={5} className="text-center text-muted-foreground">
                 {providers === null
                   ? "Loading providers…"
-                  : "No enabled providers. Add a provider to get started."}
+                  : enabledProviders?.length
+                    ? "No providers match your search."
+                    : "No enabled providers. Add a provider to get started."}
               </TableCell>
             </TableRow>
           )}

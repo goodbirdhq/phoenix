@@ -1,3 +1,4 @@
+import { EnvironmentTableSearch } from "./EnvironmentTableSearch";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { desktopNetworkAccessStateAtom } from "../../state/desktopNetworkAccess";
 import { isLoopbackHostname } from "../../environments/primary";
@@ -84,6 +85,8 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState("");
+  const [clientSearch, setClientSearch] = useState("");
+  const [linkSearch, setLinkSearch] = useState("");
   const mutate = async (next: AuthAccessAction) => {
     if (pending.current) return;
     pending.current = true;
@@ -143,6 +146,24 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
       </div>
     );
   const snapshot = access.data?.type === "snapshot" ? access.data.payload : null;
+  const visibleClients = snapshot?.clientSessions.filter((client) =>
+    [
+      client.client.label ?? client.client.os ?? "Client",
+      client.client.os,
+      client.client.browser ?? client.method,
+      client.connected ? "Connected" : "Not connected",
+      client.current ? "This client" : permissionSummary(client.scopes),
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(clientSearch.trim().toLowerCase()),
+  );
+  const visibleLinks = snapshot?.pairingLinks.filter((link) =>
+    [link.label ?? "Pairing link", permissionSummary(link.scopes), "Ready to pair"]
+      .join(" ")
+      .toLowerCase()
+      .includes(linkSearch.trim().toLowerCase()),
+  );
   return (
     <div className="space-y-6">
       {error && (
@@ -166,7 +187,12 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
               Devices with access to this environment.
             </p>
           </div>
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <EnvironmentTableSearch
+              label="Search clients"
+              value={clientSearch}
+              onChange={setClientSearch}
+            />
             <Button
               data-environment-control
               size="sm"
@@ -202,7 +228,7 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
             </TableRow>
           </TableHeader>
           <TableBody>
-            {snapshot?.clientSessions.map((client) => (
+            {visibleClients?.map((client) => (
               <TableRow key={client.sessionId}>
                 <TableCell>
                   <div className="flex items-center gap-3">
@@ -255,10 +281,14 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
                 </TableCell>
               </TableRow>
             ))}
-            {!snapshot?.clientSessions.length && (
+            {!visibleClients?.length && (
               <TableRow>
                 <TableCell colSpan={4} className="text-center text-muted-foreground">
-                  {access.isPending && !snapshot ? "Loading clients…" : "No authorized clients."}
+                  {access.isPending && !snapshot
+                    ? "Loading clients…"
+                    : snapshot?.clientSessions.length
+                      ? "No clients match your search."
+                      : "No authorized clients."}
                 </TableCell>
               </TableRow>
             )}
@@ -273,6 +303,11 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
               Active one-time invitations. Used or expired links can no longer pair a device.
             </p>
           </div>
+          <EnvironmentTableSearch
+            label="Search pairing links"
+            value={linkSearch}
+            onChange={setLinkSearch}
+          />
         </div>
         <Table className="environment-table">
           <TableHeader>
@@ -286,7 +321,7 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
             </TableRow>
           </TableHeader>
           <TableBody>
-            {snapshot?.pairingLinks.map((link) => (
+            {visibleLinks?.map((link) => (
               <TableRow key={link.id}>
                 <TableCell>
                   <span className="flex items-center gap-3 text-[13px]">
@@ -328,12 +363,14 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
                 </TableCell>
               </TableRow>
             ))}
-            {!snapshot?.pairingLinks.length && (
+            {!visibleLinks?.length && (
               <TableRow>
                 <TableCell colSpan={4} className="text-center text-muted-foreground">
                   {access.isPending && !snapshot
                     ? "Loading pairing links…"
-                    : "No active pairing links."}
+                    : snapshot?.pairingLinks.length
+                      ? "No pairing links match your search."
+                      : "No active pairing links."}
                 </TableCell>
               </TableRow>
             )}

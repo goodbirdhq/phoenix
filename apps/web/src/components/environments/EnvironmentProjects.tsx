@@ -1,3 +1,4 @@
+import { EnvironmentTableSearch } from "./EnvironmentTableSearch";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { useState } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -44,26 +45,20 @@ export function EnvironmentProjects({
             registered on this environment
           </p>
         </div>
-        <Button
-          data-environment-control
-          size="sm"
-          className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px]"
-          disabled={!canEdit}
-          onClick={() => openCommandPalette({ open: "add-project", environmentId })}
-        >
-          Add project
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <EnvironmentTableSearch label="Search projects" value={search} onChange={setSearch} />
+          <Button
+            data-environment-control
+            size="sm"
+            className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px]"
+            disabled={!canEdit}
+            onClick={() => openCommandPalette({ open: "add-project", environmentId })}
+          >
+            Add project
+          </Button>
+        </div>
       </div>
       <div className="space-y-3">
-        <label className="flex h-[42px] items-center rounded-lg border px-3 text-muted-foreground">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            aria-label="Search projects"
-            placeholder="Search projects…"
-            className="min-w-0 flex-1 bg-transparent text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
-        </label>
         <Table className="environment-table">
           <TableHeader>
             <TableRow>
