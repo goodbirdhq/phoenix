@@ -1,1267 +1,845 @@
+import { describeScheduleCadence } from "@t3tools/shared/scheduleCadence";
 import {
   aggregateSchedules,
-  cronBuilderExpression,
-  currentScheduleTimeZone,
   defaultScheduleOneTimeInput,
-  filterScheduleRows,
   formatScheduleTimestamp,
-  formatScheduleTiming,
   inspectCronTiming,
-  scheduleMutationCapability,
   scheduleWallTimeInputForInstant,
   zonedWallTimeToInstant,
   type AggregatedScheduleRow,
-  type ScheduleFilters,
 } from "@t3tools/client-runtime/schedules";
+import { ProjectId, ScheduleId, type ScheduleDetail, type ThreadId } from "@t3tools/contracts";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
-  OccurrenceId,
-  ProjectId,
-  ScheduleId,
-  isProviderAvailable,
-  type EnvironmentId,
-  type ModelSelection,
-  type ScheduleCommand,
-  type ScheduleDetail,
-  type ScheduleHistoryCursor,
-  type ScheduleHistoryEntry,
-  type ScheduleState,
-  type ScheduleTiming,
-  type ThreadId,
-} from "@t3tools/contracts";
-import { useNavigate } from "@tanstack/react-router";
-import {
+  ArrowLeftIcon,
   CalendarClockIcon,
-  CircleAlertIcon,
-  CopyIcon,
-  PencilIcon,
-  PauseIcon,
-  PlayIcon,
+  HistoryIcon,
+  LayoutGridIcon,
   PlusIcon,
-  Trash2Icon,
+  RepeatIcon,
 } from "lucide-react";
 import {
   useEffect,
   useMemo,
   useRef,
   useState,
-  type Dispatch,
+  type ComponentProps,
   type FormEvent,
   type ReactNode,
-  type SetStateAction,
 } from "react";
-
-import { requestConfirmDialog } from "../../confirmDialog";
 import { isElectron } from "../../env";
-import { newCommandId, randomUUID } from "../../lib/utils";
+import { newCommandId, randomUUID, cn } from "../../lib/utils";
 import { scheduleEnvironment, useWebEnvironmentSchedules } from "../../state/schedules";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useProjects } from "../../state/entities";
-import { cn } from "../../lib/utils";
-import { useBranches } from "../../state/queries";
+import { useClientSettings } from "../../hooks/useSettings";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "../../workspaceTitlebar";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
-import { Badge } from "../ui/badge";
+import { PageHeading } from "../patterns/PageHeading";
+import { EnvironmentIcon } from "../environments/EnvironmentIcon";
+import { getDriverOption } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
-import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from "../ui/card";
-import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { SidebarInset } from "../ui/sidebar";
-import { Textarea } from "../ui/textarea";
-import { stackedThreadToast, toastManager } from "../ui/toast";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../ui/tabs";
 import {
-  latestScheduleHistoryListText,
-  modelSelectionValue,
-  prependOlderScheduleHistory,
-  reconcileScheduleEditorDefaults,
-  scheduleFailureAttentionVersion,
-  scheduleHistoryEntryKey,
-  schedulePauseFieldLabel,
-  shouldOpenScheduleCreateRequest,
-  scheduleWorktreeCapability,
-} from "./SchedulesPage.logic";
+  Dialog,
+  DialogPopup,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "../ui/dialog";
+import { toastManager } from "../ui/toast";
+import { ScheduleActions, useSchedulePermission } from "./ScheduleActions";
+import { ScheduleHistory, ScheduleHistoryTable } from "./ScheduleHistory";
+import { ScheduleEditor, emptyDraft, type ScheduleEditorDraft } from "./ScheduleEditor";
+import { scheduleFailureAttentionVersion } from "./SchedulesPage.logic";
+import "./schedules.css";
 
-const ALL_STATES = ["enabled", "paused", "completed", "failed"] as const;
-const EMPTY_REFS = Object.freeze([]);
-const SCHEDULE_HISTORY_PAGE_SIZE = 50;
-const SCHEDULE_HISTORY_RENDER_LIMIT = 200;
+const retainedDrafts = new Map<string, ScheduleEditorDraft>();
 
-interface ScheduleEditorDraft {
-  readonly name: string;
-  readonly prompt: string;
-  readonly environmentId: string;
-  readonly projectId: string;
-  readonly timingType: "one-time" | "cron";
-  readonly runAt: string;
-  readonly cron: string;
-  readonly timeZone: string;
-  readonly modelSelection: ModelSelection | null;
-  readonly runtimeMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
-  readonly interactionMode: "default" | "plan";
-  readonly workspaceMode: "local" | "worktree";
-  readonly workspaceCustomized: boolean;
-  readonly baseBranch: string;
-  readonly createPaused: boolean;
-}
-
-function emptyDraft(environmentId = ""): ScheduleEditorDraft {
-  return {
-    name: "",
-    prompt: "",
-    environmentId,
-    projectId: "",
-    timingType: "one-time",
-    runAt: defaultScheduleOneTimeInput(Date.now()),
-    cron: "0 9 * * 1-5",
-    timeZone: currentScheduleTimeZone(),
-    modelSelection: null,
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    workspaceMode: "local",
-    workspaceCustomized: false,
-    baseBranch: "origin/HEAD",
-    createPaused: false,
-  };
-}
-
-function commandFailure(result: { readonly _tag: string }): boolean {
-  return result._tag === "Failure";
-}
-
-function notifyCommandFailure(title: string): void {
-  toastManager.add(
-    stackedThreadToast({
-      type: "error",
-      title,
-      description: "The Environment rejected the Schedule change.",
-    }),
-  );
-}
-
-export function SchedulesPage({ openCreateRequest = null }: { openCreateRequest?: string | null }) {
-  const { environments } = useWebEnvironmentSchedules();
-  const projects = useProjects();
-  const dispatch = useAtomCommand(scheduleEnvironment.dispatch);
+export function SchedulesPage() {
+  const { isReady, environments } = useWebEnvironmentSchedules();
+  const appearance = useClientSettings((s) => s.environmentAppearance);
+  const route = useSearch({ from: "/schedules" });
   const navigate = useNavigate();
-  const [showCreate, setShowCreate] = useState(openCreateRequest !== null);
-  const previousCreateRequest = useRef(openCreateRequest);
-  const [editingTarget, setEditingTarget] = useState<{
-    readonly environmentId: EnvironmentId;
-    readonly scheduleId: ScheduleId;
-  } | null>(null);
-  const [draft, setDraft] = useState<ScheduleEditorDraft>(() => emptyDraft());
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [environmentFilter, setEnvironmentFilter] = useState("");
-  const [projectFilter, setProjectFilter] = useState("");
-  const [stateFilter, setStateFilter] = useState<ScheduleState | "">("");
-  const [failureFilter, setFailureFilter] = useState<ScheduleFilters["failures"]>("all");
-  const [pending, setPending] = useState(false);
-
-  useEffect(() => {
-    if (!shouldOpenScheduleCreateRequest(previousCreateRequest.current, openCreateRequest)) return;
-    previousCreateRequest.current = openCreateRequest;
-    setEditingTarget(null);
-    setDraft(emptyDraft());
-    setShowCreate(true);
-  }, [openCreateRequest]);
-
-  const projections = useMemo(
+  const rows = useMemo(
     () =>
-      environments.map((entry) => ({
-        environmentId: entry.environment.environmentId,
-        environmentLabel: entry.environment.label,
-        source: entry.source,
-        online: entry.online,
-        supportsSchedules: entry.supportsSchedules,
-        snapshotSequence: entry.snapshotSequence,
-        schedules: entry.schedules,
-      })),
-    [environments],
-  );
-  const rows = useMemo(() => aggregateSchedules(projections), [projections]);
-  const filters = useMemo<ScheduleFilters>(
-    () => ({
-      environmentIds: new Set(environmentFilter ? [environmentFilter as EnvironmentId] : []),
-      projectIds: new Set(projectFilter ? [ProjectId.make(projectFilter)] : []),
-      states: new Set(stateFilter ? [stateFilter] : []),
-      failures: failureFilter,
-    }),
-    [environmentFilter, failureFilter, projectFilter, stateFilter],
-  );
-  const filteredRows = useMemo(
-    () =>
-      filterScheduleRows(rows, filters).toSorted((left, right) =>
-        left.name.localeCompare(right.name),
+      aggregateSchedules(
+        environments.map((e) => ({
+          ...e,
+          environmentId: e.environment.environmentId,
+          environmentLabel: appearance[e.environment.environmentId]?.alias || e.environment.label,
+        })),
       ),
-    [filters, rows],
-  );
-  const environmentById = useMemo(
-    () => new Map(environments.map((entry) => [entry.environment.environmentId, entry])),
-    [environments],
-  );
-  const projectByKey = useMemo(
-    () => new Map(projects.map((project) => [`${project.environmentId}:${project.id}`, project])),
-    [projects],
+    [environments, appearance],
   );
   const selected =
-    selectedKey === null
-      ? null
-      : (rows.find((row) => `${row.environmentId}:${row.id}` === selectedKey) ?? null);
-
-  useEffect(() => {
-    if (draft.environmentId) return;
-    const first = environments.find((entry) => entry.online && entry.supportsSchedules);
-    if (!first) return;
-    setDraft((current) => ({ ...current, environmentId: first.environment.environmentId }));
-  }, [draft.environmentId, environments]);
-
-  const runCommand = async (environmentId: EnvironmentId, command: ScheduleCommand) => {
-    setPending(true);
-    try {
-      const result = await dispatch({ environmentId, input: command });
-      if (commandFailure(result)) {
-        notifyCommandFailure("Schedule change failed");
-        return false;
-      }
-      return true;
-    } finally {
-      setPending(false);
-    }
-  };
-
-  const handleCreate = async (event: FormEvent) => {
-    event.preventDefault();
-    const environment = environmentById.get(draft.environmentId as EnvironmentId);
-    if (!environment || !environment.online || !environment.supportsSchedules) return;
-    if (
-      !draft.name.trim() ||
-      !draft.prompt.trim() ||
-      !draft.projectId ||
-      draft.modelSelection === null
-    )
-      return;
-    if (draft.timingType === "cron") {
-      const inspection = inspectCronTiming({
-        expression: draft.cron,
-        timeZone: draft.timeZone,
-        after: Date.now(),
-      });
-      if (!inspection.valid) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Invalid recurring Schedule",
-            description: inspection.error ?? "Check the cron expression.",
-          }),
-        );
-        return;
-      }
-    }
-    const oneTime =
-      draft.timingType === "one-time" ? zonedWallTimeToInstant(draft.runAt, draft.timeZone) : null;
-    if (oneTime !== null && !oneTime.valid) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Invalid one-time Schedule",
-          description: oneTime.error ?? "Check the date, time, and time zone.",
-        }),
-      );
-      return;
-    }
-    const timing: ScheduleTiming =
-      draft.timingType === "one-time"
-        ? { type: "one-time", runAt: oneTime!.instant! }
-        : { type: "cron", expression: draft.cron.trim() };
-    const definition = {
-      projectId: ProjectId.make(draft.projectId),
-      name: draft.name.trim(),
-      prompt: draft.prompt.trim(),
-      timing,
-      timeZone: draft.timeZone,
-      execution: {
-        modelSelection: draft.modelSelection,
-        runtimeMode: draft.runtimeMode,
-        interactionMode: draft.interactionMode,
-        workspaceMode: draft.workspaceMode,
-        baseBranch:
-          draft.workspaceMode === "worktree" ? draft.baseBranch.trim() || "origin/HEAD" : null,
+    rows.find((row) => row.environmentId === route.environment && row.id === route.schedule) ??
+    (!route.schedule ? rows[0] : undefined);
+  const loading =
+    !isReady ||
+    environments.some((e) => e.online && e.supportsSchedules && !e.hasSnapshot && !e.error);
+  const missingTarget = !selected && !loading;
+  const editor = !!(route.create || route.edit || route.duplicate);
+  const owning = environments.find((e) => e.environment.environmentId === selected?.environmentId);
+  const detailQuery = useEnvironmentQuery(
+    selected
+      ? scheduleEnvironment.detail({
+          environmentId: selected.environmentId,
+          input: { scheduleId: ScheduleId.make(selected.id), revision: selected.revision },
+        })
+      : null,
+  );
+  const goBack = () =>
+    void navigate({
+      to: "/schedules",
+      search: {
+        ...(selected ? { environment: selected.environmentId, schedule: selected.id } : {}),
+        tab: route.tab ?? "overview",
       },
-    };
-    const succeeded = await runCommand(
-      environment.environment.environmentId,
-      editingTarget === null
-        ? {
-            type: "schedule.create",
-            commandId: newCommandId(),
-            scheduleId: ScheduleId.make(randomUUID()),
-            ...definition,
-            state: draft.createPaused ? "paused" : "enabled",
-          }
-        : {
-            type: "schedule.update",
-            commandId: newCommandId(),
-            scheduleId: editingTarget.scheduleId,
-            ...definition,
-          },
-    );
-    if (!succeeded) return;
-    setShowCreate(false);
-    setEditingTarget(null);
-    setDraft(emptyDraft(environment.environment.environmentId));
-    toastManager.add(
-      stackedThreadToast({
-        type: "success",
-        title: editingTarget === null ? "Schedule created" : "Schedule updated",
-      }),
-    );
-  };
-
-  const handleLifecycle = async (
-    row: AggregatedScheduleRow,
-    type:
-      | "schedule.pause"
-      | "schedule.resume"
-      | "schedule.run-now"
-      | "schedule.acknowledge-failures",
-  ) => {
-    await runCommand(row.environmentId, {
-      type,
-      commandId: newCommandId(),
-      scheduleId: ScheduleId.make(row.id),
-      ...(type === "schedule.run-now" ? { occurrenceId: OccurrenceId.make(randomUUID()) } : {}),
-    } as ScheduleCommand);
-  };
-
-  const handleDelete = async (row: AggregatedScheduleRow) => {
-    const confirmation = requestConfirmDialog(
-      `Delete “${row.name}”? Its Schedule history will be removed. Threads and worktrees it already created will remain.`,
-      { variant: "destructive" },
-    );
-    if (!(await (confirmation ?? Promise.resolve(false)))) return;
-    const succeeded = await runCommand(row.environmentId, {
-      type: "schedule.delete",
-      commandId: newCommandId(),
-      scheduleId: ScheduleId.make(row.id),
     });
-    if (succeeded) setSelectedKey(null);
-  };
-
-  const duplicate = (row: AggregatedScheduleRow, detail: ScheduleDetail | null) => {
-    setEditingTarget(null);
-    setDraft({
-      ...emptyDraft(row.environmentId),
-      name: `${row.name} copy`,
-      prompt: detail?.prompt ?? "",
-      projectId: row.projectId,
-      timingType: row.timing.type,
-      runAt:
-        row.timing.type === "one-time"
-          ? (scheduleWallTimeInputForInstant(row.timing.runAt, row.timeZone) ?? row.timing.runAt)
-          : defaultScheduleOneTimeInput(Date.now()),
-      cron: row.timing.type === "cron" ? row.timing.expression : "0 9 * * 1-5",
-      timeZone: row.timeZone,
-      modelSelection: row.execution.modelSelection,
-      runtimeMode: row.execution.runtimeMode,
-      interactionMode: row.execution.interactionMode,
-      workspaceMode: row.execution.workspaceMode,
-      workspaceCustomized: true,
-      baseBranch: row.execution.baseBranch ?? "origin/HEAD",
-      createPaused: row.state === "paused",
-    });
-    setShowCreate(true);
-  };
-
-  const edit = (row: AggregatedScheduleRow, detail: ScheduleDetail) => {
-    setEditingTarget({ environmentId: row.environmentId, scheduleId: ScheduleId.make(row.id) });
-    setDraft({
-      ...emptyDraft(row.environmentId),
-      name: row.name,
-      prompt: detail.prompt,
-      projectId: row.projectId,
-      timingType: row.timing.type,
-      runAt:
-        row.timing.type === "one-time"
-          ? (scheduleWallTimeInputForInstant(row.timing.runAt, row.timeZone) ?? row.timing.runAt)
-          : defaultScheduleOneTimeInput(Date.now()),
-      cron: row.timing.type === "cron" ? row.timing.expression : "0 9 * * 1-5",
-      timeZone: row.timeZone,
-      modelSelection: row.execution.modelSelection,
-      runtimeMode: row.execution.runtimeMode,
-      interactionMode: row.execution.interactionMode,
-      workspaceMode: row.execution.workspaceMode,
-      workspaceCustomized: true,
-      baseBranch: row.execution.baseBranch ?? "origin/HEAD",
-      createPaused: false,
-    });
-    setShowCreate(true);
-  };
-
+  const create = () => void navigate({ to: "/schedules", search: { create: randomUUID() } });
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground isolate">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header
-          className={cn(
-            "flex shrink-0 items-center px-3 sm:px-5",
-            isElectron
-              ? "drag-region h-[52px] wco:h-[env(titlebar-area-height)]"
-              : "h-[var(--workspace-topbar-height)]",
-            COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+    <SidebarInset className="schedule-surface usage-surface h-dvh min-h-0 overflow-hidden bg-background text-foreground isolate">
+      <header
+        className={cn(
+          "flex h-[52px] shrink-0 items-center border-b px-4 sm:px-8",
+          isElectron && "drag-region wco:h-[env(titlebar-area-height)]",
+          COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+        )}
+      >
+        <WorkspaceBreadcrumb ariaLabel="Schedules breadcrumb">
+          <WorkspaceBreadcrumbItem>Schedules</WorkspaceBreadcrumbItem>
+          <WorkspaceBreadcrumbItem current>
+            {editor
+              ? route.edit
+                ? "Edit schedule"
+                : route.duplicate
+                  ? "Duplicate schedule"
+                  : "Create schedule"
+              : (selected?.name ?? "Overview")}
+          </WorkspaceBreadcrumbItem>
+        </WorkspaceBreadcrumb>
+      </header>
+      <ScrollArea className="min-h-0 flex-1">
+        <main className="flex min-w-0 flex-col gap-6 p-4 sm:p-8">
+          {editor ? (
+            (route.edit || route.duplicate) && !detailQuery.data ? (
+              <ScheduleMessage
+                title={
+                  missingTarget
+                    ? "Schedule unavailable"
+                    : detailQuery.error
+                      ? "Could not load this schedule"
+                      : "Loading schedule…"
+                }
+                description={
+                  missingTarget
+                    ? "This schedule may have been deleted or its environment is unavailable. Return to choose another schedule."
+                    : (detailQuery.error ?? "Loading the saved prompt and execution settings.")
+                }
+                action={
+                  <Button
+                    variant="outline"
+                    onClick={detailQuery.error ? detailQuery.refresh : goBack}
+                  >
+                    {detailQuery.error ? "Try again" : "Back"}
+                  </Button>
+                }
+              />
+            ) : (
+              <ScheduleEditorJourney
+                key={
+                  route.edit
+                    ? `edit:${selected?.environmentId}:${selected?.id}`
+                    : route.duplicate
+                      ? `duplicate:${selected?.environmentId}:${selected?.id}`
+                      : "create"
+                }
+                source={selected}
+                detail={detailQuery.data}
+                editing={!!route.edit}
+                duplicating={!!route.duplicate}
+                environments={environments}
+                onBack={goBack}
+              />
+            )
+          ) : selected ? (
+            <ScheduleDetailView
+              key={`${selected.environmentId}:${selected.id}`}
+              row={selected}
+              detail={detailQuery.data}
+              error={detailQuery.error}
+              refresh={detailQuery.refresh}
+            />
+          ) : (
+            <ScheduleMessage
+              title={
+                !isReady ||
+                environments.some(
+                  (e) => e.online && e.supportsSchedules && !e.hasSnapshot && !e.error,
+                )
+                  ? "Loading schedules…"
+                  : route.schedule
+                    ? "Schedule unavailable"
+                    : environments.some((e) => e.error)
+                      ? "Could not load schedules"
+                      : environments.some((e) => !e.hasSnapshot)
+                        ? "Schedules unavailable"
+                        : "No schedules yet"
+              }
+              description={
+                environments.find((e) => e.error)?.error ??
+                (route.schedule
+                  ? "It may have been deleted, or its environment is unavailable. Choose a schedule from the sidebar."
+                  : environments.some((e) => !e.hasSnapshot)
+                    ? "Some environments have no cached schedule data. Reconnect them to see their schedules."
+                    : "Run a prompt once or on a recurring schedule. Each occurrence starts a fresh thread on its owning environment.")
+              }
+              action={
+                <Button className="schedule-control" onClick={create}>
+                  <PlusIcon className="size-4" />
+                  Create schedule
+                </Button>
+              }
+            />
           )}
-        >
-          <WorkspaceBreadcrumb ariaLabel="Schedules breadcrumb">
-            <WorkspaceBreadcrumbItem current>Schedules</WorkspaceBreadcrumbItem>
-          </WorkspaceBreadcrumb>
-          <Button
-            className="ml-auto"
-            size="sm"
-            onClick={() => {
-              setEditingTarget(null);
-              setDraft(emptyDraft());
-              setShowCreate(true);
-            }}
-          >
-            <PlusIcon /> Create Schedule
-          </Button>
-        </header>
-
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="mx-auto grid w-full max-w-7xl gap-5 px-5 py-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
-            <main className="min-w-0 space-y-4">
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                <FilterSelect
-                  value={environmentFilter}
-                  onChange={setEnvironmentFilter}
-                  label="Environment"
-                >
-                  <option value="">All Environments</option>
-                  {environments.map((entry) => (
-                    <option
-                      key={entry.environment.environmentId}
-                      value={entry.environment.environmentId}
-                    >
-                      {entry.environment.label}
-                    </option>
-                  ))}
-                </FilterSelect>
-                <FilterSelect value={projectFilter} onChange={setProjectFilter} label="Project">
-                  <option value="">All Projects</option>
-                  {projects.map((project) => (
-                    <option key={`${project.environmentId}:${project.id}`} value={project.id}>
-                      {project.title}
-                    </option>
-                  ))}
-                </FilterSelect>
-                <FilterSelect
-                  value={stateFilter}
-                  onChange={(value) => setStateFilter(value as ScheduleState | "")}
-                  label="State"
-                >
-                  <option value="">All States</option>
-                  {ALL_STATES.map((state) => (
-                    <option key={state} value={state}>
-                      {state}
-                    </option>
-                  ))}
-                </FilterSelect>
-                <FilterSelect
-                  value={failureFilter}
-                  onChange={(value) => setFailureFilter(value as ScheduleFilters["failures"])}
-                  label="Failures"
-                >
-                  <option value="all">All</option>
-                  <option value="only">Has failure</option>
-                  <option value="without">Without failure</option>
-                </FilterSelect>
-              </div>
-
-              {showCreate ? (
-                <ScheduleEditor
-                  draft={draft}
-                  editing={editingTarget !== null}
-                  environments={environments}
-                  projects={projects}
-                  pending={pending}
-                  onChange={setDraft}
-                  onCancel={() => {
-                    setShowCreate(false);
-                    setEditingTarget(null);
-                  }}
-                  onSubmit={handleCreate}
-                />
-              ) : null}
-
-              {filteredRows.length === 0 ? (
-                <Card>
-                  <CardPanel className="flex min-h-48 flex-col items-center justify-center gap-2 text-center">
-                    <CalendarClockIcon className="size-8 text-muted-foreground" />
-                    <p className="font-medium">No Schedules to show</p>
-                    <p className="max-w-md text-sm text-muted-foreground">
-                      Schedules live on their Environment and start a fresh Thread when an
-                      Occurrence triggers.
-                    </p>
-                  </CardPanel>
-                </Card>
-              ) : (
-                <div className="space-y-2">
-                  {filteredRows.map((row) => {
-                    const key = `${row.environmentId}:${row.id}`;
-                    const project = projectByKey.get(`${row.environmentId}:${row.projectId}`);
-                    const latest = row.latestHistory
-                      ? latestScheduleHistoryListText(row.latestHistory, (value) =>
-                          formatScheduleTimestamp(value, row.timeZone),
-                        )
-                      : null;
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => setSelectedKey(key)}
-                        className={cn(
-                          "grid w-full gap-2 rounded-xl border bg-card p-4 text-left outline-none transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring sm:grid-cols-[minmax(0,1fr)_auto]",
-                          !row.online && "opacity-55 grayscale",
-                          selectedKey === key && "border-ring bg-accent/40",
-                        )}
-                      >
-                        <span className="min-w-0">
-                          <span className="flex items-center gap-2">
-                            <span className="truncate font-medium">{row.name}</span>
-                            <Badge variant={row.state === "failed" ? "error" : "secondary"}>
-                              {row.state}
-                            </Badge>
-                            {row.unacknowledgedFailure ? (
-                              <CircleAlertIcon className="size-4 text-destructive" />
-                            ) : null}
-                          </span>
-                          <span className="mt-1 block truncate text-xs text-muted-foreground">
-                            {row.environmentLabel} · {project?.title ?? "Missing Project"} ·{" "}
-                            {formatScheduleTiming(row.timing, row.timeZone)}
-                          </span>
-                          <span className="mt-1 block truncate text-xs text-muted-foreground">
-                            {latest ? `Latest: ${latest}` : "Latest: No Occurrences yet"}
-                          </span>
-                        </span>
-                        <span className="text-xs text-muted-foreground sm:text-right">
-                          <span className="block">Next</span>
-                          <span className="block text-foreground">
-                            {formatScheduleTimestamp(row.nextOccurrenceAt, row.timeZone)}
-                          </span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </main>
-
-            <aside className="min-w-0">
-              {selected ? (
-                <ScheduleDetailCard
-                  key={selectedKey}
-                  row={selected}
-                  pending={pending}
-                  onAcknowledge={() => handleLifecycle(selected, "schedule.acknowledge-failures")}
-                  onDelete={() => handleDelete(selected)}
-                  onDuplicate={duplicate}
-                  onEdit={edit}
-                  onPauseResume={() =>
-                    handleLifecycle(
-                      selected,
-                      selected.state === "paused" ? "schedule.resume" : "schedule.pause",
-                    )
-                  }
-                  onRunNow={() => handleLifecycle(selected, "schedule.run-now")}
-                  onOpenThread={(threadId) =>
-                    void navigate({
-                      to: "/$environmentId/$threadId",
-                      params: { environmentId: selected.environmentId, threadId },
-                    })
-                  }
-                />
-              ) : (
-                <Card className="sticky top-4">
-                  <CardPanel className="py-10 text-center text-sm text-muted-foreground">
-                    Select a Schedule to inspect its configuration and compact history.
-                  </CardPanel>
-                </Card>
-              )}
-            </aside>
-          </div>
-        </ScrollArea>
-      </div>
+          {!editor && owning?.error && (
+            <p role="alert" className="text-sm text-destructive">
+              {owning.error}
+            </p>
+          )}
+        </main>
+      </ScrollArea>
     </SidebarInset>
   );
 }
 
-function FilterSelect(props: {
-  readonly value: string;
-  readonly label: string;
-  readonly onChange: (value: string) => void;
-  readonly children: ReactNode;
-  readonly disabled?: boolean;
+function ScheduleMessage({
+  title,
+  description,
+  action,
+}: {
+  title: string;
+  description: string;
+  action?: ReactNode;
 }) {
   return (
-    <label className="space-y-1 text-xs text-muted-foreground">
-      <span>{props.label}</span>
-      <select
-        className="h-8 w-full rounded-lg border border-input bg-background px-2 text-sm text-foreground"
-        value={props.value}
-        disabled={props.disabled}
-        onChange={(event) => props.onChange(event.target.value)}
-      >
-        {props.children}
-      </select>
-    </label>
-  );
-}
-
-function ScheduleEditor(props: {
-  readonly draft: ScheduleEditorDraft;
-  readonly editing: boolean;
-  readonly environments: ReturnType<typeof useWebEnvironmentSchedules>["environments"];
-  readonly projects: ReturnType<typeof useProjects>;
-  readonly pending: boolean;
-  readonly onChange: Dispatch<SetStateAction<ScheduleEditorDraft>>;
-  readonly onCancel: () => void;
-  readonly onSubmit: (event: FormEvent) => void;
-}) {
-  const [cronEditorMode, setCronEditorMode] = useState<"builder" | "manual">("builder");
-  const environment = props.environments.find(
-    (entry) => entry.environment.environmentId === props.draft.environmentId,
-  );
-  const availableProjects = useMemo(
-    () => props.projects.filter((project) => project.environmentId === props.draft.environmentId),
-    [props.draft.environmentId, props.projects],
-  );
-  const selectedProject = availableProjects.find((project) => project.id === props.draft.projectId);
-  const vcsRefs = useBranches({
-    environmentId: environment?.environment.environmentId ?? null,
-    cwd: selectedProject?.workspaceRoot ?? null,
-  });
-  const branchRefs = vcsRefs.data?.refs ?? EMPTY_REFS;
-  const worktreeCapability = scheduleWorktreeCapability(vcsRefs.data?.isRepo ?? null);
-  const worktreeUnavailable =
-    props.draft.workspaceMode === "worktree" && !worktreeCapability.allowed;
-  const vcsProbePending = vcsRefs.data === null && vcsRefs.isPending;
-  const worktreeProbePending = props.draft.workspaceMode === "worktree" && vcsProbePending;
-  const modelOptions = useMemo(
-    () =>
-      environment?.environment.serverConfig?.providers.flatMap((provider) =>
-        provider.enabled && isProviderAvailable(provider)
-          ? provider.models.map((model) => ({
-              value: `${provider.instanceId}\u0000${model.slug}`,
-              label: `${provider.displayName ?? provider.instanceId} · ${model.name}`,
-              selection: { instanceId: provider.instanceId, model: model.slug } as ModelSelection,
-              isDefault: model.isDefault === true,
-            }))
-          : [],
-      ) ?? [],
-    [environment?.environment.serverConfig?.providers],
-  );
-  const cronInspection =
-    props.draft.timingType === "cron"
-      ? inspectCronTiming({
-          expression: props.draft.cron,
-          timeZone: props.draft.timeZone,
-          after: Date.now(),
-        })
-      : null;
-  const patchDraft = (patch: Partial<ScheduleEditorDraft>) =>
-    props.onChange((current) => ({ ...current, ...patch }));
-
-  useEffect(() => {
-    props.onChange((current) =>
-      reconcileScheduleEditorDefaults(current, {
-        environmentId: props.draft.environmentId,
-        projects: availableProjects,
-        modelChoices: modelOptions,
-        serverDefaultModelSelection:
-          environment?.environment.serverConfig?.settings.textGenerationModelSelection,
-        isRepo: selectedProject === undefined ? null : (vcsRefs.data?.isRepo ?? null),
-        branchRefs,
-        editing: props.editing,
-      }),
-    );
-  }, [
-    availableProjects,
-    branchRefs,
-    environment?.environment.serverConfig?.settings.textGenerationModelSelection,
-    modelOptions,
-    props.draft.baseBranch,
-    props.draft.environmentId,
-    props.draft.modelSelection,
-    props.draft.projectId,
-    props.draft.workspaceCustomized,
-    props.draft.workspaceMode,
-    props.editing,
-    props.onChange,
-    selectedProject?.defaultModelSelection,
-    vcsRefs.data?.isRepo,
-  ]);
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{props.editing ? "Edit Schedule" : "Create Schedule"}</CardTitle>
-        <CardDescription>
-          The saved execution choices will not move when defaults change.
-        </CardDescription>
-      </CardHeader>
-      <CardPanel>
-        <form className="grid gap-4 md:grid-cols-2" onSubmit={props.onSubmit}>
-          <EditorField label="Short name">
-            <Input
-              required
-              value={props.draft.name}
-              onChange={(event) => patchDraft({ name: event.target.value })}
-            />
-          </EditorField>
-          <FilterSelect
-            disabled={props.editing}
-            label="Environment"
-            value={props.draft.environmentId}
-            onChange={(environmentId) =>
-              patchDraft({ environmentId, projectId: "", modelSelection: null })
-            }
-          >
-            <option value="">Select Environment</option>
-            {props.environments.map((entry) => (
-              <option
-                key={entry.environment.environmentId}
-                disabled={!entry.online || !entry.supportsSchedules}
-                value={entry.environment.environmentId}
-              >
-                {entry.environment.label}
-                {entry.online ? "" : " (offline)"}
-              </option>
-            ))}
-          </FilterSelect>
-          <EditorField label="Prompt" className="md:col-span-2">
-            <Textarea
-              required
-              value={props.draft.prompt}
-              onChange={(event) => patchDraft({ prompt: event.target.value })}
-            />
-          </EditorField>
-          <FilterSelect
-            label="Project"
-            value={props.draft.projectId}
-            onChange={(projectId) => {
-              patchDraft({
-                projectId,
-                modelSelection: null,
-              });
-            }}
-          >
-            <option value="">Select Project</option>
-            {availableProjects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.title}
-              </option>
-            ))}
-          </FilterSelect>
-          <FilterSelect
-            label="Timing"
-            value={props.draft.timingType}
-            onChange={(timingType) =>
-              patchDraft({ timingType: timingType as ScheduleEditorDraft["timingType"] })
-            }
-          >
-            <option value="one-time">One time</option>
-            <option value="cron">Recurring</option>
-          </FilterSelect>
-          {props.draft.timingType === "one-time" ? (
-            <EditorField label="Date and time">
-              <Input
-                nativeInput
-                required
-                type="datetime-local"
-                value={props.draft.runAt}
-                onChange={(event) => patchDraft({ runAt: event.target.value })}
-              />
-            </EditorField>
-          ) : (
-            <EditorField label="Recurring rule">
-              <div className="mb-2 flex gap-1 rounded-lg bg-muted p-1">
-                <button
-                  className={cn(
-                    "flex-1 rounded-md px-2 py-1 text-xs",
-                    cronEditorMode === "builder" && "bg-background shadow-sm",
-                  )}
-                  type="button"
-                  onClick={() => setCronEditorMode("builder")}
-                >
-                  Visual builder
-                </button>
-                <button
-                  className={cn(
-                    "flex-1 rounded-md px-2 py-1 text-xs",
-                    cronEditorMode === "manual" && "bg-background shadow-sm",
-                  )}
-                  type="button"
-                  onClick={() => setCronEditorMode("manual")}
-                >
-                  Manual cron
-                </button>
-              </div>
-              {cronEditorMode === "builder" ? (
-                <select
-                  aria-label="Recurring Schedule preset"
-                  className="h-8 w-full rounded-lg border border-input bg-background px-2 text-sm text-foreground"
-                  value={props.draft.cron}
-                  onChange={(event) => patchDraft({ cron: event.target.value })}
-                >
-                  <option value={cronBuilderExpression({ cadence: "minutes", interval: 5 })}>
-                    Every 5 minutes
-                  </option>
-                  <option value={cronBuilderExpression({ cadence: "minutes", interval: 15 })}>
-                    Every 15 minutes
-                  </option>
-                  <option value={cronBuilderExpression({ cadence: "hourly", minute: 0 })}>
-                    Every hour
-                  </option>
-                  <option value="0 9 * * 1-5">Weekdays at 9:00</option>
-                  <option
-                    value={cronBuilderExpression({
-                      cadence: "weekly",
-                      weekday: 1,
-                      hour: 9,
-                      minute: 0,
-                    })}
-                  >
-                    Mondays at 9:00
-                  </option>
-                  {![
-                    "*/5 * * * *",
-                    "*/15 * * * *",
-                    "0 * * * *",
-                    "0 9 * * 1-5",
-                    "0 9 * * 1",
-                  ].includes(props.draft.cron) ? (
-                    <option value={props.draft.cron}>Custom saved rule</option>
-                  ) : null}
-                </select>
-              ) : (
-                <Input
-                  required
-                  value={props.draft.cron}
-                  onChange={(event) => patchDraft({ cron: event.target.value })}
-                />
-              )}
-              <p className="mt-1 font-mono text-xs text-muted-foreground">{props.draft.cron}</p>
-              {cronInspection?.error ? (
-                <p className="mt-1 text-xs text-destructive">{cronInspection.error}</p>
-              ) : null}
-              {cronInspection?.highFrequency ? (
-                <p className="mt-1 text-xs text-warning-foreground">
-                  This can create 288 Threads per day and about 105,000 per year. Phoenix does not
-                  automatically delete Threads or worktrees.
-                </p>
-              ) : null}
-            </EditorField>
-          )}
-          <EditorField label="IANA time zone">
-            <Input
-              required
-              value={props.draft.timeZone}
-              onChange={(event) => patchDraft({ timeZone: event.target.value })}
-            />
-            {cronInspection?.valid ? (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Next:{" "}
-                {cronInspection.occurrences
-                  .map((value) => formatScheduleTimestamp(value, props.draft.timeZone))
-                  .join(" · ")}
-              </p>
-            ) : null}
-          </EditorField>
-          <FilterSelect
-            label="Provider and model"
-            value={modelSelectionValue(props.draft.modelSelection)}
-            onChange={(model) =>
-              patchDraft({
-                modelSelection:
-                  modelOptions.find((option) => option.value === model)?.selection ?? null,
-              })
-            }
-          >
-            <option value="">Select model</option>
-            {modelOptions.map((model) => (
-              <option key={model.value} value={model.value}>
-                {model.label}
-              </option>
-            ))}
-          </FilterSelect>
-          <FilterSelect
-            label="Permission mode"
-            value={props.draft.runtimeMode}
-            onChange={(runtimeMode) =>
-              patchDraft({ runtimeMode: runtimeMode as ScheduleEditorDraft["runtimeMode"] })
-            }
-          >
-            <option value="approval-required">Approval required</option>
-            <option value="auto-accept-edits">Auto-accept edits</option>
-            <option value="auto">Auto</option>
-            <option value="full-access">Full access</option>
-          </FilterSelect>
-          <FilterSelect
-            label="Interaction"
-            value={props.draft.interactionMode}
-            onChange={(interactionMode) =>
-              patchDraft({
-                interactionMode: interactionMode as ScheduleEditorDraft["interactionMode"],
-              })
-            }
-          >
-            <option value="default">Build</option>
-            <option value="plan">Plan</option>
-          </FilterSelect>
-          <FilterSelect
-            label="Workspace"
-            value={props.draft.workspaceMode}
-            onChange={(workspaceMode) =>
-              patchDraft({
-                workspaceMode: workspaceMode as ScheduleEditorDraft["workspaceMode"],
-                workspaceCustomized: true,
-              })
-            }
-          >
-            <option disabled={!worktreeCapability.allowed} value="worktree">
-              New worktree
-            </option>
-            <option value="local">Shared project workspace</option>
-          </FilterSelect>
-          {props.draft.workspaceMode === "worktree" ? (
-            <EditorField label="Base branch">
-              <Input
-                required
-                value={props.draft.baseBranch}
-                onChange={(event) => patchDraft({ baseBranch: event.target.value })}
-              />
-            </EditorField>
-          ) : null}
-          {!worktreeCapability.allowed ? (
-            <p
-              className={cn(
-                "text-xs md:col-span-2",
-                worktreeUnavailable ? "text-destructive" : "text-muted-foreground",
-              )}
-            >
-              {vcsRefs.data?.isRepo === false
-                ? "This Project is not backed by a Git repository. Use the shared project workspace."
-                : vcsProbePending
-                  ? "Checking whether this Project is a Git repository. The shared project workspace remains available."
-                  : "Phoenix could not confirm this Project is a Git repository. Use the shared project workspace."}
-            </p>
-          ) : null}
-          {schedulePauseFieldLabel(props.editing) ? (
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={props.draft.createPaused}
-                onChange={(event) => patchDraft({ createPaused: event.target.checked })}
-              />
-              {schedulePauseFieldLabel(props.editing)}
-            </label>
-          ) : null}
-          <div className="flex justify-end gap-2 md:col-span-2">
-            <Button type="button" variant="ghost" onClick={props.onCancel}>
-              Cancel
-            </Button>
-            <Button
-              disabled={
-                props.pending ||
-                !environment?.online ||
-                !environment.supportsSchedules ||
-                worktreeUnavailable ||
-                worktreeProbePending
-              }
-              type="submit"
-            >
-              {props.editing ? "Save changes" : "Save Schedule"}
-            </Button>
-          </div>
-        </form>
-      </CardPanel>
-    </Card>
-  );
-}
-
-function EditorField(props: {
-  readonly label: string;
-  readonly children: ReactNode;
-  readonly className?: string;
-}) {
-  return (
-    <label className={cn("space-y-1 text-xs text-muted-foreground", props.className)}>
-      <span>{props.label}</span>
-      {props.children}
-    </label>
-  );
-}
-
-function ScheduleDetailCard(props: {
-  readonly row: AggregatedScheduleRow;
-  readonly pending: boolean;
-  readonly onRunNow: () => void;
-  readonly onPauseResume: () => void;
-  readonly onDelete: () => void;
-  readonly onAcknowledge: () => void;
-  readonly onDuplicate: (row: AggregatedScheduleRow, detail: ScheduleDetail | null) => void;
-  readonly onEdit: (row: AggregatedScheduleRow, detail: ScheduleDetail) => void;
-  readonly onOpenThread: (threadId: ThreadId) => void;
-}) {
-  const target = {
-    environmentId: props.row.environmentId,
-    input: { scheduleId: ScheduleId.make(props.row.id), revision: props.row.revision },
-  };
-  const detailQuery = useEnvironmentQuery(scheduleEnvironment.detail(target));
-  const detail = detailQuery.data;
-  const attemptedAcknowledgements = useRef(new Set<string>());
-  const attentionVersion = scheduleFailureAttentionVersion(
-    props.row.unacknowledgedFailure,
-    props.row.latestHistory,
-    props.row.updatedAt,
-  );
-
-  useEffect(() => {
-    if (
-      attentionVersion === null ||
-      !props.row.online ||
-      attemptedAcknowledgements.current.has(attentionVersion)
-    )
-      return;
-    attemptedAcknowledgements.current.add(attentionVersion);
-    props.onAcknowledge();
-  }, [attentionVersion, props.onAcknowledge, props.row.online]);
-
-  const capability = scheduleMutationCapability({
-    environmentLabel: props.row.environmentLabel,
-    online: props.row.online,
-    supportsSchedules: props.row.supportsSchedules,
-  });
-  return (
-    <Card className={cn("sticky top-4", !props.row.online && "opacity-75")}>
-      <CardHeader>
-        <CardTitle>{props.row.name}</CardTitle>
-        <CardDescription>
-          {props.row.environmentLabel} · {capability.allowed ? "Online" : capability.reason}
-        </CardDescription>
-      </CardHeader>
-      <CardPanel className="space-y-5">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
-          <dt className="text-muted-foreground">State</dt>
-          <dd>{props.row.state}</dd>
-          <dt className="text-muted-foreground">Timing</dt>
-          <dd>{formatScheduleTiming(props.row.timing, props.row.timeZone)}</dd>
-          <dt className="text-muted-foreground">Model</dt>
-          <dd>{props.row.execution.modelSelection.model}</dd>
-          <dt className="text-muted-foreground">Workspace</dt>
-          <dd>{props.row.execution.workspaceMode}</dd>
-        </dl>
-        {detail?.prompt ? (
-          <div>
-            <h3 className="mb-1 text-xs font-medium text-muted-foreground">Prompt</h3>
-            <p className="whitespace-pre-wrap text-sm">{detail.prompt}</p>
-          </div>
-        ) : null}
-        {detail ? (
-          <ScheduleHistoryList
-            key={`${props.row.revision}:${detail.id}:${detail.historyNextCursor ?? "complete"}`}
-            detail={detail}
-            environmentId={props.row.environmentId}
-            online={props.row.online}
-            timeZone={props.row.timeZone}
-            onOpenThread={props.onOpenThread}
-          />
-        ) : (
-          <div>
-            <h3 className="mb-2 text-xs font-medium text-muted-foreground">History</h3>
-            <p className="text-sm text-muted-foreground">
-              {detailQuery.error ?? "Loading recent history…"}
-            </p>
-          </div>
-        )}
-        <div className="flex flex-wrap gap-2">
-          <Button
-            disabled={!capability.allowed || props.pending}
-            size="sm"
-            onClick={props.onRunNow}
-          >
-            <PlayIcon />
-            Run now
-          </Button>
-          {props.row.state === "enabled" || props.row.state === "paused" ? (
-            <Button
-              disabled={!capability.allowed || props.pending}
-              size="sm"
-              variant="outline"
-              onClick={props.onPauseResume}
-            >
-              {props.row.state === "paused" ? <PlayIcon /> : <PauseIcon />}
-              {props.row.state === "paused" ? "Resume" : "Pause"}
-            </Button>
-          ) : null}
-          <Button
-            disabled={!capability.allowed || props.pending || detail === null}
-            size="sm"
-            variant="outline"
-            onClick={() => detail && props.onEdit(props.row, detail)}
-          >
-            <PencilIcon />
-            Edit
-          </Button>
-          <Button
-            disabled={!capability.allowed || props.pending || detail === null}
-            size="sm"
-            variant="outline"
-            onClick={() => props.onDuplicate(props.row, detail)}
-          >
-            <CopyIcon />
-            Duplicate
-          </Button>
-          <Button
-            disabled={!capability.allowed || props.pending}
-            size="sm"
-            variant="ghost"
-            onClick={props.onDelete}
-          >
-            <Trash2Icon />
-            Delete
-          </Button>
-        </div>
-      </CardPanel>
-    </Card>
-  );
-}
-
-function ScheduleHistoryList(props: {
-  readonly detail: ScheduleDetail;
-  readonly environmentId: EnvironmentId;
-  readonly online: boolean;
-  readonly timeZone: string;
-  readonly onOpenThread: (threadId: ThreadId) => void;
-}) {
-  const [entries, setEntries] = useState<ReadonlyArray<ScheduleHistoryEntry>>(props.detail.history);
-  const [nextCursor, setNextCursor] = useState<ScheduleHistoryCursor | null>(
-    props.detail.historyNextCursor,
-  );
-  const [requestedCursor, setRequestedCursor] = useState<ScheduleHistoryCursor | null>(null);
-  const [loadedOlder, setLoadedOlder] = useState(false);
-  const historyQuery = useEnvironmentQuery(
-    requestedCursor === null
-      ? null
-      : scheduleEnvironment.history({
-          environmentId: props.environmentId,
-          input: {
-            scheduleId: props.detail.id,
-            cursor: requestedCursor,
-            limit: SCHEDULE_HISTORY_PAGE_SIZE,
-          },
-        }),
-  );
-
-  useEffect(() => {
-    const page = historyQuery.data;
-    if (requestedCursor === null || page === null || page.scheduleId !== props.detail.id) return;
-    setEntries((current) =>
-      prependOlderScheduleHistory(page.entries, current, SCHEDULE_HISTORY_RENDER_LIMIT),
-    );
-    setNextCursor(page.nextCursor);
-    setLoadedOlder(true);
-    setRequestedCursor(null);
-  }, [historyQuery.data, props.detail.id, requestedCursor]);
-
-  const resetToRecent = () => {
-    setEntries(props.detail.history);
-    setNextCursor(props.detail.historyNextCursor);
-    setRequestedCursor(null);
-    setLoadedOlder(false);
-  };
-
-  return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="text-xs font-medium text-muted-foreground">History</h3>
-        {loadedOlder ? (
-          <Button size="xs" variant="ghost" onClick={resetToRecent}>
-            Back to recent
-          </Button>
-        ) : null}
-      </div>
-      {entries.length ? (
-        <ol className="space-y-2">
-          {entries.toReversed().map((entry) => (
-            <li key={scheduleHistoryEntryKey(entry)} className="rounded-lg border p-2 text-xs">
-              <span className="font-medium capitalize">{entry.type}</span>
-              {entry.type === "failed" ? (
-                <div className="mt-1 space-y-1 text-destructive">
-                  <p>
-                    {entry.code} · {entry.message}
-                    {entry.count > 1 ? ` (${entry.count} times)` : ""}
-                  </p>
-                  <p className="text-muted-foreground">
-                    {formatScheduleTimestamp(entry.firstFailedAt, props.timeZone)}
-                    {entry.count > 1
-                      ? ` – ${formatScheduleTimestamp(entry.lastFailedAt, props.timeZone)}`
-                      : ""}
-                  </p>
-                </div>
-              ) : null}
-              {entry.type === "skipped" ? (
-                <p className="mt-1 text-muted-foreground">
-                  {entry.countIsLowerBound ? "At least " : ""}
-                  {entry.count.toLocaleString("en-US")} Occurrences ·{" "}
-                  {formatScheduleTimestamp(entry.firstScheduledFor, props.timeZone)} –{" "}
-                  {formatScheduleTimestamp(entry.lastScheduledFor, props.timeZone)}
-                </p>
-              ) : null}
-              {entry.type === "triggered" ? (
-                <div className="mt-1 space-y-1">
-                  <p className="text-muted-foreground">
-                    {formatScheduleTimestamp(entry.triggeredAt, props.timeZone)}
-                  </p>
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    onClick={() => props.onOpenThread(entry.threadId)}
-                  >
-                    Open Thread
-                  </Button>
-                </div>
-              ) : null}
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="text-sm text-muted-foreground">No Occurrences yet.</p>
-      )}
-      {historyQuery.error ? (
-        <div className="mt-2 flex items-center gap-2 text-xs text-destructive">
-          <span>{historyQuery.error}</span>
-          <Button size="xs" variant="outline" onClick={historyQuery.refresh}>
-            Try again
-          </Button>
-        </div>
-      ) : null}
-      {nextCursor !== null ? (
-        <div className="mt-2">
-          <Button
-            disabled={!props.online || requestedCursor !== null}
-            size="xs"
-            variant="outline"
-            onClick={() => setRequestedCursor(nextCursor)}
-          >
-            {requestedCursor === null ? "Load older" : "Loading…"}
-          </Button>
-          {!props.online ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Connect to this Environment to load older history. Recent history remains available
-              offline.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
+    <div className="flex min-h-72 flex-col items-start justify-center gap-4">
+      <CalendarClockIcon className="size-7 text-muted-foreground" />
+      <h1 className="text-2xl font-semibold">{title}</h1>
+      <p className="max-w-xl text-sm text-muted-foreground">{description}</p>
+      {action}
     </div>
+  );
+}
+
+function ScheduleDetailView({
+  row,
+  detail,
+  error,
+  refresh,
+}: {
+  row: AggregatedScheduleRow;
+  detail: ScheduleDetail | null;
+  error: string | null;
+  refresh: () => void;
+}) {
+  const projects = useProjects();
+  const { environments } = useWebEnvironmentSchedules();
+  const route = useSearch({ from: "/schedules" });
+  const navigate = useNavigate();
+  const permission = useSchedulePermission(row);
+  const dispatch = useAtomCommand(scheduleEnvironment.dispatch);
+  const seen = useRef(new Set<string>());
+  const attention = scheduleFailureAttentionVersion(
+    row.unacknowledgedFailure,
+    row.latestHistory,
+    row.updatedAt,
+  );
+  useEffect(() => {
+    if (!permission.allowed || !attention || seen.current.has(attention)) return;
+    seen.current.add(attention);
+    void dispatch({
+      environmentId: row.environmentId,
+      input: {
+        type: "schedule.acknowledge-failures",
+        commandId: newCommandId(),
+        scheduleId: ScheduleId.make(row.id),
+      },
+    });
+  }, [attention, dispatch, permission.allowed, row.environmentId, row.id]);
+  const project = projects.find(
+    (p) => p.environmentId === row.environmentId && p.id === row.projectId,
+  );
+  const provider = environments
+    .find((e) => e.environment.environmentId === row.environmentId)
+    ?.environment.serverConfig?.providers.find(
+      (p) => p.instanceId === row.execution.modelSelection.instanceId,
+    );
+  const providerMeta = getDriverOption(provider?.driver);
+  const ProviderIcon = providerMeta?.icon;
+  const tab = route.tab ?? "overview";
+  const openThread = (threadId: ThreadId) =>
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: row.environmentId, threadId },
+    });
+  const latest = row.latestHistory;
+  return (
+    <>
+      <PageHeading
+        title={row.name}
+        icon={<CalendarClockIcon strokeWidth={1.7} />}
+        description={
+          <span className="flex flex-wrap items-center gap-1.5">
+            <EnvironmentIcon environmentId={row.environmentId} className="size-4" />
+            {project?.title ?? "Missing project"} · {row.environmentLabel} ·{" "}
+            <span className="capitalize">{row.state}</span>
+            {!row.online && " · Offline"}
+          </span>
+        }
+        actions={<ScheduleActions row={row} />}
+      />
+      {!row.online && (
+        <div role="status" className="rounded-lg bg-muted p-4 text-sm">
+          <p className="font-medium">{row.environmentLabel} is offline</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Showing the last cached data. Reconnect to edit, run, or load older history.
+          </p>
+        </div>
+      )}
+      {row.online && permission.reason && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {permission.reason}
+        </p>
+      )}
+      <Tabs
+        value={tab}
+        onValueChange={(value) =>
+          void navigate({
+            to: "/schedules",
+            search: {
+              environment: row.environmentId,
+              schedule: row.id,
+              tab: value === "history" ? "history" : "overview",
+            },
+          })
+        }
+      >
+        <TabsList className="gap-6" aria-label="Schedule sections">
+          <TabsTrigger value="overview" className="data-[active]:font-semibold">
+            <LayoutGridIcon className="size-4" />
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="history" className="data-[active]:font-semibold">
+            <HistoryIcon className="size-4" />
+            History
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="overview" className="space-y-6">
+          <div className="grid gap-6 border-b pb-6 sm:grid-cols-3">
+            <ScheduleStat
+              label="Next occurrence"
+              icon={<CalendarClockIcon />}
+              value={
+                row.state !== "enabled"
+                  ? row.state.charAt(0).toUpperCase() + row.state.slice(1)
+                  : row.nextOccurrenceAt
+                    ? new Intl.DateTimeFormat(undefined, {
+                        weekday: "short",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        hourCycle: "h23",
+                        timeZone: row.timeZone,
+                      }).format(new Date(row.nextOccurrenceAt))
+                    : "Unavailable"
+              }
+              description={row.timeZone}
+            />
+            <ScheduleStat
+              label="Repeats"
+              icon={<RepeatIcon />}
+              value={
+                row.timing.type === "one-time"
+                  ? "One time"
+                  : describeScheduleCadence(row.timing, row.timeZone)
+              }
+              description={
+                row.timing.type === "cron" ? row.timing.expression : "Runs once at the saved time"
+              }
+            />
+            <ScheduleStat
+              label="Last occurrence"
+              icon={<HistoryIcon />}
+              value={
+                latest
+                  ? latest.type === "triggered"
+                    ? "Triggered"
+                    : latest.type === "failed"
+                      ? "Failed"
+                      : "Skipped"
+                  : "Not yet triggered"
+              }
+              description={
+                latest
+                  ? formatScheduleTimestamp(
+                      latest.type === "triggered"
+                        ? latest.triggeredAt
+                        : latest.type === "failed"
+                          ? latest.lastFailedAt
+                          : latest.lastScheduledFor,
+                      row.timeZone,
+                    )
+                  : "No recorded occurrences"
+              }
+            />
+          </div>
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold">Prompt</h2>
+            {detail ? (
+              <p className="rounded-lg border bg-muted/20 p-5 text-sm leading-[22px] whitespace-pre-wrap break-words">
+                {detail.prompt}
+              </p>
+            ) : (
+              <QueryMessage error={error} refresh={refresh} />
+            )}
+            <p className="text-xs text-muted-foreground">
+              Each occurrence starts a fresh thread. Agent progress and approvals appear in that
+              thread.
+            </p>
+          </section>
+          <section className="space-y-4">
+            <h2 className="text-sm font-semibold">Execution</h2>
+            <dl className="grid gap-x-6 gap-y-5 sm:grid-cols-3">
+              <ExecutionField label="Provider & model">
+                <span className="flex items-center gap-2">
+                  {ProviderIcon && <ProviderIcon className="size-4 shrink-0" />}
+                  {provider?.displayName ??
+                    providerMeta?.label ??
+                    row.execution.modelSelection.instanceId}{" "}
+                  · {row.execution.modelSelection.model}
+                </span>
+              </ExecutionField>
+              <ExecutionField label="Permissions">
+                {
+                  {
+                    "full-access": "Full access",
+                    "approval-required": "Approval required",
+                    "auto-accept-edits": "Auto-accept edits",
+                    auto: "Auto",
+                  }[row.execution.runtimeMode]
+                }
+              </ExecutionField>
+              <ExecutionField label="Interaction">
+                {row.execution.interactionMode === "plan" ? "Plan" : "Build"}
+              </ExecutionField>
+              <ExecutionField label="Workspace">
+                {row.execution.workspaceMode === "worktree"
+                  ? "New worktree"
+                  : "Shared project workspace"}
+              </ExecutionField>
+              <ExecutionField label="Base branch">
+                {row.execution.baseBranch ?? "Not applicable"}
+              </ExecutionField>
+              <ExecutionField label="Environment">
+                <span className="flex items-center gap-2">
+                  <EnvironmentIcon environmentId={row.environmentId} className="size-4" />
+                  {row.environmentLabel} · {row.online ? "Online" : "Offline"}
+                </span>
+              </ExecutionField>
+            </dl>
+          </section>
+          {row.state === "failed" && (
+            <p role="status" className="rounded-lg border border-destructive/30 p-4 text-sm">
+              The last trigger failed. Inspect History, run again now, or edit a one-time schedule
+              to a future time to re-enable it.
+            </p>
+          )}
+          <section>
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Recent history</h2>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  void navigate({
+                    to: "/schedules",
+                    search: { environment: row.environmentId, schedule: row.id, tab: "history" },
+                  })
+                }
+              >
+                View all history →
+              </Button>
+            </div>
+            {detail ? (
+              <ScheduleHistoryTable
+                entries={detail.history.slice(-2)}
+                timeZone={row.timeZone}
+                onOpenThread={openThread}
+                compact
+              />
+            ) : (
+              <QueryMessage error={error} refresh={refresh} />
+            )}
+          </section>
+          <div className="flex flex-wrap items-center gap-5">
+            <ScheduleActions row={row} lifecycleOnly />
+            <p className="text-xs text-muted-foreground">
+              {row.state === "paused"
+                ? "Resuming starts at the next future time. The paused period is not caught up."
+                : `Runs on ${row.environmentLabel} even when Phoenix clients are closed.`}
+            </p>
+          </div>
+        </TabsContent>
+        <TabsContent value="history">
+          {detail ? (
+            <ScheduleHistory
+              key={detail.id}
+              detail={detail}
+              environmentId={row.environmentId}
+              online={row.online}
+              timeZone={row.timeZone}
+              onOpenThread={openThread}
+            />
+          ) : (
+            <QueryMessage error={error} refresh={refresh} />
+          )}
+        </TabsContent>
+      </Tabs>
+    </>
+  );
+}
+function QueryMessage({ error, refresh }: { error: string | null; refresh: () => void }) {
+  return (
+    <div
+      role={error ? "alert" : "status"}
+      className="flex items-center gap-3 py-5 text-sm text-muted-foreground"
+    >
+      {error ?? "Loading schedule details…"}
+      {error && (
+        <Button variant="outline" size="sm" onClick={refresh}>
+          Try again
+        </Button>
+      )}
+    </div>
+  );
+}
+function ScheduleStat({
+  label,
+  icon,
+  value,
+  description,
+}: {
+  label: string;
+  icon: ReactNode;
+  value: string;
+  description: string;
+}) {
+  return (
+    <dl className="space-y-3">
+      <dt className="flex items-center gap-2 text-xs text-muted-foreground [&_svg]:size-4">
+        {icon}
+        {label}
+      </dt>
+      <dd className="text-2xl leading-9 font-semibold tracking-tight">{value}</dd>
+      <dd className="text-xs text-muted-foreground">{description}</dd>
+    </dl>
+  );
+}
+function ExecutionField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-2">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="text-[13px] break-words">{children}</dd>
+    </div>
+  );
+}
+
+function draftFromDetail(
+  source: AggregatedScheduleRow,
+  detail: ScheduleDetail,
+  duplicate: boolean,
+): ScheduleEditorDraft {
+  return {
+    ...emptyDraft(source.environmentId),
+    name: `${source.name}${duplicate ? " copy" : ""}`,
+    prompt: detail.prompt,
+    projectId: source.projectId,
+    timingType: source.timing.type,
+    runAt:
+      source.timing.type === "one-time"
+        ? (scheduleWallTimeInputForInstant(source.timing.runAt, source.timeZone) ??
+          source.timing.runAt)
+        : defaultScheduleOneTimeInput(Date.now()),
+    cron: source.timing.type === "cron" ? source.timing.expression : "0 9 * * 1-5",
+    timeZone: source.timeZone,
+    modelSelection: source.execution.modelSelection,
+    runtimeMode: source.execution.runtimeMode,
+    interactionMode: source.execution.interactionMode,
+    workspaceMode: source.execution.workspaceMode,
+    workspaceCustomized: true,
+    baseBranch: source.execution.baseBranch ?? "origin/HEAD",
+    createPaused: duplicate && source.state === "paused",
+  };
+}
+function ScheduleEditorJourney({
+  source,
+  detail,
+  editing,
+  duplicating,
+  environments,
+  onBack,
+}: {
+  source: AggregatedScheduleRow | undefined;
+  detail: ScheduleDetail | null;
+  editing: boolean;
+  duplicating: boolean;
+  environments: ReturnType<typeof useWebEnvironmentSchedules>["environments"];
+  onBack: () => void;
+}) {
+  const key =
+    editing || duplicating
+      ? `${editing ? "edit" : "duplicate"}:${source?.environmentId}:${source?.id}`
+      : "create";
+  const [draft, setDraft] = useState(
+    () =>
+      retainedDrafts.get(key) ??
+      (source && detail && (editing || duplicating)
+        ? draftFromDetail(source, detail, duplicating)
+        : emptyDraft(
+            environments.find((e) => e.online && e.supportsSchedules)?.environment.environmentId,
+          )),
+  );
+  const projects = useProjects();
+  const navigate = useNavigate();
+  const dispatch = useAtomCommand(scheduleEnvironment.dispatch);
+  const lock = useRef(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [discard, setDiscard] = useState(false);
+  useEffect(() => {
+    retainedDrafts.set(key, draft);
+    if (retainedDrafts.size > 24) retainedDrafts.delete(retainedDrafts.keys().next().value!);
+  }, [key, draft]);
+  useEffect(() => {
+    const first = environments.find((e) => e.online && e.supportsSchedules);
+    if (!draft.environmentId && first)
+      setDraft((current) => ({ ...current, environmentId: first.environment.environmentId }));
+  }, [draft.environmentId, environments]);
+  const environment = environments.find((e) => e.environment.environmentId === draft.environmentId);
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    if (lock.current) return;
+    if (!environment) {
+      setError("Choose an available environment.");
+      return;
+    }
+    if (!draft.modelSelection) {
+      setError(
+        "Choose a provider and model. If none are available, configure a provider on this environment first.",
+      );
+      return;
+    }
+    setError(null);
+    const one =
+      draft.timingType === "one-time" ? zonedWallTimeToInstant(draft.runAt, draft.timeZone) : null;
+    const unchangedTime =
+      editing && source?.timing.type === "one-time" && one?.instant === source.timing.runAt;
+    if (!draft.name.trim() || !draft.prompt.trim() || !draft.projectId) {
+      setError("Enter a name and prompt, and choose a project.");
+      return;
+    }
+    if (
+      one &&
+      (!one.valid || !one.instant || (!unchangedTime && Date.parse(one.instant) <= Date.now()))
+    ) {
+      setError(one.error ?? "Choose a date and time in the future.");
+      return;
+    }
+    if (draft.timingType === "cron") {
+      const result = inspectCronTiming({
+        expression: draft.cron,
+        timeZone: draft.timeZone,
+        after: Date.now(),
+      });
+      if (!result.valid) {
+        setError(result.error ?? "Check the recurring rule.");
+        return;
+      }
+    }
+    lock.current = true;
+    setPending(true);
+    const id = editing && source ? ScheduleId.make(source.id) : ScheduleId.make(randomUUID());
+    try {
+      const definition = {
+        scheduleId: id,
+        commandId: newCommandId(),
+        projectId: ProjectId.make(draft.projectId),
+        name: draft.name.trim(),
+        prompt: draft.prompt.trim(),
+        timing:
+          draft.timingType === "cron"
+            ? { type: "cron" as const, expression: draft.cron.trim() }
+            : { type: "one-time" as const, runAt: one!.instant! },
+        timeZone: draft.timeZone,
+        execution: {
+          modelSelection: draft.modelSelection,
+          runtimeMode: draft.runtimeMode,
+          interactionMode: draft.interactionMode,
+          workspaceMode: draft.workspaceMode,
+          baseBranch:
+            draft.workspaceMode === "worktree" ? draft.baseBranch.trim() || "origin/HEAD" : null,
+        },
+      };
+      const result = await dispatch({
+        environmentId: environment.environment.environmentId,
+        input: editing
+          ? { ...definition, type: "schedule.update" }
+          : {
+              ...definition,
+              type: "schedule.create",
+              state: draft.createPaused ? "paused" : "enabled",
+            },
+      });
+      if (result._tag === "Failure") {
+        setError(
+          "The environment could not save this schedule. Your input is retained. Check your connection and permissions, then try again.",
+        );
+        return;
+      }
+      retainedDrafts.delete(key);
+      toastManager.add({
+        type: "success",
+        title: editing ? "Schedule updated" : "Schedule created",
+      });
+      await navigate({
+        to: "/schedules",
+        search: {
+          environment: environment.environment.environmentId,
+          schedule: id,
+          tab: "overview",
+        },
+      });
+    } catch {
+      setError("Could not save the schedule. Your input is retained; try again.");
+    } finally {
+      lock.current = false;
+      setPending(false);
+    }
+  };
+  return (
+    <>
+      <PageHeading
+        title={editing ? "Edit schedule" : duplicating ? "Duplicate schedule" : "Create schedule"}
+        icon={<CalendarClockIcon />}
+        actions={
+          <Button variant="ghost" className="w-fit px-0" disabled={pending} onClick={onBack}>
+            <ArrowLeftIcon className="size-4" />
+            Back · Keep draft
+          </Button>
+        }
+        description="Run a saved prompt once or on a recurring cadence."
+      />
+      {error && (
+        <p
+          role="alert"
+          className="rounded-lg border border-destructive/30 p-4 text-sm text-destructive"
+        >
+          {error}
+        </p>
+      )}
+      {environment ? (
+        <PermissionEditor
+          key={environment.environment.environmentId}
+          environment={environment}
+          draft={draft}
+          editing={editing}
+          environments={environments}
+          projects={projects}
+          pending={pending}
+          onChange={setDraft}
+          onCancel={() => setDiscard(true)}
+          onSubmit={save}
+        />
+      ) : (
+        <>
+          <p role="status" className="text-sm text-muted-foreground">
+            This draft's environment is unavailable. Choose another destination or cancel to discard
+            the draft.
+          </p>
+          <ScheduleEditor
+            draft={draft}
+            editing={editing}
+            environments={environments}
+            projects={projects}
+            pending={pending}
+            canSave={false}
+            onChange={setDraft}
+            onCancel={() => setDiscard(true)}
+            onSubmit={save}
+          />
+        </>
+      )}
+      <Dialog open={discard} onOpenChange={setDiscard}>
+        <DialogPopup className="schedule-surface sm:max-w-[430px]" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Discard this draft?</DialogTitle>
+            <DialogDescription>
+              Your unsaved changes will be removed. The saved schedule will stay unchanged.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiscard(false)}>
+              Keep editing
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                retainedDrafts.delete(key);
+                onBack();
+              }}
+            >
+              Discard changes
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+    </>
+  );
+}
+function PermissionEditor({
+  environment,
+  ...props
+}: Omit<ComponentProps<typeof ScheduleEditor>, "canSave"> & {
+  environment: ReturnType<typeof useWebEnvironmentSchedules>["environments"][number];
+}) {
+  const permission = useSchedulePermission({
+    environmentId: environment.environment.environmentId,
+    online: environment.online,
+    supportsSchedules: environment.supportsSchedules,
+  });
+  return (
+    <>
+      {permission.reason && (
+        <p role="status" className="mb-4 text-sm text-muted-foreground">
+          {permission.reason}
+        </p>
+      )}
+      <ScheduleEditor
+        {...props}
+        canSave={permission.allowed}
+        onSubmit={(event) => {
+          if (!permission.allowed) {
+            event.preventDefault();
+            return;
+          }
+          props.onSubmit(event);
+        }}
+      />
+    </>
   );
 }

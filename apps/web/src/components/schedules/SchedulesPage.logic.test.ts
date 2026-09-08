@@ -163,6 +163,33 @@ describe("Schedule editor logic", () => {
     ).toBe(draft);
   });
 
+  it("preserves saved project and provider when editing an unavailable configuration", () => {
+    const draft = {
+      environmentId: "agents",
+      projectId: "removed-project",
+      modelSelection: configuredSelection,
+      workspaceMode: "local" as const,
+      workspaceCustomized: true,
+      baseBranch: "origin/main",
+    };
+    expect(
+      reconcileScheduleEditorDefaults(draft, {
+        environmentId: "agents",
+        projects: [{ id: "other-project", defaultModelSelection: null }],
+        modelChoices: [
+          {
+            selection: { instanceId: ProviderInstanceId.make("claude"), model: "another-model" },
+            isDefault: true,
+          },
+        ],
+        serverDefaultModelSelection: null,
+        isRepo: false,
+        branchRefs: [],
+        editing: true,
+      }),
+    ).toBe(draft);
+  });
+
   it("uses mode-appropriate pause copy", () => {
     expect(schedulePauseFieldLabel(false)).toBe("Create Paused");
     expect(schedulePauseFieldLabel(true)).toBeNull();

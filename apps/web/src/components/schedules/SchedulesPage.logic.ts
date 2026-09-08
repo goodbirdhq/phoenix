@@ -81,15 +81,18 @@ export function reconcileScheduleEditorDefaults<T extends ScheduleEditorDefaults
 
   const project =
     input.projects.find((candidate) => candidate.id === draft.projectId) ?? input.projects[0];
-  const projectId = project?.id ?? "";
-  const modelSelection = input.modelChoices.some(
-    (choice) => draft.modelSelection !== null && sameModel(choice.selection, draft.modelSelection),
-  )
-    ? draft.modelSelection
-    : chooseScheduleModelSelection(
-        [project?.defaultModelSelection, input.serverDefaultModelSelection],
-        input.modelChoices,
-      );
+  const projectId = input.editing && draft.projectId ? draft.projectId : (project?.id ?? "");
+  const modelSelection =
+    (input.editing && draft.modelSelection !== null) ||
+    input.modelChoices.some(
+      (choice) =>
+        draft.modelSelection !== null && sameModel(choice.selection, draft.modelSelection),
+    )
+      ? draft.modelSelection
+      : chooseScheduleModelSelection(
+          [project?.defaultModelSelection, input.serverDefaultModelSelection],
+          input.modelChoices,
+        );
   const workspaceMode = draft.workspaceCustomized
     ? draft.workspaceMode
     : resolveScheduleWorkspaceModeDefault(project === undefined ? null : input.isRepo);

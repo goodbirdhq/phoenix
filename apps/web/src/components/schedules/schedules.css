@@ -1,0 +1,53 @@
+.schedule-surface {
+  font-family: "Environment Inter", "Inter Variable", system-ui, sans-serif;
+  font-synthesis: none;
+}
+.schedule-surface .schedule-control {
+  height: 36px;
+  padding-inline: 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 19px;
+  box-shadow: none;
+}
+.schedule-history {
+  min-width: 680px;
+  table-layout: fixed;
+  font-size: 13px;
+  line-height: 22px;
+}
+.schedule-history th {
+  height: 40px;
+  padding: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
+}
+.schedule-history td {
+  padding: 20px 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.schedule-history tbody tr:last-child {
+  border-bottom: 1px solid var(--border);
+}
+.schedule-history td:first-child {
+  font-size: 14px;
+}
+.schedule-editor input:not([type="checkbox"]),
+.schedule-editor select {
+  height: 40px;
+  border-radius: 8px;
+}
+html:not(.dark):not([data-theme-id]) .schedule-surface {
+  --primary: #0284c7;
+  --primary-foreground: #fff;
+  --input: var(--border);
+}
+
+.schedule-editor input:not([type="checkbox"]),
+.schedule-editor textarea {
+  font-size: 13px;
+  line-height: 22px;
+  box-shadow: none;
+}

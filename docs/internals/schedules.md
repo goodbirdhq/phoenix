@@ -153,3 +153,33 @@ Use explicit reactor drains or typed receipts instead of sleeps. Thin tests cove
 authorization, cache reconciliation, client navigation, and VCS identity. All server tests use
 isolated worktree-local Phoenix state; the live Phoenix installation and its database are never test
 targets.
+
+## Web and desktop destination
+
+The Schedules route uses environment-qualified `environment` and `schedule` search parameters,
+with `overview` / `history` tabs and create/edit/duplicate journeys. It never changes the active
+conversation merely to inspect another environment. The command palette and sidebar open this
+route; Settings' Schedule management toggle continues to govern agent MCP access, not human
+schedule permissions. There is no dedicated scheduling keybinding. Desktop reuses the web view;
+mobile keeps its existing native schedule implementation.
+
+The UI reuses the shared PageHeading, tabs, table, dialogs, sidebar chrome, EnvironmentIcon and
+provider metadata introduced with the Environments destination. Environment appearance is explicit
+and independent of connection method. History uses 40px headers and 20px vertical cell padding;
+failed rows distinguish their scheduled time from the later trigger attempt. A Triggered occurrence
+means the first turn was accepted, not that the agent finished successfully.
+
+Mutations and failure acknowledgement require the owning connection's `orchestration:operate`
+scope. Snapshot readiness and errors are carried through the web facade, so missing snapshots do
+not render as an empty healthy list. Cached schedules remain inspectable offline. Details are loaded
+for selection or deliberate row preview; older history loads in 50-entry pages with a 200-entry
+render bound. Drafts are retained in a bounded in-memory store for Back navigation during the app
+session, and removed after save or confirmed discard. Existing edit selections are retained when
+a provider or project becomes unavailable rather than silently substituted.
+
+The Paper source is file `01M1PXJYW6YGH9Q0MEVZA3HSN1`, page `U-0`
+(**03 · Desktop · Production · Schedules**), artboards `2AZ0-0` through `2FZZ-0`.
+The table reference is Environments `QFE-0`, and confirmations use the Modal Dialog foundation.
+**Design requiring new backend support:** prompt-content search is not implemented by the summary
+contract or an RPC. The sidebar currently searches names, projects, and environments; it must not
+fetch every potentially 120k-character prompt to simulate server search.

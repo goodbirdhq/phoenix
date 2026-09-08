@@ -9,6 +9,16 @@ page combines Schedules from every environment the client knows. Schedules from 
 environment remain visible from the last cached view, but are greyed out and read-only until that
 environment reconnects.
 
+## Find and inspect schedules
+
+On web and desktop, the Schedules sidebar groups work into Failed, Enabled, Paused, and Completed.
+Search by schedule name, project, or environment, and narrow the list with project, environment,
+state, and failure filters. Environment icons follow your saved appearance preferences.
+
+Select a schedule to inspect its **Overview** or **History**. Switching tabs keeps the same
+environment and schedule selected. Inspecting schedules does not switch your active conversation.
+Changing a schedule requires an online environment and permission to operate tasks on that connection.
+
 ## Create a Schedule
 
 A Schedule needs a short name, a text prompt, an environment, and a project. Choose either a single
@@ -25,6 +35,11 @@ base branch explicitly. Later changes to project defaults do not silently change
 For Git projects, a new worktree based on the configured remote default branch is selected by
 default. Shared workspace is available as an explicit choice. Worktree mode is not available for a
 non-Git project.
+
+Use **Back · Keep draft** to leave the editor and return to it during the same app session. The
+visual builder and manual cron editor share a single Save/Cancel boundary. Errors retain your input;
+Cancel asks before discarding it. Saved schedules survive reloads. To copy a schedule, choose
+**More → Duplicate**, select the destination environment and its project and model, then save.
 
 ## Triggering and threads
 
