@@ -131,7 +131,28 @@ export function ScheduleActions({
       >
         {row.state === "paused" ? "Resume schedule" : "Pause schedule"}
       </Button>
-    ) : null;
+    ) : (
+      <div className="flex items-center gap-5">
+        {row.state === "failed" && (
+          <Button
+            variant="outline"
+            className="schedule-control"
+            disabled={busy || !permission.allowed}
+            onClick={() => void mutate("schedule.run-now")}
+          >
+            Run now
+          </Button>
+        )}
+        <Button
+          variant="outline"
+          className="schedule-control"
+          disabled={busy || !permission.allowed}
+          onClick={() => openEditor(false)}
+        >
+          Edit schedule
+        </Button>
+      </div>
+    );
   return (
     <>
       <div
@@ -166,7 +187,7 @@ export function ScheduleActions({
                 variant="outline"
                 size={compact ? "icon" : "default"}
                 className={
-                  compact ? "size-6 border-0 bg-transparent shadow-none" : "schedule-control"
+                  compact ? "size-6 border-0 bg-transparent shadow-none" : "schedule-control gap-1"
                 }
                 aria-label={`More actions for ${row.name}`}
               />
@@ -176,7 +197,7 @@ export function ScheduleActions({
               <MoreHorizontalIcon className="size-4" />
             ) : (
               <>
-                More <ChevronDownIcon className="size-3" />
+                More <ChevronDownIcon className="size-2.5" />
               </>
             )}
           </MenuTrigger>

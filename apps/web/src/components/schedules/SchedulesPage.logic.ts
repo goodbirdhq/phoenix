@@ -1,6 +1,7 @@
 import { describeScheduleCadence } from "@t3tools/shared/scheduleCadence";
 import type { ModelSelection, ScheduleHistoryEntry, ScheduleTiming } from "@t3tools/contracts";
 import {
+  type AggregatedScheduleRow,
   preferredScheduleBaseBranch,
   resolveScheduleWorkspaceModeDefault,
   scheduleWorktreeCapability,
@@ -191,4 +192,61 @@ export function scheduleRepeatSummary(timing: ScheduleTiming, timeZone: string) 
         description: `At ${split[2]}${split[1] === "Weekdays" ? " · Mon–Fri" : ""}`,
       }
     : { value: cadence, description: timing.expression };
+}
+
+/** Show the next connected occurrence first, leaving cached offline work at the end. */
+export function compareScheduleSidebarRows(
+  left: Pick<AggregatedScheduleRow, "state" | "online" | "nextOccurrenceAt" | "name">,
+  right: Pick<AggregatedScheduleRow, "state" | "online" | "nextOccurrenceAt" | "name">,
+) {
+  if (left.state === "enabled" && right.state === "enabled") {
+    if (left.online !== right.online) return left.online ? -1 : 1;
+    const leftTime = left.nextOccurrenceAt === null ? Infinity : Date.parse(left.nextOccurrenceAt);
+    const rightTime =
+      right.nextOccurrenceAt === null ? Infinity : Date.parse(right.nextOccurrenceAt);
+    if (leftTime !== rightTime) return leftTime - rightTime;
+  }
+  return left.name.localeCompare(right.name);
+}
+
+export function schedulePromptExplanation(
+  state: AggregatedScheduleRow["state"],
+  latestOutcome: ScheduleHistoryEntry["type"] | null,
+) {
+  if (state === "failed")
+    return latestOutcome === "triggered"
+      ? "The latest run created a thread. Edit the schedule to enable future occurrences."
+      : "This schedule could not start its thread. Failures after a thread starts are shown in the thread.";
+  if (state === "completed")
+    return latestOutcome === "triggered"
+      ? "The scheduled thread was created. Open it to see the agent’s progress."
+      : "This one-time schedule is completed. Review its history for recorded occurrences.";
+  return "Each occurrence starts a fresh thread. Agent progress and approvals appear in that thread.";
+}
+
+export function scheduleHistoryScheduledLabel(
+  entry: ScheduleHistoryEntry,
+  timeZone: string,
+  compact: boolean,
+) {
+  const label = (value: string) => {
+    const formatted = scheduleDisplayTimestamp(value, timeZone);
+    return compact ? formatted : formatted.replace(/^[^,]+, /u, "");
+  };
+  if (entry.type !== "skipped") return label(entry.scheduledFor);
+  const first = label(entry.firstScheduledFor).split(" · ")[0];
+  const last = label(entry.lastScheduledFor).split(" · ")[0];
+  return first === last ? first : `${first} – ${last}`;
+}
+
+export function scheduleHistoryStartedLabel(
+  entry: Extract<ScheduleHistoryEntry, { type: "triggered" }>,
+  timeZone: string,
+) {
+  const started = scheduleDisplayTimestamp(entry.triggeredAt, timeZone);
+  const scheduled = scheduleDisplayTimestamp(entry.scheduledFor, timeZone);
+  if (!started.includes(" · ")) return `Started ${started}`;
+  return started.split(" · ")[0] === scheduled.split(" · ")[0]
+    ? `Started at ${started.split(" · ")[1]}`
+    : `Started ${started}`;
 }

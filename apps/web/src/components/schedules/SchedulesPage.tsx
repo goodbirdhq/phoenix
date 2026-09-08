@@ -9,7 +9,6 @@ import {
 import { ProjectId, ScheduleId, type ScheduleDetail, type ThreadId } from "@t3tools/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
-  ArrowLeftIcon,
   CalendarClockIcon,
   CalendarIcon,
   HistoryIcon,
@@ -62,12 +61,14 @@ import {
   scheduleFailureAttentionVersion,
   scheduleDisplayTimestamp,
   scheduleRepeatSummary,
+  schedulePromptExplanation,
 } from "./SchedulesPage.logic";
 import "./schedules.css";
 
 const retainedDrafts = new Map<string, ScheduleEditorDraft>();
 
 export function SchedulesPage() {
+  const [editorPending, setEditorPending] = useState(false);
   const { isReady, environments } = useWebEnvironmentSchedules();
   const appearance = useClientSettings((s) => s.environmentAppearance);
   const route = useSearch({ from: "/schedules" });
@@ -120,7 +121,19 @@ export function SchedulesPage() {
       >
         <WorkspaceBreadcrumb ariaLabel="Schedules breadcrumb">
           <WorkspaceBreadcrumbItem className="font-normal text-foreground">
-            Schedules
+            {editor ? (
+              <button
+                type="button"
+                disabled={editorPending}
+                onClick={goBack}
+                aria-label="Back to schedules · Keep draft"
+                className="cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Schedules
+              </button>
+            ) : (
+              "Schedules"
+            )}
           </WorkspaceBreadcrumbItem>
           <WorkspaceBreadcrumbSeparator />
           <WorkspaceBreadcrumbItem current className="text-xs font-normal text-muted-foreground">
@@ -175,6 +188,8 @@ export function SchedulesPage() {
                 duplicating={!!route.duplicate}
                 environments={environments}
                 onBack={goBack}
+                pending={editorPending}
+                setPending={setEditorPending}
               />
             )
           ) : selected ? (
@@ -358,21 +373,36 @@ function ScheduleDetailView({
               icon={<CalendarIcon strokeWidth={1.7} />}
               value={
                 row.state !== "enabled"
-                  ? row.state.charAt(0).toUpperCase() + row.state.slice(1)
+                  ? row.state === "paused"
+                    ? "Paused"
+                    : "No next occurrence"
                   : row.nextOccurrenceAt
                     ? scheduleDisplayTimestamp(row.nextOccurrenceAt, row.timeZone)
                     : "Unavailable"
               }
-              description={row.state === "paused" ? "No upcoming occurrences" : row.timeZone}
+              description={
+                row.state === "paused"
+                  ? "No upcoming occurrences"
+                  : row.state === "completed"
+                    ? "One-time schedule completed"
+                    : row.state === "failed"
+                      ? "Update the schedule to recover"
+                      : row.timeZone
+              }
             />
             <ScheduleStat
-              label="Repeats"
-              icon={<RepeatIcon />}
+              label={row.timing.type === "one-time" ? "Timing" : "Repeats"}
+              icon={row.timing.type === "one-time" ? <CalendarIcon /> : <RepeatIcon />}
               value={scheduleRepeatSummary(row.timing, row.timeZone).value}
-              description={scheduleRepeatSummary(row.timing, row.timeZone).description}
+              description={
+                row.timing.type === "one-time"
+                  ? scheduleDisplayTimestamp(row.timing.runAt, row.timeZone)
+                  : scheduleRepeatSummary(row.timing, row.timeZone).description
+              }
             />
             <ScheduleStat
               label="Last occurrence"
+              destructive={latest?.type === "failed"}
               icon={<HistoryIcon />}
               value={
                 latest
@@ -407,8 +437,7 @@ function ScheduleDetailView({
               <QueryMessage error={error} refresh={refresh} />
             )}
             <p className="text-xs text-muted-foreground">
-              Each occurrence starts a fresh thread. Agent progress and approvals appear in that
-              thread.
+              {schedulePromptExplanation(row.state, latest?.type ?? null)}
             </p>
           </section>
           <section className="space-y-3">
@@ -455,12 +484,6 @@ function ScheduleDetailView({
               </ExecutionField>
             </dl>
           </section>
-          {row.state === "failed" && (
-            <p role="status" className="rounded-lg border border-destructive/30 p-4 text-sm">
-              The last trigger failed. Inspect History, run again now, or edit a one-time schedule
-              to a future time to re-enable it.
-            </p>
-          )}
           <section>
             <div className="mb-6 flex items-center justify-between">
               <h2 className="text-sm leading-[22px] font-semibold">Recent history</h2>
@@ -478,7 +501,19 @@ function ScheduleDetailView({
                 View all history →
               </Button>
             </div>
-            {detail ? (
+            {row.state === "failed" && latest?.type === "failed" ? (
+              <div role="status" className="schedule-failure space-y-2 rounded-lg border p-4">
+                <p className="text-sm leading-[22px] font-semibold">Could not create the thread</p>
+                <p className="text-[13px] leading-[22px]">
+                  {latest.code} · {latest.message}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {latest.count} {latest.count === 1 ? "attempt" : "attempts"} ·{" "}
+                  {scheduleDisplayTimestamp(latest.lastFailedAt, row.timeZone)} · No thread was
+                  created.
+                </p>
+              </div>
+            ) : detail ? (
               <ScheduleHistoryTable
                 entries={detail.history.slice(-2)}
                 timeZone={row.timeZone}
@@ -489,12 +524,21 @@ function ScheduleDetailView({
               <QueryMessage error={error} refresh={refresh} />
             )}
           </section>
+          {row.state === "failed" && (
+            <p className="text-xs text-muted-foreground">
+              Opening this schedule marks the failure notice as seen. The history entry remains.
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-5">
             <ScheduleActions row={row} lifecycleOnly />
             <p className="text-xs text-muted-foreground">
               {row.state === "paused"
                 ? "Resuming starts at the next future time. The paused period is not caught up."
-                : `Runs on ${row.environmentLabel} even when Phoenix clients are closed.`}
+                : row.state === "completed"
+                  ? "Choose a new future time to enable this schedule again. Run now leaves it completed."
+                  : row.state === "failed"
+                    ? "Fix the cause, then try again. A new future time re-enables a failed one-time schedule."
+                    : `Runs on ${row.environmentLabel} even when Phoenix clients are closed.`}
             </p>
           </div>
         </TabsContent>
@@ -536,7 +580,9 @@ function ScheduleStat({
   icon,
   value,
   description,
+  destructive = false,
 }: {
+  destructive?: boolean;
   label: string;
   icon: ReactNode;
   value: string;
@@ -548,7 +594,9 @@ function ScheduleStat({
         {icon}
         {label}
       </dt>
-      <dd className="text-2xl leading-9 font-semibold">{value}</dd>
+      <dd className={cn("text-2xl leading-9 font-semibold", destructive && "text-destructive")}>
+        {value}
+      </dd>
       <dd className="text-xs text-muted-foreground">{description}</dd>
     </dl>
   );
@@ -596,6 +644,8 @@ function ScheduleEditorJourney({
   duplicating,
   environments,
   onBack,
+  pending,
+  setPending,
 }: {
   source: AggregatedScheduleRow | undefined;
   detail: ScheduleDetail | null;
@@ -603,6 +653,8 @@ function ScheduleEditorJourney({
   duplicating: boolean;
   environments: ReturnType<typeof useWebEnvironmentSchedules>["environments"];
   onBack: () => void;
+  pending: boolean;
+  setPending: (pending: boolean) => void;
 }) {
   const key =
     editing || duplicating
@@ -621,7 +673,6 @@ function ScheduleEditorJourney({
   const navigate = useNavigate();
   const dispatch = useAtomCommand(scheduleEnvironment.dispatch);
   const lock = useRef(false);
-  const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [discard, setDiscard] = useState(false);
   useEffect(() => {
@@ -636,7 +687,7 @@ function ScheduleEditorJourney({
   const environment = environments.find((e) => e.environment.environmentId === draft.environmentId);
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    if (lock.current) return;
+    if (lock.current || pending) return;
     if (!environment) {
       setError("Choose an available environment.");
       return;
@@ -740,12 +791,6 @@ function ScheduleEditorJourney({
         className="schedule-heading"
         title={editing ? "Edit schedule" : duplicating ? "Duplicate schedule" : "Create schedule"}
         icon={<CalendarIcon strokeWidth={1.7} />}
-        actions={
-          <Button variant="ghost" className="w-fit px-0" disabled={pending} onClick={onBack}>
-            <ArrowLeftIcon className="size-4" />
-            Back · Keep draft
-          </Button>
-        }
         description="Run a saved prompt once or on a recurring cadence."
       />
       {error && (

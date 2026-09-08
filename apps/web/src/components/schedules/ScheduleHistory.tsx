@@ -14,6 +14,8 @@ import {
   prependOlderScheduleHistory,
   scheduleHistoryEntryKey,
   scheduleDisplayTimestamp,
+  scheduleHistoryScheduledLabel,
+  scheduleHistoryStartedLabel,
 } from "./SchedulesPage.logic";
 
 export function ScheduleHistoryTable({
@@ -54,16 +56,7 @@ export function ScheduleHistoryTable({
       <TableBody>
         {entries.toReversed().map((entry) => (
           <TableRow key={scheduleHistoryEntryKey(entry)}>
-            <TableCell>
-              {scheduleDisplayTimestamp(
-                entry.type === "skipped"
-                  ? entry.firstScheduledFor
-                  : entry.type === "failed"
-                    ? entry.scheduledFor
-                    : entry.scheduledFor,
-                timeZone,
-              )}
-            </TableCell>
+            <TableCell>{scheduleHistoryScheduledLabel(entry, timeZone, compact)}</TableCell>
             <TableCell>
               <span
                 className={
@@ -84,7 +77,7 @@ export function ScheduleHistoryTable({
             {!compact && (
               <TableCell className="pr-4">
                 {entry.type === "triggered"
-                  ? `Started ${scheduleDisplayTimestamp(entry.triggeredAt, timeZone)}`
+                  ? scheduleHistoryStartedLabel(entry, timeZone)
                   : entry.type === "failed"
                     ? `${entry.message} · ${entry.count} ${entry.count === 1 ? "attempt" : "attempts"}`
                     : `${entry.countIsLowerBound ? "At least " : ""}${entry.count.toLocaleString()} older occurrences · through ${scheduleDisplayTimestamp(entry.lastScheduledFor, timeZone)}`}
@@ -149,10 +142,10 @@ export function ScheduleHistory({
     setRequested(null);
   }, [requested, history.data, detail.id]);
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-semibold">Occurrence history</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
+        <h2 className="text-xl leading-[22px] font-semibold">Occurrence history</h2>
+        <p className="mt-1.5 text-xs text-muted-foreground">
           {timeZone} · Newest first · Triggered means the thread accepted its first turn.
         </p>
       </div>
@@ -165,7 +158,7 @@ export function ScheduleHistory({
           </Button>
         </div>
       )}
-      <div className="flex flex-wrap items-center gap-4">
+      <div className="flex min-h-[38px] flex-wrap items-center gap-4">
         {cursor && (
           <Button
             variant="outline"
@@ -190,7 +183,7 @@ export function ScheduleHistory({
             Back to recent
           </Button>
         )}
-        <p className="text-xs text-muted-foreground">
+        <p className="ml-auto text-xs text-muted-foreground">
           {online
             ? "Thread results, approvals and provider errors live in the thread."
             : "Unavailable while offline. Cached entries remain readable."}

@@ -51,6 +51,7 @@ import {
 } from "../ui/menu";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { ScheduleActions } from "./ScheduleActions";
+import { compareScheduleSidebarRows } from "./SchedulesPage.logic";
 
 const states = ["failed", "enabled", "paused", "completed"] as const;
 const stateIcons = {
@@ -217,7 +218,7 @@ export function SchedulesSidebar() {
         </Button>
       </div>
       <SidebarContent className="schedule-sidebar">
-        <div className="px-2.5 py-2">
+        <div className="flex flex-col gap-0.5 px-2.5 py-2">
           {!isReady && (
             <p role="status" className="p-3 text-sm text-muted-foreground">
               Loading environments…
@@ -241,12 +242,14 @@ export function SchedulesSidebar() {
               </p>
             ))}
           {states.map((state) => {
-            const items = filtered.filter((row) => row.state === state);
+            const items = filtered
+              .filter((row) => row.state === state)
+              .toSorted(compareScheduleSidebarRows);
             if (!items.length) return null;
             const Icon = stateIcons[state];
             const open = expanded.includes(state) || !!query || count > 0;
             return (
-              <section key={state}>
+              <section key={state} className="contents">
                 <button
                   type="button"
                   aria-expanded={open}
@@ -398,7 +401,7 @@ function ScheduleSidebarRow({
   return (
     <div
       className={cn(
-        "group/schedule relative mb-0.5 rounded-lg border border-transparent",
+        "group/schedule relative rounded-lg border border-transparent",
         selected ? "border-sidebar-border bg-background" : "hover:bg-sidebar-accent",
       )}
     >
@@ -409,26 +412,28 @@ function ScheduleSidebarRow({
               type="button"
               onClick={onSelect}
               aria-current={selected ? "page" : undefined}
-              className="flex min-h-[84px] w-full items-center gap-2.5 rounded-lg px-2 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex min-h-[82px] w-full items-center gap-2.5 rounded-lg px-2 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           }
         >
           <span
             className={cn(
-              "relative flex size-8 shrink-0 items-center justify-center rounded-full border bg-background",
+              "relative mx-px flex size-[30px] shrink-0 items-center justify-center rounded-full border bg-background",
               row.state === "failed" && "border-destructive",
+              !row.online && "opacity-45",
             )}
           >
             {project ? (
               <ProjectFavicon
                 environmentId={row.environmentId}
                 cwd={project.workspaceRoot}
-                className="size-[18px]"
+                faviconPath={project.faviconPath}
+                className="size-4"
               />
             ) : (
               <CalendarClockIcon className="size-[18px]" />
             )}
-            <Icon className="absolute -right-1 -bottom-1 size-3.5 rounded-full border bg-sidebar p-0.5 text-muted-foreground" />
+            <Icon className="absolute -right-[3px] -bottom-[3px] size-3.5 rounded-full border bg-sidebar p-0.5 text-muted-foreground" />
           </span>
           <span className="min-w-0 flex-1 space-y-0.5">
             <span
@@ -477,10 +482,17 @@ function ScheduleSidebarRow({
                   : row.state === "completed"
                     ? "Done"
                     : next
-                      ? new Intl.DateTimeFormat(undefined, {
-                          weekday: "short",
-                          timeZone: row.timeZone,
-                        }).format(next)
+                      ? new Intl.DateTimeFormat("en-CA", { timeZone: row.timeZone }).format(
+                          next,
+                        ) ===
+                          new Intl.DateTimeFormat("en-CA", { timeZone: row.timeZone }).format(
+                            new Date(),
+                          ) && row.state === "failed"
+                        ? "Today"
+                        : new Intl.DateTimeFormat(undefined, {
+                            weekday: "short",
+                            timeZone: row.timeZone,
+                          }).format(next)
                       : "—"}
             </span>
             {row.online && next && (
@@ -496,7 +508,7 @@ function ScheduleSidebarRow({
             {row.unacknowledgedFailure && (
               <span
                 aria-label="Unacknowledged failure"
-                className="mt-auto size-1.5 rounded-full bg-destructive"
+                className="mt-auto size-1 rounded-full bg-destructive"
               />
             )}
           </span>
@@ -514,7 +526,7 @@ function ScheduleSidebarRow({
           </p>
         </TooltipPopup>
       </Tooltip>
-      <div className="absolute right-1 bottom-1 hidden group-hover/schedule:block group-focus-within/schedule:block">
+      <div className="schedule-row-actions absolute right-1 bottom-1 hidden group-hover/schedule:block group-focus-within/schedule:block">
         <ScheduleActions row={row} compact />
       </div>
     </div>

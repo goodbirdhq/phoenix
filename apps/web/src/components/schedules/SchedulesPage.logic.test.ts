@@ -8,6 +8,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   chooseScheduleModelSelection,
+  compareScheduleSidebarRows,
+  schedulePromptExplanation,
   scheduleDisplayTimestamp,
   scheduleRepeatSummary,
   latestScheduleHistoryListText,
@@ -329,5 +331,44 @@ describe("schedule destination labels", () => {
     expect(
       scheduleRepeatSummary({ type: "cron", expression: "*/16 * * * *" }, "Europe/Berlin"),
     ).toEqual({ value: "*/16 * * * *", description: "*/16 * * * *" });
+  });
+});
+
+describe("schedule navigation and recovery", () => {
+  it("sorts enabled schedules by upcoming time across environments, then offline rows", () => {
+    const rows = [
+      {
+        state: "enabled" as const,
+        online: false,
+        nextOccurrenceAt: "2026-09-08T05:00:00Z",
+        name: "Offline",
+      },
+      { state: "enabled" as const, online: true, nextOccurrenceAt: null, name: "Unavailable" },
+      {
+        state: "enabled" as const,
+        online: true,
+        nextOccurrenceAt: "2026-09-08T07:00:00Z",
+        name: "Daily",
+      },
+      {
+        state: "enabled" as const,
+        online: true,
+        nextOccurrenceAt: "2026-09-08T06:00:00Z",
+        name: "Dependency",
+      },
+    ];
+    expect(rows.toSorted(compareScheduleSidebarRows).map((row) => row.name)).toEqual([
+      "Dependency",
+      "Daily",
+      "Unavailable",
+      "Offline",
+    ]);
+  });
+  it("recognizes a successful manual recovery while the one-time schedule remains failed", () => {
+    expect(schedulePromptExplanation("failed", "triggered")).toContain(
+      "latest run created a thread",
+    );
+    expect(schedulePromptExplanation("failed", "failed")).toContain("could not start its thread");
+    expect(schedulePromptExplanation("completed", null)).not.toContain("thread was created");
   });
 });
