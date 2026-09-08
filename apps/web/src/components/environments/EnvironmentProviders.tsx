@@ -100,15 +100,14 @@ export function EnvironmentProviders({
             instanceId: provider.instanceId,
             driver: provider.driver,
             isDefault: provider.instanceId === defaultInstanceIdForDriver(provider.driver),
-            ...(saved.enabled &&
-            resolveAppModelSelectionState(settings, providers ?? []).instanceId ===
-              provider.instanceId
+            ...(resolveAppModelSelectionState(settings, providers ?? []).instanceId ===
+            provider.instanceId
               ? {
                   textGenerationModelSelection:
                     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
                 }
               : {}),
-            instance: { ...saved, enabled: !saved.enabled },
+            instance: { ...saved, enabled: false },
           }),
         },
       });

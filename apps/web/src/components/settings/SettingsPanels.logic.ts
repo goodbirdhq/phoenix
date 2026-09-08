@@ -11,7 +11,10 @@ import type {
   UnifiedSettings,
 } from "@t3tools/contracts";
 import { defaultInstanceIdForDriver } from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import {
+  DEFAULT_UNIFIED_SETTINGS,
+  resolveProviderInstanceEnabled,
+} from "@t3tools/contracts/settings";
 import {
   getBackgroundActivityBaseProfile,
   normalizeBackgroundActivitySettings,
@@ -271,10 +274,8 @@ export function isProviderInstanceEnabled(
   settings: Pick<ServerSettings, "providers" | "providerInstances">,
   provider: Pick<ServerProvider, "instanceId" | "driver" | "enabled">,
 ): boolean {
-  return (
-    resolveProviderInstanceSettings(settings, provider.instanceId, provider.driver)?.enabled ??
-    provider.enabled
-  );
+  const saved = resolveProviderInstanceSettings(settings, provider.instanceId, provider.driver);
+  return saved ? resolveProviderInstanceEnabled(saved) : provider.enabled;
 }
 
 export function buildProviderInstanceUpdatePatch(input: {

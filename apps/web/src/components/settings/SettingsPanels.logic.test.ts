@@ -362,6 +362,16 @@ describe("configured provider visibility", () => {
     expect(isProviderInstanceEnabled(settings, unavailable)).toBe(true);
   });
 
+  it("resolves omitted enabled flags for healthy and unavailable saved accounts", () => {
+    const instance = { driver, config: {} };
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: { [instanceId]: instance },
+    };
+    expect(isProviderInstanceEnabled(settings, unavailable)).toBe(true);
+    expect(isProviderInstanceEnabled(settings, { ...unavailable, enabled: true })).toBe(true);
+  });
+
   it("uses saved disabled state even if a stale runtime snapshot remains enabled", () => {
     const settings = {
       ...DEFAULT_SERVER_SETTINGS,
