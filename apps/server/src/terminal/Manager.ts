@@ -8,6 +8,7 @@
  */
 import {
   DEFAULT_TERMINAL_ID,
+  T3_THREAD_ID_ENV_VAR,
   TerminalCwdError,
   TerminalCwdNotDirectoryError,
   TerminalCwdNotFoundError,
@@ -1083,6 +1084,7 @@ function stripAppImageRuntimeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 function createTerminalSpawnEnv(
   baseEnv: NodeJS.ProcessEnv,
+  threadId: string,
   runtimeEnv?: Record<string, string> | null,
 ): NodeJS.ProcessEnv {
   const spawnEnv: NodeJS.ProcessEnv = {};
@@ -1096,6 +1098,8 @@ function createTerminalSpawnEnv(
       spawnEnv[key] = value;
     }
   }
+  // Reserved Phoenix identity wins over inherited and caller-supplied values.
+  spawnEnv[T3_THREAD_ID_ENV_VAR] = threadId;
   return stripAppImageRuntimeEnv(spawnEnv);
 }
 
@@ -1103,7 +1107,8 @@ function normalizedRuntimeEnv(
   env: Record<string, string> | undefined,
 ): Record<string, string> | null {
   if (!env) return null;
-  const entries = Object.entries(env);
+  // Ignored identity overrides must not trigger a terminal restart on reattach.
+  const entries = Object.entries(env).filter(([key]) => key !== T3_THREAD_ID_ENV_VAR);
   if (entries.length === 0) return null;
   return Object.fromEntries(entries.toSorted(([left], [right]) => left.localeCompare(right)));
 }
@@ -1868,7 +1873,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         Effect.andThen(
           Effect.gen(function* () {
             const shellCandidates = resolveShellCandidates(shellResolver, platform, baseEnv);
-            const terminalEnv = createTerminalSpawnEnv(baseEnv, session.runtimeEnv);
+            const terminalEnv = createTerminalSpawnEnv(
+              baseEnv,
+              session.threadId,
+              session.runtimeEnv,
+            );
             const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session);
             ptyProcess = spawnResult.process;
             startedShell = spawnResult.shellLabel;

@@ -19,6 +19,7 @@ import {
   RuntimeRequestId,
   type RuntimeMode,
   type ThreadId,
+  T3_THREAD_ID_ENV_VAR,
   TurnId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -546,7 +547,8 @@ export function makeCursorAdapter(
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeCursorAcpRuntime({
             cursorSettings: effectiveCursorSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
+            // Phoenix owns this reserved identity for the per-session ACP process.
+            environment: { ...options?.environment, [T3_THREAD_ID_ENV_VAR]: input.threadId },
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),

@@ -90,6 +90,25 @@ a time, because git allows only one writer per repository. If a git process else
 machine is holding the repository open, Phoenix says which lock file is in the way instead of
 forcing its way through.
 
+## Identity for scripts and skills
+
+Phoenix sets `T3_THREAD_ID` in each agent process it launches and in terminal
+shells belonging to the same thread. Scripts and skills can use this opaque,
+non-secret identifier to coordinate ownership of work on a shared machine.
+Provider environment settings and terminal environment overrides cannot replace
+the value supplied by Phoenix.
+
+The ID follows the Phoenix thread: resuming it or switching providers keeps the
+same identity. A new thread, including a child created through Phoenix session
+orchestration, gets its own identity. Provider-internal subagents that inherit
+their parent's environment share that parent's identity. It is an ownership
+label, not a security boundary or proof that a process is safe to terminate.
+
+Existing processes receive the variable when they are next launched. Restart
+an existing agent session or terminal to pick it up after upgrading.
+Phoenix cannot inject environment variables into an externally managed OpenCode
+server; tools running on that server do not receive this guarantee.
+
 ## The Sessions Panel
 
 Everything a session spawns is also visible to you, not just to the agent that spawned it. Open the

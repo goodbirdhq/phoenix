@@ -54,6 +54,7 @@ import {
   type TaskAgentLinkage,
   type TaskRunHandles,
   ThreadId,
+  T3_THREAD_ID_ENV_VAR,
   TurnId,
   type UserInputQuestion,
 } from "@t3tools/contracts";
@@ -1822,7 +1823,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             if (closing) throw new Error("Claude query closed before process spawn.");
             const child = NodeChildProcess.spawn(options.command, options.args, {
               cwd: options.cwd,
-              env: options.env,
+              env: {
+                ...options.env,
+                // SDK settings and env must not replace the reserved Phoenix thread identity.
+                [T3_THREAD_ID_ENV_VAR]: input.options.env?.[T3_THREAD_ID_ENV_VAR],
+              },
               signal: options.signal,
               stdio: ["pipe", "pipe", "pipe"],
               windowsHide: true,
@@ -4572,7 +4577,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         canUseTool,
         onUserDialog,
         supportedDialogKinds: ["resume_return"],
-        env: claudeEnvironment,
+        // Phoenix owns this reserved identity; provider-instance env cannot override it.
+        env: { ...claudeEnvironment, [T3_THREAD_ID_ENV_VAR]: input.threadId },
         additionalDirectories,
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpSession

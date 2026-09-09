@@ -16,6 +16,7 @@ import {
   type ProviderUserInputAnswers,
   RuntimeMode,
   ThreadId,
+  T3_THREAD_ID_ENV_VAR,
   TurnId,
 } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -1272,6 +1273,8 @@ export const makeCodexSessionRuntime = (
     const env = {
       ...options.environment,
       ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+      // Phoenix owns this reserved identity; provider-instance env cannot override it.
+      [T3_THREAD_ID_ENV_VAR]: options.threadId,
     };
     const extendEnv = options.environment === undefined;
     const appServerArgs = codexSessionAppServerArgs(options.appServerArgs, options.launchArgs);

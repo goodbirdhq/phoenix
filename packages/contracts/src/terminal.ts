@@ -8,6 +8,13 @@ import { TrimmedNonEmptyString } from "./baseSchemas.ts";
  */
 export const DEFAULT_TERMINAL_ID = "term-1";
 
+/**
+ * Phoenix-owned, non-secret orchestration thread identity for provider processes
+ * and managed terminals. Applied after caller environment overrides; stable for
+ * the lifetime of the Phoenix thread, including provider restarts and switches.
+ */
+export const T3_THREAD_ID_ENV_VAR = "T3_THREAD_ID";
+
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const TerminalColsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(
   Schema.isLessThanOrEqualTo(1000),
@@ -20,6 +27,7 @@ const TerminalEnvKeySchema = Schema.String.check(
   Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/),
 ).check(Schema.isMaxLength(128));
 const TerminalEnvValueSchema = Schema.String.check(Schema.isMaxLength(8_192));
+// T3_THREAD_ID is accepted for compatibility but ignored: the server owns its value.
 const TerminalEnvSchema = Schema.Record(TerminalEnvKeySchema, TerminalEnvValueSchema).check(
   Schema.isMaxProperties(128),
 );
