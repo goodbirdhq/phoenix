@@ -23,6 +23,27 @@ adapter in a child scope. Adapter implementations live beside them in
 [`ProviderAdapter.ts`][adapter]. Read the driver plus its adapter to see how a specific agent's
 transport, config, and event shapes are mapped.
 
+## Thread environment identity
+
+`T3_THREAD_ID_ENV_VAR` in `packages/contracts/src/terminal.ts` names the reserved
+`T3_THREAD_ID` variable. Each chat launch sets it to the orchestration `threadId`
+after merging inherited and provider-instance environment settings. Never set
+it on the shared host environment or at provider-instance construction time:
+one instance can serve multiple threads concurrently.
+
+Claude supplies the identity to its SDK query and process spawn; Codex applies
+it at app-server spawn; Cursor, Grok, and locally managed OpenCode apply it to
+their per-thread launch environments. Managed terminal shells use their own
+thread's ID, including on restart. Caller terminal identity overrides are
+ignored during launch-context comparison as well as overwritten at spawn.
+
+The identifier is non-secret and persists with the Phoenix thread across
+provider restarts and switches. Provider-native IDs and per-claim nonces have
+different lifetimes and must not replace it. Phoenix cannot set process
+environment on externally managed OpenCode servers. Account probes and shared
+text-generation helpers have no owning chat thread and are not covered by this
+contract.
+
 ## Registry and routing
 
 Two registries separate configuration from live processes:

@@ -10,6 +10,7 @@ import {
   ProviderInstanceId,
   RuntimeRequestId,
   type ThreadId,
+  T3_THREAD_ID_ENV_VAR,
   TurnId,
 } from "@t3tools/contracts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -998,7 +999,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeGrokAcpRuntime({
             grokSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
+            // Phoenix owns this reserved identity for the per-session ACP process.
+            environment: { ...options?.environment, [T3_THREAD_ID_ENV_VAR]: input.threadId },
             childProcessSpawner,
             cwd,
             runtimeMode: input.runtimeMode,

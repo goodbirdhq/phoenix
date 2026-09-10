@@ -166,6 +166,7 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
+  readonly environment?: NodeJS.ProcessEnv;
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -176,6 +177,7 @@ function makeHarness(config?: {
     | undefined;
 
   const adapterOptions: ClaudeAdapterLiveOptions = {
+    ...(config?.environment ? { environment: config.environment } : {}),
     ...(config?.instanceId ? { instanceId: config.instanceId } : {}),
     modelCatalog: Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
     createQuery: (input) => {
@@ -521,6 +523,39 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  it.effect(
+    "reserves T3_THREAD_ID per Claude session while preserving instance environment",
+    () => {
+      const environment = { T3_THREAD_ID: "caller-override", CUSTOM: "kept", HOME: "/tmp/account" };
+      const harness = makeHarness({
+        environment,
+        claudeConfig: { homePath: "/tmp/claude-account" },
+      });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const environments: Array<NodeJS.ProcessEnv | undefined> = [];
+        for (const id of ["phoenix-one", "phoenix-two"]) {
+          yield* adapter.startSession({
+            threadId: ThreadId.make(id),
+            provider: ProviderDriverKind.make("claudeAgent"),
+            runtimeMode: "full-access",
+          });
+          environments.push(harness.getLastCreateQueryInput()?.options.env);
+        }
+        assert.deepEqual(
+          environments.map((env) => env?.T3_THREAD_ID),
+          ["phoenix-one", "phoenix-two"],
+        );
+        for (const env of environments) {
+          assert.equal(env?.CUSTOM, "kept");
+          assert.equal(env?.HOME, "/tmp/account");
+          assert.equal(env?.CLAUDE_CONFIG_DIR, "/tmp/claude-account");
+        }
+        assert.equal(environment.T3_THREAD_ID, "caller-override");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   it.effect("forwards Claude thinking toggle for models that support it", () => {
     const harness = makeHarness();

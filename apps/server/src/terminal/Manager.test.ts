@@ -1573,6 +1573,40 @@ it.layer(
     }),
   );
 
+  it.effect("owns the thread identity across terminal launches and restarts", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        env: { T3_THREAD_ID: "inherited-thread", HOST_CUSTOM: "host-value" },
+      });
+      const env = { T3_THREAD_ID: "caller-thread", CUSTOM_FLAG: "1" };
+      yield* manager.open(openInput({ threadId: "thread-a", env }));
+      yield* manager.open(openInput({ threadId: "thread-b", env }));
+      yield* manager.restart(restartInput({ threadId: "thread-a", env }));
+
+      expect(ptyAdapter.spawnInputs.map((input) => input.env.T3_THREAD_ID)).toEqual([
+        "thread-a",
+        "thread-b",
+        "thread-a",
+      ]);
+      for (const input of ptyAdapter.spawnInputs) {
+        expect(input.env.HOST_CUSTOM).toBe("host-value");
+        expect(input.env.CUSTOM_FLAG).toBe("1");
+      }
+      expect(env.T3_THREAD_ID).toBe("caller-thread");
+    }),
+  );
+
+  it.effect("ignores reserved identity overrides when reattaching a running terminal", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput({ env: { T3_THREAD_ID: "first" } }));
+      yield* manager.open(openInput({ env: { T3_THREAD_ID: "second" } }));
+      yield* manager.open(openInput());
+      expect(ptyAdapter.spawnInputs).toHaveLength(1);
+      expect(ptyAdapter.spawnInputs[0]?.env.T3_THREAD_ID).toBe("thread-1");
+    }),
+  );
+
   it.effect("injects runtime env overrides into spawned terminals", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
