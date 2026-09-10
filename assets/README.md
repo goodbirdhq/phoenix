@@ -49,16 +49,15 @@ Verify every result is 1024×1024 and has the classic macOS safe area: an 824×8
 
 Do not edit the generated PNG or ICO files directly.
 
-## Android adaptive foreground
+## Android icons
 
-`apps/mobile/assets/android-icon-foreground.svg` is the source of truth for the foreground used by
-the normal Android adaptive launcher icon. Export its paired PNG after changing it:
+Mobile launcher icons, shortcuts, and splash screens use the full-bleed Phoenix iOS PNGs.
+Android applies its own launcher mask. Mobile preview uses the production Phoenix artwork
+until a Phoenix nightly design is available; the app name still identifies the preview build.
 
-```sh
-rsvg-convert -w 432 -h 432 \
-  -o apps/mobile/assets/android-icon-foreground.png \
-  apps/mobile/assets/android-icon-foreground.svg
-```
+`apps/mobile/assets/android-icon-mark.svg` is the Phoenix silhouette source for the themed
+launcher and notification icons. Render it at 432×432 for `android-icon-mark.png`.
+For `android-notification-icon.png`, crop the central 216×216 area (offset 108,108)
+and resize to 96×96. Both exports must retain white artwork on transparency.
 
-The foreground must remain transparent and keep the T3 mark inside Android's adaptive-icon safe
-zone. `android-icon-mark.png` remains a flat silhouette for Android's monochrome themed icon.
+Changes to these assets require a native rebuild and installation, not an OTA update.
