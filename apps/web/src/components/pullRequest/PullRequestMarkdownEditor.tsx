@@ -1,3 +1,4 @@
+import { EyeIcon, PencilIcon } from "lucide-react";
 import { useState } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 
@@ -68,7 +69,7 @@ export function PullRequestMarkdownEditor({
           disabled={saving}
           onClick={() => setPreview(false)}
         >
-          Write
+          <PencilIcon className="size-4" /> Write
         </Button>
         <Button
           size="xs"
@@ -76,7 +77,7 @@ export function PullRequestMarkdownEditor({
           disabled={saving}
           onClick={() => setPreview(true)}
         >
-          Preview
+          <EyeIcon className="size-4" /> Preview
         </Button>
       </div>
       {preview ? (

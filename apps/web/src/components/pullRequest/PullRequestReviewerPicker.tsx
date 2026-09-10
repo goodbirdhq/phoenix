@@ -18,6 +18,15 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 
+import {
+  AlertDialog,
+  AlertDialogPopup,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogClose,
+} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -54,6 +63,9 @@ export function PullRequestReviewerPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [removeCandidate, setRemoveCandidate] = useState<PullRequestReviewerCandidate | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removeOpen, setRemoveOpen] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
 
   // Mounted with the menu closed, so nothing is asked of the host until it opens.
@@ -72,6 +84,7 @@ export function PullRequestReviewerPicker({
   const toggle = async (candidate: PullRequestReviewerCandidate) => {
     if (pending !== null) return;
     setPending(candidate.id);
+    setRemoveError(null);
     const result = await requestReviewers({
       environmentId,
       input: {
@@ -82,6 +95,7 @@ export function PullRequestReviewerPicker({
     });
     setPending(null);
     if (result._tag === "Failure") {
+      if (candidate.isRequested) setRemoveError("Could not remove the review request. Try again.");
       toastManager.add({
         type: "error",
         title: candidate.isRequested
@@ -100,6 +114,7 @@ export function PullRequestReviewerPicker({
         ? `Review request to ${candidate.login} taken back`
         : `Review requested from ${candidate.login}`,
     });
+    setRemoveOpen(false);
     onRequested();
     candidatesQuery.refresh();
   };
@@ -122,67 +137,111 @@ export function PullRequestReviewerPicker({
   }
 
   return (
-    <Menu open={open} onOpenChange={setOpen}>
-      <MenuTrigger
-        render={
-          <Button size="icon-xs" variant="ghost" aria-label="Request a review">
-            <UserPlusIcon className="size-3.5" />
-          </Button>
-        }
-      />
-      <MenuPopup align="start" side="bottom" className="w-72 p-0">
-        <div className="border-b border-border/60 p-2">
-          <Input
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="Search people with access"
-            aria-label="Search people with access"
-            size="compact"
-          />
-        </div>
-        <div className="max-h-72 overflow-y-auto p-1">
-          {candidatesQuery.isPending ? (
-            <PullRequestPeopleGhost rows={4} />
-          ) : candidatesQuery.error !== null ? (
-            <p className="p-2 text-xs text-muted-foreground">
-              The people with access could not be read. {candidatesQuery.error}
-            </p>
-          ) : candidates.length === 0 ? (
-            <p className="p-2 text-xs text-muted-foreground">
-              {query.length > 0
-                ? "Nobody with access matches that."
-                : "Nobody else has access to this repository."}
-            </p>
-          ) : (
-            candidates.map((candidate) => (
-              <button
-                key={`${candidate.kind}:${candidate.id}`}
-                type="button"
-                disabled={pending !== null}
-                onClick={() => void toggle(candidate)}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60 disabled:opacity-60"
-              >
-                <PullRequestActorLabel actor={candidate} className="min-w-0 flex-1 truncate" />
-                {candidate.kind === "team" ? (
-                  <span className="shrink-0 text-muted-foreground">team</span>
-                ) : null}
-                {candidate.isRequested ? (
-                  <CheckIcon aria-label="Already asked" className="size-3.5 shrink-0" />
-                ) : null}
-              </button>
-            ))
-          )}
-          {candidatesQuery.data?.truncated ? (
-            // Typing filters what arrived; it does not ask the host again, so this says what the
-            // list is rather than offering a search that would find nothing further.
-            <p className="px-2 py-1.5 text-xs text-muted-foreground">
-              This repository has more people with access than are listed here. Ask for the rest on
-              the host.
-            </p>
-          ) : null}
-        </div>
-      </MenuPopup>
-    </Menu>
+    <>
+      <Menu open={open} onOpenChange={setOpen}>
+        <MenuTrigger
+          render={
+            <Button size="icon-xs" variant="ghost" aria-label="Request a review">
+              <UserPlusIcon className="size-3.5" />
+            </Button>
+          }
+        />
+        <MenuPopup align="start" side="bottom" className="w-72 p-0">
+          <div className="border-b border-border/60 p-2">
+            <Input
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.currentTarget.value)}
+              placeholder="Search people with access"
+              aria-label="Search people with access"
+              size="compact"
+            />
+          </div>
+          <div className="max-h-72 overflow-y-auto p-1">
+            {candidatesQuery.isPending ? (
+              <PullRequestPeopleGhost rows={4} />
+            ) : candidatesQuery.error !== null ? (
+              <p className="p-2 text-xs text-muted-foreground">
+                The people with access could not be read. {candidatesQuery.error}
+              </p>
+            ) : candidates.length === 0 ? (
+              <p className="p-2 text-xs text-muted-foreground">
+                {query.length > 0
+                  ? "Nobody with access matches that."
+                  : "Nobody else has access to this repository."}
+              </p>
+            ) : (
+              candidates.map((candidate) => (
+                <button
+                  key={`${candidate.kind}:${candidate.id}`}
+                  type="button"
+                  disabled={pending !== null}
+                  onClick={() => {
+                    if (candidate.isRequested) {
+                      setRemoveCandidate(candidate);
+                      setRemoveOpen(true);
+                      setRemoveError(null);
+                      setOpen(false);
+                    } else void toggle(candidate);
+                  }}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60 disabled:opacity-60"
+                >
+                  <PullRequestActorLabel actor={candidate} className="min-w-0 flex-1 truncate" />
+                  {candidate.kind === "team" ? (
+                    <span className="shrink-0 text-muted-foreground">team</span>
+                  ) : null}
+                  {candidate.isRequested ? (
+                    <CheckIcon aria-label="Already asked" className="size-3.5 shrink-0" />
+                  ) : null}
+                </button>
+              ))
+            )}
+            {candidatesQuery.data?.truncated ? (
+              // Typing filters what arrived; it does not ask the host again, so this says what the
+              // list is rather than offering a search that would find nothing further.
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                This repository has more people with access than are listed here. Ask for the rest
+                on the host.
+              </p>
+            ) : null}
+          </div>
+        </MenuPopup>
+      </Menu>
+      <AlertDialog
+        open={removeOpen}
+        onOpenChange={(next) => {
+          if (pending === null) setRemoveOpen(next);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove review request?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove the request for {removeCandidate?.login} on {reference.repository} #
+              {reference.number}? You can request their review again.
+            </AlertDialogDescription>
+            {removeError ? (
+              <p role="alert" className="text-sm text-destructive">
+                {removeError}
+              </p>
+            ) : null}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" disabled={pending !== null} />}>
+              Cancel
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              disabled={pending !== null}
+              onClick={() => {
+                if (removeCandidate) void toggle(removeCandidate);
+              }}
+            >
+              {pending ? "Removing…" : "Remove request"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </>
   );
 }

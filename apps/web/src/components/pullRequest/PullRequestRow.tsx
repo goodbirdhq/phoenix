@@ -1,6 +1,9 @@
-import { SearchIcon } from "lucide-react";
+import { ProjectFavicon } from "../ProjectFavicon";
+import { EnvironmentIcon } from "../environments/EnvironmentIcon";
+import { SearchIcon, FolderGit2Icon, ArrowUpRightIcon, MoreHorizontalIcon } from "lucide-react";
 import { memo, type RefCallback } from "react";
 
+import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -14,6 +17,7 @@ import {
   PullRequestDiffStat,
   PullRequestMetaLine,
   PullRequestStateGlyph,
+  resolvePullRequestState,
 } from "./pullRequestPresentation";
 
 function PullRequestRowLabels({ labels }: { labels: EnvironmentPullRequestEntry["labels"] }) {
@@ -40,6 +44,7 @@ function PullRequestRowImpl({
   showProvider,
   environmentLabel,
   matchedElsewhere,
+  projectIcon,
   statsKey,
   statsRef,
   onSelect,
@@ -57,41 +62,104 @@ function PullRequestRowImpl({
    */
   matchedElsewhere?: boolean;
   /** Used by the list's shared visibility observer to defer optional line-count reads. */
+  projectIcon?: { workspaceRoot: string; faviconPath: string | null };
   statsKey?: string;
   statsRef?: RefCallback<HTMLButtonElement>;
   onSelect: (entry: EnvironmentPullRequestEntry) => void;
 }) {
+  const state = resolvePullRequestState(entry);
   const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
   return (
-    <button
-      ref={statsRef}
-      data-pull-request-stats-key={statsKey}
-      type="button"
-      aria-current={selected ? "true" : undefined}
-      onClick={() => onSelect(entry)}
+    <div
       className={cn(
-        "grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        "group/pr-row relative grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2.5 rounded-lg px-2.5 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         // Offscreen rows are skipped for style, layout and paint: a long list costs what the
         // viewport shows, not what the pages have loaded. The intrinsic size keeps the
         // scrollbar honest while a row is skipped.
-        "[contain-intrinsic-block-size:54px] [content-visibility:auto]",
-        selected ? "bg-accent" : "hover:bg-accent/60",
+        "[contain-intrinsic-block-size:82px] [content-visibility:auto]",
+        selected ? "bg-white dark:bg-zinc-800" : "hover:bg-white dark:hover:bg-zinc-800",
       )}
     >
-      <PullRequestStateGlyph
-        state={entry.state}
-        isDraft={entry.isDraft}
-        mergeability={entry.mergeability}
-        baseBranch={entry.baseBranch}
+      <button
+        ref={statsRef}
+        data-pull-request-stats-key={statsKey}
+        type="button"
+        aria-current={selected ? "true" : undefined}
+        aria-label={`${entry.title}, ${entry.repository} #${entry.number}, ${state.label}`}
+        onClick={() => onSelect(entry)}
+        className="absolute inset-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
-      <span className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5">
+      <span className="pointer-events-none relative flex size-[30px] shrink-0 items-center justify-center rounded-full border border-border bg-background">
+        {projectIcon?.faviconPath ? (
+          <ProjectFavicon
+            environmentId={entry.environmentId}
+            cwd={projectIcon.workspaceRoot}
+            faviconPath={projectIcon.faviconPath}
+            className="size-[18px]"
+            fallbackIcon={FolderGit2Icon}
+          />
+        ) : (
+          <FolderGit2Icon aria-hidden className="size-[18px] text-muted-foreground" />
+        )}
+        <span className="absolute -bottom-1 -right-1 rounded-full bg-background p-0.5">
+          <PullRequestStateGlyph
+            state={entry.state}
+            isDraft={entry.isDraft}
+            mergeability={entry.mergeability}
+            baseBranch={entry.baseBranch}
+            className="size-3"
+          />
+        </span>
+      </span>
+      <span className="pointer-events-none relative grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1">
         <span className="col-start-1 row-start-1 block truncate text-sm font-medium text-foreground">
           {entry.title}
         </span>
-        <span className="col-start-2 row-start-1 justify-self-end whitespace-nowrap text-xs text-muted-foreground/70 tabular-nums">
-          {formatRelativeTimeLabel(entry.updatedAt)}
+        <span className="relative col-start-2 row-start-1 flex w-12 justify-end text-[11px] text-muted-foreground tabular-nums">
+          <span className="group-hover/pr-row:invisible group-focus-within/pr-row:invisible">
+            {formatRelativeTimeLabel(entry.updatedAt)}
+          </span>
+          <span className="pointer-events-auto absolute inset-0 flex justify-end gap-1 opacity-0 group-hover/pr-row:opacity-100 group-focus-within/pr-row:opacity-100">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={openOnHostLabel(entry.provider)}
+                    onClick={() => void readLocalApi()?.shell.openExternal(entry.url)}
+                    className="flex size-5 items-center justify-center rounded hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <ArrowUpRightIcon className="size-3.5" />
+                  </button>
+                }
+              />
+              <TooltipPopup>{openOnHostLabel(entry.provider)}</TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={`Actions for #${entry.number}`}
+                    onClick={(event) => {
+                      const bounds = event.currentTarget.getBoundingClientRect();
+                      void showPullRequestLinkContextMenu({
+                        url: entry.url,
+                        openLabel: openOnHostLabel(entry.provider),
+                        position: { x: bounds.left, y: bounds.bottom },
+                      });
+                    }}
+                    className="flex size-5 items-center justify-center rounded hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <MoreHorizontalIcon className="size-3.5" />
+                  </button>
+                }
+              />
+              <TooltipPopup>Pull request actions</TooltipPopup>
+            </Tooltip>
+          </span>
         </span>
-        <PullRequestMetaLine className="@container/pr-row-meta col-start-1 row-start-2 overflow-hidden text-xs text-muted-foreground/70">
+        <PullRequestMetaLine className="@container/pr-row-meta col-span-2 col-start-1 row-start-2 overflow-hidden text-xs text-muted-foreground">
           {matchedElsewhere ? (
             <Tooltip>
               <TooltipTrigger
@@ -119,7 +187,10 @@ function PullRequestRowImpl({
             ) : null}
             {/* The number carries the link, here as much as on the detail: a right-click on it
                 copies the pull request's own address rather than opening the editing menu. */}
-            <span
+            <button
+              type="button"
+              onClick={() => onSelect(entry)}
+              className="pointer-events-auto rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -131,11 +202,14 @@ function PullRequestRowImpl({
               }}
             >
               #{entry.number}
-            </span>
+            </button>
           </span>
           {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
           {environmentLabel ? (
-            <span className="min-w-0 max-w-32 truncate">{environmentLabel}</span>
+            <span className="flex min-w-0 max-w-36 items-center gap-1">
+              <EnvironmentIcon environmentId={entry.environmentId} />
+              <span className="truncate">{environmentLabel}</span>
+            </span>
           ) : null}
           <PullRequestActorLabel
             actor={entry.author}
@@ -143,6 +217,9 @@ function PullRequestRowImpl({
             labelClassName="sr-only @xs/pr-row-meta:not-sr-only @xs/pr-row-meta:truncate"
           />
           {entry.labels.length > 0 ? <PullRequestRowLabels labels={entry.labels} /> : null}
+        </PullRequestMetaLine>
+        <span className="col-start-1 row-start-3 flex min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-muted-foreground">
+          <span className={cn("shrink-0", state.toneClassName)}>{state.label}</span>
           {/* Only a verdict somebody has actually given: "review required" is the absence of
               one, and saying so on every unreviewed row would say nothing. */}
           {entry.reviewDecision === "approved" || entry.reviewDecision === "changes-requested" ? (
@@ -159,6 +236,8 @@ function PullRequestRowImpl({
           ) : null}
           {entry.checksState === undefined ? null : (
             <PullRequestChecksPopover
+              showLabel
+              className="pointer-events-auto"
               checksState={entry.checksState}
               environmentId={entry.environmentId}
               reference={{
@@ -168,14 +247,23 @@ function PullRequestRowImpl({
               }}
             />
           )}
-        </PullRequestMetaLine>
-        <PullRequestDiffStat
-          additions={entry.additions}
-          deletions={entry.deletions}
-          className="col-start-2 row-start-2 justify-self-end text-xs"
-        />
+        </span>
+        {entry.additions === 0 && entry.deletions === 0 ? (
+          <span
+            aria-label="Line counts unavailable"
+            className="col-start-2 row-start-3 text-right text-[11px] text-muted-foreground"
+          >
+            —
+          </span>
+        ) : (
+          <PullRequestDiffStat
+            additions={entry.additions}
+            deletions={entry.deletions}
+            className="col-start-2 row-start-3 justify-self-end text-[11px]"
+          />
+        )}
       </span>
-    </button>
+    </div>
   );
 }
 
