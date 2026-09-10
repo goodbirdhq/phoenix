@@ -5,6 +5,13 @@ providers — "spawn a Codex session to write the tests while you refactor" — 
 sessions, hand each one a task, and collect the results without you shuttling messages between
 threads.
 
+With session orchestration enabled, Phoenix gives agents guidance to suggest splitting a task
+when separate sessions would help. The agent should explain the proposed work, dependencies, and
+model choices, then ask before spawning sessions unless you have already authorized orchestration.
+Small tasks should stay in the current session, and you can decline a suggestion. Suggestions
+depend on the agent's judgment; available model and subscription information may not establish an
+exact cost or a cheapest choice.
+
 ## How It Works
 
 Every session has tools for orchestration alongside its other Phoenix tools:

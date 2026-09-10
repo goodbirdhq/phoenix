@@ -30,6 +30,16 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
 
 ## Pieces
 
+- **Capability guidance** — `apps/server/src/provider/SessionOrchestrationInstructions.ts` is
+  prepended to non-continuation provider input by `ProviderService.sendTurn` when the session has
+  Phoenix MCP configuration and `enableSessionOrchestration` is on. This shared path covers Codex,
+  Claude, Cursor, Grok, and OpenCode for every client; persisted user messages remain unchanged.
+  The setting is read each turn, so running sessions receive updated guidance without a new
+  provider session. Settings read failures, missing MCP configuration, and inputs too close to
+  the provider input limit omit the guidance. It prompts a concrete proposal and provider discovery
+  before spawning, honors existing authorization, and leaves small tasks local. This is prompt
+  guidance, not a deterministic task classifier or cost router.
+
 - **Contracts** — `packages/contracts/src/sessionOrchestration.ts` (tool inputs/results, error
   union, spawn caps); `SessionReport`, the `thread.report.post` internal command, the
   `thread.report-posted` event, and `OrchestrationThread.reports` /
