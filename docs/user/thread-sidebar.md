@@ -1,5 +1,9 @@
 # Organizing threads
 
+On web and desktop, drag the sidebar edge to resize it. Agents, Pull Requests, Schedules, Usage,
+Environments, and Settings share the saved width on that client. Double-click the edge to reset
+the width for every page.
+
 Pin a thread from its context menu to keep it in the pinned section above your active work.
 `mod+shift+p` pins or unpins the thread you have open. Pinned threads are shown independently of
 their project, including when you connect to more than one environment.
