@@ -57,7 +57,7 @@ function DesktopUpdateDownloadingIcon({ percent }: { readonly percent: number | 
   const progressOffset = DOWNLOAD_PROGRESS_CIRCUMFERENCE * (1 - normalizedPercent / 100);
 
   return (
-    <span className="relative grid size-8 place-items-center">
+    <span className="relative grid size-4 shrink-0 place-items-center">
       <svg
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 size-full -rotate-90"
@@ -69,7 +69,7 @@ function DesktopUpdateDownloadingIcon({ percent }: { readonly percent: number | 
           r={DOWNLOAD_PROGRESS_RADIUS}
           fill="none"
           stroke="color-mix(in srgb, currentColor 22%, transparent)"
-          strokeWidth="1.5"
+          strokeWidth="3"
         />
         <circle
           cx="16"
@@ -80,11 +80,11 @@ function DesktopUpdateDownloadingIcon({ percent }: { readonly percent: number | 
           strokeDasharray={DOWNLOAD_PROGRESS_CIRCUMFERENCE}
           strokeDashoffset={progressOffset}
           strokeLinecap="round"
-          strokeWidth="1.5"
+          strokeWidth="3"
           className="transition-[stroke-dashoffset] duration-300 ease-out motion-reduce:transition-none"
         />
       </svg>
-      <DownloadIcon className="size-4" />
+      <DownloadIcon className="size-2.5" />
     </span>
   );
 }

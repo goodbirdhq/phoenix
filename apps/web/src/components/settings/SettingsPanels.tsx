@@ -45,10 +45,14 @@ import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../..
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
+  getDesktopUpdateDownloadedVersion,
   getDesktopUpdateInstallConfirmationMessage,
+  getDesktopUpdateReleaseUrl,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
+  shouldShowDesktopUpdateButton,
 } from "../../components/desktopUpdate.logic";
+import { openDesktopUpdateReleaseNotes } from "../desktopUpdate.toast";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import {
@@ -385,6 +389,10 @@ function AboutVersionSection() {
 
   const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
   const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState) : null;
+  const releaseUrl =
+    updateState && shouldShowDesktopUpdateButton(updateState)
+      ? getDesktopUpdateReleaseUrl(getDesktopUpdateDownloadedVersion(updateState))
+      : null;
   const buttonDisabled =
     action === "none"
       ? !canCheckForUpdate(updateState)
@@ -399,15 +407,36 @@ function AboutVersionSection() {
   const buttonLabel =
     actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "Check for Updates";
   const description =
-    action === "download" || action === "install"
-      ? "Update available."
-      : "Current version of the application.";
+    updateState?.status === "downloading"
+      ? "Downloading update."
+      : action === "download" || action === "install"
+        ? "Update available."
+        : "Current version of the application.";
 
   return (
     <>
       <SettingsRow
         title={<AboutVersionTitle />}
-        description={description}
+        description={
+          <>
+            {description}
+            {releaseUrl ? (
+              <>
+                {" "}
+                <a
+                  href={releaseUrl}
+                  className="underline decoration-dotted underline-offset-4 hover:text-foreground"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void openDesktopUpdateReleaseNotes(window.desktopBridge, releaseUrl);
+                  }}
+                >
+                  Release notes
+                </a>
+              </>
+            ) : null}
+          </>
+        }
         control={
           <Tooltip>
             <TooltipTrigger
