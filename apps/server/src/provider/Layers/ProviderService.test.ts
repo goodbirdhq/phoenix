@@ -74,6 +74,7 @@ import {
 } from "../../persistence/Layers/Sqlite.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 
@@ -3351,6 +3352,107 @@ boundedListing.layer("ProviderServiceLive session listing", (it) => {
       assert.deepEqual(getBinding.mock.calls, [[activeSessionThreadId]]);
     }),
   );
+});
+
+describe("orchestration suggestions", () => {
+  for (const driverName of ["codex", "claudeAgent", "cursor", "grok", "opencode"]) {
+    it.effect(`updates orchestration guidance in ${driverName} conversation history`, () => {
+      const driver = ProviderDriverKind.make(driverName);
+      const instanceId = ProviderInstanceId.make(driverName);
+      const threadId = asThreadId(`orchestration-guidance-${driverName}`);
+      const fake = makeFakeCodexAdapter(driver);
+      const settingsLayer = ServerSettings.layerTest({ enableSessionOrchestration: false });
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(ProviderSessionRuntime.layer.pipe(Layer.provide(SqlitePersistenceMemory))),
+      );
+      const providerLayer = makeProviderServiceLive({
+        issueMcpCredential: (request) =>
+          Effect.succeed({
+            config: {
+              ...request,
+              environmentId: EnvironmentId.make("test-environment"),
+              providerSessionId: `test-${driverName}`,
+              endpoint: "http://127.0.0.1/mcp",
+              authorizationHeader: "Bearer test-credential",
+            },
+          }),
+      }).pipe(
+        Layer.provide(
+          Layer.succeed(
+            ProviderAdapterRegistry.ProviderAdapterRegistry,
+            makeAdapterRegistryMock({ [driver]: fake.adapter }),
+          ),
+        ),
+        Layer.provide(directoryLayer),
+        Layer.provideMerge(settingsLayer),
+        Layer.provide(serverConfigTestLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      );
+      return Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* provider.startSession(threadId, {
+          provider: driver,
+          providerInstanceId: instanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const request = { threadId, input: "Add search to web and mobile." };
+        yield* provider.sendTurn(request);
+        assert.include(fake.sendTurn.mock.calls.at(-1)?.[0].input ?? "", "Current state: disabled");
+
+        yield* settings.updateSettings({ enableSessionOrchestration: true });
+        yield* provider.sendTurn(request);
+        const delivered = fake.sendTurn.mock.calls.at(-1)?.[0].input ?? "";
+        assert.include(delivered, "<phoenix_orchestration>");
+        assert.include(delivered, "list_session_providers");
+        assert.isTrue(delivered.endsWith(`\n\n${request.input}`));
+        assert.equal(request.input, "Add search to web and mobile.");
+
+        if (driverName === "codex") {
+          const continuation = { threadId, continuation: true };
+          yield* provider.sendTurn(continuation);
+          assert.deepEqual(fake.sendTurn.mock.calls.at(-1)?.[0], continuation);
+
+          const largeRequest = {
+            threadId,
+            input: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+          };
+          yield* provider.sendTurn(largeRequest);
+          assert.equal(fake.sendTurn.mock.calls.at(-1)?.[0].input, largeRequest.input);
+        }
+
+        yield* settings.updateSettings({ enableSessionOrchestration: false });
+        yield* provider.sendTurn(request);
+        const conversation = fake.sendTurn.mock.calls.map(([turn]) => turn.input ?? "");
+        assert.isTrue(conversation.some((text) => text.includes("Current state: enabled")));
+        assert.include(conversation.at(-1) ?? "", "Current state: disabled");
+        assert.include(
+          conversation.at(-1) ?? "",
+          "replaces any earlier Phoenix orchestration guidance",
+        );
+
+        yield* provider.sendTurn({ threadId, input: "Continue." });
+        assert.include(fake.sendTurn.mock.calls.at(-1)?.[0].input ?? "", "Current state: disabled");
+
+        yield* settings.updateSettings({ enableSessionOrchestration: true });
+        yield* provider.sendTurn(request);
+        assert.include(fake.sendTurn.mock.calls.at(-1)?.[0].input ?? "", "Current state: enabled");
+        McpProviderSession.clearMcpProviderSession(threadId);
+        yield* provider.sendTurn(request);
+        assert.deepEqual(fake.sendTurn.mock.calls.at(-1)?.[0], request);
+      }).pipe(
+        Effect.provide(providerLayer.pipe(Layer.provide(NodeServices.layer))),
+        Effect.ensuring(Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+      );
+    });
+  }
 });
 
 describe("agent browser access", () => {

@@ -19,6 +19,7 @@ import {
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderAvailability,
@@ -50,6 +51,11 @@ import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
+import * as ServerSettings from "../../serverSettings.ts";
+import {
+  SESSION_ORCHESTRATION_DISABLED_INSTRUCTIONS,
+  SESSION_ORCHESTRATION_INSTRUCTIONS,
+} from "../SessionOrchestrationInstructions.ts";
 import {
   increment,
   providerMetricAttributes,
@@ -620,6 +626,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 ) {
   const analytics = yield* Effect.service(AnalyticsService.AnalyticsService);
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
   const eventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
   // Options-provided logger wins (test overrides); otherwise we take whatever
   // the `ProviderEventLoggers` tag exposes — `undefined` means "no canonical
@@ -1437,9 +1444,32 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       // rather than issuing a new one: sessions that go a long time between
       // browser tool calls used to lose the toolkit outright.
       yield* McpSessionRegistry.touchActiveMcpThread(input.threadId);
+      // Enrich only provider input, leaving the user's persisted message intact.
+      // Read the setting per turn so existing sessions pick up changes, and keep
+      // promptless continuations intact for providers that resume autonomously.
+      let providerInput = input;
+      if (
+        input.continuation !== true &&
+        input.input !== undefined &&
+        McpProviderSession.readMcpProviderSession(input.threadId) !== undefined
+      ) {
+        const orchestrationEnabled = yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.enableSessionOrchestration),
+          Effect.orElseSucceed(() => false),
+        );
+        const instructions = orchestrationEnabled
+          ? SESSION_ORCHESTRATION_INSTRUCTIONS
+          : SESSION_ORCHESTRATION_DISABLED_INSTRUCTIONS;
+        const enrichedInput = `${instructions}\n\n${input.input}`;
+        if (enrichedInput.length <= PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+          providerInput = { ...input, input: enrichedInput };
+        }
+      }
       const acceptance = yield* Deferred.make<ProviderTurnStartResult, ProviderAdapterError>();
       yield* routed.adapter
-        .sendTurn(input, (result) => Deferred.succeed(acceptance, result).pipe(Effect.asVoid))
+        .sendTurn(providerInput, (result) =>
+          Deferred.succeed(acceptance, result).pipe(Effect.asVoid),
+        )
         .pipe(
           Effect.onExit((exit) => Deferred.done(acceptance, exit).pipe(Effect.asVoid)),
           Effect.catchCause((cause) =>

@@ -5,6 +5,13 @@ providers — "spawn a Codex session to write the tests while you refactor" — 
 sessions, hand each one a task, and collect the results without you shuttling messages between
 threads.
 
+With session orchestration enabled, Phoenix gives agents guidance to suggest splitting a task
+when separate sessions would help. The agent should explain the proposed work, dependencies, and
+model choices, then ask before spawning sessions unless you have already authorized orchestration.
+Small tasks should stay in the current session, and you can decline a suggestion. Suggestions
+depend on the agent's judgment; available model and subscription information may not establish an
+exact cost or a cheapest choice.
+
 ## How It Works
 
 Every session has tools for orchestration alongside its other Phoenix tools:
@@ -157,8 +164,13 @@ Orchestration is bounded so a runaway agent cannot overwhelm your machine:
 
 ## Turning It Off
 
-Settings → General → **Session orchestration** disables the feature for the whole environment. The
-switch applies immediately, including to sessions that are already running.
+On mobile, open **Settings → General → Session orchestration**. Each environment has its own
+toggle, labelled with its name. Changes apply to that environment across all clients. Reconnect
+to an offline environment before changing its setting.
+Read-only connections cannot change the setting; the control stays disabled while access is checked.
+
+Turning the mobile toggle off disables the feature for the whole environment, including sessions
+that are already running. Web and desktop currently do not expose this toggle.
 
 Provider metadata warnings do not prevent starting a child when the provider is enabled, installed and usable. Disabled providers, signed-out accounts and unavailable or failed runtimes are rejected.
 

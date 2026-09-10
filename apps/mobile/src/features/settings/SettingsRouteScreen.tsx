@@ -58,6 +58,7 @@ import { useSavedRemoteConnections } from "../../state/use-remote-environment-re
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import { SessionOrchestrationSettingsRows } from "./SessionOrchestrationSettingsRows";
 import {
   GENERAL_INSIGHT_SETTINGS_ROWS,
   resolveAgentAwarenessPlatformPresentation,
@@ -549,6 +550,7 @@ function GeneralSettingsSection() {
   return (
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
+      <SessionOrchestrationSettingsRows />
       <AutoSettleSettingsRows />
       {GENERAL_INSIGHT_SETTINGS_ROWS.map((row) => (
         <SettingsRow
