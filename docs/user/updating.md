@@ -8,6 +8,9 @@ the server.
 
 ## Updating
 
+When a desktop update is available, **Settings → General** shows a **Release notes** link
+beside the app version. The link stays available while downloading and before installing.
+
 - For a desktop-managed server, update the Phoenix desktop app on the machine that runs it.
 - For a source-built command-line server, check out the matching Phoenix revision, rebuild it, stop
   the old process after active work finishes, and relaunch it with the same startup options. If you
