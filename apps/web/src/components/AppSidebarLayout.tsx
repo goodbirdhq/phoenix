@@ -183,16 +183,6 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const isOnEnvironments = pathname === "/environments";
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
-  const [environmentSidebarWidth, setEnvironmentSidebarWidth] = useState(() => {
-    try {
-      const saved = getLocalStorageItem("phoenix:environment-sidebar-width", Schema.Finite);
-      if (saved !== null && saved >= THREAD_SIDEBAR_MIN_WIDTH)
-        return Math.min(saved, resolveThreadSidebarMaximumWidth(window.innerWidth));
-    } catch (error) {
-      console.error("Could not read persisted environment sidebar width.", error);
-    }
-    return 344;
-  });
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // Subscribed rather than read once: the clamp must track live window size,
   // and a clamped drag ends with an unchanged width, which skips the re-render
@@ -200,15 +190,6 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
   const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth);
   const resetSidebarWidth = () => {
-    if (isOnEnvironments || isOnSchedules) {
-      try {
-        removeLocalStorageItem("phoenix:environment-sidebar-width");
-      } catch (error) {
-        console.error("Could not clear persisted environment sidebar width.", error);
-      }
-      setEnvironmentSidebarWidth(344);
-      return;
-    }
     try {
       removeLocalStorageItem(THREAD_SIDEBAR_WIDTH_STORAGE_KEY);
     } catch (error) {
@@ -223,7 +204,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       : false;
   });
   const sidebarProviderStyle = {
-    "--sidebar-width": `${isOnEnvironments || isOnSchedules ? environmentSidebarWidth : sidebarWidth}px`,
+    "--sidebar-width": `${sidebarWidth}px`,
     ...(isMacosDesktop && !isWindowFullscreen
       ? { "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET }
       : {}),
@@ -284,12 +265,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
             nextWidth <= currentWidth ||
             wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-          storageKey:
-            isOnEnvironments || isOnSchedules
-              ? "phoenix:environment-sidebar-width"
-              : THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-          onResize:
-            isOnEnvironments || isOnSchedules ? setEnvironmentSidebarWidth : setSidebarWidth,
+          storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+          onResize: setSidebarWidth,
         }}
       >
         {isOnSettings ? (
