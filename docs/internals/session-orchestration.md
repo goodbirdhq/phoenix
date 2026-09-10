@@ -687,8 +687,8 @@ model work duration. Completion and failure remain observable through provider r
 
 The opt-in `sidebarAttentionFirstEnabled` client setting ranks the current active
 list using `packages/client-runtime/src/state/threadAttention.ts`. Priority is
-human decisions, session errors, unread completed results, autonomous work, then
-quiet history. Each group preserves the usual order. Pins and parked sections
+human decisions, session errors, unread completed results, viewed completed results,
+autonomous work, then quiet history. Each group preserves the usual order. Pins and parked sections
 retain their own ordering. Mobile stores its preference and read markers locally;
 it does not synchronize this toggle with web/desktop client settings.
 

@@ -69,7 +69,7 @@ export function sortThreadsByAttention<T extends ThreadAttentionInput>(
     children.set(parentKey, siblings);
   }
 
-  // Decisions, failures, unread results, autonomous work, then quiet history.
+  // Decisions, failures, unread results, viewed results, autonomous work, then quiet history.
   type Summary = { rank: number; busy: boolean; completedAt: number };
   const summaries = new Map<string, Summary>();
   const visiting = new Set<string>();
@@ -77,7 +77,7 @@ export function sortThreadsByAttention<T extends ThreadAttentionInput>(
     const cached = summaries.get(key);
     if (cached) return cached;
     // Malformed parent cycles must neither recurse forever nor look complete.
-    if (visiting.has(key)) return { rank: 3, busy: true, completedAt: 0 };
+    if (visiting.has(key)) return { rank: 4, busy: true, completedAt: 0 };
     visiting.add(key);
     const thread = threads.get(key)!;
     const status = thread.session?.status;
@@ -118,7 +118,12 @@ export function sortThreadsByAttention<T extends ThreadAttentionInput>(
     // A child's completion belongs to its parent. A quiet parent is still
     // delegating while descendants run or have a newer result to hand back.
     const handoff = childBusy || childCompletedAt > completedAt;
-    const ownRank = decision ? 0 : failed ? 1 : busy || handoff ? 3 : unread && !hasParent ? 2 : 4;
+    const finished = thread.latestTurn?.state === "completed" && completedAt > 0 && !hasParent;
+    let ownRank = 5;
+    if (decision) ownRank = 0;
+    else if (failed) ownRank = 1;
+    else if (busy || handoff) ownRank = 4;
+    else if (finished) ownRank = unread ? 2 : 3;
     const summary = {
       rank:
         context.propagateDescendantRank === false
@@ -142,6 +147,6 @@ export function sortThreadsByAttention<T extends ThreadAttentionInput>(
   for (const key of threads.keys()) summarize(key);
   return [...orderedThreads].sort(
     (left, right) =>
-      (summaries.get(keyFor(left))?.rank ?? 4) - (summaries.get(keyFor(right))?.rank ?? 4),
+      (summaries.get(keyFor(left))?.rank ?? 5) - (summaries.get(keyFor(right))?.rank ?? 5),
   );
 }
