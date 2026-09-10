@@ -164,6 +164,9 @@ Orchestration is bounded so a runaway agent cannot overwhelm your machine:
 
 ## Turning It Off
 
+On desktop and web, open **Settings → General → Session orchestration** to turn orchestration
+on or off for the primary environment. The setting applies across all clients connected to it.
+
 On mobile, open **Settings → General → Session orchestration**. Each environment has its own
 toggle, labelled with its name. Changes apply to that environment across all clients. Reconnect
 to an offline environment before changing its setting.

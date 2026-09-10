@@ -2274,6 +2274,34 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          serverScoped
+          {...searchableSetting("session-orchestration")}
+          description="Let agents suggest coordinated work, discover available models, and spawn child sessions after your approval. Applies to this environment across all clients."
+          resetAction={
+            settings.enableSessionOrchestration !==
+            DEFAULT_UNIFIED_SETTINGS.enableSessionOrchestration ? (
+              <SettingResetButton
+                label="session orchestration"
+                onClick={() =>
+                  updateSettings({
+                    enableSessionOrchestration: DEFAULT_UNIFIED_SETTINGS.enableSessionOrchestration,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.enableSessionOrchestration}
+              onCheckedChange={(checked) =>
+                updateSettings({ enableSessionOrchestration: Boolean(checked) })
+              }
+              aria-label="Session orchestration"
+            />
+          }
+        />
+
+        <SettingsRow
           {...searchableSetting("schedule-management")}
           description="Let agent sessions read, create, edit, pause and trigger this environment's Schedules through the phoenix tools. Agents cannot delete a Schedule, and can only change Schedules in the project they are working in. Applies to running sessions immediately."
           resetAction={
