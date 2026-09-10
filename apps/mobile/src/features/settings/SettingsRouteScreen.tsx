@@ -546,10 +546,28 @@ function ConfiguredSettingsRouteScreen() {
 
 function GeneralSettingsSection() {
   const schedulesValue = useScheduleSettingsValue();
+  const threadListV2Enabled = useThreadListV2Enabled();
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
 
   return (
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
+      <SettingsSwitchRow
+        icon="arrow.up"
+        label="Attention first"
+        subtitle={
+          threadListV2Enabled
+            ? "Move decisions, failures and unread results above sessions working or waiting on other agents."
+            : "Turn off Legacy thread list to use attention ordering."
+        }
+        disabled={!AsyncResult.isSuccess(preferences) || !threadListV2Enabled}
+        value={
+          AsyncResult.isSuccess(preferences) &&
+          preferences.value.sidebarAttentionFirstEnabled === true
+        }
+        onValueChange={(value) => savePreferences({ sidebarAttentionFirstEnabled: value })}
+      />
       <SessionOrchestrationSettingsRows />
       <AutoSettleSettingsRows />
       {GENERAL_INSIGHT_SETTINGS_ROWS.map((row) => (

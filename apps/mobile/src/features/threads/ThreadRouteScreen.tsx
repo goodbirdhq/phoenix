@@ -766,6 +766,7 @@ function ThreadRouteContent(
 
   const contentPresentation = projectThreadContentPresentation({
     hasDetail: selectedThreadDetail !== null,
+    detailCompletedAt: selectedThreadDetail?.latestTurn?.completedAt ?? null,
     detailError: Option.getOrNull(selectedThreadDetailState.error),
     detailDeleted: selectedThreadDetailState.status === "deleted",
     connectionState: routeConnectionState,

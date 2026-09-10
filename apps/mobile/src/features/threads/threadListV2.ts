@@ -1,3 +1,4 @@
+import { sortThreadsByAttention } from "@t3tools/client-runtime/state/thread-attention";
 import {
   effectiveSnoozed,
   hasQueuedTurnStart,
@@ -467,6 +468,8 @@ export function buildThreadListV2ListItems(input: {
  * the settled recency tail, matching the web v2 list.
  */
 export function buildThreadListV2Items(input: {
+  readonly attentionFirstEnabled?: boolean;
+  readonly lastVisitedAtByKey?: Readonly<Record<string, string>>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs?: ReadonlyArray<{
@@ -546,7 +549,21 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  const orderedActive = sortThreadsForListV2(active);
+  const orderedActive = input.attentionFirstEnabled
+    ? sortThreadsByAttention(sortThreadsForListV2(active), {
+        threads: input.threads.filter(
+          (thread) =>
+            thread.archivedAt === null &&
+            thread.settledOverride !== "settled" &&
+            !effectiveSnoozed(thread, { now }),
+        ),
+        lastVisitedAtByKey: input.lastVisitedAtByKey,
+        visibleThreadKeys: new Set(
+          [...active, ...pinned].map((thread) => `${thread.environmentId}:${thread.id}`),
+        ),
+        now,
+      })
+    : sortThreadsForListV2(active);
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),

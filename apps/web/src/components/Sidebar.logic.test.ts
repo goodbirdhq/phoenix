@@ -34,6 +34,7 @@ import {
   planPinnedReorder,
   sortPinnedThreadsForSidebar,
   sortThreadsForSidebar,
+  orderActiveSidebarThreads,
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
   shouldCreateNewThreadInCurrentProject,
@@ -265,6 +266,22 @@ describe("hasUnseenCompletion", () => {
         lastVisitedAt: "2026-03-09T10:04:00.000Z",
         session: null,
       }),
+    ).toBe(true);
+  });
+
+  it("treats a never-visited result as unread in attention mode", () => {
+    expect(
+      hasUnseenCompletion(
+        {
+          hasActionableProposedPlan: false,
+          hasPendingApprovals: false,
+          hasPendingUserInput: false,
+          interactionMode: "default",
+          latestTurn: makeLatestTurn(),
+          session: null,
+        },
+        true,
+      ),
     ).toBe(true);
   });
 
@@ -1970,5 +1987,51 @@ describe("awaiting-parent status", () => {
       } as never,
     });
     expect(pill).toMatchObject({ label: "Waiting on Parent", pulse: false });
+  });
+});
+
+describe("active sidebar attention wiring", () => {
+  const base = {
+    environmentId: "local",
+    interactionMode: "default" as const,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+  };
+  const parent = { ...base, id: "parent" };
+  const child = { ...base, id: "child", spawnedByThreadId: "parent", hasPendingApprovals: true };
+  const failure = { ...base, id: "failure", session: { status: "error" as const } };
+  const ordered = [parent, child, failure];
+  const options = {
+    enabled: true,
+    hierarchyEnabled: false,
+    pinnedThreads: [],
+    contextThreads: ordered,
+    now: "2026-09-10T12:00:00Z",
+  };
+  it("ranks flat rows by their own decisions, and nested rows by visible family decisions", () => {
+    expect(orderActiveSidebarThreads(ordered, options).map((t) => t.id)).toEqual([
+      "child",
+      "failure",
+      "parent",
+    ]);
+    expect(
+      orderActiveSidebarThreads(ordered, { ...options, hierarchyEnabled: true }).map((t) => t.id),
+    ).toEqual(["parent", "child", "failure"]);
+  });
+  it("keeps filtered-out child decisions from promoting an unexplained ready row", () => {
+    expect(
+      orderActiveSidebarThreads([parent, failure], { ...options, hierarchyEnabled: true }).map(
+        (t) => t.id,
+      ),
+    ).toEqual(["failure", "parent"]);
+  });
+  it("restores the original order on disable and leaves pinned rows out of the active list", () => {
+    expect(orderActiveSidebarThreads(ordered, { ...options, enabled: false })).toBe(ordered);
+    expect(
+      orderActiveSidebarThreads([parent, failure], { ...options, pinnedThreads: [child] }).map(
+        (t) => t.id,
+      ),
+    ).toEqual(["failure", "parent"]);
   });
 });

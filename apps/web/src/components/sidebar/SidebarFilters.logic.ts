@@ -48,6 +48,7 @@ export function matchesSidebarThreadFilters(
     section: "active" | "pinned" | "snoozed" | "settled";
     lastVisitedAt: string | undefined;
     woke: boolean;
+    attentionFirstEnabled?: boolean;
   },
 ) {
   if (
@@ -68,7 +69,10 @@ export function matchesSidebarThreadFilters(
     (selected) =>
       selected === status ||
       (selected === "unread" &&
-        hasUnseenCompletion({ ...thread, lastVisitedAt: context.lastVisitedAt })) ||
+        hasUnseenCompletion(
+          { ...thread, lastVisitedAt: context.lastVisitedAt },
+          context.attentionFirstEnabled,
+        )) ||
       (selected === "woke" && context.woke) ||
       (selected === "pinned" && thread.pinnedAt != null) ||
       selected === context.section,

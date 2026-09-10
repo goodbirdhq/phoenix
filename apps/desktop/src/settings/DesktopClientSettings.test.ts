@@ -54,6 +54,7 @@ const clientSettings: ClientSettings = {
   sidebarThreadSortOrder: "created_at",
   sidebarThreadPreviewCount: 6,
   sidebarSessionHierarchyEnabled: true,
+  sidebarAttentionFirstEnabled: true,
   legacySidebarEnabled: false,
   timestampFormat: "24-hour",
   wordWrap: true,

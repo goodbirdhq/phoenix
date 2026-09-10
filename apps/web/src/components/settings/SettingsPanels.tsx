@@ -2271,7 +2271,34 @@ export function GeneralSettingsPanel() {
           }
         />
 
-        {/* Dependent on the switch above: with orchestration off nothing spawns
+        <SettingsRow
+          {...searchableSetting("sidebar-attention-first")}
+          description={
+            settings.legacySidebarEnabled
+              ? "Turn off Legacy sidebar to use attention ordering."
+              : "Move decisions, failures and unread results to the top of the active thread list. Sessions waiting on other agents stay below work that needs you."
+          }
+          resetAction={
+            settings.sidebarAttentionFirstEnabled ? (
+              <SettingResetButton
+                label="attention first"
+                onClick={() => updateSettings({ sidebarAttentionFirstEnabled: false })}
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              disabled={settings.legacySidebarEnabled}
+              checked={settings.sidebarAttentionFirstEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarAttentionFirstEnabled: Boolean(checked) })
+              }
+              aria-label="Attention first"
+            />
+          }
+        />
+
+        {/* With session orchestration off nothing spawns
             children, so the mode has nothing to nest and the row would only be
             a dead end. Existing trees keep rendering if orchestration is later
             turned off — the nesting is history, not a live permission. */}

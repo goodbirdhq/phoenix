@@ -16,6 +16,8 @@ const PREFERENCES_KEY = "t3code.preferences";
 const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
 
 export interface Preferences {
+  readonly sidebarAttentionFirstEnabled?: boolean;
+  readonly threadLastVisitedAtByKey?: Readonly<Record<string, string>>;
   readonly liveActivitiesEnabled?: boolean;
   readonly themeId?: MobileThemeId;
   readonly lightThemeId?: MobileThemeId;
@@ -86,6 +88,8 @@ export class MobilePreferencesStore extends Context.Service<
 
 function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
+    sidebarAttentionFirstEnabled?: boolean;
+    threadLastVisitedAtByKey?: Record<string, string>;
     liveActivitiesEnabled?: boolean;
     themeId?: MobileThemeId;
     lightThemeId?: MobileThemeId;
@@ -106,6 +110,20 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListV2SnoozedShelfExpanded?: boolean;
   } = {};
 
+  if (typeof parsed.sidebarAttentionFirstEnabled === "boolean") {
+    preferences.sidebarAttentionFirstEnabled = parsed.sidebarAttentionFirstEnabled;
+  }
+  if (
+    parsed.threadLastVisitedAtByKey &&
+    typeof parsed.threadLastVisitedAtByKey === "object" &&
+    !Array.isArray(parsed.threadLastVisitedAtByKey)
+  ) {
+    preferences.threadLastVisitedAtByKey = Object.fromEntries(
+      Object.entries(parsed.threadLastVisitedAtByKey).filter(
+        ([, value]) => typeof value === "string" && Number.isFinite(Date.parse(value)),
+      ),
+    );
+  }
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
     preferences.liveActivitiesEnabled = parsed.liveActivitiesEnabled;
   }

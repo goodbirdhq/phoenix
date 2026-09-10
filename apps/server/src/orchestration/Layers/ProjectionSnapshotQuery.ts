@@ -128,6 +128,8 @@ const ProjectionThreadReportDbRowSchema = ProjectionThreadReport.mapFields((fiel
 );
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
+    latestReportAt: Schema.NullOr(IsoDateTime),
+    hasPendingTurnStart: Schema.Number,
     modelSelection: Schema.fromJsonString(ModelSelection),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
@@ -538,6 +540,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           spawned_by_thread_id AS "spawnedByThreadId",
           report_delivery AS "reportDelivery",
+          (SELECT MAX(report.created_at) FROM projection_thread_reports AS report
+           WHERE report.thread_id = projection_threads.thread_id) AS "latestReportAt",
+          EXISTS(SELECT 1 FROM projection_turns AS pending
+                 WHERE pending.thread_id = projection_threads.thread_id
+                   AND pending.pending_message_id IS NOT NULL
+                   AND pending.state IN ('pending', 'queued', 'interrupting', 'releasing')) AS "hasPendingTurnStart",
           linked_pull_request_json AS "linkedPullRequest",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
@@ -579,6 +587,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           spawned_by_thread_id AS "spawnedByThreadId",
           report_delivery AS "reportDelivery",
+          (SELECT MAX(report.created_at) FROM projection_thread_reports AS report
+           WHERE report.thread_id = projection_threads.thread_id) AS "latestReportAt",
+          EXISTS(SELECT 1 FROM projection_turns AS pending
+                 WHERE pending.thread_id = projection_threads.thread_id
+                   AND pending.pending_message_id IS NOT NULL
+                   AND pending.state IN ('pending', 'queued', 'interrupting', 'releasing')) AS "hasPendingTurnStart",
           linked_pull_request_json AS "linkedPullRequest",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
@@ -622,6 +636,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           spawned_by_thread_id AS "spawnedByThreadId",
           report_delivery AS "reportDelivery",
+          (SELECT MAX(report.created_at) FROM projection_thread_reports AS report
+           WHERE report.thread_id = projection_threads.thread_id) AS "latestReportAt",
+          EXISTS(SELECT 1 FROM projection_turns AS pending
+                 WHERE pending.thread_id = projection_threads.thread_id
+                   AND pending.pending_message_id IS NOT NULL
+                   AND pending.state IN ('pending', 'queued', 'interrupting', 'releasing')) AS "hasPendingTurnStart",
           linked_pull_request_json AS "linkedPullRequest",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
@@ -1180,6 +1200,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           spawned_by_thread_id AS "spawnedByThreadId",
           report_delivery AS "reportDelivery",
+          (SELECT MAX(report.created_at) FROM projection_thread_reports AS report
+           WHERE report.thread_id = projection_threads.thread_id) AS "latestReportAt",
+          EXISTS(SELECT 1 FROM projection_turns AS pending
+                 WHERE pending.thread_id = projection_threads.thread_id
+                   AND pending.pending_message_id IS NOT NULL
+                   AND pending.state IN ('pending', 'queued', 'interrupting', 'releasing')) AS "hasPendingTurnStart",
           linked_pull_request_json AS "linkedPullRequest",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
@@ -2707,6 +2733,8 @@ pending_approval_requests AS (
                       hasPendingApprovals: row.pendingApprovalCount > 0,
                       hasPendingUserInput: row.pendingUserInputCount > 0,
                       hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                      latestReportAt: row.latestReportAt,
+                      hasPendingTurnStart: row.hasPendingTurnStart > 0,
                       awaitingParentReplySince: row.awaitingParentReplySince ?? null,
                       backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                         row.threadId,
@@ -2860,6 +2888,8 @@ pending_approval_requests AS (
                   hasPendingUserInput: row.pendingUserInputCount > 0,
                   hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
                   awaitingParentReplySince: row.awaitingParentReplySince ?? null,
+                  latestReportAt: row.latestReportAt,
+                  hasPendingTurnStart: row.hasPendingTurnStart > 0,
                   backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                     row.threadId,
                   ),
@@ -3161,6 +3191,8 @@ pending_approval_requests AS (
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
         hasActionableProposedPlan: threadRow.value.hasActionableProposedPlan > 0,
+        latestReportAt: threadRow.value.latestReportAt,
+        hasPendingTurnStart: threadRow.value.hasPendingTurnStart > 0,
         awaitingParentReplySince: threadRow.value.awaitingParentReplySince ?? null,
         backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
           threadRow.value.threadId,

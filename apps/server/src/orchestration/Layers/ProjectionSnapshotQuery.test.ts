@@ -40,6 +40,89 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("includes report and pending-start signals in bulk, single and archived shells", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('attention-project', 'Attention', '/tmp/attention', '[]', '2026-09-10T10:00:00Z', '2026-09-10T10:00:00Z')`;
+      yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at)
+        VALUES ('attention-child', 'attention-project', 'Child', '{"instanceId":"codex","model":"gpt-6-astra"}', 'full-access', 'default', '2026-09-10T10:00:00Z', '2026-09-10T10:00:00Z')`;
+      const threadId = ThreadId.make("attention-child");
+      const before = yield* query.getThreadShellById(threadId);
+      assert.equal(before._tag, "Some");
+      if (before._tag === "Some") assert.equal(before.value.latestReportAt, null);
+      yield* sql`INSERT INTO projection_thread_reports
+        (report_id, thread_id, status, title, summary, artifacts_json, created_at)
+        VALUES ('attention-report-2', 'attention-child', 'success', 'New', 'New result', '[]', '2026-09-10T11:00:10Z'),
+               ('attention-report-1', 'attention-child', 'success', 'Old', 'Old result', '[]', '2026-09-10T11:00:00Z')`;
+      const single = yield* query.getThreadShellById(threadId);
+      assert.equal(single._tag, "Some");
+      if (single._tag === "Some") assert.equal(single.value.latestReportAt, "2026-09-10T11:00:10Z");
+      const snapshot = yield* query.getShellSnapshot();
+      assert.equal(
+        snapshot.threads.find((thread) => thread.id === threadId)?.latestReportAt,
+        "2026-09-10T11:00:10Z",
+      );
+
+      yield* sql`INSERT INTO projection_turns
+        (thread_id, turn_id, state, requested_at, completed_at, checkpoint_files_json)
+        VALUES ('attention-child', 'attention-completed', 'completed', '2026-09-10T10:00:00Z', '2026-09-10T11:00:10Z', '[]')`;
+      yield* sql`UPDATE projection_threads SET latest_turn_id = 'attention-completed' WHERE thread_id = 'attention-child'`;
+      yield* sql`INSERT INTO projection_turns
+        (thread_id, pending_message_id, state, requested_at, checkpoint_files_json)
+        VALUES ('attention-child', 'attention-queued', 'queued', '2026-09-10T11:00:00Z', '[]')`;
+      // The unrelated completed turn remains latest while delivery waits.
+      for (const state of [
+        "queued",
+        "interrupting",
+        "releasing",
+        "pending",
+        "consumed",
+        "cancelled",
+      ]) {
+        yield* sql`UPDATE projection_turns SET state = ${state}
+          WHERE thread_id = 'attention-child' AND pending_message_id = 'attention-queued'`;
+        const expected = state !== "consumed" && state !== "cancelled";
+        const shell = yield* query.getThreadShellById(threadId);
+        assert.equal(shell._tag, "Some");
+        if (shell._tag === "Some") {
+          assert.equal(shell.value.latestTurn?.state, "completed");
+          assert.equal(shell.value.hasPendingTurnStart, expected);
+        }
+        const bulk = yield* query.getShellSnapshot();
+        assert.equal(
+          bulk.threads.find((thread) => thread.id === threadId)?.hasPendingTurnStart,
+          expected,
+        );
+      }
+      yield* sql`UPDATE projection_turns SET state = 'releasing'
+        WHERE thread_id = 'attention-child' AND pending_message_id = 'attention-queued'`;
+      yield* sql`UPDATE projection_threads SET archived_at = '2026-09-10T12:00:00Z' WHERE thread_id = 'attention-child'`;
+      const archived = yield* query.getArchivedShellSnapshot();
+      assert.equal(
+        archived.threads.find((thread) => thread.id === threadId)?.hasPendingTurnStart,
+        true,
+      );
+      assert.equal(
+        archived.threads.find((thread) => thread.id === threadId)?.latestReportAt,
+        "2026-09-10T11:00:10Z",
+      );
+    }).pipe(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`DELETE FROM projection_turns WHERE thread_id = 'attention-child'`;
+          yield* sql`DELETE FROM projection_thread_reports WHERE thread_id = 'attention-child'`;
+          yield* sql`DELETE FROM projection_threads WHERE thread_id = 'attention-child'`;
+          yield* sql`DELETE FROM projection_projects WHERE project_id = 'attention-project'`;
+        }).pipe(Effect.orDie),
+      ),
+    ),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -542,6 +625,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           hasPendingUserInput: false,
           hasActionableProposedPlan: false,
           backgroundLiveness: null,
+          latestReportAt: "2026-02-24T00:00:06.500Z",
+          hasPendingTurnStart: false,
           planProgress: null,
         },
       ]);

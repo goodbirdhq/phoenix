@@ -107,6 +107,9 @@ describe("sidebar conversation filters", () => {
     const filters = { ...EMPTY_SIDEBAR_FILTERS, statuses: ["unread"] };
     expect(matchesSidebarThreadFilters(thread, filters, context)).toBe(false);
     expect(
+      matchesSidebarThreadFilters(thread, filters, { ...context, attentionFirstEnabled: true }),
+    ).toBe(true);
+    expect(
       matchesSidebarThreadFilters(thread, filters, {
         ...context,
         lastVisitedAt: "2026-09-05T10:00:00Z",

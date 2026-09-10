@@ -213,6 +213,19 @@ describe("ClientSettings editor handoff", () => {
 });
 
 describe("ClientSettings sidebar", () => {
+  it("keeps attention ordering opt-in and allows switching it back off", () => {
+    expect(decodeClientSettings({}).sidebarAttentionFirstEnabled).toBe(false);
+    expect(
+      decodeClientSettingsPatch({ sidebarAttentionFirstEnabled: true })
+        .sidebarAttentionFirstEnabled,
+    ).toBe(true);
+    expect(
+      decodeClientSettingsPatch({ sidebarAttentionFirstEnabled: false })
+        .sidebarAttentionFirstEnabled,
+    ).toBe(false);
+    expect(() => decodeClientSettingsPatch({ sidebarAttentionFirstEnabled: "yes" })).toThrow();
+  });
+
   it("defaults to the current sidebar", () => {
     expect(decodeClientSettings({}).legacySidebarEnabled).toBe(false);
   });
