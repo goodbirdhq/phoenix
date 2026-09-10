@@ -24,7 +24,7 @@ export function SessionOrchestrationSettingsRows() {
         subtitle={
           connected
             ? `${environment.label}: let agents suggest and coordinate child sessions. Applies to all clients.`
-            : `${environment.label}: reconnect to change this setting.`
+            : `${environment.label}: available when this environment is connected.`
         }
         disabled={!connected}
         value={settings.enableSessionOrchestration}

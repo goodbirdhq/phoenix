@@ -147,5 +147,5 @@ On mobile, open **Settings → General → Session orchestration**. Each environ
 toggle, labelled with its name. Changes apply to that environment across all clients. Reconnect
 to an offline environment before changing its setting.
 
-Settings → General → **Session orchestration** disables the feature for the whole environment. The
-switch applies immediately, including to sessions that are already running.
+Turning the mobile toggle off disables the feature for the whole environment, including sessions
+that are already running. Web and desktop currently do not expose this toggle.
