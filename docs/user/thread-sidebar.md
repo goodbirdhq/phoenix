@@ -169,7 +169,7 @@ default. The setting is available with the current thread list; turn off the
 legacy sidebar or legacy thread list to use it.
 
 Decisions and actionable plans come first, followed by failures, unread results,
-work continuing autonomously, and quiet threads. Within each group, threads keep
+viewed results, work continuing autonomously, and quiet threads. Within each group, threads keep
 their usual order. Turning the setting off restores the usual order immediately.
 Pinned threads keep their manual positions, snoozed threads keep their wake order,
 and settled threads stay in history.
@@ -183,7 +183,9 @@ or have a newer result to hand back. A new result from the parent can
 bring it up once that work is processed. Explicit decisions and failures remain
 visible at the top even while other agents work.
 
-Opening a completed conversation marks its result as seen on that client. Results
+Opening a completed conversation marks its result as seen on that client. Finished
+sessions stay above running work after you read them, until they are settled or
+start working again. Unread results come before results you have already viewed. Results
 from conversations you have never opened also count as unread with Attention first
 on. Read state is local to each client, and mobile saves the setting on each device.
 Turning Attention first on in desktop or web does not enable it on your phone.

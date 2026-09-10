@@ -47,12 +47,21 @@ describe("attention ordering", () => {
     ).toEqual(["input", "approval", "failed", "result", "working", "quiet"]);
   });
 
-  it("returns reviewed results to quiet history without moving equal-priority rows", () => {
+  it("keeps viewed completions above running work and preserves order within each group", () => {
     expect(
-      order([thread("quiet"), completed("read"), completed("unread")], {
-        lastVisitedAtByKey: { "local:read": BEFORE },
-      }),
-    ).toEqual(["unread", "quiet", "read"]);
+      order(
+        [
+          thread("quiet"),
+          thread("working", { session: { status: "running" } }),
+          completed("read"),
+          completed("read-2"),
+          completed("unread"),
+        ],
+        {
+          lastVisitedAtByKey: { "local:read": BEFORE, "local:read-2": BEFORE },
+        },
+      ),
+    ).toEqual(["unread", "read", "read-2", "working", "quiet"]);
   });
 
   it("does not promote stopped, interrupted or missing sessions as completed work", () => {
@@ -110,7 +119,7 @@ describe("attention ordering", () => {
       order([parent, thread("working", { backgroundLiveness: "monitoring" }), child], {
         lastVisitedAtByKey: { "local:parent": NOW },
       }),
-    ).toEqual(["working", "parent", "child"]);
+    ).toEqual(["parent", "working", "child"]);
   });
 
   it("recognizes actionable plans above background work", () => {
@@ -277,4 +286,21 @@ it("retains human decision priority while a turn start is pending", () => {
     hasPendingTurnStart: true,
   };
   expect(order([completed("result"), decision])).toEqual(["decision", "result"]);
+});
+
+it("does not promote viewed parent completions while children or queued deliveries are pending", () => {
+  const parent = completed("parent");
+  const child = thread("child", { spawnedByThreadId: "parent", session: { status: "running" } });
+  const finished = completed("finished");
+  const pending = { ...completed("pending"), hasPendingTurnStart: true };
+  expect(
+    order([parent, pending, finished], {
+      threads: [parent, child, pending, finished],
+      lastVisitedAtByKey: {
+        "local:parent": BEFORE,
+        "local:pending": BEFORE,
+        "local:finished": BEFORE,
+      },
+    }),
+  ).toEqual(["finished", "parent", "pending"]);
 });
