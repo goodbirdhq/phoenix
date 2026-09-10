@@ -503,16 +503,7 @@ const makeWsRpcLayer = (
         if (Option.isSome(providerService) && providerService.value.getAvailability !== undefined) {
           return providerService.value.getAvailability(instanceId, provider);
         }
-        return Effect.succeed({
-          status: "unknown",
-          source:
-            provider === "codex"
-              ? "codex_app_server"
-              : provider === "claudeAgent"
-                ? "claude_agent_sdk"
-                : "unsupported",
-          windows: [],
-        } satisfies ProviderAvailability);
+        return Effect.succeed(ProviderService.unknownAvailabilityForDriver(provider));
       };
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;

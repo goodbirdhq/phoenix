@@ -1,3 +1,5 @@
+import { registerPairingConnection } from "./onboarding.ts";
+import { remoteHttpClientLayer } from "../rpc/http.ts";
 import {
   type DesktopSshEnvironmentTarget,
   EnvironmentId,
@@ -427,6 +429,89 @@ function awaitConnectionState(
 }
 
 describe("EnvironmentRegistry", () => {
+  it.effect("retains saved state and can reconnect after manual disconnect", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([TARGET]);
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.start;
+        yield* awaitConnectionState(
+          registry,
+          TARGET.environmentId,
+          (state) => state.phase === "connected",
+        );
+        yield* registry.run(
+          TARGET.environmentId,
+          EnvironmentSupervisor.EnvironmentSupervisor.pipe(
+            Effect.flatMap((supervisor) => supervisor.disconnect),
+          ),
+        );
+        yield* awaitConnectionState(
+          registry,
+          TARGET.environmentId,
+          (state) => state.phase === "available",
+        );
+        expect((yield* Ref.get(harness.storedTargets)).has(TARGET.environmentId)).toBe(true);
+        expect(yield* Ref.get(harness.cacheClears)).toEqual([]);
+        yield* registry.retryNow(TARGET.environmentId);
+        yield* awaitConnectionState(
+          registry,
+          TARGET.environmentId,
+          (state) => state.phase === "connected",
+        );
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("persists auto-connect without interrupting the active transport", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([BEARER_TARGET], [BEARER_PROFILE]);
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.start;
+        yield* awaitConnectionState(
+          registry,
+          BEARER_TARGET.environmentId,
+          (state) => state.phase === "connected",
+        );
+        const before = yield* registry.state(BEARER_TARGET.environmentId);
+        yield* registry.setAutoConnect(BEARER_TARGET.environmentId, false);
+        expect(
+          (yield* Ref.get(harness.storedProfiles)).get(BEARER_TARGET.connectionId)?.autoConnect,
+        ).toBe(false);
+        expect((yield* registry.state(BEARER_TARGET.environmentId)).generation).toBe(
+          before.generation,
+        );
+        expect((yield* registry.state(BEARER_TARGET.environmentId)).phase).toBe("connected");
+        expect(yield* Ref.get(harness.releasedSessions)).toBe(0);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect(
+    "keeps auto-connect-disabled profiles disconnected at startup until explicitly connected",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness(
+          [BEARER_TARGET],
+          [new BearerConnectionProfile({ ...BEARER_PROFILE, autoConnect: false })],
+        );
+        yield* Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+          yield* registry.start;
+          const before = yield* registry.state(BEARER_TARGET.environmentId);
+          expect(before.desired).toBe(false);
+          expect(yield* Ref.get(harness.sessions)).toEqual([]);
+          yield* registry.retryNow(BEARER_TARGET.environmentId);
+          yield* awaitConnectionState(
+            registry,
+            BEARER_TARGET.environmentId,
+            (state) => state.phase === "connected",
+          );
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
   it.effect("replays connected state when arming a desktop commit observer", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness([TARGET]);
@@ -709,6 +794,62 @@ describe("EnvironmentRegistry", () => {
     }),
   );
 
+  it.effect("moves durable streams when re-pairing leaves the catalog entry equivalent", () =>
+    Effect.gen(function* () {
+      const replacement = new RelayConnectionTarget({
+        environmentId: RELAY_TARGET.environmentId,
+        label: RELAY_TARGET.label,
+      });
+      const harness = yield* makeHarness([RELAY_TARGET]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        const firstObserved = yield* Deferred.make<void>();
+        const secondObserved = yield* Deferred.make<void>();
+        const labels = yield* Ref.make<ReadonlyArray<string>>([]);
+        yield* registry.start;
+        yield* awaitConnectionState(
+          registry,
+          RELAY_TARGET.environmentId,
+          (state) => state.phase === "connected",
+        );
+
+        const subscription = yield* Effect.forkChild(
+          registry
+            .followStream(
+              RELAY_TARGET.environmentId,
+              Stream.unwrap(
+                EnvironmentSupervisor.EnvironmentSupervisor.pipe(
+                  Effect.map((supervisor) =>
+                    Stream.concat(Stream.succeed(supervisor.target.label), Stream.never),
+                  ),
+                ),
+              ),
+            )
+            .pipe(
+              Stream.tap((label) =>
+                Ref.updateAndGet(labels, (current) => [...current, label]).pipe(
+                  Effect.flatMap((current) =>
+                    current.length === 1
+                      ? Deferred.succeed(firstObserved, undefined)
+                      : Deferred.succeed(secondObserved, undefined),
+                  ),
+                ),
+              ),
+              Stream.runDrain,
+            ),
+        );
+
+        yield* Deferred.await(firstObserved).pipe(Effect.timeout("1 second"));
+        yield* registry.register(new RelayConnectionRegistration({ target: replacement }));
+        yield* Deferred.await(secondObserved).pipe(Effect.timeout("1 second"));
+        yield* Fiber.interrupt(subscription);
+
+        expect(yield* Ref.get(labels)).toEqual([RELAY_TARGET.label, replacement.label]);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
   it.effect("ignores retry signals for environments that are no longer registered", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness([]);
@@ -810,6 +951,102 @@ describe("EnvironmentRegistry", () => {
               ?.profile ?? Option.none(),
           ),
         ).toEqual(BEARER_PROFILE);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
+  for (const autoConnect of [true, false]) {
+    it.effect(`pairing establishes one session with autoConnect=${autoConnect}`, () =>
+      Effect.gen(function* () {
+        const connectionId = `bearer:${BEARER_TARGET.environmentId}`;
+        const target = new BearerConnectionTarget({ ...BEARER_TARGET, connectionId });
+        const profile = new BearerConnectionProfile({
+          ...BEARER_PROFILE,
+          connectionId,
+          autoConnect,
+        });
+        const harness = yield* makeHarness(
+          autoConnect ? [] : [target],
+          autoConnect ? [] : [profile],
+        );
+        const http = remoteHttpClientLayer(((input) => {
+          const url = String(input);
+          if (url.endsWith("/.well-known/t3/environment"))
+            return Promise.resolve(
+              Response.json({
+                environmentId: target.environmentId,
+                label: target.label,
+                platform: { os: "linux", arch: "x64" },
+                serverVersion: "0.0.0-test",
+                capabilities: { repositoryIdentity: true },
+              }),
+            );
+          if (url.endsWith("/oauth/token"))
+            return Promise.resolve(
+              Response.json({
+                access_token: "new-token",
+                issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+                token_type: "Bearer",
+                expires_in: 3600,
+                scope: "orchestration:read",
+              }),
+            );
+          return Promise.reject(new Error(`Unexpected request: ${url}`));
+        }) satisfies typeof fetch);
+        yield* Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+          yield* registry.start;
+          const environmentId = yield* registerPairingConnection({
+            host: "https://bearer.example.test",
+            pairingCode: "test-code",
+          });
+          yield* awaitConnectionState(
+            registry,
+            environmentId,
+            (state) => state.phase === "connected",
+          );
+          expect(yield* Ref.get(harness.sessions)).toHaveLength(1);
+          expect(yield* Ref.get(harness.releasedSessions)).toBe(0);
+        }).pipe(
+          Effect.provide(Layer.mergeAll(harness.layer, http)),
+          Effect.provideService(ClientCapabilities.ClientPresentation, {
+            metadata: { label: "Test", deviceType: "desktop", os: "linux" },
+            scopes: [],
+          }),
+          Effect.scoped,
+        );
+      }),
+    );
+  }
+
+  it.effect("preserves auto-connect when pairing replaces an existing credential", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [BEARER_TARGET],
+        [new BearerConnectionProfile({ ...BEARER_PROFILE, autoConnect: false })],
+        [[BEARER_TARGET.connectionId, BEARER_CREDENTIAL]],
+      );
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.start;
+        yield* registry.register(
+          new BearerConnectionRegistration({
+            target: BEARER_TARGET,
+            profile: BEARER_PROFILE,
+            credential: new BearerConnectionCredential({ token: "replacement-token" }),
+          }),
+        );
+        expect(
+          (yield* Ref.get(harness.storedProfiles)).get(BEARER_TARGET.connectionId)?.autoConnect,
+        ).toBe(false);
+        expect(yield* Ref.get(harness.sessions)).toHaveLength(0);
+        yield* registry.retryNow(BEARER_TARGET.environmentId);
+        yield* awaitConnectionState(
+          registry,
+          BEARER_TARGET.environmentId,
+          (state) => state.phase === "connected",
+        );
+        expect(yield* Ref.get(harness.sessions)).toHaveLength(1);
       }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
   );

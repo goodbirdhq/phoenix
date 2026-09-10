@@ -22,13 +22,15 @@ import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
  * `claude_cli_usage` source, the verified account subject, and the `stale`
  * marker.
  *
+ * Version 3 adds Grok ACP billing readings.
+ *
  * A caller sends the version it can decode; a server that speaks a higher
  * version narrows its answer with {@link narrowProviderAvailability}. Bump this
  * (and extend the narrowing) whenever a *value* an older client's schema would
  * reject is introduced. Purely additive optional *fields* do not need a bump:
  * struct decoding ignores keys it does not know.
  */
-export const PROVIDER_AVAILABILITY_CONTRACT_VERSION = 2 as const;
+export const PROVIDER_AVAILABILITY_CONTRACT_VERSION = 3 as const;
 
 /** The window kinds a version 1 client's schema accepts. */
 const V1_WINDOW_KINDS: ReadonlySet<string> = new Set(["primary", "secondary"]);
@@ -90,6 +92,7 @@ export const ProviderAvailability = Schema.Struct({
     "codex_app_server",
     "claude_agent_sdk",
     "claude_cli_usage",
+    "grok_acp",
     "unsupported",
   ]),
   observedAt: Schema.optional(IsoDateTime),
@@ -123,6 +126,10 @@ export const narrowProviderAvailability = (
   contractVersion: number | undefined,
 ): ProviderAvailability => {
   if ((contractVersion ?? 1) >= PROVIDER_AVAILABILITY_CONTRACT_VERSION) return availability;
+  if (availability.source === "grok_acp") {
+    return { ...availability, source: "unsupported", status: "unknown", windows: [] };
+  }
+  if ((contractVersion ?? 1) >= 2) return availability;
   const source: ProviderAvailability["source"] =
     availability.source === "claude_cli_usage" ? "claude_agent_sdk" : availability.source;
   const windows = availability.windows.filter((window) => V1_WINDOW_KINDS.has(window.kind));

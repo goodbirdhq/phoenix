@@ -220,10 +220,11 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     execute: ({ threadId, messageId, turnId, consumedAt }) =>
       sql`
         UPDATE projection_turns
-        SET state = 'consumed', consumed_by_turn_id = ${turnId}, consumed_at = ${consumedAt}
+        SET state = 'consumed', consumed_by_turn_id = ${turnId}, consumed_at = ${consumedAt},
+            cancelled_at = NULL, cancel_reason = NULL
         WHERE thread_id = ${threadId}
           AND pending_message_id = ${messageId}
-          AND state = 'releasing'
+          AND state IN ('queued', 'interrupting', 'releasing', 'cancelled')
       `,
   });
 

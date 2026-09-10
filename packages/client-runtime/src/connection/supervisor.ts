@@ -19,6 +19,7 @@ import * as Connectivity from "./connectivity.ts";
 import * as ConnectionDriver from "./driver.ts";
 import {
   DPOP_ACCESS_TOKEN_REFRESH_SKEW_MS,
+  CONNECTION_ESTABLISHMENT_TIMEOUT_MS,
   type ConnectionAttemptError,
   type ConnectionTarget,
   ConnectionTransientError,
@@ -31,7 +32,6 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 
 const RETRY_DELAYS_MS = [3_000, 4_000, 8_000, 16_000] as const;
-const CONNECTION_ESTABLISHMENT_TIMEOUT = "15 seconds";
 const CONNECTION_PROBE_TIMEOUT = "15 seconds";
 const MOBILE_CONNECTION_PROBE_TIMEOUT = "3 seconds";
 const BACKOFF_RESET_AFTER_MS = 30_000;
@@ -529,7 +529,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           }),
         ),
       ),
-      Effect.sleep(CONNECTION_ESTABLISHMENT_TIMEOUT).pipe(
+      Effect.sleep(CONNECTION_ESTABLISHMENT_TIMEOUT_MS).pipe(
         Effect.as<EstablishmentEvent>({ _tag: "TimedOut" }),
       ),
     ]);
@@ -806,10 +806,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     Effect.withSpan("EnvironmentSupervisor.disconnect"),
   );
 
-  const retryNow = Ref.set(resetRetryState, true).pipe(
-    Effect.andThen(signal({ _tag: "RetryRequested" })),
-    Effect.withSpan("EnvironmentSupervisor.retryNow"),
-  );
+  const retryNow = Effect.gen(function* () {
+    const previous = yield* Ref.getAndUpdate(intent, (current) => ({ ...current, desired: true }));
+    yield* Ref.set(resetRetryState, true);
+    yield* signal({ _tag: previous.desired ? "RetryRequested" : "ConnectRequested" });
+  }).pipe(Effect.withSpan("EnvironmentSupervisor.retryNow"));
 
   yield* Effect.addFinalizer(() => Queue.shutdown(signals).pipe(Effect.andThen(clearLease)));
 

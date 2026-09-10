@@ -229,10 +229,73 @@ export interface ThreadListV2Layout {
 
 export interface ThreadListV2ThreadListItem {
   readonly type: "v2-thread";
+  readonly agentThreads?: ReadonlyArray<EnvironmentThreadShell>;
   readonly key: string;
   readonly item: ThreadListV2Item;
   /** Precomputed so recycled-list equality can see a minute-tick change. */
   readonly snoozeWakeLabelText: string | undefined;
+}
+
+/** A visible root's spawned descendants, retaining their immediate-parent shape. */
+export interface ThreadAgentGroupNode {
+  readonly thread: EnvironmentThreadShell;
+  readonly children: ReadonlyArray<ThreadAgentGroupNode>;
+}
+
+/**
+ * Rebuilds immediate parent/child links for the descendants attached to one
+ * visible row. The visible root itself is intentionally absent from `threads`,
+ * so descendants whose parent is not in this collection start a tree. A
+ * missing parent, a cross-environment parent, or any cycle remains visible at
+ * the top level rather than being dropped or recursively rendered forever.
+ */
+export function buildThreadAgentGroupHierarchy(
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+): ReadonlyArray<ThreadAgentGroupNode> {
+  type MutableNode = {
+    readonly thread: EnvironmentThreadShell;
+    readonly children: MutableNode[];
+  };
+  const keyFor = (thread: Pick<EnvironmentThreadShell, "environmentId" | "id">) =>
+    `${thread.environmentId}:${thread.id}`;
+  const nodes = new Map<string, MutableNode>();
+  for (const thread of threads) {
+    nodes.set(keyFor(thread), { thread, children: [] });
+  }
+
+  const parentByChildKey = new Map<string, string>();
+  for (const thread of threads) {
+    if (thread.spawnedByThreadId == null) continue;
+    const childKey = keyFor(thread);
+    const parentKey = `${thread.environmentId}:${thread.spawnedByThreadId}`;
+    if (parentKey !== childKey && nodes.has(parentKey)) {
+      parentByChildKey.set(childKey, parentKey);
+    }
+  }
+
+  const hasAncestorCycle = (startKey: string): boolean => {
+    const visited = new Set<string>();
+    let currentKey: string | undefined = startKey;
+    while (currentKey !== undefined) {
+      if (visited.has(currentKey)) return true;
+      visited.add(currentKey);
+      currentKey = parentByChildKey.get(currentKey);
+    }
+    return false;
+  };
+
+  const roots: MutableNode[] = [];
+  for (const thread of threads) {
+    const childKey = keyFor(thread);
+    const parentKey = parentByChildKey.get(childKey);
+    const parent = parentKey === undefined ? undefined : nodes.get(parentKey);
+    if (parent === undefined || hasAncestorCycle(childKey)) {
+      roots.push(nodes.get(childKey)!);
+    } else {
+      parent.children.push(nodes.get(childKey)!);
+    }
+  }
+  return roots;
 }
 
 export interface ThreadListV2PendingListItem {
@@ -257,7 +320,14 @@ export interface ThreadListV2SettledShelfListItem {
   readonly expanded: boolean;
 }
 
+export interface ThreadListV2SectionItem {
+  readonly type: "v2-section";
+  readonly key: string;
+  readonly label: "Pinned" | "Recent";
+}
+
 export type ThreadListV2ListItem =
+  | ThreadListV2SectionItem
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2SnoozedShelfListItem
@@ -304,7 +374,73 @@ export function buildThreadListV2ListItems(input: {
   const settledShelfHeaderIndex = input.settledShelfHeaderIndex ?? null;
   const activeEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
-  const result: ThreadListV2ListItem[] = [...threadItems.slice(0, activeEnd), ...pendingItems];
+  const activeRows = threadItems.slice(0, activeEnd);
+  const rowsByKey = new Map(
+    activeRows
+      .filter((row) => row.type === "v2-thread")
+      .map((row) => [`${row.item.thread.environmentId}:${row.item.thread.id}`, row]),
+  );
+  const children = new Map<string, EnvironmentThreadShell[]>();
+  const groupedChildren = new Set<string>();
+  for (const row of activeRows) {
+    if (row.type !== "v2-thread") continue;
+    const ownKey = `${row.item.thread.environmentId}:${row.item.thread.id}`;
+    const visited = new Set([ownKey]);
+    const ancestors: string[] = [];
+    let current = row;
+    let cyclic = false;
+    while (current.item.thread.spawnedByThreadId) {
+      const parentKey = `${current.item.thread.environmentId}:${current.item.thread.spawnedByThreadId}`;
+      const parent = rowsByKey.get(parentKey);
+      if (!parent) break;
+      if (visited.has(parentKey)) {
+        cyclic = true;
+        break;
+      }
+      visited.add(parentKey);
+      ancestors.push(parentKey);
+      current = parent;
+    }
+    if (cyclic) continue;
+    // Only visible roots and pinned rows need eager detail arrays. Nested
+    // rows derive their descendants from the hierarchy when expanded.
+    for (const key of ancestors) {
+      if (key !== ancestors.at(-1) && !rowsByKey.get(key)?.item.pinned) continue;
+      const group = children.get(key) ?? [];
+      group.push(row.item.thread);
+      children.set(key, group);
+    }
+    if (ancestors.length && !row.item.pinned) groupedChildren.add(ownKey);
+  }
+  const activeItems = activeRows
+    .filter(
+      (row) =>
+        row.type !== "v2-thread" ||
+        !groupedChildren.has(`${row.item.thread.environmentId}:${row.item.thread.id}`),
+    )
+    .map((row) =>
+      row.type === "v2-thread"
+        ? {
+            ...row,
+            agentThreads: children.get(`${row.item.thread.environmentId}:${row.item.thread.id}`),
+          }
+        : row,
+    );
+  const pinnedCount = activeItems.filter(
+    (item) => item.type === "v2-thread" && item.item.pinned,
+  ).length;
+  const result: ThreadListV2ListItem[] =
+    pinnedCount === 0
+      ? [...activeItems, ...pendingItems]
+      : [
+          { type: "v2-section", key: "v2-pinned", label: "Pinned" },
+          ...activeItems.slice(0, pinnedCount),
+          ...(activeItems.length > pinnedCount || pendingItems.length > 0
+            ? [{ type: "v2-section" as const, key: "v2-recent", label: "Recent" as const }]
+            : []),
+          ...activeItems.slice(pinnedCount),
+          ...pendingItems,
+        ];
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
       type: "v2-snoozed-shelf",

@@ -17,7 +17,9 @@ exact cost or a cheapest choice.
 Every session has tools for orchestration alongside its other Phoenix tools:
 
 - **List providers** — enumerate the providers and models this environment can start, so the agent
-  offers real choices instead of guessing.
+  offers real choices instead of guessing. Disabled provider accounts and their models are omitted.
+  Enabled accounts that are not ready are marked offline; agents can request only ready accounts.
+  Starting a child with a disabled account is rejected even if the agent already knows its ID.
 - **List spawned sessions** — see this session's children: status, settled/archived state, whether
   it has posted a report, its worktree, provider/model, and when it was created. Shows active
   (still-counted) children by default — including a settled child whose process has not actually
@@ -40,10 +42,10 @@ Every session has tools for orchestration alongside its other Phoenix tools:
 - **Ping without disturbing** — a session can peek at a spawned session's live progress (status,
   current activity, plan step, whether a report has landed, and a best-effort usage snapshot —
   tokens, turn count, elapsed time) without starting a turn or interrupting it, for a cheap check
-  between messages. The same peek distinguishes busy from stuck: it shows when messages have been
-  delivered to a session that never picks them up (Phoenix retries, then cancels and tells the
-  parent the session looks wedged), and after a session ends it names the reason it ended — quota
-  exhausted, crashed, stopped, and by whom.
+  between messages. It shows recent provider activity and messages still awaiting delivery
+  confirmation. A long turn can legitimately leave messages queued; an old timestamp or missing
+  confirmation alone does not prove the session is stuck. After a session ends, the peek names
+  the reason it ended — quota exhausted, crashed, stopped, and by whom.
 - **Post a report** — when a spawned session finishes, it posts a completion report: a status, a
   summary, and any artifacts (files, branches, PR links). The report shows as a card in the thread,
   and creates a visible report update in the spawning thread — no polling and no surprise agent
@@ -94,6 +96,25 @@ Cleaning up several sessions at once is safe: Phoenix removes worktrees from one
 a time, because git allows only one writer per repository. If a git process elsewhere on your
 machine is holding the repository open, Phoenix says which lock file is in the way instead of
 forcing its way through.
+
+## Identity for scripts and skills
+
+Phoenix sets `T3_THREAD_ID` in each agent process it launches and in terminal
+shells belonging to the same thread. Scripts and skills can use this opaque,
+non-secret identifier to coordinate ownership of work on a shared machine.
+Provider environment settings and terminal environment overrides cannot replace
+the value supplied by Phoenix.
+
+The ID follows the Phoenix thread: resuming it or switching providers keeps the
+same identity. A new thread, including a child created through Phoenix session
+orchestration, gets its own identity. Provider-internal subagents that inherit
+their parent's environment share that parent's identity. It is an ownership
+label, not a security boundary or proof that a process is safe to terminate.
+
+Existing processes receive the variable when they are next launched. Restart
+an existing agent session or terminal to pick it up after upgrading.
+Phoenix cannot inject environment variables into an externally managed OpenCode
+server; tools running on that server do not receive this guarantee.
 
 ## The Sessions Panel
 
@@ -146,6 +167,31 @@ Orchestration is bounded so a runaway agent cannot overwhelm your machine:
 On mobile, open **Settings → General → Session orchestration**. Each environment has its own
 toggle, labelled with its name. Changes apply to that environment across all clients. Reconnect
 to an offline environment before changing its setting.
+Read-only connections cannot change the setting; the control stays disabled while access is checked.
 
 Turning the mobile toggle off disables the feature for the whole environment, including sessions
 that are already running. Web and desktop currently do not expose this toggle.
+
+Provider metadata warnings do not prevent starting a child when the provider is enabled, installed and usable. Disabled providers, signed-out accounts and unavailable or failed runtimes are rejected.
+
+## Coordinating messages reliably
+
+A busy session receives queued messages in order after its turn ends. A child asking a blocking
+question should send it once and finish its turn so the parent's answer can arrive. Polling or
+continuing to use tools in the same turn keeps the answer waiting.
+
+Send one complete instruction and use a ping to check progress. Interrupting deliberately stops
+current work; it keeps the existing message order and does not replace earlier instructions.
+Claude uses native interruption when possible, retaining the conversation runtime. If background
+work or a failed interrupt requires a restart, Phoenix confirms process exit before resuming.
+An ordinary interrupt does not generate a session death notice. If Phoenix cannot confirm that
+a provider stopped, it keeps queued instructions blocked and sends the parent a failure notice.
+Inspect the session error, resolve the provider problem, and retry Stop before resuming work.
+
+A delivery receipt confirms that the provider accepted an input for a particular turn. It does not
+prove that the agent understood or completed the instruction. For important approvals, request one
+brief acknowledgement of the accepted scope. Avoid blindly repeating cancelled instructions after
+an interruption; check recent work and the latest receipts first.
+
+Terminal notices identify the ended episode and its time. They may arrive after the same thread
+has resumed. Check its current state before restarting it or assigning duplicate work.

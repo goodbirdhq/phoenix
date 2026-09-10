@@ -5,7 +5,11 @@ machine running your Phoenix server does that, its themes appear in the theme li
 your own, and Phoenix follows them: change the desktop theme and Phoenix retints with it, without
 a restart.
 
-To use one:
+The default Phoenix theme uses neutral light and dark surfaces with blue accents. Web and desktop
+clients start with opaque surfaces; adjust **Glass opacity** in **Settings → Appearance** to add
+transparency. Existing saved opacity and theme choices are preserved.
+
+To use an environment theme:
 
 1. Open **Settings**.
 2. Select **Appearance**.

@@ -41,6 +41,13 @@ export type ProviderSessionDirectoryWriteError =
   | ProviderSessionDirectoryPersistenceError;
 
 export interface ProviderSessionDirectoryShape {
+  /** Observe runtime traffic without a database write. Used only for liveness enrichment. */
+  readonly recordActivity: (
+    threadId: ThreadId,
+    providerInstanceId: ProviderInstanceId,
+    observedAt: string,
+  ) => Effect.Effect<void>;
+
   readonly upsert: (
     binding: ProviderRuntimeBinding,
   ) => Effect.Effect<void, ProviderSessionDirectoryWriteError>;

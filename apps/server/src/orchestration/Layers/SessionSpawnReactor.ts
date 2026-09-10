@@ -1,3 +1,4 @@
+import * as QueuedDelivery from "../QueuedDelivery.ts";
 import {
   CommandId,
   DEFAULT_SESSION_REPORT_DELIVERY,
@@ -46,7 +47,13 @@ type ReportPostedEvent = Extract<OrchestrationEvent, { type: "thread.report-post
 type SessionSetEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
 type TurnQueuedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-queued" }>;
 type TurnRequestedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>;
-type WatchedEvent = ReportPostedEvent | SessionSetEvent | TurnQueuedEvent | TurnRequestedEvent;
+type StopFailureEvent = Extract<OrchestrationEvent, { type: "thread.activity-appended" }>;
+type WatchedEvent =
+  | ReportPostedEvent
+  | SessionSetEvent
+  | TurnQueuedEvent
+  | TurnRequestedEvent
+  | StopFailureEvent;
 type WorkerInput =
   | { readonly type: "event"; readonly event: WatchedEvent }
   | { readonly type: "recover"; readonly threadId: ThreadId }
@@ -63,6 +70,7 @@ type DeathNoticeInput = {
   readonly synthesizedReportId: string | null;
   readonly hadAgentReport: boolean;
   readonly episodeKey: string;
+  readonly endedAt: string;
 };
 
 // A session in one of these states is done producing work for this episode.
@@ -221,6 +229,8 @@ export interface TerminalWorktreeRisk {
  */
 export const formatDeathNotice = (input: {
   readonly childTitle: string;
+  readonly episodeKey: string;
+  readonly endedAt: string;
   readonly childThreadId: ThreadId;
   readonly exitReason: SessionExitReason;
   readonly lastError: string | null;
@@ -231,6 +241,9 @@ export const formatDeathNotice = (input: {
   const lines: Array<string> = [
     `[Phoenix] Spawned session "${input.childTitle}" terminated — exit reason: ${input.exitReason} (${EXIT_REASON_DESCRIPTIONS[input.exitReason]}).`,
   ];
+  lines.push(
+    `Episode ${input.episodeKey} ended at ${input.endedAt}. This notice can arrive after the thread has resumed; inspect its current state before taking action.`,
+  );
   if (input.lastError !== null) {
     lines.push(`Provider error: ${truncate(input.lastError, 400)}`);
   }
@@ -348,6 +361,7 @@ export const buildTerminalReportSummary = (input: {
 export const makeSessionSpawnReactor = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const engine = yield* OrchestrationEngineService;
+  const delivery = yield* QueuedDelivery.QueuedDelivery;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const providerService = yield* ProviderService;
@@ -379,6 +393,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
 
   const cancelQueuedTurns = Effect.fn("SessionSpawnReactor.cancelQueuedTurns")(function* (input: {
     readonly threadId: ThreadId;
+    readonly expectedSessionEpisode?: string;
     readonly reason:
       | "session_terminal"
       | "interrupt_timeout"
@@ -400,14 +415,23 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       queued,
       (entry) =>
         Effect.gen(function* () {
-          yield* engine.dispatch({
-            type: "thread.turn.queue.cancel",
-            commandId: yield* serverCommandId("queued-turn-cancel"),
-            threadId: input.threadId,
-            messageId: entry.messageId,
-            reason: input.reason,
-            createdAt: yield* nowIso,
-          });
+          yield* engine
+            .dispatch({
+              type: "thread.turn.queue.cancel",
+              commandId: yield* serverCommandId("queued-turn-cancel"),
+              threadId: input.threadId,
+              messageId: entry.messageId,
+              reason: input.reason,
+              ...(input.expectedSessionEpisode !== undefined
+                ? { expectedSessionEpisode: input.expectedSessionEpisode }
+                : {}),
+              createdAt: yield* nowIso,
+            })
+            .pipe(
+              Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
+                input.expectedSessionEpisode !== undefined ? Effect.void : Effect.fail(error),
+              ),
+            );
         }),
       { concurrency: 1 },
     );
@@ -469,9 +493,9 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
 
   const cancelTerminalQueue = Effect.fn("SessionSpawnReactor.cancelTerminalQueue")(function* (
     threadId: ThreadId,
-    _status: "stopped" | "error",
+    expectedSessionEpisode: string,
   ) {
-    yield* cancelQueuedTurns({ threadId, reason: "session_terminal" });
+    yield* cancelQueuedTurns({ threadId, reason: "session_terminal", expectedSessionEpisode });
   });
 
   /**
@@ -574,6 +598,8 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         return { isSpawnedChild: false, hadAgentReport: false, reportId: null } as const;
       }
       const episodeStartedAt = input.session.episodeStartedAt ?? null;
+      const episodeKey = episodeStartedAt ?? input.session.updatedAt;
+      const reportId = `session-terminal-report:${input.threadId}:${episodeKey}`;
       const episodeReports =
         episodeStartedAt === null
           ? detail.value.reports
@@ -587,7 +613,9 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       // A prior partial attempt may have persisted the synthesized report but
       // failed before notifying the parent. Reuse it so the notice retains the
       // report-delivery correlation instead of manufacturing another account.
-      const existingSystemReport = episodeReports.find((report) => report.origin === "system");
+      const existingSystemReport = detail.value.reports.find(
+        (report) => report.origin === "system" && report.reportId === reportId,
+      );
       if (existingSystemReport !== undefined) {
         return {
           isSpawnedChild: true,
@@ -604,8 +632,6 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         createdAt: detail.value.createdAt,
         latestTurn: detail.value.latestTurn,
       });
-      const episodeKey = episodeStartedAt ?? input.session.updatedAt;
-      const reportId = `session-terminal-report:${input.threadId}:${episodeKey}`;
       yield* engine
         .dispatch({
           type: "thread.report.post",
@@ -655,6 +681,8 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       childThreadId: input.threadId,
       text: formatDeathNotice({
         childTitle: input.shell.title,
+        episodeKey: input.episodeKey,
+        endedAt: input.endedAt,
         childThreadId: input.threadId,
         exitReason: input.exitReason,
         lastError: input.lastError,
@@ -687,8 +715,18 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       // wakes the parent with the exit reason, the worktree's git state,
       // and where that account lives. Deterministic command ids make this
       // safe both for event replay and startup recovery after a crash.
-      yield* cancelTerminalQueue(threadId, session.status);
       const episodeKey = session.episodeStartedAt ?? session.updatedAt;
+      const current = yield* snapshotQuery.getThreadShellById(threadId);
+      const currentSession = Option.isSome(current) ? current.value.session : null;
+      // A delayed exit remains historical evidence, but cannot cancel work
+      // queued for a newer episode while this worker was waiting on delivery.
+      if (
+        currentSession !== null &&
+        isTerminalStatus(currentSession.status) &&
+        (currentSession.episodeStartedAt ?? currentSession.updatedAt) === episodeKey
+      ) {
+        yield* cancelTerminalQueue(threadId, episodeKey);
+      }
       if (terminalReportedThreads.get(threadId) === episodeKey) return;
       const exitReason = deriveSessionExitReason(session);
       const outcome = yield* synthesizeTerminalReport({
@@ -717,6 +755,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
           synthesizedReportId: outcome.reportId,
           hadAgentReport: outcome.hadAgentReport,
           episodeKey,
+          endedAt: session.updatedAt,
         });
       } else {
         terminalReportedThreads.set(threadId, episodeKey);
@@ -727,6 +766,19 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   const processEvent = Effect.fn("SessionSpawnReactor.processEvent")(function* (
     event: WatchedEvent,
   ) {
+    if (event.type === "thread.activity-appended") {
+      if (event.payload.activity.kind !== "provider.session.stop.failed") return;
+      const key = `session-stop-unconfirmed:${event.payload.threadId}:${event.eventId}`;
+      yield* notifyParent({
+        childThreadId: event.payload.threadId,
+        origin: { kind: "phoenix", threadId: event.payload.threadId },
+        commandTag: "session-stop-unconfirmed",
+        commandId: CommandId.make(key),
+        messageId: MessageId.make(key),
+        text: `[Phoenix] Stop could not be confirmed for spawned session ${event.payload.threadId} at ${event.occurredAt}. Its provider may still be running. Queued instructions remain blocked to prevent overlapping work. Inspect read_session and ping_session, then retry Stop after resolving the provider failure. This is not a death notice and may arrive after recovery.`,
+      }).pipe(Effect.retry({ times: 2, schedule: Schedule.exponential(100) }));
+      return;
+    }
     if (event.type === "thread.turn-start-queued") return;
     if (event.type === "thread.turn-start-requested") {
       // A parent turn starting on a delivered report message IS the parent
@@ -1040,6 +1092,7 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
           ),
           (entry) =>
             Effect.gen(function* () {
+              if (yield* delivery.isPending(input.threadId, entry.messageId)) return;
               if (entry.redeliveryCount >= MAX_QUEUED_TURN_REDELIVERIES) {
                 yield* cancelWedgedDelivery({
                   threadId: input.threadId,
@@ -1123,18 +1176,23 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   });
 
   const processInputSafely = (input: WorkerInput) =>
-    processInput(input).pipe(
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.interrupt;
-        }
-        return Effect.logWarning("session spawn reactor failed to process event", {
-          inputType: input.type,
-          threadId: input.type === "event" ? input.event.payload.threadId : input.threadId,
-          cause: Cause.pretty(cause),
-        });
-      }),
-    );
+    delivery
+      .withPermit(
+        input.type === "event" ? input.event.payload.threadId : input.threadId,
+        processInput(input),
+      )
+      .pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return Effect.interrupt;
+          }
+          return Effect.logWarning("session spawn reactor failed to process event", {
+            inputType: input.type,
+            threadId: input.type === "event" ? input.event.payload.threadId : input.threadId,
+            cause: Cause.pretty(cause),
+          });
+        }),
+      );
 
   deathNoticeWorker = yield* makeDrainableWorker<DeathNoticeInput, never, never>((input) =>
     processDeathNotice(input).pipe(
@@ -1148,13 +1206,21 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
       ),
     ),
   );
-  worker = yield* makeDrainableWorker(processInputSafely);
+  worker = yield* QueuedDelivery.makeWorker(
+    (input: WorkerInput) =>
+      input.type === "event" ? input.event.payload.threadId : input.threadId,
+    processInputSafely,
+  );
 
   const start: SessionSpawnReactorShape["start"] = Effect.fn("start")(function* () {
     const domainEvents = yield* engine.subscribeDomainEvents;
     yield* forkParked(
       Stream.runForEach(domainEvents, (event) => {
         if (
+          !(
+            event.type === "thread.activity-appended" &&
+            event.payload.activity.kind === "provider.session.stop.failed"
+          ) &&
           event.type !== "thread.report-posted" &&
           event.type !== "thread.session-set" &&
           event.type !== "thread.turn-start-queued" &&

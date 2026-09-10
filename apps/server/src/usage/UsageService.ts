@@ -12,6 +12,8 @@
  *
  * @module UsageService
  */
+import { UsageAttributionQuery } from "./UsageAttributionQuery.ts";
+import { attributeUsageSessions, usageSessionLinkCandidates } from "./usageAttribution.ts";
 import * as NodeOS from "node:os";
 
 import {
@@ -38,16 +40,16 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../config.ts";
-import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   claudeInstanceHomes,
   claudeProjectsDirCandidates,
   codexInstanceHomes,
+  grokInstanceHomes,
   opencodeInstanceDatabases,
   type ProviderInstanceHome,
 } from "../provider/providerHomes.ts";
-import { UsageAggregator } from "./usageAggregation.ts";
+import { UsageAggregator, makeDayFormatter } from "./usageAggregation.ts";
 import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
@@ -139,6 +141,7 @@ interface TranscriptDir {
   readonly provider: UsageProviderKind;
   readonly storePath: string;
   readonly sourceId: string;
+  readonly configuredInstanceIds: readonly string[];
   readonly fileName?: string;
 }
 
@@ -147,11 +150,13 @@ interface OpenCodeDatabase {
   readonly provider: "opencode";
   readonly storePath: string;
   readonly sourceId: string;
+  readonly configuredInstanceIds: readonly string[];
 }
 
 type UsageStore = TranscriptDir | OpenCodeDatabase;
 
 export const make = Effect.gen(function* () {
+  const attributionQuery = yield* UsageAttributionQuery;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig;
@@ -254,47 +259,59 @@ export const make = Effect.gen(function* () {
     );
 
     const stores: UsageStore[] = [];
-    const seenStores = new Set<string>();
-    const addDir = (provider: UsageProviderKind, storePath: string, fileName?: string) => {
-      if (seenStores.has(storePath)) return;
-      seenStores.add(storePath);
-      stores.push({
+    const storesByPath = new Map<string, UsageStore>();
+    const addDir = (
+      provider: UsageProviderKind,
+      storePath: string,
+      configuredInstanceIds: readonly string[],
+      fileName?: string,
+    ) => {
+      const key = `${provider}:${storePath}`;
+      const existing = storesByPath.get(key);
+      if (existing) {
+        const merged = {
+          ...existing,
+          configuredInstanceIds: [
+            ...new Set([...existing.configuredInstanceIds, ...configuredInstanceIds]),
+          ].sort(),
+        };
+        stores[stores.indexOf(existing)] = merged;
+        storesByPath.set(key, merged);
+        return;
+      }
+      const store: TranscriptDir = {
         kind: "transcriptDir",
         provider,
         storePath,
         sourceId: String(stores.length),
         ...(fileName === undefined ? {} : { fileName }),
-      });
+        configuredInstanceIds,
+      };
+      stores.push(store);
+      storesByPath.set(key, store);
     };
-    const addOpenCodeDatabase = (storePath: string) => {
-      if (seenStores.has(storePath)) return;
-      seenStores.add(storePath);
+    const addOpenCodeDatabase = (storePath: string, configuredInstanceIds: readonly string[]) => {
       stores.push({
         kind: "opencodeDatabase",
         provider: "opencode",
+        configuredInstanceIds,
         storePath,
         sourceId: String(stores.length),
       });
     };
 
     for (const home of yield* claudeInstanceHomes(settings)) {
-      addDir("claude", yield* resolveClaudeTranscriptDir(home));
+      addDir("claude", yield* resolveClaudeTranscriptDir(home), home.instanceIds);
     }
     for (const home of yield* codexInstanceHomes(settings)) {
-      addDir("codex", path.join(home.homePath, "sessions"));
+      addDir("codex", path.join(home.homePath, "sessions"), home.instanceIds);
     }
     for (const database of yield* opencodeInstanceDatabases(settings)) {
-      addOpenCodeDatabase(database.databasePath);
+      addOpenCodeDatabase(database.databasePath, database.instanceIds);
     }
-    // Grok Settings only expose the binary path; home is `$GROK_HOME` or `~/.grok`.
-    // Empty/whitespace GROK_HOME must fall back: coalescing alone would scan cwd.
-    const grokHomeEnv = hostEnvironment["GROK_HOME"]?.trim() ?? "";
-    const grokHome =
-      grokHomeEnv.length > 0
-        ? path.resolve(expandHomePath(grokHomeEnv))
-        : path.join(NodeOS.homedir(), ".grok");
-
-    addDir("grok", path.join(grokHome, "sessions"), "updates.jsonl");
+    for (const home of yield* grokInstanceHomes(settings, hostEnvironment)) {
+      addDir("grok", path.join(home.homePath, "sessions"), home.instanceIds, "updates.jsonl");
+    }
     return stores;
   });
 
@@ -400,6 +417,7 @@ export const make = Effect.gen(function* () {
         readonly provider: UsageProviderKind;
         readonly storePath: string;
         readonly sourceId: string;
+        readonly configuredInstanceIds: readonly string[];
         readonly volumeId: string;
         readonly files:
           | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
@@ -410,6 +428,7 @@ export const make = Effect.gen(function* () {
         readonly provider: "opencode";
         readonly storePath: string;
         readonly sourceId: string;
+        readonly configuredInstanceIds: readonly string[];
         readonly volumeId: string;
         readonly exists: boolean;
       };
@@ -506,6 +525,7 @@ export const make = Effect.gen(function* () {
       untilDay: input.untilDay,
       resolution: input.resolution ?? "day",
       ...hourlyWindow,
+      includeSessions: input.includeSessions ?? false,
       rates,
     });
 
@@ -514,12 +534,13 @@ export const make = Effect.gen(function* () {
     const walkedRoots: string[] = [];
 
     for (const store of scannedStores) {
-      const { kind, provider, storePath, sourceId, volumeId } = store;
+      const { kind, provider, storePath, sourceId, volumeId, configuredInstanceIds } = store;
       if (kind === "opencodeDatabase") {
         if (!store.exists) {
           sources.push({
             fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
             id: sourceId,
+            configuredInstanceIds,
             status: "missing",
             scannedFiles: 0,
             skippedFiles: 0,
@@ -540,6 +561,7 @@ export const make = Effect.gen(function* () {
         sources.push({
           fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
           id: sourceId,
+          configuredInstanceIds,
           status: read === null ? "failed" : read.complete ? "ok" : "partial",
           scannedFiles: read === null ? 0 : 1,
           skippedFiles: read === null || !read.complete ? 1 : 0,
@@ -560,6 +582,7 @@ export const make = Effect.gen(function* () {
         sources.push({
           fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
           id: sourceId,
+          configuredInstanceIds,
           status: "missing",
           scannedFiles: 0,
           skippedFiles: 0,
@@ -596,6 +619,7 @@ export const make = Effect.gen(function* () {
       sources.push({
         fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
         id: sourceId,
+        configuredInstanceIds,
         status: "ok",
         scannedFiles,
         skippedFiles,
@@ -615,6 +639,37 @@ export const make = Effect.gen(function* () {
     yield* persistScanCache();
 
     const aggregated = aggregator.finish();
+    const sessionUsage =
+      aggregated.sessionUsage === undefined
+        ? undefined
+        : attributeUsageSessions(
+            aggregated.sessionUsage,
+            sources,
+            yield* attributionQuery.list(
+              usageSessionLinkCandidates(aggregated.sessionUsage, sources),
+            ),
+          );
+    const toDay = makeDayFormatter(input.timeZone);
+    const threadCreations = input.includeSessions
+      ? (yield* attributionQuery.creations(
+          DateTime.formatIso(DateTime.makeUnsafe(windowStartMs)),
+          DateTime.formatIso(
+            DateTime.add(DateTime.makeUnsafe(`${input.untilDay}T00:00:00Z`), { days: 2 }),
+          ),
+        )).filter((creation) => {
+          const instant = DateTime.toEpochMillis(DateTime.makeUnsafe(creation.createdAt));
+          return hourlyWindow
+            ? instant >= hourlyWindow.sinceTimeMs && instant < hourlyWindow.untilTimeMs
+            : toDay(instant) >= input.sinceDay && toDay(instant) <= input.untilDay;
+        })
+      : undefined;
+    const threadCreationSource = input.includeSessions
+      ? {
+          hostId,
+          statePath: config.stateDir,
+          volumeId: yield* Effect.promise(() => readDirectoryVolumeId(config.stateDir)),
+        }
+      : undefined;
     const readAt = yield* DateTime.now;
     const finishedAtMs = yield* Clock.currentTimeMillis;
 
@@ -626,6 +681,8 @@ export const make = Effect.gen(function* () {
         sinceDay: input.sinceDay,
         untilDay: input.untilDay,
         buckets: aggregated.buckets,
+        ...(sessionUsage === undefined ? {} : { sessionUsage }),
+        ...(threadCreations === undefined ? {} : { threadCreations, threadCreationSource }),
         sources,
         pricing: {
           status: ratesStatus,
@@ -657,6 +714,8 @@ export const make = Effect.gen(function* () {
       input.resolution ?? "day",
       input.sinceTime ?? null,
       input.untilTime ?? null,
+      input.includeSessions ?? false,
+      input.contractVersion ?? 4,
     ]);
 
   const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {

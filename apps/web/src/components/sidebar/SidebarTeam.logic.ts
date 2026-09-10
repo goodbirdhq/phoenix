@@ -87,6 +87,8 @@ export function resolveSidebarTeamStatus<
   for (const member of expanded ? [parent] : members) {
     const next = resolveSidebarThreadStatus(member);
     if (next === "working") workingCount++;
+    // Waiting on another agent is not a request for human attention.
+    if (member !== parent && next === "awaiting-parent") continue;
     if (statusPriority[next] < statusPriority[status]) {
       status = next;
       target = member;

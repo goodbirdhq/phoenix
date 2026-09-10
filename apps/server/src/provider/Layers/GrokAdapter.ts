@@ -10,6 +10,7 @@ import {
   ProviderInstanceId,
   RuntimeRequestId,
   type ThreadId,
+  T3_THREAD_ID_ENV_VAR,
   TurnId,
 } from "@t3tools/contracts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -38,6 +39,8 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
+import { grokUsageFromResponse } from "../grokUsage.ts";
+
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
@@ -65,6 +68,7 @@ import {
   currentGrokModelIdFromSessionSetup,
   currentGrokReasoningEffortFromSessionSetup,
   makeGrokAcpRuntime,
+  resolveGrokAuthMethodId,
   normalizeGrokReasoningEffort,
   resolveGrokAcpBaseModelId,
 } from "../acp/GrokAcpSupport.ts";
@@ -995,7 +999,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeGrokAcpRuntime({
             grokSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
+            // Phoenix owns this reserved identity for the per-session ACP process.
+            environment: { ...options?.environment, [T3_THREAD_ID_ENV_VAR]: input.threadId },
             childProcessSpawner,
             cwd,
             runtimeMode: input.runtimeMode,
@@ -1478,7 +1483,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         }).pipe(Effect.scoped),
       );
 
-    const sendTurn: GrokAdapterShape["sendTurn"] = (input) =>
+    const sendTurn: GrokAdapterShape["sendTurn"] = (input, onAccepted) =>
       Effect.gen(function* () {
         const prepared = yield* withThreadLock(
           input.threadId,
@@ -1718,6 +1723,12 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 Deferred.await(dispatched),
                 Fiber.await(fiber).pipe(Effect.asVoid),
               );
+              if (!(yield* Deferred.isDone(dispatched)))
+                yield* Fiber.join(fiber).pipe(
+                  Effect.mapError((error) =>
+                    mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
+                  ),
+                );
               return { _tag: "Started" as const, fiber };
             }),
           );
@@ -1747,6 +1758,12 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             };
           }
 
+          if (onAccepted)
+            yield* onAccepted({
+              threadId: input.threadId,
+              turnId: prepared.turnId,
+              resumeCursor: sessions.get(input.threadId)?.session.resumeCursor,
+            });
           const result = yield* Fiber.join(promptStart.fiber).pipe(
             Effect.tap((promptResult) =>
               Effect.all(
@@ -2130,10 +2147,59 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       ),
     );
 
+    const refreshAvailability: NonNullable<GrokAdapterShape["refreshAvailability"]> = () =>
+      Effect.gen(function* () {
+        const cwd = serverConfig.providerStatusCacheDir;
+        yield* fileSystem.makeDirectory(cwd, { recursive: true });
+        const environment = options?.environment ?? hostEnvironment;
+        const runtime = yield* makeGrokAcpRuntime({
+          grokSettings,
+          environment,
+          childProcessSpawner,
+          cwd,
+          clientInfo: { name: "phoenix-usage-probe", version: "0.0.0" },
+        });
+        yield* runtime.initialize();
+        yield* runtime.request("authenticate", {
+          methodId: resolveGrokAuthMethodId(environment),
+        });
+        const response = yield* runtime.request("_x.ai/billing", {}).pipe(
+          Effect.map((value) => ({ supported: true as const, value })),
+          Effect.catchTag("AcpRequestError", (error) =>
+            error.code === -32601
+              ? Effect.succeed({ supported: false as const })
+              : Effect.fail(error),
+          ),
+        );
+        if (!response.supported)
+          return {
+            source: "unsupported" as const,
+            status: "unknown" as const,
+            observedAt: DateTime.formatIso(yield* DateTime.now),
+            windows: [],
+          };
+        const observedAt = DateTime.formatIso(yield* DateTime.now);
+        return yield* Effect.try(() => grokUsageFromResponse(response.value, observedAt));
+      }).pipe(
+        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.scoped,
+        Effect.timeout("20 seconds"),
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "refreshAvailability",
+              detail: "Could not refresh Grok account limits.",
+              cause,
+            }),
+        ),
+      );
+
     const streamEvents = Stream.fromPubSub(runtimeEventPubSub);
 
     return {
       provider: PROVIDER,
+      refreshAvailability,
       capabilities: {
         sessionModelSwitch: "in-session",
         promptlessTurnContinuation: true,

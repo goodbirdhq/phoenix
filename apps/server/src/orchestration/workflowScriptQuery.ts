@@ -45,7 +45,7 @@ const candidateRoots = Effect.fn("orchestration.workflowScriptRoots")(function* 
   );
   const homes =
     settings === null
-      ? [{ instanceId: "claudeAgent", homePath: NodeOS.homedir(), overridden: false }]
+      ? [{ instanceIds: ["claudeAgent"], homePath: NodeOS.homedir(), overridden: false }]
       : yield* claudeInstanceHomes(settings);
   const roots: string[] = [];
   for (const home of homes) {

@@ -19,6 +19,9 @@ import {
   type PlatformConnectionRegistration,
   type PrimaryConnectionRegistration,
   SshConnectionProfile,
+  BearerConnectionProfile,
+  BearerConnectionRegistration,
+  SshConnectionRegistration,
   connectionRegistrationCatalogEntry,
 } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
@@ -88,6 +91,13 @@ export class EnvironmentRegistry extends Context.Service<
       | Persistence.ConnectionPersistenceError
       | ConnectionAttemptError
       | PlatformEnvironmentRemovalError
+    >;
+    readonly setAutoConnect: (
+      environmentId: EnvironmentId,
+      autoConnect: boolean,
+    ) => Effect.Effect<
+      void,
+      ConnectionAttemptError | EnvironmentNotRegisteredError | PlatformEnvironmentRemovalError
     >;
     readonly retryNow: (environmentId: EnvironmentId) => Effect.Effect<void>;
     readonly state: (
@@ -260,7 +270,8 @@ export const make = Effect.gen(function* () {
             Scope.provide(scope),
             Effect.onError(() => Scope.close(scope, Exit.void)),
           );
-          yield* supervisor.connect;
+          if (Option.isNone(entry.profile) || entry.profile.value.autoConnect !== false)
+            yield* supervisor.connect;
           yield* SubscriptionRef.update(serviceScopes, (current) => {
             const next = new Map(current);
             next.set(environmentId, { entry, supervisor, scope });
@@ -318,28 +329,21 @@ export const make = Effect.gen(function* () {
     stream: Stream.Stream<A, E, R>,
   ) =>
     Stream.concat(
-      Stream.fromEffect(SubscriptionRef.get(entries)),
-      SubscriptionRef.changes(entries),
+      Stream.fromEffect(acquireSupervisor(environmentId).pipe(Effect.option)),
+      SubscriptionRef.changes(serviceScopes).pipe(
+        Stream.map((current) => Option.fromUndefinedOr(current.get(environmentId)?.supervisor)),
+      ),
     ).pipe(
-      Stream.map((current) => Option.fromUndefinedOr(current.get(environmentId))),
-      Stream.changes,
+      // Credentials can change while the catalog entry stays equivalent. Follow
+      // the live supervisor so existing queries adopt the replacement session.
+      Stream.changesWith(
+        (previous, next) => Option.getOrUndefined(previous) === Option.getOrUndefined(next),
+      ),
       Stream.switchMap(
         Option.match({
           onNone: () => Stream.empty,
-          onSome: () =>
-            Stream.unwrap(
-              acquireSupervisor(environmentId).pipe(
-                Effect.match({
-                  onFailure: () => Stream.empty,
-                  onSuccess: (supervisor) =>
-                    Stream.provideService(
-                      stream,
-                      EnvironmentSupervisor.EnvironmentSupervisor,
-                      supervisor,
-                    ),
-                }),
-              ),
-            ),
+          onSome: (supervisor) =>
+            Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
         }),
       ),
     );
@@ -390,15 +394,33 @@ export const make = Effect.gen(function* () {
   const register = Effect.fn("EnvironmentRegistry.register")(function* (
     registration: ConnectionRegistration,
   ) {
-    const entry = connectionRegistrationCatalogEntry(registration);
-    const environmentId = entry.target.environmentId;
+    const environmentId = registration.target.environmentId;
     yield* withLeaseLock(
       environmentId,
       Effect.gen(function* () {
         if ((yield* Ref.get(platformEnvironmentIds)).has(environmentId)) {
           return;
         }
-        yield* registrations.register(registration);
+        const previous = (yield* SubscriptionRef.get(entries)).get(environmentId);
+        const previousProfile = previous && Option.getOrUndefined(previous.profile);
+        const autoConnect = previousProfile?.autoConnect;
+        const preservePreference =
+          registration._tag !== "RelayConnectionRegistration" &&
+          previousProfile?.connectionId === registration.profile.connectionId &&
+          autoConnect !== undefined;
+        const nextRegistration = preservePreference
+          ? registration._tag === "BearerConnectionRegistration"
+            ? new BearerConnectionRegistration({
+                ...registration,
+                profile: new BearerConnectionProfile({ ...registration.profile, autoConnect }),
+              })
+            : new SshConnectionRegistration({
+                ...registration,
+                profile: new SshConnectionProfile({ ...registration.profile, autoConnect }),
+              })
+          : registration;
+        yield* registrations.register(nextRegistration);
+        const entry = connectionRegistrationCatalogEntry(nextRegistration);
         yield* Ref.update(persistedTargetsByEnvironment, (current) => {
           const next = new Map(current);
           next.set(environmentId, registration.target);
@@ -623,6 +645,41 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  const setAutoConnect = Effect.fn("EnvironmentRegistry.setAutoConnect")(function* (
+    environmentId: EnvironmentId,
+    autoConnect: boolean,
+  ) {
+    yield* withLeaseLock(
+      environmentId,
+      Effect.gen(function* () {
+        if ((yield* Ref.get(platformEnvironmentIds)).has(environmentId))
+          return yield* new PlatformEnvironmentRemovalError({ environmentId });
+        const entry = yield* getEntry(environmentId);
+        if (Option.isNone(entry.profile))
+          return yield* new PlatformEnvironmentRemovalError({ environmentId });
+        const profile =
+          entry.profile.value._tag === "BearerConnectionProfile"
+            ? new BearerConnectionProfile({ ...entry.profile.value, autoConnect })
+            : new SshConnectionProfile({ ...entry.profile.value, autoConnect });
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            yield* profiles.put(profile);
+            const nextEntry = { ...entry, profile: Option.some(profile) };
+            // Preference changes do not replace a live transport or clear a manual disconnect.
+            yield* SubscriptionRef.update(serviceScopes, (current) => {
+              const lease = current.get(environmentId);
+              if (!lease) return current;
+              return new Map(current).set(environmentId, { ...lease, entry: nextEntry });
+            });
+            yield* SubscriptionRef.update(entries, (current) =>
+              new Map(current).set(environmentId, nextEntry),
+            );
+          }),
+        );
+      }),
+    );
+  });
+
   const retryNow = (environmentId: EnvironmentId) =>
     acquireSupervisor(environmentId).pipe(
       Effect.flatMap((supervisor) => supervisor.retryNow),
@@ -668,6 +725,7 @@ export const make = Effect.gen(function* () {
     remove,
     removeRelayEnvironments,
     retryNow,
+    setAutoConnect,
     state,
     stateChanges,
     run,

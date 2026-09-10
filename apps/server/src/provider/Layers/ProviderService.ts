@@ -1,3 +1,5 @@
+import * as Scope from "effect/Scope";
+import { codexUsageFromSnapshot } from "../codexUsage.ts";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -26,6 +28,7 @@ import {
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type ProviderTurnStartResult,
 } from "@t3tools/contracts";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { causeErrorTag } from "@t3tools/shared/observability";
@@ -49,7 +52,10 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
-import { SESSION_ORCHESTRATION_INSTRUCTIONS } from "../SessionOrchestrationInstructions.ts";
+import {
+  SESSION_ORCHESTRATION_DISABLED_INSTRUCTIONS,
+  SESSION_ORCHESTRATION_INSTRUCTIONS,
+} from "../SessionOrchestrationInstructions.ts";
 import {
   increment,
   providerMetricAttributes,
@@ -238,13 +244,15 @@ const NATIVE_AVAILABILITY_SOURCES: Partial<
   Record<string, ReadonlyArray<ProviderAvailability["source"]>>
 > = {
   codex: ["codex_app_server"],
+  grok: ["grok_acp"],
   claudeAgent: ["claude_agent_sdk", "claude_cli_usage"],
 };
 
 const isNativeAvailabilitySource = (
   provider: ProviderDriverKind,
   source: ProviderAvailability["source"],
-): boolean => (NATIVE_AVAILABILITY_SOURCES[provider] ?? ["unsupported"]).includes(source);
+): boolean =>
+  source === "unsupported" || (NATIVE_AVAILABILITY_SOURCES[provider] ?? []).includes(source);
 
 // Which channel a silent driver is silent on is one fact, shared with the
 // transports that build the same fallback when an instance cannot answer.
@@ -257,6 +265,7 @@ const unknownAvailabilityForDriver = ProviderService.unknownAvailabilityForDrive
 // CLI read failed.
 const REFRESH_AVAILABILITY_SOURCES: Partial<Record<string, ProviderAvailability["source"]>> = {
   claudeAgent: "claude_cli_usage",
+  grok: "grok_acp",
 };
 
 /**
@@ -594,37 +603,7 @@ export const availabilityFromRuntimeEvent = (
       return undefined;
     const snapshot = payload.rateLimits;
     if (typeof snapshot !== "object" || snapshot === null) return undefined;
-    const windows = (["primary", "secondary"] as const).flatMap((kind) => {
-      const candidate = (snapshot as Record<string, unknown>)[kind];
-      if (typeof candidate !== "object" || candidate === null) return [];
-      const fields = candidate as Record<string, unknown>;
-      const usedPercent = fields.usedPercent;
-      if (typeof usedPercent !== "number" || usedPercent < 0 || usedPercent > 100) return [];
-      const resetsAt = toIsoDateTime(fields.resetsAt);
-      const windowDurationMins = fields.windowDurationMins;
-      return [
-        {
-          kind,
-          usedPercent,
-          ...(resetsAt ? { resetsAt } : {}),
-          ...(typeof windowDurationMins === "number" &&
-          Number.isInteger(windowDurationMins) &&
-          windowDurationMins >= 0
-            ? { windowDurationMins }
-            : {}),
-        },
-      ];
-    });
-    return {
-      status: windows.some((window) => window.usedPercent >= 100)
-        ? "limited"
-        : windows.length > 0
-          ? "available"
-          : "unknown",
-      source: "codex_app_server",
-      observedAt: event.createdAt,
-      windows,
-    };
+    return codexUsageFromSnapshot(snapshot, event.createdAt);
   }
   // Claude's SDK event is deliberately less stable than Codex's documented
   // app-server schema. Preserve native provenance and only derive fields the
@@ -655,6 +634,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   // no-op.
   const canonicalEventLogger = options?.canonicalEventLogger ?? eventLoggers.canonical;
 
+  const providerScope = yield* Scope.Scope;
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -833,6 +813,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     event: ProviderRuntimeEvent,
   ): Effect.Effect<void> => {
     const ingest = Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
+      Effect.tap((canonicalEvent) => {
+        const threadId = canonicalEvent.threadId;
+        return threadId === undefined
+          ? Effect.void
+          : Effect.flatMap(nowIso, (observedAt) =>
+              directory.recordActivity(threadId, source.instanceId, observedAt),
+            );
+      }),
       Effect.tap((canonicalEvent) => {
         const availability = availabilityFromRuntimeEvent(canonicalEvent);
         return availability
@@ -1469,25 +1457,55 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           Effect.map((settings) => settings.enableSessionOrchestration),
           Effect.orElseSucceed(() => false),
         );
-        const enrichedInput = `${SESSION_ORCHESTRATION_INSTRUCTIONS}\n\n${input.input}`;
-        if (orchestrationEnabled && enrichedInput.length <= PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+        const instructions = orchestrationEnabled
+          ? SESSION_ORCHESTRATION_INSTRUCTIONS
+          : SESSION_ORCHESTRATION_DISABLED_INSTRUCTIONS;
+        const enrichedInput = `${instructions}\n\n${input.input}`;
+        if (enrichedInput.length <= PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
           providerInput = { ...input, input: enrichedInput };
         }
       }
-      const turn = yield* routed.adapter.sendTurn(providerInput);
-      yield* directory.upsert({
-        threadId: input.threadId,
-        provider: routed.adapter.provider,
-        providerInstanceId: routed.instanceId,
-        status: "running",
-        ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
-        runtimePayload: {
-          ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-          activeTurnId: turn.turnId,
-          lastRuntimeEvent: "provider.sendTurn",
-          lastRuntimeEventAt: yield* nowIso,
-        },
-      });
+      const acceptance = yield* Deferred.make<ProviderTurnStartResult, ProviderAdapterError>();
+      yield* routed.adapter
+        .sendTurn(providerInput, (result) =>
+          Deferred.succeed(acceptance, result).pipe(Effect.asVoid),
+        )
+        .pipe(
+          Effect.onExit((exit) => Deferred.done(acceptance, exit).pipe(Effect.asVoid)),
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.void
+              : Effect.logWarning("Provider submission/completion failed", {
+                  threadId: input.threadId,
+                  cause,
+                }),
+          ),
+          Effect.forkIn(providerScope),
+        );
+      const turn = yield* Deferred.await(acceptance);
+      yield* directory
+        .upsert({
+          threadId: input.threadId,
+          provider: routed.adapter.provider,
+          providerInstanceId: routed.instanceId,
+          status: "running",
+          ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+          runtimePayload: {
+            ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+            activeTurnId: turn.turnId,
+            lastRuntimeEvent: "provider.sendTurn",
+            lastRuntimeEventAt: yield* nowIso,
+          },
+        })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Accepted provider input; binding update failed", {
+              threadId: input.threadId,
+              turnId: turn.turnId,
+              error,
+            }),
+          ),
+        );
       yield* analytics.record("provider.turn.sent", {
         provider: routed.adapter.provider,
         model: input.modelSelection?.model,

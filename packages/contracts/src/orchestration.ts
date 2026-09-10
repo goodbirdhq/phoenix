@@ -1526,6 +1526,8 @@ const ThreadSessionStopCommand = Schema.Struct({
   type: Schema.Literal("thread.session.stop"),
   commandId: CommandId,
   threadId: ThreadId,
+  onlyIfActiveTurnId: Schema.optional(Schema.NullOr(TurnId)),
+  onlyIfSessionEpisode: Schema.optional(Schema.NullOr(IsoDateTime)),
   createdAt: IsoDateTime,
   stopReason: Schema.optional(SessionStopReason),
   stoppedBy: Schema.optional(SessionStoppedBy),
@@ -1617,10 +1619,21 @@ const ThreadQueuedTurnStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Internal provider acceptance receipt; never a client/manual acknowledgement.
+const ThreadQueuedTurnConsumeCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.queue.consume"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  turnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadQueuedTurnCancelCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.queue.cancel"),
   commandId: CommandId,
   threadId: ThreadId,
+  expectedSessionEpisode: Schema.optional(IsoDateTime),
   messageId: MessageId,
   reason: Schema.Literals([
     "session_terminal",
@@ -1734,6 +1747,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadQueuedTurnStartCommand,
   ThreadQueuedTurnCancelCommand,
+  ThreadQueuedTurnConsumeCommand,
   ThreadQueuedTurnRequeueCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
@@ -2057,6 +2071,9 @@ export const ThreadRevertedPayload = Schema.Struct({
 });
 
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
+  onlyIfActiveTurnId: Schema.optional(Schema.NullOr(TurnId)),
+  onlyIfSessionEpisode: Schema.optional(Schema.NullOr(IsoDateTime)),
+
   threadId: ThreadId,
   createdAt: IsoDateTime,
   // Optional so persisted events from older servers still decode on replay.

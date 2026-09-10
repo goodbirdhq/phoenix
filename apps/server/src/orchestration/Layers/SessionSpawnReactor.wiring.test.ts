@@ -1,3 +1,4 @@
+import * as QueuedDelivery from "../QueuedDelivery.ts";
 /**
  * SessionSpawnReactor event-processing tests.
  *
@@ -186,6 +187,7 @@ const runReactor = (events: ReadonlyArray<OrchestrationEvent>, options: HarnessO
 
     yield* Effect.gen(function* () {
       const reactor = yield* makeSessionSpawnReactor.pipe(
+        Effect.provide(QueuedDelivery.layer),
         Effect.provideService(OrchestrationEngineService, engine),
         Effect.provideService(ProjectionSnapshotQuery, snapshotQuery),
         // Queued-turn release and provider liveness belong to the delivery-mode

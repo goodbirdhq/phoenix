@@ -11,6 +11,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   backgroundActivitySharedPolicySettings,
   buildProviderInstanceUpdatePatch,
+  isProviderInstanceEnabled,
+  resolveProviderInstanceSettings,
   formatDiagnosticsDescription,
   getChangedBrowserSettingLabels,
   getChangedTypographySettingLabels,
@@ -300,5 +302,99 @@ describe("isSamePreviewViewport", () => {
         { _tag: "preset", width: 390, height: 844, presetId: "iphone-12-pro" },
       ),
     ).toBe(false);
+  });
+});
+
+describe("effective provider configuration for editors", () => {
+  const driver = ProviderDriverKind.make("codex");
+  const instanceId = ProviderInstanceId.make("codex");
+  it("retains legacy executable and home settings when editing a built-in provider", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        codex: {
+          ...DEFAULT_SERVER_SETTINGS.providers.codex,
+          binaryPath: "/custom/bin/codex",
+          homePath: "/custom/codex",
+          enabled: true,
+        },
+      },
+    };
+    const initial = resolveProviderInstanceSettings(settings, instanceId, driver)!;
+    const patch = buildProviderInstanceUpdatePatch({
+      settings,
+      instanceId,
+      driver,
+      isDefault: true,
+      instance: { ...initial, enabled: false, displayName: "Work" },
+    });
+    expect(patch.providerInstances?.[instanceId]).toMatchObject({
+      enabled: false,
+      displayName: "Work",
+      config: { binaryPath: "/custom/bin/codex", homePath: "/custom/codex" },
+    });
+    expect(patch.providerInstances?.[instanceId]?.config).not.toHaveProperty("enabled");
+    expect(settings.providers.codex.enabled).toBe(true);
+  });
+  it("prefers explicit configuration and never gives a missing custom instance the default credentials", () => {
+    const instance = { driver, enabled: false, config: { binaryPath: "/explicit/codex" } };
+    const settings = { ...DEFAULT_SERVER_SETTINGS, providerInstances: { codex: instance } };
+    expect(resolveProviderInstanceSettings(settings, instanceId, driver)).toBe(instance);
+    expect(
+      resolveProviderInstanceSettings(settings, ProviderInstanceId.make("codex_deleted"), driver),
+    ).toBeUndefined();
+  });
+});
+
+describe("configured provider visibility", () => {
+  const driver = ProviderDriverKind.make("codex");
+  const instanceId = ProviderInstanceId.make("codex_work");
+  const unavailable = { instanceId, driver, enabled: false };
+
+  it("keeps enabled accounts recoverable when the runtime is unavailable", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [instanceId]: { driver, enabled: true, config: { binaryPath: "/missing/codex" } },
+      },
+    };
+    expect(isProviderInstanceEnabled(settings, unavailable)).toBe(true);
+  });
+
+  it("resolves omitted enabled flags for healthy and unavailable saved accounts", () => {
+    const instance = { driver, config: {} };
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: { [instanceId]: instance },
+    };
+    expect(isProviderInstanceEnabled(settings, unavailable)).toBe(true);
+    expect(isProviderInstanceEnabled(settings, { ...unavailable, enabled: true })).toBe(true);
+  });
+
+  it("uses saved disabled state even if a stale runtime snapshot remains enabled", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: { [instanceId]: { driver, enabled: false, config: {} } },
+    };
+    expect(isProviderInstanceEnabled(settings, { ...unavailable, enabled: true })).toBe(false);
+  });
+
+  it("resolves legacy defaults and falls back to snapshots for unknown instances", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, enabled: true },
+      },
+    };
+    expect(
+      isProviderInstanceEnabled(settings, {
+        ...unavailable,
+        instanceId: ProviderInstanceId.make("codex"),
+      }),
+    ).toBe(true);
+    expect(isProviderInstanceEnabled(settings, unavailable)).toBe(false);
+    expect(isProviderInstanceEnabled(settings, { ...unavailable, enabled: true })).toBe(true);
   });
 });

@@ -1,3 +1,4 @@
+import * as QueuedDelivery from "../QueuedDelivery.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -37,6 +38,7 @@ import { buildConversationSeed } from "../../provider/conversationSeed.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import {
   ProviderAdapterRequestError,
+  ProviderAdapterProcessError,
   ProviderAdapterSessionNotFoundError,
 } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
@@ -57,6 +59,7 @@ import {
 } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterSessionNotFoundError = Schema.is(ProviderAdapterSessionNotFoundError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
@@ -332,6 +335,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const providerService = yield* ProviderService;
+    const delivery = yield* QueuedDelivery.QueuedDelivery;
     const providerRegistry = yield* ProviderRegistry;
     const gitWorkflow = yield* GitWorkflowService;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -825,7 +829,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
                 : (thread.session?.graceStopEpisodeId ?? null),
               episodeStartedAt,
               queuedDeliveryMessageId:
-                options?.queuedDeliveryMessageId ?? thread.session?.queuedDeliveryMessageId ?? null,
+                options?.queuedDeliveryMessageId !== undefined
+                  ? options.queuedDeliveryMessageId
+                  : (thread.session?.queuedDeliveryMessageId ?? null),
               updatedAt: session.updatedAt,
             },
             createdAt,
@@ -1273,6 +1279,8 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         return;
       }
 
+      const queuedId = event.payload.queuedDeliveryMessageId;
+      if (queuedId != null && (yield* delivery.isPending(event.payload.threadId, queuedId))) return;
       const thread = yield* resolveThread(event.payload.threadId);
       if (!thread) {
         return;
@@ -1366,6 +1374,18 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           ),
         );
 
+      if (event.payload.queuedDeliveryMessageId != null) {
+        const current = yield* resolveThread(event.payload.threadId);
+        if (
+          !current?.queuedTurnStarts?.some(
+            (entry) =>
+              entry.messageId === event.payload.queuedDeliveryMessageId &&
+              entry.releasingAt !== undefined,
+          )
+        )
+          return;
+      }
+
       const sendTurnRequest = yield* buildSendTurnRequestForThread({
         threadId: event.payload.threadId,
         messageText: message.text,
@@ -1374,7 +1394,8 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           ? { modelSelection: event.payload.modelSelection }
           : {}),
         interactionMode: event.payload.interactionMode,
-        queuedDeliveryMessageId: event.payload.queuedDeliveryMessageId ?? null,
+        // New sends acknowledge the adapter result, not an unrelated lifecycle event.
+        queuedDeliveryMessageId: null,
         createdAt: event.payload.createdAt,
       }).pipe(
         Effect.map(Option.some),
@@ -1385,9 +1406,70 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         return;
       }
 
-      yield* providerService
-        .sendTurn(sendTurnRequest.value)
-        .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+      yield* Effect.gen(function* () {
+        const messageId = event.payload.queuedDeliveryMessageId;
+        if (messageId != null) {
+          const current = yield* resolveThread(event.payload.threadId);
+          if (current?.session?.stopRequestedAt != null) return;
+          if (
+            !current?.queuedTurnStarts?.some(
+              (entry) => entry.messageId === messageId && entry.releasingAt !== undefined,
+            )
+          )
+            return;
+        }
+        if (messageId != null) {
+          if (yield* delivery.isPending(event.payload.threadId, messageId)) return;
+          yield* delivery.setPending(event.payload.threadId, messageId, true);
+        }
+        // The permit serializes admission with cancellation, never provider work.
+        // A cancelled in-flight attempt can still receive a late acceptance receipt.
+        yield* Effect.gen(function* () {
+          const accepted = yield* providerService.sendTurn(sendTurnRequest.value).pipe(
+            Effect.map(Option.some),
+            Effect.catchCause((cause) =>
+              recoverTurnStartFailure(cause).pipe(Effect.as(Option.none())),
+            ),
+          );
+          if (Option.isNone(accepted) || messageId == null) return;
+          const consumedAt = DateTime.formatIso(yield* DateTime.now);
+          yield* Effect.suspend(() =>
+            orchestrationEngine.dispatch({
+              type: "thread.turn.queue.consume",
+              commandId: CommandId.make(
+                `queued-turn-consumed:${event.payload.threadId}:${messageId}`,
+              ),
+              threadId: event.payload.threadId,
+              messageId,
+              turnId: accepted.value.turnId,
+              createdAt: consumedAt,
+            }),
+          ).pipe(
+            Effect.retry({
+              schedule: Schedule.exponential("250 millis").pipe(
+                Schedule.modifyDelay(({ duration }) =>
+                  Effect.succeed(Duration.min(duration, Duration.seconds(5))),
+                ),
+                Schedule.jittered,
+              ),
+              while: (error) =>
+                error._tag === "PersistenceSqlError" ||
+                error._tag === "OrchestrationListenerCallbackError",
+            }),
+          );
+        }).pipe(
+          Effect.ensuring(
+            messageId == null
+              ? Effect.void
+              : delivery.setPending(event.payload.threadId, messageId, false),
+          ),
+          Effect.forkScoped,
+        );
+      }).pipe((send) =>
+        event.payload.queuedDeliveryMessageId == null
+          ? send
+          : delivery.withPermit(event.payload.threadId, send),
+      );
     });
 
     const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
@@ -1438,6 +1520,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
               return Effect.interrupt;
             }
             const orphaned = hasProviderAdapterSessionNotFoundError(cause);
+            const unconfirmedProcess = cause.reasons.some(
+              (reason) => Cause.isFailReason(reason) && isProviderAdapterProcessError(reason.error),
+            );
             return appendProviderFailureActivity({
               threadId: event.payload.threadId,
               kind: "provider.turn.interrupt.failed",
@@ -1445,28 +1530,55 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
               detail: Cause.pretty(cause),
               turnId: event.payload.turnId ?? null,
               createdAt: event.payload.createdAt,
-            }).pipe(Effect.as(orphaned ? ("phantom" as const) : ("failed" as const)));
+            }).pipe(
+              Effect.as(
+                orphaned
+                  ? ("phantom" as const)
+                  : unconfirmedProcess
+                    ? ("timed-out" as const)
+                    : ("failed" as const),
+              ),
+            );
           }),
         );
 
-      // A stop must always settle in the orchestrator. Adapters only emit
+      // An acknowledged stop must settle in the orchestrator. Adapters only emit
       // lifecycle events when they still know the provider turn id — after a
       // server restart (or any recovered session) they cannot, and with no
       // lifecycle event the session stays "running" forever, stranding queued
-      // messages. Settle on success, on timeout (the user asked to stop; do not
-      // recreate the stuck-forever state), and for phantom sessions whose
-      // runtime died with a previous process.
+      // messages. Settle on success and for phantom sessions whose runtime died
+      // with a previous process. A timeout does not prove teardown finished;
+      // the queued interrupt deadline handles escalation without releasing work.
       //
       // A definite failure keeps the session running: the provider is alive and
       // may still be working, so claiming it idle — or stopped — would invite
       // the next message to interleave with live work. Upstream escalates to a
       // session stop here instead; see docs/operations/upstream-integrations.
+      if (outcome === "timed-out") {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.session.stop",
+          commandId: CommandId.make(`interrupt-timeout-stop:${event.eventId}`),
+          threadId: event.payload.threadId,
+          onlyIfActiveTurnId: thread.session?.activeTurnId ?? null,
+          onlyIfSessionEpisode: thread.session?.episodeStartedAt ?? null,
+          stoppedBy: "system",
+          stopReason: "tool_failed",
+          createdAt: event.payload.createdAt,
+        });
+        return;
+      }
       if (outcome === "failed") {
         return;
       }
       const phantom = outcome === "phantom";
       const afterInterrupt = yield* resolveThread(event.payload.threadId);
       const activeTurnId = afterInterrupt?.session?.activeTurnId ?? null;
+      if (
+        activeTurnId !== (thread.session?.activeTurnId ?? null) ||
+        (afterInterrupt?.session?.episodeStartedAt ?? null) !==
+          (thread.session?.episodeStartedAt ?? null)
+      )
+        return;
       if (
         afterInterrupt?.session &&
         activeTurnId !== null &&
@@ -1721,6 +1833,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
               : {}),
             runtimeMode: current.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
             activeTurnId: null,
+            episodeStartedAt: current.session?.episodeStartedAt ?? null,
             lastError: current.session?.lastError ?? null,
             ...stopAudit(current),
             graceStopDeadlineAt: null,
@@ -1734,10 +1847,29 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         if (!current || current.session?.status === "stopped") {
           return;
         }
+        if (
+          (event.payload.onlyIfActiveTurnId !== undefined &&
+            current.session?.activeTurnId !== event.payload.onlyIfActiveTurnId) ||
+          (event.payload.onlyIfSessionEpisode !== undefined &&
+            (current.session?.episodeStartedAt ?? null) !== event.payload.onlyIfSessionEpisode)
+        )
+          return;
         if (current.session !== null) {
+          yield* setThreadSession({
+            threadId: current.id,
+            session: { ...current.session, ...stopAudit(current) },
+            createdAt: now,
+          });
           yield* providerService.stopSession({ threadId: current.id });
         }
-        yield* setStoppedSession(current);
+        const afterStop = yield* resolveThread(current.id);
+        if (
+          !afterStop ||
+          (afterStop.session?.episodeStartedAt ?? null) !==
+            (current.session?.episodeStartedAt ?? null)
+        )
+          return;
+        yield* setStoppedSession(afterStop);
       });
 
       if (event.payload.gracePeriodMs == null || thread.session === null) {
@@ -1843,7 +1975,31 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           yield* processUserInputResponseRequested(event);
           return;
         case "thread.session-stop-requested":
-          yield* processSessionStopRequested(event);
+          yield* processSessionStopRequested(event).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                const current = yield* resolveThread(event.payload.threadId);
+                const detail = Cause.pretty(cause);
+                if (current?.session)
+                  yield* setThreadSession({
+                    threadId: current.id,
+                    session: {
+                      ...current.session,
+                      lastError: `Provider stop was not confirmed: ${detail}`,
+                    },
+                    createdAt: event.payload.createdAt,
+                  });
+                yield* appendProviderFailureActivity({
+                  threadId: event.payload.threadId,
+                  kind: "provider.session.stop.failed",
+                  summary: "Provider stop was not confirmed",
+                  detail,
+                  turnId: null,
+                  createdAt: event.payload.createdAt,
+                });
+              }),
+            ),
+          );
           return;
         case "thread.settled": {
           const thread = yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId);
@@ -1926,7 +2082,10 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         }),
       );
 
-    const worker = yield* makeDrainableWorker(processDomainEventSafely);
+    const worker = yield* QueuedDelivery.makeWorker(
+      (event: ProviderIntentEvent) => event.payload.threadId,
+      processDomainEventSafely,
+    );
 
     const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
       yield* rearmGraceStopDeadlines().pipe(

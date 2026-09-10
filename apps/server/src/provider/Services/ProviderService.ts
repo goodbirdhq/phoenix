@@ -63,6 +63,7 @@ export const PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY = 4;
  */
 const NATIVE_AVAILABILITY_SOURCES: Partial<Record<string, ProviderAvailability["source"]>> = {
   codex: "codex_app_server",
+  grok: "grok_acp",
   claudeAgent: "claude_agent_sdk",
 };
 

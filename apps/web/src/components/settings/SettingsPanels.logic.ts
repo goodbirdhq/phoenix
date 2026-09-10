@@ -6,10 +6,15 @@ import type {
   PreviewViewportSetting,
   ProviderInstanceId,
   ServerSettings,
+  ServerProvider,
   SidebarProjectGroupingMode,
   UnifiedSettings,
 } from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import { defaultInstanceIdForDriver } from "@t3tools/contracts";
+import {
+  DEFAULT_UNIFIED_SETTINGS,
+  resolveProviderInstanceEnabled,
+} from "@t3tools/contracts/settings";
 import {
   getBackgroundActivityBaseProfile,
   normalizeBackgroundActivitySettings,
@@ -244,6 +249,33 @@ export function formatDiagnosticsDescription(input: {
   }
 
   return `${mode}.`;
+}
+
+/** The editor must start with the effective configuration, including legacy default slots. */
+export function resolveProviderInstanceSettings(
+  settings: Pick<ServerSettings, "providers" | "providerInstances">,
+  instanceId: ProviderInstanceId,
+  driver: ProviderDriverKind,
+): ProviderInstanceConfig | undefined {
+  const explicit = settings.providerInstances[instanceId];
+  if (explicit) return explicit;
+  if (instanceId !== defaultInstanceIdForDriver(driver)) return undefined;
+  const providers: Readonly<
+    Record<string, ServerSettings["providers"][keyof ServerSettings["providers"]] | undefined>
+  > = settings.providers;
+  const legacy = providers[driver];
+  if (!legacy) return undefined;
+  const { enabled, ...config } = legacy;
+  return { driver, enabled, config };
+}
+
+/** Runtime availability can report disabled even when the saved account is enabled. */
+export function isProviderInstanceEnabled(
+  settings: Pick<ServerSettings, "providers" | "providerInstances">,
+  provider: Pick<ServerProvider, "instanceId" | "driver" | "enabled">,
+): boolean {
+  const saved = resolveProviderInstanceSettings(settings, provider.instanceId, provider.driver);
+  return saved ? resolveProviderInstanceEnabled(saved) : provider.enabled;
 }
 
 export function buildProviderInstanceUpdatePatch(input: {

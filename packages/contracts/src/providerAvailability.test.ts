@@ -273,3 +273,20 @@ describe("canRefreshProviderAvailability", () => {
     ).toBe(false);
   });
 });
+
+it("keeps Grok billing readable by current clients and safely omits it for version 1/2 clients", () => {
+  const reading: ProviderAvailability = {
+    source: "grok_acp",
+    status: "available",
+    windows: [{ kind: "weekly", usedPercent: 42 }],
+  };
+  expect(narrowProviderAvailability(reading, 3)).toEqual(reading);
+  for (const version of [1, 2]) {
+    expect(narrowProviderAvailability(reading, version)).toEqual({
+      source: "unsupported",
+      status: "unknown",
+      windows: [],
+    });
+  }
+  expect(narrowProviderAvailability(claudeCliAvailability, 2)).toEqual(claudeCliAvailability);
+});

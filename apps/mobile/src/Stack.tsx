@@ -1,3 +1,6 @@
+import { NavigationFooter } from "./features/home/NavigationFooter";
+import { footerDestination, type FooterRoute } from "./features/home/navigation-footer-layout";
+import { PullRequestsRouteScreen } from "./features/home/PullRequestsRouteScreen";
 import {
   createPathConfigForStaticNavigation,
   getPathFromState,
@@ -10,7 +13,8 @@ import {
   createNativeStackScreen,
   type NativeStackNavigationOptions,
 } from "@react-navigation/native-stack";
-import { useEffect, useRef } from "react";
+import { useCallback, useContext, useEffect, useRef } from "react";
+import { NavigationContainerRefContext } from "@react-navigation/native";
 import { Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useResolveClassNames } from "uniwind";
 
@@ -21,7 +25,10 @@ import { useAgentNotificationNavigation } from "./features/agent-awareness/notif
 import { ConnectOnboardingRouteScreen } from "./features/cloud/ConnectOnboardingRouteScreen";
 import { useConnectOnboardingNavigation } from "./features/cloud/connectOnboardingNavigation";
 import { ThreadFilesTreeScreen, ThreadFileScreen } from "./features/files/ThreadFilesRouteScreen";
-import { AdaptiveWorkspaceLayout } from "./features/layout/AdaptiveWorkspaceLayout";
+import {
+  AdaptiveWorkspaceLayout,
+  useAdaptiveWorkspaceLayout,
+} from "./features/layout/AdaptiveWorkspaceLayout";
 import { HardwareKeyboardCommandProvider } from "./features/keyboard/HardwareKeyboardCommandProvider";
 import { ReviewCommentComposerSheet } from "./features/review/ReviewCommentComposerSheet";
 import { ReviewSheet } from "./features/review/ReviewSheet";
@@ -146,7 +153,33 @@ const LEGAL_DOCUMENT_HEADER_OPTIONS: AppScreenOptions = {
   presentation: "fullScreenModal",
 };
 
+function SettingsNavigationFooter(props: React.ComponentProps<typeof NavigationFooter>) {
+  const { panes } = useAdaptiveWorkspaceLayout();
+  const rootNavigation = useContext(NavigationContainerRefContext);
+  const handleNavigate = useCallback(
+    (route: FooterRoute) => {
+      if (route === "Home") {
+        rootNavigation?.dispatch(StackActions.popTo("Home"));
+      } else {
+        props.onNavigate?.(route);
+      }
+    },
+    [props.onNavigate, rootNavigation],
+  );
+  if (Platform.OS === "android" && panes.primarySidebarVisible) return null;
+  return <NavigationFooter {...props} onNavigate={handleNavigate} />;
+}
+
 const SettingsContentStack = createNativeStackNavigator({
+  layout: ({ children, state, navigation }) => (
+    <View style={{ flex: 1 }}>
+      {children}
+      <SettingsNavigationFooter
+        onNavigate={(route) => navigation.dispatch(StackActions.popTo(route))}
+        selected={footerDestination(state)}
+      />
+    </View>
+  ),
   initialRouteName: "Settings",
   screenOptions: {
     ...GLASS_HEADER_OPTIONS,
@@ -202,6 +235,11 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "Client Storage",
       },
+    }),
+    SettingsPullRequests: createNativeStackScreen({
+      screen: PullRequestsRouteScreen,
+      linking: "pull-requests",
+      options: { title: "Pull Requests" },
     }),
     SettingsUsage: createNativeStackScreen({
       screen: UsageRouteScreen,

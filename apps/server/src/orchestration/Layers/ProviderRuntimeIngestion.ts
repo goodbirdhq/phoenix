@@ -1568,6 +1568,14 @@ const make = Effect.gen(function* () {
         if (staleInstanceEvent) {
           return false;
         }
+        // Tail events from a confirmed stop cannot reopen its episode. A new
+        // provider start first establishes a new starting session in the command reactor.
+        if (
+          thread.session?.status === "stopped" &&
+          thread.session.stopRequestedAt != null &&
+          event.type !== "session.exited"
+        )
+          return false;
         if (!STRICT_PROVIDER_LIFECYCLE_GUARD) {
           return true;
         }

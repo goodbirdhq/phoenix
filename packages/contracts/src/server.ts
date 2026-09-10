@@ -240,6 +240,15 @@ export type ServerProviders = typeof ServerProviders.Type;
 export const isProviderAvailable = (snapshot: ServerProvider): boolean =>
   snapshot.availability !== "unavailable";
 
+/** Shared eligibility for starting work; metadata warnings do not disable a runtime. */
+export const canStartProviderSession = (snapshot: ServerProvider): boolean =>
+  snapshot.enabled &&
+  snapshot.installed &&
+  isProviderAvailable(snapshot) &&
+  snapshot.status !== "error" &&
+  snapshot.status !== "disabled" &&
+  snapshot.auth.status !== "unauthenticated";
+
 /**
  * Whether asking this instance for a fresh native quota reading is safe.
  * A refresh runs the provider's own CLI, so it is only offered for an

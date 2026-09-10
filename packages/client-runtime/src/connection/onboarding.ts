@@ -94,7 +94,6 @@ export const preparePairingRegistration = Effect.fn(
   const access = yield* bootstrapRemoteBearerSession({
     httpBaseUrl: target.httpBaseUrl,
     credential: target.credential,
-    scopes: presentation.scopes,
     clientMetadata: presentation.metadata,
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
   const connectionId = `bearer:${descriptor.environmentId}`;
@@ -124,6 +123,12 @@ export const registerPairingConnection = Effect.fn(
   const registration = yield* preparePairingRegistration(input);
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   yield* registry.register(registration);
+  const entry = (yield* SubscriptionRef.get(registry.entries)).get(
+    registration.target.environmentId,
+  );
+  if (entry && Option.isSome(entry.profile) && entry.profile.value.autoConnect === false) {
+    yield* registry.retryNow(registration.target.environmentId);
+  }
   return registration.target.environmentId;
 });
 
@@ -200,6 +205,7 @@ export const prepareBearerConnectionUpdate = Effect.fn(
       connectionId,
     }),
     profile: new BearerConnectionProfile({
+      ...entry.profile.value,
       connectionId,
       environmentId: options.input.environmentId,
       label,
@@ -239,6 +245,12 @@ export const registerSshConnection = Effect.fn(
   const registration = yield* prepareSshRegistration(input);
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   yield* registry.register(registration);
+  const entry = (yield* SubscriptionRef.get(registry.entries)).get(
+    registration.target.environmentId,
+  );
+  if (entry && Option.isSome(entry.profile) && entry.profile.value.autoConnect === false) {
+    yield* registry.retryNow(registration.target.environmentId);
+  }
   return registration.target.environmentId;
 });
 

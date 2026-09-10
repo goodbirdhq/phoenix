@@ -1,3 +1,4 @@
+import { ProviderSessionDirectoryPersistenceError } from "../Errors.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -418,6 +419,43 @@ function makeProviderServiceLayer(
   };
 }
 
+it.effect("returns native input acceptance while provider completion is still pending", () =>
+  Effect.gen(function* () {
+    const base = makeFakeCodexAdapter();
+    const entered = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<void>();
+    const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+      ...base.adapter,
+      sendTurn: (input, onAccepted) =>
+        Effect.gen(function* () {
+          const result = { threadId: input.threadId, turnId: asTurnId("native-accepted") };
+          if (onAccepted) yield* onAccepted(result);
+          yield* Deferred.succeed(entered, undefined);
+          yield* Deferred.await(finish);
+          return result;
+        }),
+    };
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("streaming-after-acceptance");
+      yield* provider.startSession(threadId, {
+        threadId,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access",
+      });
+      const sending = yield* provider.sendTurn({ threadId, input: "work" }).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* Effect.yieldNow;
+      const result = sending.pollUnsafe();
+      assert.isTrue(result !== undefined && Exit.isSuccess(result));
+      yield* Deferred.succeed(finish, undefined);
+    }).pipe(
+      Effect.ensuring(Deferred.succeed(finish, undefined)),
+      Effect.provide(makeAvailabilityProviderLayer(adapter, serverConfigTestLayer)),
+    );
+  }),
+);
+
 it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
   Effect.gen(function* () {
     const codex = makeFakeCodexAdapter();
@@ -687,6 +725,81 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
 );
 
 const routing = makeProviderServiceLayer();
+
+routing.layer("ProviderService accepted input", (it) => {
+  it.effect("preserves acceptance when the post-send binding write fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("accepted-before-write-failure");
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access",
+      });
+      const before = routing.codex.sendTurn.mock.calls.length;
+      const write = vi.spyOn(directory, "upsert").mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderSessionDirectoryPersistenceError({
+            operation: "test post-send binding",
+            detail: "disk full",
+          }),
+        ),
+      );
+      const accepted = yield* provider
+        .sendTurn({ threadId, input: "authorization" })
+        .pipe(Effect.ensuring(Effect.sync(() => write.mockRestore())));
+      assert.equal(accepted.threadId, threadId);
+      assert.equal(routing.codex.sendTurn.mock.calls.length, before + 1);
+      assert.isString(accepted.turnId);
+    }),
+  );
+});
+
+routing.layer("ProviderService runtime activity", (it) => {
+  it.effect("updates activity during a turn without another send or binding write", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("activity-during-turn");
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access",
+      });
+      const before = yield* repository.getByThreadId({ threadId });
+      yield* TestClock.adjust("1 second");
+      const observed = yield* provider.streamEvents.pipe(
+        Stream.filter((event) => event.eventId === "activity-observed"),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      routing.codex.emit({
+        type: "content.delta",
+        eventId: asEventId("activity-observed"),
+        provider: CODEX_DRIVER,
+        threadId,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        payload: { streamKind: "assistant_text", delta: "still working" },
+      });
+      yield* Fiber.join(observed);
+      const binding = (yield* directory.listBindings()).find(
+        (entry) => entry.threadId === threadId,
+      );
+      assert.isTrue(
+        binding !== undefined &&
+          Option.isSome(before) &&
+          binding.lastSeenAt > before.value.lastSeenAt,
+      );
+      assert.deepEqual(yield* repository.getByThreadId({ threadId }), before);
+    }),
+  );
+});
 
 it.effect(
   "ProviderServiceLive uploads feedback through the adapter that recovered the session",
@@ -3213,6 +3326,7 @@ const boundedListing = makeProviderServiceLayer({
     getProvider: () => Effect.die("ProviderService.listSessions does not use getProvider"),
     getBinding,
     listThreadIds,
+    recordActivity: () => Effect.void,
     listBindings: () => Effect.die("ProviderService.listSessions does not use listBindings"),
   },
 });
@@ -3242,7 +3356,7 @@ boundedListing.layer("ProviderServiceLive session listing", (it) => {
 
 describe("orchestration suggestions", () => {
   for (const driverName of ["codex", "claudeAgent", "cursor", "grok", "opencode"]) {
-    it.effect(`supplies guidance to ${driverName} only while orchestration is available`, () => {
+    it.effect(`updates orchestration guidance in ${driverName} conversation history`, () => {
       const driver = ProviderDriverKind.make(driverName);
       const instanceId = ProviderInstanceId.make(driverName);
       const threadId = asThreadId(`orchestration-guidance-${driverName}`);
@@ -3291,7 +3405,7 @@ describe("orchestration suggestions", () => {
         });
         const request = { threadId, input: "Add search to web and mobile." };
         yield* provider.sendTurn(request);
-        assert.deepEqual(fake.sendTurn.mock.calls.at(-1)?.[0], request);
+        assert.include(fake.sendTurn.mock.calls.at(-1)?.[0].input ?? "", "Current state: disabled");
 
         yield* settings.updateSettings({ enableSessionOrchestration: true });
         yield* provider.sendTurn(request);
@@ -3316,9 +3430,20 @@ describe("orchestration suggestions", () => {
 
         yield* settings.updateSettings({ enableSessionOrchestration: false });
         yield* provider.sendTurn(request);
-        assert.deepEqual(fake.sendTurn.mock.calls.at(-1)?.[0], request);
+        const conversation = fake.sendTurn.mock.calls.map(([turn]) => turn.input ?? "");
+        assert.isTrue(conversation.some((text) => text.includes("Current state: enabled")));
+        assert.include(conversation.at(-1) ?? "", "Current state: disabled");
+        assert.include(
+          conversation.at(-1) ?? "",
+          "replaces any earlier Phoenix orchestration guidance",
+        );
+
+        yield* provider.sendTurn({ threadId, input: "Continue." });
+        assert.include(fake.sendTurn.mock.calls.at(-1)?.[0].input ?? "", "Current state: disabled");
 
         yield* settings.updateSettings({ enableSessionOrchestration: true });
+        yield* provider.sendTurn(request);
+        assert.include(fake.sendTurn.mock.calls.at(-1)?.[0].input ?? "", "Current state: enabled");
         McpProviderSession.clearMcpProviderSession(threadId);
         yield* provider.sendTurn(request);
         assert.deepEqual(fake.sendTurn.mock.calls.at(-1)?.[0], request);

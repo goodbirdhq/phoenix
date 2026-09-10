@@ -218,6 +218,7 @@ describe("createScheduleEnvironmentAtoms", () => {
           stream,
         ) => Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
         const registryService = EnvironmentRegistry.EnvironmentRegistry.of({
+          setAutoConnect: () => Effect.void,
           run,
           followStream,
         } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);

@@ -14,6 +14,7 @@ import {
   claudeInstanceHomes,
   claudeProjectsDirCandidates,
   codexInstanceHomes,
+  grokInstanceHomes,
   opencodeInstanceDatabases,
   providerInstanceConfigsForDriver,
 } from "./providerHomes.ts";
@@ -70,6 +71,7 @@ describe("claudeInstanceHomes", () => {
       });
       const homes = yield* claudeInstanceHomes(settings);
       assert.deepEqual(homePaths(homes), ["/homes/a"]);
+      assert.deepEqual(homes[0]?.instanceIds, ["claudeAgent", "claudeAgent_dup"]);
     }).pipe(Effect.provide(Path.layer)),
   );
 
@@ -91,6 +93,76 @@ describe("claudeInstanceHomes", () => {
       const homes = yield* claudeInstanceHomes(decodeSettings({}));
       assert.deepEqual(homePaths(homes), [NodeOS.homedir()]);
     }).pipe(Effect.provide(Path.layer)),
+  );
+});
+
+describe("shared history membership", () => {
+  effectIt.effect("retains every Codex auth overlay sharing a transcript home", () =>
+    Effect.gen(function* () {
+      const homes = yield* codexInstanceHomes(
+        decodeSettings({
+          providerInstances: {
+            codex: { driver: "codex", config: { homePath: "/shared", shadowHomePath: "/auth/a" } },
+            codex_b: {
+              driver: "codex",
+              config: { homePath: "/shared", shadowHomePath: "/auth/b" },
+            },
+            codex_c: { driver: "codex", config: { homePath: "/separate" } },
+          },
+        }),
+      );
+      assert.deepEqual(
+        homes.map(({ homePath, instanceIds }) => ({ homePath, instanceIds })),
+        [
+          { homePath: "/shared", instanceIds: ["codex", "codex_b"] },
+          { homePath: "/separate", instanceIds: ["codex_c"] },
+        ],
+      );
+    }).pipe(Effect.provide(Path.layer)),
+  );
+  effectIt.effect("retains both OpenCode instances without scanning their database twice", () =>
+    Effect.gen(function* () {
+      const databases = yield* opencodeInstanceDatabases(
+        decodeSettings({
+          providerInstances: {
+            opencode: { driver: "opencode" },
+            opencode_b: { driver: "opencode" },
+          },
+        }),
+        { XDG_DATA_HOME: "/data" },
+      );
+      assert.deepEqual(databases, [
+        { databasePath: "/data/opencode/opencode.db", instanceIds: ["opencode", "opencode_b"] },
+      ]);
+    }).pipe(Effect.provide(Path.layer), Effect.provideService(HostProcessPlatform, "linux")),
+  );
+  effectIt.effect("resolves Grok instances using their own environment overrides", () =>
+    Effect.gen(function* () {
+      const homes = yield* grokInstanceHomes(
+        decodeSettings({
+          providerInstances: {
+            grok: { driver: "grok" },
+            grok_b: { driver: "grok", environment: [{ name: "GROK_HOME", value: "/grok-b" }] },
+            grok_c: {
+              driver: "grok",
+              environment: [
+                { name: "GROK_HOME", value: "  " },
+                { name: "HOME", value: "/user-c" },
+              ],
+            },
+          },
+        }),
+        { GROK_HOME: "/grok-a" },
+      );
+      assert.deepEqual(
+        homes.map(({ homePath, instanceIds }) => ({ homePath, instanceIds })),
+        [
+          { homePath: "/grok-a", instanceIds: ["grok"] },
+          { homePath: "/grok-b", instanceIds: ["grok_b"] },
+          { homePath: "/user-c/.grok", instanceIds: ["grok_c"] },
+        ],
+      );
+    }).pipe(Effect.provide(Path.layer), Effect.provideService(HostProcessPlatform, "linux")),
   );
 });
 
@@ -150,7 +222,7 @@ describe("opencodeInstanceDatabases", () => {
       const databases = yield* opencodeInstanceDatabases(settings, {});
       assert.deepEqual(databases, [
         {
-          instanceId: "opencode",
+          instanceIds: ["opencode"],
           databasePath: "/data/open-code/opencode/opencode.db",
         },
       ]);
@@ -187,7 +259,7 @@ describe("claudeProjectsDirCandidates", () => {
   effectIt.effect("probes the nested layout before the overridden one", () =>
     Effect.gen(function* () {
       const overridden = yield* claudeProjectsDirCandidates({
-        instanceId: "claudeAgent",
+        instanceIds: ["claudeAgent"],
         homePath: "/homes/a",
         overridden: true,
       });
@@ -196,7 +268,7 @@ describe("claudeProjectsDirCandidates", () => {
       // A default install's home is the user's own; only the nested layout
       // there belongs to Claude.
       const inherited = yield* claudeProjectsDirCandidates({
-        instanceId: "claudeAgent",
+        instanceIds: ["claudeAgent"],
         homePath: "/homes/a",
         overridden: false,
       });

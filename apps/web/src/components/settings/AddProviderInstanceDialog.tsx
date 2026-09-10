@@ -3,14 +3,21 @@
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { CheckIcon } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
 import {
   ProviderInstanceId,
   ProviderDriverKind,
   type EnvironmentId,
   type ProviderInstanceConfig,
+  type ServerProvider,
+  defaultInstanceIdForDriver,
 } from "@t3tools/contracts";
 
-import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import { useEnvironmentSessionState } from "../../state/session";
+import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { serverEnvironment } from "../../state/server";
+import { ServerIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Button } from "../ui/button";
@@ -29,13 +36,17 @@ import { RadioGroup } from "../ui/radio-group";
 import { toastManager } from "../ui/toast";
 import { DRIVER_OPTION_BY_VALUE, DRIVER_OPTIONS } from "./providerDriverMeta";
 import { ProviderSettingsForm, deriveProviderSettingsFields } from "./ProviderSettingsForm";
-import { AnimatedHeight } from "../AnimatedHeight";
 import {
   ADD_PROVIDER_WIZARD_STEPS,
   resolveWizardNavigation,
   type WizardNavigation,
 } from "./AddProviderInstanceDialog.logic";
 import { AddProviderInstanceWizardSteps } from "./AddProviderInstanceWizardSteps";
+import {
+  buildProviderInstanceUpdatePatch,
+  isProviderInstanceEnabled,
+  resolveProviderInstanceSettings,
+} from "./SettingsPanels.logic";
 
 const PROVIDER_ACCENT_SWATCHES = [
   "#2563eb",
@@ -128,8 +139,14 @@ export function AddProviderInstanceDialog({
   environmentLabel,
   onOpenChange,
 }: AddProviderInstanceDialogProps) {
+  const session = useEnvironmentSessionState(environmentId);
+  const canEdit = session.data?.scopes?.includes("orchestration:operate") ?? false;
   const settings = useEnvironmentSettings(environmentId);
-  const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
+  const disabledProviders =
+    providers?.filter((provider) => !isProviderInstanceEnabled(settings, provider)) ?? [];
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, "add provider instance");
+  const [saving, setSaving] = useState(false);
 
   const [wizardStep, setWizardStep] = useState(0);
   const [driver, setDriver] = useState<ProviderDriverKind>(DEFAULT_DRIVER_KIND);
@@ -187,7 +204,43 @@ export function AddProviderInstanceDialog({
     );
   };
 
-  const handleSave = () => {
+  const enableExisting = async (provider: ServerProvider) => {
+    if (!canEdit || saving) return;
+    const instance = resolveProviderInstanceSettings(
+      settings,
+      provider.instanceId,
+      provider.driver,
+    );
+    if (!instance) return;
+    setSaving(true);
+    try {
+      const result = await updateSettings({
+        environmentId,
+        input: {
+          patch: buildProviderInstanceUpdatePatch({
+            settings,
+            instanceId: provider.instanceId,
+            driver: provider.driver,
+            isDefault: provider.instanceId === defaultInstanceIdForDriver(provider.driver),
+            instance: { ...instance, enabled: true },
+          }),
+        },
+      });
+      if (result._tag === "Failure") throw new Error("Could not enable this provider. Try again.");
+      onOpenChange(false);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not enable provider",
+        description: error instanceof Error ? error.message : "Update failed.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!canEdit || saving) return;
     setHasAttemptedSubmit(true);
     if (instanceIdError !== null) return;
 
@@ -212,7 +265,15 @@ export function AddProviderInstanceDialog({
       [brandedId]: nextInstance,
     };
     try {
-      updateSettings({ providerInstances: nextMap });
+      setSaving(true);
+      const result = await updateSettings({
+        environmentId,
+        input: { patch: { providerInstances: nextMap } },
+      });
+      if (result._tag === "Failure")
+        throw new Error(
+          "The environment could not save this provider. Your draft has been kept; try again.",
+        );
       toastManager.add({
         type: "success",
         title: "Provider instance added",
@@ -225,18 +286,27 @@ export function AddProviderInstanceDialog({
         title: "Could not add provider instance",
         description: error instanceof Error ? error.message : "Update failed.",
       });
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup className="max-w-xl overflow-hidden">
-        <div className="flex min-h-0 flex-col overflow-hidden">
-          <DialogHeader>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!saving) onOpenChange(next);
+      }}
+    >
+      <DialogPopup className="w-[620px] max-w-[calc(100vw-32px)] overflow-hidden rounded-[14px]">
+        <div className="flex h-[618px] max-h-[calc(100dvh-50px)] min-h-0 flex-col overflow-hidden">
+          <DialogHeader className="items-center px-7 pt-7 text-center">
+            <ServerIcon className="size-6 text-sky-600" />
             <DialogTitle>Add provider instance</DialogTitle>
             <DialogDescription>
-              Configure an additional provider instance on {environmentLabel} — for example, a
-              second Codex install pointed at a different workspace.
+              {canEdit
+                ? `Configure another provider instance on ${environmentLabel}.`
+                : `Operate tasks permission is required to add or enable providers on ${environmentLabel}.`}
             </DialogDescription>
             <AddProviderInstanceWizardSteps
               currentStep={wizardStep}
@@ -248,10 +318,47 @@ export function AddProviderInstanceDialog({
 
           <div
             data-slot="dialog-panel"
-            className="space-y-4 bg-zinc-25/80 px-6 py-5 ring-1 ring-black/5 dark:bg-white/2 dark:ring-white/5"
+            className="min-h-0 flex-1 space-y-4 overflow-y-auto px-7 py-5"
           >
-            <AnimatedHeight>
+            <>
               <div className={cn("grid gap-2", wizardStep !== 0 && "hidden")}>
+                {disabledProviders.length > 0 && (
+                  <section aria-label="Disabled provider accounts" className="mb-3 space-y-2">
+                    <h3 className="text-sm font-medium">Enable an existing account</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Keep its saved configuration, or add a new instance below.
+                    </p>
+                    {disabledProviders.map((provider) => {
+                      const definition = DRIVER_OPTION_BY_VALUE[provider.driver];
+                      const Mark = definition?.icon;
+                      return (
+                        <div
+                          key={provider.instanceId}
+                          className="flex items-center gap-3 border-b py-2"
+                        >
+                          {Mark && <Mark className="size-4 shrink-0" />}
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm">
+                              {provider.displayName ?? definition?.label ?? provider.driver}
+                            </p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              {provider.instanceId}
+                            </p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={saving || !canEdit}
+                            onClick={() => void enableExisting(provider)}
+                            aria-label={`Enable ${provider.displayName ?? definition?.label ?? provider.driver} (${provider.instanceId})`}
+                          >
+                            Enable
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </section>
+                )}
                 <div id="add-instance-driver-label" className="text-sm font-medium text-foreground">
                   Driver
                 </div>
@@ -267,7 +374,7 @@ export function AddProviderInstanceDialog({
                       <RadioPrimitive.Root
                         key={option.value}
                         value={option.value}
-                        className="relative flex cursor-pointer items-center gap-3 rounded-lg bg-card px-3 py-3 text-left text-muted-foreground outline-none ring-1 ring-black/5 hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-primary/8 data-checked:text-foreground data-checked:ring-2 data-checked:ring-primary data-checked:hover:bg-primary/8 dark:bg-white/3 dark:ring-white/5 dark:hover:bg-white/5 dark:data-checked:bg-primary/15 dark:data-checked:ring-primary dark:data-checked:hover:bg-primary/15"
+                        className="relative flex cursor-pointer items-center gap-3 rounded-lg bg-card px-3 py-2 text-left text-muted-foreground outline-none ring-1 ring-black/5 hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-primary/8 data-checked:text-foreground data-checked:ring-2 data-checked:ring-primary data-checked:hover:bg-primary/8 dark:bg-white/3 dark:ring-white/5 dark:hover:bg-white/5 dark:data-checked:bg-primary/15 dark:data-checked:ring-primary dark:data-checked:hover:bg-primary/15"
                       >
                         <IconComponent className="size-4 shrink-0" aria-hidden />
                         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
@@ -295,7 +402,7 @@ export function AddProviderInstanceDialog({
                         value={option.value}
                         disabled
                         className={cn(
-                          "relative flex cursor-not-allowed items-center gap-3 rounded-lg bg-card/60 px-3 py-3 text-left opacity-55 outline-none ring-1 ring-black/5 dark:bg-white/2 dark:ring-white/5",
+                          "relative flex cursor-not-allowed items-center gap-3 rounded-lg bg-card/60 px-3 py-2 text-left opacity-55 outline-none ring-1 ring-black/5 dark:bg-white/2 dark:ring-white/5",
                         )}
                       >
                         <IconComponent
@@ -411,13 +518,14 @@ export function AddProviderInstanceDialog({
                   </p>
                 </div>
               ) : null}
-            </AnimatedHeight>
+            </>
           </div>
 
-          <DialogFooter variant="bare">
+          <DialogFooter variant="bare" className="h-16 shrink-0 border-t border-border px-7 py-4">
             <Button
               variant="outline"
               size="sm"
+              disabled={saving}
               onClick={() => {
                 if (wizardStep === 0) {
                   onOpenChange(false);
@@ -433,8 +541,8 @@ export function AddProviderInstanceDialog({
                 Next
               </Button>
             ) : (
-              <Button size="sm" onClick={handleSave}>
-                Add instance
+              <Button size="sm" disabled={saving || !canEdit} onClick={() => void handleSave()}>
+                {saving ? "Adding…" : "Add instance"}
               </Button>
             )}
           </DialogFooter>

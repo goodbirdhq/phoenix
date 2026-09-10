@@ -1,0 +1,147 @@
+import { describe, expect, it } from "vite-plus/test";
+import { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentSessionUsage } from "@t3tools/shared/usageMerge";
+import { buildUsageReport } from "./reports.ts";
+
+const session: EnvironmentSessionUsage = {
+  environmentId: EnvironmentId.make("env"),
+  environmentLabel: "Environment",
+  provider: "codex",
+  sourceId: "home",
+  sessionId: "native",
+  attribution: "linked",
+  firstActivityAt: "2026-09-01T00:00:00Z",
+  lastActivityAt: "2026-09-01T00:00:00Z",
+  thread: {
+    id: "thread",
+    title: "Work",
+    createdAt: "2026-08-01T00:00:00Z",
+    projectId: "project",
+    projectTitle: "Phoenix",
+    projectWorkspaceRoot: "/workspace",
+    projectFaviconPath: null,
+  },
+  models: [
+    {
+      model: "model",
+      totals: {
+        uncachedInputTokens: 10,
+        cachedInputTokens: 20,
+        cacheCreationTokens: 5,
+        outputTokens: 10,
+        reasoningTokens: 5,
+      },
+      records: 1,
+      unpricedRecords: 0,
+      costUsd: 2,
+      cacheSavingsUsd: 1,
+    },
+  ],
+};
+describe("usage reports", () => {
+  it("omits zero-usage local messages from older servers without hiding real unpriced usage", () => {
+    const model = session.models[0]!;
+    const [row] = buildUsageReport(
+      [
+        {
+          ...session,
+          attribution: "unlinked",
+          thread: undefined,
+          models: [
+            { ...model, unpricedRecords: 1, costUsd: 0 },
+            {
+              ...model,
+              model: "<synthetic>",
+              totals: {
+                uncachedInputTokens: 0,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+                outputTokens: 0,
+                reasoningTokens: 0,
+              },
+              costUsd: 0,
+              unpricedRecords: 1,
+            },
+          ],
+        },
+      ],
+      "threads",
+    );
+    expect(row?.models).toEqual(["model"]);
+    expect(row?.unpricedRecords).toBe(1);
+    expect(row?.totalTokens).toBe(45);
+    expect(row?.title).toBe("Unlinked session · native");
+  });
+  it("combines a thread's native sessions and models without counting reasoning twice", () => {
+    const rows = buildUsageReport(
+      [
+        session,
+        { ...session, sessionId: "second", models: [{ ...session.models[0]!, model: "other" }] },
+      ],
+      "threads",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      sessions: 2,
+      models: ["model", "other"],
+      costUsd: 4,
+      totalTokens: 90,
+      cachedInputTokens: 40,
+      cacheCreationTokens: 10,
+    });
+  });
+  it("groups projects within each environment, retaining unlinked cost", () => {
+    const rows = buildUsageReport(
+      [
+        session,
+        { ...session, environmentId: EnvironmentId.make("other") },
+        { ...session, attribution: "unlinked", thread: undefined },
+      ],
+      "projects",
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows.reduce((sum, row) => sum + row.costUsd, 0)).toBe(6);
+    expect(rows.some((row) => row.title === "Unattributed usage")).toBe(true);
+  });
+});
+
+it("preserves real unpriced zero-counter records but omits fully synthetic unlinked rows", () => {
+  const model = {
+    ...session.models[0]!,
+    totals: {
+      uncachedInputTokens: 0,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    },
+    costUsd: 0,
+    unpricedRecords: 1,
+  };
+  const real = buildUsageReport(
+    [{ ...session, attribution: "unlinked", models: [model] }],
+    "threads",
+  );
+  expect(real[0]?.models).toEqual(["model"]);
+  expect(real[0]?.unpricedRecords).toBe(1);
+  expect(
+    buildUsageReport(
+      [{ ...session, attribution: "unlinked", models: [{ ...model, model: "<synthetic>" }] }],
+      "threads",
+    ),
+  ).toEqual([]);
+});
+
+it("keeps provider sessions separate when they belong to the same conversation", () => {
+  const rows = buildUsageReport(
+    [session, { ...session, sessionId: "second", lastActivityAt: "2026-09-02T00:00:00Z" }],
+    "sessions",
+  );
+  expect(rows).toHaveLength(2);
+  expect(new Set(rows.map((row) => row.sessionId))).toEqual(new Set(["native", "second"]));
+  expect(rows.reduce((total, row) => total + row.costUsd, 0)).toBe(4);
+  expect(rows.every((row) => row.sessions === 1 && row.project?.id === "thread")).toBe(true);
+  expect(
+    buildUsageReport([session, { ...session, sessionId: "second" }], "projects")[0]?.sessions,
+  ).toBe(2);
+});

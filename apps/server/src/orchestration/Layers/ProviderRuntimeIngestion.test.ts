@@ -391,7 +391,39 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
-  it("consumes a busy-thread user delivery when the provider starts its released turn", async () => {
+  it("a late completion cannot reopen a confirmed stopped episode", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("stopped-episode"),
+      threadId: asThreadId("thread-1"),
+      session: {
+        threadId: asThreadId("thread-1"),
+        status: "stopped",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+        stopRequestedAt: now,
+      },
+      createdAt: now,
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("late-stopped-completion"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("old-turn"),
+      createdAt: now,
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    expect((await harness.readModel()).threads[0]?.session?.status).toBe("stopped");
+  });
+
+  it("does not acknowledge a legacy queued marker from an unrelated lifecycle event", async () => {
     const harness = await createHarness();
     const threadId = asThreadId("thread-1");
     const messageId = asMessageId("queued-user-message");
@@ -462,12 +494,10 @@ describe("ProviderRuntimeIngestion", () => {
       },
       createdAt: "2026-01-01T00:00:03.000Z",
     });
-    expect((await harness.readModel()).threads[0]?.session?.queuedDeliveryMessageId).toBe(
-      messageId,
-    );
+    expect((await harness.readModel()).threads[0]?.session?.queuedDeliveryMessageId).toBe(null);
     expect(
       (await harness.readShell()).pipe(Option.getOrUndefined)?.session?.queuedDeliveryMessageId,
-    ).toBe(messageId);
+    ).toBeNull();
 
     harness.emit({
       type: "turn.started",
@@ -487,10 +517,148 @@ describe("ProviderRuntimeIngestion", () => {
     expect(await harness.readQueuedDeliveryReceipts()).toContainEqual(
       expect.objectContaining({
         messageId,
-        state: "consumed",
-        consumedByTurnId: asTurnId("queued-user-turn"),
-        consumedAt: expect.any(String),
+        state: "releasing",
+        consumedByTurnId: null,
+        consumedAt: null,
       }),
+    );
+  });
+
+  it.each(["releasing", "cancelled", "requeued", "requeued-cancelled"])(
+    "records provider acceptance by message ID despite recovery (%s)",
+    async (recovery) => {
+      const harness = await createHarness();
+      const threadId = asThreadId("thread-1");
+      const messageId = asMessageId("accepted-message");
+      const now = "2026-01-01T00:00:01.000Z";
+      const session = {
+        threadId,
+        status: "running" as const,
+        providerName: "claudeAgent" as const,
+        runtimeMode: "approval-required" as const,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+      };
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("busy"),
+        threadId,
+        session,
+        createdAt: now,
+      });
+      await harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("queue"),
+        threadId,
+        message: { messageId, role: "user", text: "authorization", attachments: [] },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      });
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("ready"),
+        threadId,
+        session: { ...session, status: "ready" },
+        createdAt: now,
+      });
+      await harness.dispatch({
+        type: "thread.turn.start.queued",
+        commandId: CommandId.make("release"),
+        threadId,
+        messageId,
+        createdAt: now,
+      });
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("native-running"),
+        threadId,
+        session,
+        createdAt: now,
+      });
+      if (recovery.startsWith("requeued")) {
+        await harness.dispatch({
+          type: "thread.turn.queue.requeue",
+          commandId: CommandId.make("requeue"),
+          threadId,
+          messageId,
+          createdAt: now,
+        });
+      }
+      if (recovery.endsWith("cancelled")) {
+        await harness.dispatch({
+          type: "thread.turn.queue.cancel",
+          commandId: CommandId.make("cancel"),
+          threadId,
+          messageId,
+          reason: "session_terminal",
+          createdAt: now,
+        });
+      }
+      await harness.dispatch({
+        type: "thread.turn.queue.consume",
+        commandId: CommandId.make("accepted"),
+        threadId,
+        messageId,
+        turnId: asTurnId("accepted-turn"),
+        createdAt: now,
+      });
+      expect(await harness.readQueuedDeliveryReceipts()).toContainEqual(
+        expect.objectContaining({
+          messageId,
+          state: "consumed",
+          consumedByTurnId: asTurnId("accepted-turn"),
+          cancelledAt: null,
+        }),
+      );
+      expect((await harness.readModel()).threads[0]?.session?.activeTurnId).toBeNull();
+    },
+  );
+
+  it("rejects an old episode cancellation after a resume has queued new input", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const now = "2026-01-01T00:00:02.000Z";
+    const messageId = asMessageId("resumed-input");
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("resumed"),
+      threadId,
+      session: {
+        threadId,
+        status: "running",
+        providerName: "claudeAgent",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+        episodeStartedAt: now,
+      },
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("new-input"),
+      threadId,
+      message: { messageId, role: "user", text: "new episode work", attachments: [] },
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    });
+    await expect(
+      harness.dispatch({
+        type: "thread.turn.queue.cancel",
+        commandId: CommandId.make("old-exit"),
+        threadId,
+        messageId,
+        reason: "session_terminal",
+        expectedSessionEpisode: "2026-01-01T00:00:00.000Z",
+        createdAt: now,
+      }),
+    ).rejects.toThrow("Terminal episode changed");
+    expect(await harness.readQueuedDeliveryReceipts()).toContainEqual(
+      expect.objectContaining({ messageId, state: "queued", cancelledAt: null }),
     );
   });
 

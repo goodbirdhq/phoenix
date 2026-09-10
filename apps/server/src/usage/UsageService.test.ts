@@ -1,3 +1,4 @@
+import * as UsageAttributionQuery from "./UsageAttributionQuery.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real
 // transcript trees on disk, outside the service's Effect FileSystem.
 import * as NodeFSP from "node:fs/promises";
@@ -7,7 +8,7 @@ import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
-import { UsageDay, type UsageSummaryInput } from "@t3tools/contracts";
+import { ProviderInstanceId, UsageDay, type UsageSummaryInput } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -68,6 +69,7 @@ const serviceLayers = (input: {
 }) =>
   ServerConfig.layerTest(process.cwd(), { prefix: input.prefix }).pipe(
     Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(UsageAttributionQuery.layerTest),
     Layer.provideMerge(ServerSettings.layerTest(input.settings)),
     Layer.provideMerge(
       Layer.succeed(
@@ -92,6 +94,63 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
 }
 
 describe("UsageService", () => {
+  it.live("keeps optional detail and contract vocabulary separate for concurrent callers", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(serviceLayers({ prefix: "usage-session-detail-test", home, settings })),
+      );
+      const [overview, detail, legacy] = yield* Effect.all(
+        [
+          service.readSummary({ ...WINDOW, contractVersion: 6 }),
+          service.readSummary({ ...WINDOW, contractVersion: 6, includeSessions: true }),
+          service.readSummary({ ...WINDOW, contractVersion: 4, includeSessions: true }),
+        ],
+        { concurrency: 3 },
+      );
+      assert.strictEqual(overview.sessionUsage, undefined);
+      assert.strictEqual(detail.sessionUsage?.length, 1);
+      assert.strictEqual(detail.sessionUsage?.[0]?.attribution, "unlinked");
+      assert.strictEqual(
+        detail.sessionUsage?.[0]?.models[0]?.totals.outputTokens,
+        totalOutputTokens(detail),
+      );
+      assert.strictEqual(detail.contractVersion, 6);
+      assert.strictEqual(legacy.contractVersion, 4);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("reports all configured instances sharing a store without multiplying usage", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          serviceLayers({
+            prefix: "usage-service-membership-test",
+            home,
+            settings: {
+              ...settings,
+              providerInstances: {
+                [ProviderInstanceId.make("claudeAgent_b")]: {
+                  driver: "claudeAgent",
+                  config: { homePath: NodePath.join(home, "claude") },
+                },
+              },
+            },
+          }),
+        ),
+      );
+      const result = yield* service.readSummary(WINDOW);
+      const sources = result.sources.filter((source) => source.fingerprint.provider === "claude");
+      assert.strictEqual(sources.length, 1);
+      assert.deepEqual(sources[0]?.configuredInstanceIds, ["claudeAgent", "claudeAgent_b"]);
+      assert.strictEqual(totalOutputTokens(result), 5);
+      assert.strictEqual(sources[0]?.distinctSessions, 1);
+    }).pipe(Effect.scoped),
+  );
+
   it.live("counts appended usage on a rescan of a grown transcript", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;

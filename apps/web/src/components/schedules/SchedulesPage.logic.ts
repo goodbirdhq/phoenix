@@ -1,5 +1,7 @@
-import type { ModelSelection, ScheduleHistoryEntry } from "@t3tools/contracts";
+import { describeScheduleCadence } from "@t3tools/shared/scheduleCadence";
+import type { ModelSelection, ScheduleHistoryEntry, ScheduleTiming } from "@t3tools/contracts";
 import {
+  type AggregatedScheduleRow,
   preferredScheduleBaseBranch,
   resolveScheduleWorkspaceModeDefault,
   scheduleWorktreeCapability,
@@ -81,15 +83,18 @@ export function reconcileScheduleEditorDefaults<T extends ScheduleEditorDefaults
 
   const project =
     input.projects.find((candidate) => candidate.id === draft.projectId) ?? input.projects[0];
-  const projectId = project?.id ?? "";
-  const modelSelection = input.modelChoices.some(
-    (choice) => draft.modelSelection !== null && sameModel(choice.selection, draft.modelSelection),
-  )
-    ? draft.modelSelection
-    : chooseScheduleModelSelection(
-        [project?.defaultModelSelection, input.serverDefaultModelSelection],
-        input.modelChoices,
-      );
+  const projectId = input.editing && draft.projectId ? draft.projectId : (project?.id ?? "");
+  const modelSelection =
+    (input.editing && draft.modelSelection !== null) ||
+    input.modelChoices.some(
+      (choice) =>
+        draft.modelSelection !== null && sameModel(choice.selection, draft.modelSelection),
+    )
+      ? draft.modelSelection
+      : chooseScheduleModelSelection(
+          [project?.defaultModelSelection, input.serverDefaultModelSelection],
+          input.modelChoices,
+        );
   const workspaceMode = draft.workspaceCustomized
     ? draft.workspaceMode
     : resolveScheduleWorkspaceModeDefault(project === undefined ? null : input.isRepo);
@@ -143,3 +148,114 @@ export {
   prependOlderScheduleHistory,
   scheduleHistoryEntryKey,
 } from "@t3tools/client-runtime/schedules";
+
+/** Compact destination timestamp; keep the year when it would otherwise be ambiguous. */
+export function scheduleDisplayTimestamp(
+  value: string,
+  timeZone: string,
+  now = new Date(),
+): string {
+  try {
+    const date = new Date(value);
+    const year = new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone });
+    const parts = new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone,
+    }).formatToParts(date);
+    const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value;
+    const day = `${part("weekday")}, ${part("day")} ${part("month")}${year.format(date) !== year.format(now) ? ` ${year.format(date)}` : ""}`;
+    const time = new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone,
+    }).format(date);
+    return `${day} · ${time}`;
+  } catch {
+    return value;
+  }
+}
+
+export function scheduleRepeatSummary(timing: ScheduleTiming, timeZone: string) {
+  if (timing.type === "one-time")
+    return { value: "One time", description: "Runs once at the saved time" };
+  const cadence = describeScheduleCadence(timing, timeZone);
+  const split =
+    /^(Weekdays|Every day|Mondays|Tuesdays|Wednesdays|Thursdays|Fridays|Saturdays|Sundays) at (\d{2}:\d{2})$/u.exec(
+      cadence,
+    );
+  return split
+    ? {
+        value: split[1]!,
+        description: `At ${split[2]}${split[1] === "Weekdays" ? " · Mon–Fri" : ""}`,
+      }
+    : { value: cadence, description: timing.expression };
+}
+
+/** Show the next connected occurrence first, leaving cached offline work at the end. */
+export function compareScheduleSidebarRows(
+  left: Pick<AggregatedScheduleRow, "state" | "online" | "nextOccurrenceAt" | "name">,
+  right: Pick<AggregatedScheduleRow, "state" | "online" | "nextOccurrenceAt" | "name">,
+) {
+  if (left.state === "enabled" && right.state === "enabled") {
+    if (left.online !== right.online) return left.online ? -1 : 1;
+    const leftTime = left.nextOccurrenceAt === null ? Infinity : Date.parse(left.nextOccurrenceAt);
+    const rightTime =
+      right.nextOccurrenceAt === null ? Infinity : Date.parse(right.nextOccurrenceAt);
+    if (leftTime !== rightTime) return leftTime - rightTime;
+  }
+  return left.name.localeCompare(right.name);
+}
+
+export function schedulePromptExplanation(
+  state: AggregatedScheduleRow["state"],
+  latestOutcome: ScheduleHistoryEntry["type"] | null,
+) {
+  if (state === "failed")
+    return latestOutcome === "triggered"
+      ? "The latest run created a thread. Edit the schedule to enable future occurrences."
+      : "This schedule could not start its thread. Failures after a thread starts are shown in the thread.";
+  if (state === "completed")
+    return latestOutcome === "triggered"
+      ? "The scheduled thread was created. Open it to see the agent’s progress."
+      : "This one-time schedule is completed. Review its history for recorded occurrences.";
+  return "Each occurrence starts a fresh thread. Agent progress and approvals appear in that thread.";
+}
+
+export function scheduleHistoryScheduledLabel(
+  entry: ScheduleHistoryEntry,
+  timeZone: string,
+  compact: boolean,
+) {
+  const label = (value: string) => {
+    const formatted = scheduleDisplayTimestamp(value, timeZone);
+    return compact ? formatted : formatted.replace(/^[^,]+, /u, "");
+  };
+  if (entry.type !== "skipped") return label(entry.scheduledFor);
+  const first = label(entry.firstScheduledFor).split(" · ")[0];
+  const last = label(entry.lastScheduledFor).split(" · ")[0];
+  return first === last ? first : `${first} – ${last}`;
+}
+
+export function scheduleHistoryStartedLabel(
+  entry: Extract<ScheduleHistoryEntry, { type: "triggered" }>,
+  timeZone: string,
+) {
+  const started = scheduleDisplayTimestamp(entry.triggeredAt, timeZone);
+  const scheduled = scheduleDisplayTimestamp(entry.scheduledFor, timeZone);
+  if (!started.includes(" · ")) return `Started ${started}`;
+  return started.split(" · ")[0] === scheduled.split(" · ")[0]
+    ? `Started at ${started.split(" · ")[1]}`
+    : `Started ${started}`;
+}
+
+export function scheduleHistoryFailureDetails(
+  entry: Extract<ScheduleHistoryEntry, { type: "failed" }>,
+  timeZone: string,
+) {
+  const first = scheduleDisplayTimestamp(entry.firstFailedAt, timeZone);
+  const last = scheduleDisplayTimestamp(entry.lastFailedAt, timeZone);
+  return `${entry.code} · ${first === last ? first : `${first} – ${last}`}`;
+}

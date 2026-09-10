@@ -1,3 +1,4 @@
+import * as QueuedDelivery from "../QueuedDelivery.ts";
 import {
   CommandId,
   EventId,
@@ -165,6 +166,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   readonly status: NonNullable<OrchestrationThreadShell["session"]>["status"];
   readonly queued: ReadonlyArray<ProjectionQueuedTurnStart>;
   readonly live?: boolean;
+  readonly pendingMessageId?: MessageId;
   readonly updatedAt?: string;
   readonly boundaryEvents?: ReadonlyArray<OrchestrationEvent>;
   readonly preActivationEvent?: OrchestrationEvent;
@@ -321,7 +323,12 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
     status: () => Effect.die("git status unused in this harness"),
   } as unknown as GitWorkflowService.GitWorkflowService["Service"]);
 
-  const reactor = yield* makeSessionSpawnReactor.pipe(
+  const reactor = yield* Effect.gen(function* () {
+    const delivery = yield* QueuedDelivery.QueuedDelivery;
+    if (input.pendingMessageId) yield* delivery.setPending(CHILD_ID, input.pendingMessageId, true);
+    return yield* makeSessionSpawnReactor;
+  }).pipe(
+    Effect.provide(QueuedDelivery.layer),
     Effect.provideService(OrchestrationEngineService, engine),
     Effect.provideService(ProjectionSnapshotQuery, snapshot),
     Effect.provideService(ProjectionTurnRepository, turns),
@@ -351,6 +358,45 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
 });
 
 describe("SessionSpawnReactor queued delivery", () => {
+  it.effect("notifies the parent that stop is unconfirmed without claiming the child died", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const event: OrchestrationEvent = {
+          ...sessionSetEvent(makeShell(CHILD_ID, "running")),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: CHILD_ID,
+            activity: {
+              id: EventId.make("stop-failed"),
+              kind: "provider.session.stop.failed",
+              tone: "error",
+              summary: "Provider stop was not confirmed",
+              payload: { detail: "exit unconfirmed" },
+              turnId: null,
+              createdAt: NOW,
+            },
+          },
+        };
+        const harness = yield* createHarness({
+          status: "running",
+          queued: [queued("blocked")],
+          live: true,
+          boundaryEvents: [event, event],
+        });
+        const notices = harness.commands.filter(
+          (c) => c.type === "thread.turn.start" && c.threadId === PARENT_ID,
+        );
+        expect(notices.length).toBeGreaterThan(0);
+        expect(new Set(notices.map((c) => c.commandId)).size).toBe(1);
+        expect(notices[0]?.type === "thread.turn.start" && notices[0].message.text).toContain(
+          "Queued instructions remain blocked",
+        );
+        expect(harness.commands.some((c) => c.type === "thread.report.post")).toBe(false);
+        expect(harness.queuedRows[0]?.state).toBe("queued");
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
   it.effect("releases a queued user message that quotes a report envelope", () =>
     Effect.scoped(
       createHarness({
@@ -467,6 +513,25 @@ describe("SessionSpawnReactor queued delivery", () => {
         }),
         Effect.provide(NodeServices.layer),
       ),
+    ),
+  );
+
+  it.effect("does not requeue an input while its acceptance receipt is owned", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const harness = yield* createHarness({
+          status: "ready",
+          queued: [releasing("owned")],
+          pendingMessageId: MessageId.make("queued-owned"),
+        });
+        expect(
+          harness.commands.some(
+            (c) => c.type === "thread.turn.queue.requeue" || c.type === "thread.turn.start.queued",
+          ),
+        ).toBe(false);
+        expect(harness.queuedRows[0]?.state).toBe("releasing");
+      }).pipe(Effect.provide(NodeServices.layer)),
     ),
   );
 
@@ -682,6 +747,63 @@ describe("SessionSpawnReactor queued delivery", () => {
         ).toHaveLength(2);
         expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(1);
       }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("an old terminal event cannot cancel a resumed session's queued work", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const { commands, queuedRows } = yield* createHarness({
+          status: "running",
+          live: true,
+          updatedAt: NOW,
+          queued: [queued("new-episode")],
+          boundaryEvents: [sessionSetEvent(makeShell(CHILD_ID, "stopped", STALE))],
+        });
+        expect(commands.filter((command) => command.type === "thread.turn.queue.cancel")).toEqual(
+          [],
+        );
+        expect(queuedRows).toHaveLength(1);
+        const notice = commands.find((command) => command.type === "thread.turn.start");
+        expect(notice?.type === "thread.turn.start" && notice.message.text).toContain(
+          `ended at ${STALE}`,
+        );
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("a delayed old report is not reused for the resumed episode", () =>
+    Effect.scoped(
+      createHarness({
+        status: "stopped",
+        updatedAt: NOW,
+        queued: [],
+        boundaryEvents: [sessionSetEvent(makeShell(CHILD_ID, "stopped", NOW))],
+        reports: [
+          {
+            reportId: `session-terminal-report:${CHILD_ID}:${STALE}`,
+            threadId: CHILD_ID,
+            status: "partial",
+            title: "Old episode ended",
+            summary: "Delayed report from before the resume.",
+            artifacts: [],
+            origin: "system",
+            createdAt: NOW,
+          },
+        ],
+      }).pipe(
+        Effect.map(({ commands }) => {
+          const posted = commands.filter((command) => command.type === "thread.report.post");
+          expect(posted).toHaveLength(1);
+          expect(posted[0]?.reportId).toBe(`session-terminal-report:${CHILD_ID}:${NOW}`);
+          const notice = commands.find((command) => command.type === "thread.turn.start");
+          expect(notice?.type === "thread.turn.start" && notice.message.messageId).toBe(
+            `session-report-delivery:${CHILD_ID}:session-terminal-report:${CHILD_ID}:${NOW}`,
+          );
+        }),
+        Effect.provide(NodeServices.layer),
+      ),
     ),
   );
 

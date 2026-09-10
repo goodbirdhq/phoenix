@@ -113,8 +113,8 @@ describe("ClientSettings browser recording frame rate", () => {
 });
 
 describe("ClientSettings glass opacity", () => {
-  it("defaults to a readable translucent surface", () => {
-    expect(decodeClientSettings({}).glassOpacity).toBe(80);
+  it("defaults to an opaque surface", () => {
+    expect(decodeClientSettings({}).glassOpacity).toBe(100);
   });
 
   it.each([39, 101, 72.5])("rejects an invalid glass opacity: %s", (value) => {
@@ -565,5 +565,30 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(encoded.addProjectBaseDirectory).toBe("~/Development");
     expect(encoded.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
     expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
+  });
+});
+
+describe("environment appearance preferences", () => {
+  it("defaults older clients to no custom appearance and round-trips all icon choices", () => {
+    expect(decodeClientSettings({}).environmentAppearance).toEqual({});
+    const environmentAppearance = {
+      laptop: { icon: "laptop", alias: "My laptop" },
+      desktop: { icon: "desktop", alias: "Workstation" },
+      server: { icon: "server", alias: "Build" },
+    };
+    expect(
+      decodeClientSettings(encodeClientSettings(decodeClientSettings({ environmentAppearance })))
+        .environmentAppearance,
+    ).toEqual(environmentAppearance);
+    expect(decodeClientSettingsPatch({ environmentAppearance }).environmentAppearance).toEqual(
+      environmentAppearance,
+    );
+  });
+  it("rejects unsupported icons at the persistence boundary", () => {
+    expect(() =>
+      decodeClientSettingsPatch({
+        environmentAppearance: { example: { icon: "cloud", alias: "Example" } },
+      }),
+    ).toThrow();
   });
 });

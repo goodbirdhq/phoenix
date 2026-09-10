@@ -1,3 +1,5 @@
+import { UsageHoverSummary } from "../usage/UsageHoverSummary";
+import { useProviderUpdateCount } from "../../state/providerUpdates";
 import {
   aggregateSchedules,
   unacknowledgedScheduleFailureCount,
@@ -5,6 +7,7 @@ import {
 import { Link, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
+  ArrowUpIcon,
   CalendarClockIcon,
   ChartNoAxesColumnIcon,
   CodeXmlIcon,
@@ -23,7 +26,7 @@ import { isElectron } from "../../env";
 import { isMacPlatform } from "../../lib/utils";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator, MenuShortcut } from "../ui/menu";
-import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../../hooks/useSettings";
 import { APP_BASE_NAME } from "~/branding";
 import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
@@ -51,14 +54,19 @@ import { SidebarUpdateArchitectureWarning, SidebarUpdateMenuItem } from "./Sideb
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
+  plain = false,
+  compact = false,
 }: {
   isElectron: boolean;
+  plain?: boolean;
+  compact?: boolean;
 }) {
+  const legacy = useLegacySidebarEnabled();
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const backdropVariant = resolveSidebarStageBackdropVariant(
     stageLabel,
-    environmentIdentificationMode === "artwork",
+    !plain && environmentIdentificationMode === "artwork",
   );
   const pillLabel =
     environmentIdentificationMode === "pill"
@@ -68,7 +76,10 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   return (
     <SidebarHeader
       className={cn(
-        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0",
+        "@container/sidebar-header relative shrink-0 flex-row items-center px-3 pb-0 md:px-0",
+        legacy || compact
+          ? "h-[var(--workspace-topbar-height)] pt-0"
+          : "h-[calc(var(--workspace-topbar-height)+14px)] pt-3.5",
         isElectron && "drag-region",
       )}
     >
@@ -81,7 +92,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           backdropVariant && resolveSidebarStageFocusRingOffsetClass(backdropVariant),
         )}
       />
-      <SidebarBrand onBackdrop={backdropVariant !== null} />
+      <SidebarBrand onBackdrop={backdropVariant !== null} legacy={legacy} />
       {pillLabel ? (
         <Badge
           className="relative z-10 ml-1 hidden rounded-full px-1.5 text-muted-foreground @[15rem]/sidebar-header:inline-flex"
@@ -96,12 +107,15 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   );
 });
 
-function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
+function SidebarBrand({ onBackdrop, legacy }: { onBackdrop: boolean; legacy: boolean }) {
   return (
     <Link
       aria-label="Go to threads"
       className={cn(
-        "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex",
+        "relative z-10 hidden h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex",
+        legacy
+          ? "ml-[var(--workspace-titlebar-content-left)]"
+          : "ml-[calc(var(--workspace-titlebar-content-left)+22px)]",
         onBackdrop ? "text-white" : "text-foreground",
       )}
       to="/"
@@ -123,12 +137,14 @@ function SidebarUtilityItem({
   label,
   onClick,
   active = false,
-  activeWidth,
   badge,
+  updateCount,
+  tooltipContent,
 }: {
   active?: boolean;
-  activeWidth: number;
   badge?: number;
+  updateCount?: number;
+  tooltipContent?: ReactNode;
   icon: ReactNode;
   label: string;
   onClick: () => void;
@@ -142,10 +158,11 @@ function SidebarUtilityItem({
               aria-label={
                 badge
                   ? `${label}, ${badge} unacknowledged ${badge === 1 ? "failure" : "failures"}`
-                  : label
+                  : updateCount
+                    ? `${label}, ${updateCount} provider updates available`
+                    : label
               }
               aria-current={active ? "page" : undefined}
-              style={active ? { width: activeWidth } : undefined}
               onClick={onClick}
               className={cn(
                 "relative h-9 w-9 @max-[316px]/sidebar-footer:w-7! @max-[316px]/sidebar-footer:px-0 group-data-[wide-label=true]/footer:w-8 justify-center rounded-[8px] p-0 text-sidebar-muted-foreground [&>svg]:size-4 [&>svg]:text-current",
@@ -155,6 +172,14 @@ function SidebarUtilityItem({
             >
               {icon}
               {active ? <span className="@max-[316px]/sidebar-footer:hidden">{label}</span> : null}
+              {updateCount ? (
+                <span
+                  className="absolute -right-0.5 -top-0.5 rounded-full bg-sidebar p-0.5 text-warning"
+                  aria-hidden
+                >
+                  <ArrowUpIcon className="size-2.5" />
+                </span>
+              ) : null}
               {badge ? (
                 <span
                   className="absolute right-0 top-0 flex min-h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[9px] font-semibold leading-none text-white"
@@ -166,7 +191,16 @@ function SidebarUtilityItem({
             </SidebarMenuButton>
           }
         />
-        <TooltipPopup side="top">{label}</TooltipPopup>
+        <TooltipPopup
+          side="top"
+          className={
+            tooltipContent
+              ? "rounded-[10px] [&_[data-slot=tooltip-viewport]]:p-0 [--viewport-inline-padding:0px]"
+              : undefined
+          }
+        >
+          {tooltipContent ?? label}
+        </TooltipPopup>
       </Tooltip>
     </SidebarMenuItem>
   );
@@ -251,6 +285,7 @@ function SidebarSettingsMenu({ onNavigate }: { onNavigate: () => void }) {
 }
 
 export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
+  const providerUpdates = useProviderUpdateCount();
   const navigate = useNavigate();
   const router = useRouter();
   const location = useLocation();
@@ -355,7 +390,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           <SidebarUtilityItem
             icon={<CodeXmlIcon strokeWidth={1.7} />}
             label="Agents"
-            activeWidth={84}
             active={currentFooterPage === null}
             onClick={() => {
               closeMobileSidebar();
@@ -366,7 +400,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             <SidebarUtilityItem
               icon={<GitPullRequestIcon />}
               label="Pull Requests"
-              activeWidth={132}
               active={currentFooterPage === "pull-requests"}
               onClick={handlePullRequestsClick}
             />
@@ -374,7 +407,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           <SidebarUtilityItem
             icon={<CalendarClockIcon />}
             label="Schedules"
-            activeWidth={112}
             active={currentFooterPage === "schedules"}
             onClick={handleSchedulesClick}
             badge={scheduleFailureCount}
@@ -382,14 +414,14 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"
-            activeWidth={84}
+            tooltipContent={<UsageHoverSummary />}
             active={currentFooterPage === "usage"}
             onClick={handleUsageClick}
           />
           <SidebarUtilityItem
             icon={<ServerIcon />}
             label="Environments"
-            activeWidth={132}
+            updateCount={providerUpdates}
             active={currentFooterPage === "environments"}
             onClick={handleEnvironmentsClick}
           />
@@ -402,7 +434,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
-    <SidebarFooter className="border-t-0 p-2.5">
+    <SidebarFooter className="border-t-0 px-[11px] py-2.5">
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />

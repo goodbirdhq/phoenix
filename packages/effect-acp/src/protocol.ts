@@ -368,11 +368,16 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
         if (message.exit._tag === "Success") {
           return completeExtPendingSuccess(message.requestId, message.exit.value);
         }
-        const failure = message.exit.cause.find((entry) => entry._tag === "Fail");
-        if (failure && isProtocolError(failure.error)) {
+        // Extension errors may arrive as encoded defects because raw methods have no typed error schema.
+        const failure = message.exit.cause
+          .map((entry) =>
+            entry._tag === "Fail" ? entry.error : entry._tag === "Die" ? entry.defect : undefined,
+          )
+          .find(isProtocolError);
+        if (failure) {
           return completeExtPendingFailure(
             message.requestId,
-            AcpError.AcpRequestError.fromProtocolError(failure.error, {
+            AcpError.AcpRequestError.fromProtocolError(failure, {
               method: pendingRequest.method,
               requestId: message.requestId,
               cause: message.exit.cause,

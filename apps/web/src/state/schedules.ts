@@ -32,6 +32,9 @@ export interface WebEnvironmentSchedules {
   readonly source: "cache" | "live";
   readonly snapshotSequence: number;
   readonly schedules: ReadonlyArray<ScheduleSummary>;
+  readonly status: "empty" | "cached" | "synchronizing" | "live";
+  readonly error: string | null;
+  readonly hasSnapshot: boolean;
 }
 
 export function useWebEnvironmentSchedules() {
@@ -57,6 +60,9 @@ export function useWebEnvironmentSchedules() {
           source: state?.status === "live" ? ("live" as const) : ("cache" as const),
           snapshotSequence: snapshot?.sequence ?? 0,
           schedules: snapshot?.schedules ?? [],
+          status: state?.status ?? "empty",
+          error: state ? Option.getOrNull(state.error) : null,
+          hasSnapshot: snapshot !== null,
         };
       }),
     [environments, stateById],

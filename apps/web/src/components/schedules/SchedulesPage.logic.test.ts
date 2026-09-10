@@ -8,6 +8,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   chooseScheduleModelSelection,
+  compareScheduleSidebarRows,
+  schedulePromptExplanation,
+  scheduleHistoryFailureDetails,
+  scheduleDisplayTimestamp,
+  scheduleRepeatSummary,
   latestScheduleHistoryListText,
   latestScheduleHistorySummary,
   prependOlderScheduleHistory,
@@ -163,6 +168,33 @@ describe("Schedule editor logic", () => {
     ).toBe(draft);
   });
 
+  it("preserves saved project and provider when editing an unavailable configuration", () => {
+    const draft = {
+      environmentId: "agents",
+      projectId: "removed-project",
+      modelSelection: configuredSelection,
+      workspaceMode: "local" as const,
+      workspaceCustomized: true,
+      baseBranch: "origin/main",
+    };
+    expect(
+      reconcileScheduleEditorDefaults(draft, {
+        environmentId: "agents",
+        projects: [{ id: "other-project", defaultModelSelection: null }],
+        modelChoices: [
+          {
+            selection: { instanceId: ProviderInstanceId.make("claude"), model: "another-model" },
+            isDefault: true,
+          },
+        ],
+        serverDefaultModelSelection: null,
+        isRepo: false,
+        branchRefs: [],
+        editing: true,
+      }),
+    ).toBe(draft);
+  });
+
   it("uses mode-appropriate pause copy", () => {
     expect(schedulePauseFieldLabel(false)).toBe("Create Paused");
     expect(schedulePauseFieldLabel(true)).toBeNull();
@@ -176,7 +208,7 @@ describe("Schedule editor logic", () => {
 });
 
 describe("Schedule attention and history", () => {
-  const failed = (occurrenceId: string): ScheduleHistoryEntry => ({
+  const failed = (occurrenceId: string): Extract<ScheduleHistoryEntry, { type: "failed" }> => ({
     type: "failed",
     occurrenceId: OccurrenceId.make(occurrenceId),
     scheduledFor: "2026-08-19T09:00:00.000Z",
@@ -186,6 +218,32 @@ describe("Schedule attention and history", () => {
     count: 2,
     firstFailedAt: "2026-08-19T09:00:01.000Z",
     lastFailedAt: "2026-08-19T09:05:01.000Z",
+  });
+
+  it("preserves failure codes and actual retry times in the owning time zone", () => {
+    const entry = {
+      ...failed("00000000-0000-0000-0000-00000000000a"),
+      scheduledFor: "2026-08-19T07:00:00.000Z",
+      firstFailedAt: "2026-08-19T07:20:00.000Z",
+      lastFailedAt: "2026-08-19T07:40:00.000Z",
+    };
+    const details = scheduleHistoryFailureDetails(entry, "Europe/Berlin");
+    expect(details).toContain("trigger_failed");
+    expect(details).toContain("09:20");
+    expect(details).toContain("09:40");
+    expect(details).not.toContain("09:00");
+    expect(
+      scheduleHistoryFailureDetails(
+        { ...entry, lastFailedAt: entry.firstFailedAt },
+        "Europe/Berlin",
+      ),
+    ).not.toContain(" – ");
+    expect(
+      scheduleHistoryFailureDetails(
+        { ...entry, lastFailedAt: "2026-08-20T07:40:00.000Z" },
+        "Europe/Berlin",
+      ),
+    ).toContain("20 Aug");
   });
 
   it("keys acknowledgement to the latest failed Occurrence", () => {
@@ -273,5 +331,71 @@ describe("Schedule attention and history", () => {
       second,
       third,
     ]);
+  });
+});
+
+describe("schedule destination labels", () => {
+  it("formats in the owning environment time zone across midnight and daylight saving", () => {
+    const now = new Date("2026-09-08T00:00:00Z");
+    expect(scheduleDisplayTimestamp("2026-09-07T07:00:00Z", "Europe/Berlin", now)).toBe(
+      "Mon, 7 Sep · 09:00",
+    );
+    expect(scheduleDisplayTimestamp("2026-09-07T23:30:00Z", "Europe/Berlin", now)).toBe(
+      "Tue, 8 Sep · 01:30",
+    );
+    expect(scheduleDisplayTimestamp("2026-12-07T07:00:00Z", "Europe/Berlin", now)).toBe(
+      "Mon, 7 Dec · 08:00",
+    );
+    expect(scheduleDisplayTimestamp("2025-09-07T07:00:00Z", "Europe/Berlin", now)).toBe(
+      "Sun, 7 Sep 2025 · 09:00",
+    );
+    expect(scheduleDisplayTimestamp("unavailable", "Europe/Berlin", now)).toBe("unavailable");
+  });
+  it("separates a known cadence from its time without guessing custom cron semantics", () => {
+    expect(
+      scheduleRepeatSummary({ type: "cron", expression: "0 9 * * 1-5" }, "Europe/Berlin"),
+    ).toEqual({ value: "Weekdays", description: "At 09:00 · Mon–Fri" });
+    expect(
+      scheduleRepeatSummary({ type: "cron", expression: "*/16 * * * *" }, "Europe/Berlin"),
+    ).toEqual({ value: "*/16 * * * *", description: "*/16 * * * *" });
+  });
+});
+
+describe("schedule navigation and recovery", () => {
+  it("sorts enabled schedules by upcoming time across environments, then offline rows", () => {
+    const rows = [
+      {
+        state: "enabled" as const,
+        online: false,
+        nextOccurrenceAt: "2026-09-08T05:00:00Z",
+        name: "Offline",
+      },
+      { state: "enabled" as const, online: true, nextOccurrenceAt: null, name: "Unavailable" },
+      {
+        state: "enabled" as const,
+        online: true,
+        nextOccurrenceAt: "2026-09-08T07:00:00Z",
+        name: "Daily",
+      },
+      {
+        state: "enabled" as const,
+        online: true,
+        nextOccurrenceAt: "2026-09-08T06:00:00Z",
+        name: "Dependency",
+      },
+    ];
+    expect(rows.toSorted(compareScheduleSidebarRows).map((row) => row.name)).toEqual([
+      "Dependency",
+      "Daily",
+      "Unavailable",
+      "Offline",
+    ]);
+  });
+  it("recognizes a successful manual recovery while the one-time schedule remains failed", () => {
+    expect(schedulePromptExplanation("failed", "triggered")).toContain(
+      "latest run created a thread",
+    );
+    expect(schedulePromptExplanation("failed", "failed")).toContain("could not start its thread");
+    expect(schedulePromptExplanation("completed", null)).not.toContain("thread was created");
   });
 });

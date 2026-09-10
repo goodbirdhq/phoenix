@@ -194,3 +194,32 @@ Required coverage includes:
 [supervisor]: ../../packages/client-runtime/src/connection/supervisor.ts
 [session]: ../../packages/client-runtime/src/rpc/session.ts
 [client]: ../../packages/client-runtime/src/rpc/client.ts
+
+## Environment destination preferences
+
+The web and desktop Environments route selects an inspection target independently of the active
+conversation. Its `environment` and `tab` search parameters preserve that target when changing tabs.
+Live host metrics and history subscribe only while Overview is selected.
+
+`ClientSettings.environmentAppearance` stores display aliases and laptop/desktop/server icons by
+EnvironmentId. These are client presentation preferences, not server-wide renames. Missing entries
+use the connection label and desktop icon. The existing server setting `addProjectBaseDirectory`
+owns the default directory for adding projects; it does not change any existing project root.
+
+Saved bearer and SSH profiles have an optional `autoConnect` preference. Missing means true for
+backward compatibility. False suppresses startup connection, while an explicit retry starts the
+supervisor. Changing the preference updates persistence and the registry entry without replacing
+an existing transport. Disconnect stops the supervisor without removing its saved profile or
+cache; Remove uses the existing registration-removal path. Platform-managed environments retain
+their existing lifecycle restrictions.
+
+Access actions use the selected supervisor's prepared endpoint and authorization through the shared
+HTTP client, including bearer, cookie and managed-relay DPoP authorization. Client-side permissions
+control presentation; the server remains authoritative for every action. Creating or revoking access
+is immediate and independent of the Edit environment draft.
+
+Pairing exchanges inherit the invitation's granted scopes rather than forcing the client's standard
+request set. Re-registration preserves `autoConnect` for the same connection ID. Durable streams
+follow supervisor identity, so a new credential with an equivalent catalog entry still replaces
+prepared HTTP authorization and permission queries. An explicit retry sends one connect signal for
+a previously disconnected supervisor or one retry signal for an existing connection intent.
