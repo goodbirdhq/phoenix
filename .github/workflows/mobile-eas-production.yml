@@ -221,7 +221,12 @@ jobs:
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas build --platform ${{ inputs.platform }} --profile production --auto-submit --non-interactive --no-wait
+        run: |
+          if [ "${{ inputs.platform }}" = "android" ]; then
+            eas build --platform android --profile production:apk --non-interactive --no-wait
+          else
+            eas build --platform ${{ inputs.platform }} --profile production --auto-submit --non-interactive --no-wait
+          fi
 
       - name: Publish OTA update (manual)
         if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.mode == 'update'
