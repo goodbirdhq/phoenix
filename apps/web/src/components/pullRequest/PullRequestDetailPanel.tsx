@@ -1,3 +1,4 @@
+import { EnvironmentIcon } from "../environments/EnvironmentIcon";
 import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
@@ -14,6 +15,7 @@ import {
   ArrowLeftIcon,
   ArrowUpRightIcon,
   BookOpenIcon,
+  HistoryIcon,
   CircleDotIcon,
   ChevronDownIcon,
   ExternalLinkIcon,
@@ -34,7 +36,6 @@ import {
   PanelRightIcon,
   PencilIcon,
   RefreshCwIcon,
-  ServerIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import {
@@ -77,7 +78,7 @@ import {
 } from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import { PullRequestEditDialog } from "./PullRequestEditDialog";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
   Menu,
@@ -203,11 +204,11 @@ const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
 const UPDATE_BRANCH_REBASE_FAILURE_HINT =
   "The host refused it. A rebase stops at the first commit that does not apply cleanly; updating with a merge commit may still work.";
 
-const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
-  { value: "summary", label: "Summary" },
-  { value: "timeline", label: "Timeline" },
-  { value: "code", label: "Code" },
-];
+const TABS = [
+  { value: "summary", label: "Summary", Icon: BookOpenIcon },
+  { value: "timeline", label: "Timeline", Icon: HistoryIcon },
+  { value: "code", label: "Code", Icon: FileDiffIcon },
+] as const;
 
 // The diff viewer pulls in its worker pool, so it stays out of the bundle until Code is opened.
 // Named rather than inlined so the panel can also call it itself, to start the download before
@@ -258,7 +259,7 @@ function ActOnEnvironmentPicker({
             {/* The radio item lays its children out as one block, so the icon and the label
                 need their own row to share a line. */}
             <span className="flex min-w-0 items-center gap-2">
-              <ServerIcon className="size-3.5 shrink-0" />
+              <EnvironmentIcon environmentId={environment.environmentId} />
               <span className="truncate">{environment.label}</span>
             </span>
           </MenuRadioItem>
@@ -640,15 +641,7 @@ export function PullRequestDetailPanel({
   // of them runs, but only the button that was pressed may say what it is doing.
   const [pendingAction, setPendingAction] = useState<PullRequestAction | null>(null);
   const actionPending = pendingAction !== null;
-  const update = useAtomCommand(pullRequestEnvironment.update, { reportFailure: false });
-  // Scoped to the pull request it was typed against, since this one panel shows a different one
-  // every time it is opened and a half-written title must not follow it there.
-  const [titleScope, setTitleScope] = useState<{
-    readonly pullRequestKey: string;
-    readonly text: string;
-  } | null>(null);
-  const titleDraft = titleScope?.pullRequestKey === pullRequestKey ? titleScope.text : null;
-  const [titleSaving, setTitleSaving] = useState(false);
+  const [editScope, setEditScope] = useState<string | null>(null);
   const newThread = useNewThreadHandler();
   const { environments } = useEnvironments();
   const projects = useProjects();
@@ -725,6 +718,7 @@ export function PullRequestDetailPanel({
       });
       return;
     }
+    setConfirmation((current) => ({ ...current, open: false }));
     toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
     // A branch update moves the head commit, which leaves the diff atom pointed at a comparison
     // that no longer exists — the same staleness the manual refresh button fixes, so it goes
@@ -737,33 +731,6 @@ export function PullRequestDetailPanel({
       refreshDetail();
     }
     onActed?.();
-  };
-
-  const saveTitle = async (next: string) => {
-    const title = next.trim();
-    if (detail === null || titleSaving) return;
-    if (title.length === 0 || title === detail.title) {
-      setTitleScope(null);
-      return;
-    }
-    setTitleSaving(true);
-    const result = await update({ environmentId, input: { ...reference, title } });
-    setTitleSaving(false);
-    if (result._tag === "Failure") {
-      // The draft stays open with the words still in it: retyping a title somebody has just
-      // rewritten is the one thing a failed save must not cost them.
-      toastManager.add({
-        type: "error",
-        title: "The title could not be saved",
-        description: readableFailure(
-          squashAtomCommandFailure(result),
-          "The host refused the new title.",
-        ),
-      });
-      return;
-    }
-    setTitleScope(null);
-    refreshDetail();
   };
 
   type ThreadTask = {
@@ -1178,7 +1145,7 @@ export function PullRequestDetailPanel({
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col bg-background">
+    <div className="@container/pr-detail flex h-full min-h-0 w-full flex-col bg-background">
       <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 border-b border-border/60">
         <div className="ml-4 grid h-7 min-w-0 items-center">
           <div
@@ -1683,67 +1650,34 @@ export function PullRequestDetailPanel({
             inert={condensed}
           >
             {detail ? (
-              <div className="col-span-2 mt-1 min-w-0 px-4 pb-4">
-                {titleDraft === null ? (
-                  <div className="group flex min-w-0 items-start gap-1">
-                    <h1 className="min-w-0 flex-1 text-base font-semibold leading-snug">
-                      {detail.title}
-                    </h1>
-                    {canEditPullRequestChangeRequest(detail) ? (
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
-                        aria-label="Edit title"
-                        onClick={() => setTitleScope({ pullRequestKey, text: detail.title })}
-                      >
-                        <PencilIcon className="size-3" />
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : (
-                  // A title is one line of text, not markdown, so it takes an input rather than
-                  // the editor the description and the remarks share.
-                  <div className="space-y-2">
-                    <Input
-                      autoFocus
-                      size="sm"
-                      disabled={titleSaving}
-                      value={titleDraft}
-                      aria-label="Pull request title"
-                      onChange={(event) =>
-                        setTitleScope({ pullRequestKey, text: event.target.value })
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          void saveTitle(titleDraft);
-                        } else if (event.key === "Escape") {
-                          event.preventDefault();
-                          setTitleScope(null);
-                        }
-                      }}
+              <div className="col-span-2 mt-1 min-w-0 px-4 @3xl/pr-detail:px-8 pb-4">
+                <div className="group flex min-w-0 items-start gap-2">
+                  <h1
+                    className={cn(
+                      "flex min-w-0 flex-1 items-start gap-3 font-semibold",
+                      context === "page" ? "text-[28px] leading-[34px]" : "text-base leading-snug",
+                    )}
+                  >
+                    <GitPullRequestIcon
+                      aria-hidden
+                      className={cn(
+                        "shrink-0 text-muted-foreground",
+                        context === "page" ? "mt-1 size-7" : "mt-0.5 size-[18px]",
+                      )}
                     />
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        disabled={titleSaving}
-                        onClick={() => setTitleScope(null)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        disabled={titleSaving || titleDraft.trim().length === 0}
-                        onClick={() => void saveTitle(titleDraft)}
-                      >
-                        {titleSaving ? "Saving..." : "Save"}
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                    <span className="min-w-0 break-words">{detail.title}</span>
+                  </h1>
+                  {canEditPullRequestChangeRequest(detail) ? (
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label="Edit pull request"
+                      onClick={() => setEditScope(pullRequestKey)}
+                    >
+                      <PencilIcon className="size-4" />
+                    </Button>
+                  ) : null}
+                </div>
                 <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                   <PullRequestMetaLine className="min-w-0 whitespace-nowrap">
                     <PullRequestActorLabel actor={detail.author} className="font-medium" />
@@ -1831,12 +1765,11 @@ export function PullRequestDetailPanel({
 
         {detail ? (
           <nav
-            className="col-span-2 flex min-w-0 items-center gap-1 overflow-x-auto border-t border-border/60 px-4 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            className="col-span-2 flex min-w-0 items-center gap-1 overflow-x-auto border-b border-border px-4 @3xl/pr-detail:px-8 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             aria-label="Pull request tabs"
           >
             <ToggleGroup
-              size="segmented"
-              variant="segmented"
+              className="gap-6 rounded-none bg-transparent p-0"
               value={[tab]}
               onValueChange={(next) => {
                 const nextTab = visibleTabs.find((item) => item.value === next[0])?.value;
@@ -1844,7 +1777,12 @@ export function PullRequestDetailPanel({
               }}
             >
               {visibleTabs.map((item) => (
-                <Toggle key={item.value} value={item.value}>
+                <Toggle
+                  key={item.value}
+                  value={item.value}
+                  className="h-10 gap-2 rounded-none border-b-2 border-transparent px-0 text-sm text-muted-foreground data-pressed:border-foreground data-pressed:bg-transparent data-pressed:text-foreground data-pressed:font-semibold"
+                >
+                  <item.Icon aria-hidden className="size-4" />
                   {item.label}
                 </Toggle>
               ))}
@@ -1978,6 +1916,7 @@ export function PullRequestDetailPanel({
             {mountedTabs.has("summary") ? (
               <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
                 <PullRequestSummaryTab
+                  onEdit={() => setEditScope(pullRequestKey)}
                   environmentId={environmentId}
                   reference={reference}
                   detail={detail}
@@ -2035,9 +1974,25 @@ export function PullRequestDetailPanel({
         ) : null}
       </div>
 
+      {detail ? (
+        <PullRequestEditDialog
+          key={pullRequestKey}
+          environmentId={environmentId}
+          reference={reference}
+          detail={detail}
+          open={editScope === pullRequestKey}
+          onOpenChange={(open) => setEditScope(open ? pullRequestKey : null)}
+          onSaved={() => {
+            refreshDetail();
+            onActed?.();
+          }}
+        />
+      ) : null}
       <AlertDialog
         open={confirmation.open}
-        onOpenChange={(open) => setConfirmation((current) => ({ ...current, open }))}
+        onOpenChange={(open) => {
+          if (!actionPending) setConfirmation((current) => ({ ...current, open }));
+        }}
         onOpenChangeComplete={(open) => {
           if (!open) setConfirmation({ open: false, action: "merge" });
         }}
@@ -2063,7 +2018,9 @@ export function PullRequestDetailPanel({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+            <AlertDialogClose
+              render={<Button variant="outline" size="sm" disabled={actionPending} />}
+            >
               Cancel
             </AlertDialogClose>
             <Button
@@ -2072,7 +2029,6 @@ export function PullRequestDetailPanel({
               disabled={actionPending}
               onClick={() => {
                 const action = confirmAction;
-                setConfirmation((current) => ({ ...current, open: false }));
                 if (action === "merge") void perform("merge", selectedMergeMethod);
                 if (action === "enable-auto-merge")
                   void perform("enable-auto-merge", selectedMergeMethod);

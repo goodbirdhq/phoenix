@@ -29,23 +29,20 @@ export function PullRequestListGhost({
   caption?: string;
 }) {
   return (
-    <div
-      role="status"
-      aria-label={caption ?? "Loading pull requests"}
-      className="animate-ghost-pulse space-y-0.5"
-    >
+    <div role="status" aria-label={caption ?? "Loading pull requests"} className="space-y-0.5">
       {caption ? (
         <p className="px-3 pb-1 text-xs font-medium text-muted-foreground/70">{caption}</p>
       ) : null}
       {Array.from({ length: rows }, (_, index) => (
         <div
           key={index}
-          className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-3 py-2"
+          className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg px-2.5 py-3"
         >
-          <GhostBar className="size-4 rounded-full" />
+          <GhostBar className="size-[30px] rounded-full" />
           <div className="min-w-0 space-y-1.5">
             <GhostBar className={cn("h-3.5", TITLE_WIDTHS[index % TITLE_WIDTHS.length])} />
             <GhostBar className={META_WIDTHS[index % META_WIDTHS.length]} />
+            <GhostBar className="w-3/4" />
           </div>
           <div className="flex flex-col items-end gap-1.5">
             <GhostBar className="w-12" />
@@ -84,7 +81,7 @@ export function PullRequestDetailGhost() {
         <div className="px-4 pb-4 pt-1">
           <GhostBar className="h-5 w-4/5 max-w-md" />
           <div className="mt-2 flex items-center gap-1.5">
-            <GhostBar className="size-4 rounded-full" />
+            <GhostBar className="size-[30px] rounded-full" />
             <GhostBar className="w-24" />
           </div>
           <div className="mt-4 flex min-w-0 items-center gap-2">
@@ -116,8 +113,8 @@ export function PullRequestDetailGhost() {
               <GhostBar className="w-14" />
             </div>
             <div className="flex items-center gap-1">
-              <GhostBar className="size-4 rounded-full" />
-              <GhostBar className="size-4 rounded-full" />
+              <GhostBar className="size-[30px] rounded-full" />
+              <GhostBar className="size-[30px] rounded-full" />
               <GhostBar className="ml-1 size-5 rounded-md" />
             </div>
           </div>
@@ -163,8 +160,9 @@ export function PullRequestPeopleGhost({ rows = 4 }: { rows?: number }) {
     <div role="status" aria-label="Loading people" className="animate-ghost-pulse space-y-1 p-1">
       {Array.from({ length: rows }, (_, index) => (
         <div key={index} className="flex h-7 items-center gap-2 rounded-md px-2">
-          <GhostBar className="size-4 rounded-full" />
+          <GhostBar className="size-[30px] rounded-full" />
           <GhostBar className={META_WIDTHS[index % META_WIDTHS.length]} />
+          <GhostBar className="w-3/4" />
         </div>
       ))}
     </div>
@@ -201,6 +199,7 @@ export function PullRequestConversationGhost({ rows = 3 }: { rows?: number }) {
           <GhostBar className="size-5 shrink-0 rounded-full" />
           <div className="flex-1 space-y-1.5">
             <GhostBar className={META_WIDTHS[index % META_WIDTHS.length]} />
+            <GhostBar className="w-3/4" />
             <GhostBar className="w-full" />
             <GhostBar className="w-3/4" />
           </div>

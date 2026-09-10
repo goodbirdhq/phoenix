@@ -7,6 +7,9 @@ import type {
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
+  CircleCheckIcon,
+  FileTextIcon,
+  EyeIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   HammerIcon,
@@ -283,7 +286,16 @@ function Section({
       >
         {/* Title first, chevron riding to its right, count last: the row reads as a heading
             with an affordance rather than a tree node. */}
-        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
+        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 @3xl/pr-detail:px-8 py-3 text-left text-sm font-medium">
+          <span aria-hidden className="text-muted-foreground">
+            {title === "Checks" ? (
+              <CircleCheckIcon className="size-4" />
+            ) : title === "Description" ? (
+              <FileTextIcon className="size-4" />
+            ) : (
+              <MessageSquareIcon className="size-4" />
+            )}
+          </span>
           <span>{title}</span>
           <ChevronRightIcon
             aria-hidden
@@ -299,7 +311,7 @@ function Section({
         {open ? actions : null}
       </div>
       <CollapsiblePanel>
-        <div className="px-4 pb-4">{children}</div>
+        <div className="px-4 @3xl/pr-detail:px-8 pb-4">{children}</div>
       </CollapsiblePanel>
     </Collapsible>
   );
@@ -315,6 +327,7 @@ function CommentComposer({
   onCommented: () => void;
 }) {
   const [body, setBody] = useState("");
+  const [preview, setPreview] = useState(false);
   const [posting, setPosting] = useState(false);
   const postComment = useAtomCommand(pullRequestEnvironment.comment, { reportFailure: false });
 
@@ -341,17 +354,49 @@ function CommentComposer({
   };
 
   return (
-    <div className="mt-3 space-y-2">
-      <Textarea
-        // Locked while posting: the body is cleared on success, which would otherwise throw
-        // away a new draft typed while the request was still in flight.
-        disabled={posting}
-        value={body}
-        rows={3}
-        placeholder="Leave a comment"
-        aria-label="Comment on this pull request"
-        onChange={(event) => setBody(event.target.value)}
-      />
+    <div className="mt-3 space-y-3 rounded-lg border border-border p-3">
+      <div className="flex gap-4 border-b border-border pb-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-pressed={!preview}
+          onClick={() => setPreview(false)}
+          className={!preview ? "font-semibold" : "text-muted-foreground"}
+        >
+          <PencilIcon className="size-4" />
+          Write
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-pressed={preview}
+          onClick={() => setPreview(true)}
+          className={preview ? "font-semibold" : "text-muted-foreground"}
+        >
+          <EyeIcon className="size-4" />
+          Preview
+        </Button>
+      </div>
+      {preview ? (
+        <div className="min-h-24 p-2">
+          <PullRequestMarkdown
+            text={body || "_Nothing to preview._"}
+            cwd={detail.workspaceRoot}
+            environmentId={environmentId}
+          />
+        </div>
+      ) : (
+        <Textarea
+          // Locked while posting: the body is cleared on success, which would otherwise throw
+          // away a new draft typed while the request was still in flight.
+          disabled={posting}
+          value={body}
+          rows={3}
+          placeholder="Leave a comment"
+          aria-label="Comment on this pull request"
+          onChange={(event) => setBody(event.target.value)}
+        />
+      )}
       <div className="flex justify-end">
         <Button
           size="xs"
@@ -384,6 +429,7 @@ export function PullRequestSummaryTab({
   fixCheckLabel = "Fix",
   onFixFinding,
   onRefresh,
+  onEdit,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
@@ -396,6 +442,7 @@ export function PullRequestSummaryTab({
   fixCheckLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
   onRefresh: () => void;
+  onEdit: () => void;
 }) {
   // Keyed by the pull request, so opening another one starts at the end of its conversation
   // rather than wherever the last one had been read back to.
@@ -457,14 +504,9 @@ export function PullRequestSummaryTab({
     void readLocalApi()?.shell.openExternal(url);
   };
 
-  const update = useAtomCommand(pullRequestEnvironment.update, { reportFailure: false });
   const updateComment = useAtomCommand(pullRequestEnvironment.updateComment, {
     reportFailure: false,
   });
-  // Keyed by the pull request, like the comment window above it, so an editor left open never
-  // reappears over the next pull request's description.
-  const [bodyScope, setBodyScope] = useState<string | null>(null);
-  const [bodySaving, setBodySaving] = useState(false);
   // The remark being rewritten, named with the pull request it belongs to: a comment id is the
   // host's own, and two hosts — or two pull requests on Azure DevOps, which numbers a remark
   // inside its thread — hand out the same one. Without the pull request beside it, opening a
@@ -475,19 +517,6 @@ export function PullRequestSummaryTab({
   } | null>(null);
   const [commentSaving, setCommentSaving] = useState(false);
   const editingCommentId = commentScope?.pullRequest === detail.url ? commentScope.commentId : null;
-
-  const saveBody = async (body: string) => {
-    if (bodySaving) return;
-    setBodySaving(true);
-    const result = await update({ environmentId, input: { ...reference, body } });
-    setBodySaving(false);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: "Could not save the description" });
-      return;
-    }
-    setBodyScope(null);
-    onRefresh();
-  };
 
   const commentEditing: CommentEditing = {
     cwd: detail.workspaceRoot,
@@ -518,9 +547,9 @@ export function PullRequestSummaryTab({
 
   return (
     <div className="h-full overflow-y-auto" data-pull-request-summary-scroll>
-      <section className="px-4 py-3">
+      <section className="px-4 @3xl/pr-detail:px-8 py-3">
         <div>
-          <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
+          <MetaRow icon={<UsersIcon className="size-4" />} label="Reviewers">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               {reviewerEntries.length === 0 ? (
                 <span className="text-muted-foreground">None</span>
@@ -611,7 +640,7 @@ export function PullRequestSummaryTab({
             </span>
           </MetaRow>
           {detail.labels.length > 0 ? (
-            <MetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
+            <MetaRow icon={<TagIcon className="size-4" />} label="Labels">
               <span className="flex min-w-0 flex-wrap items-center gap-1">
                 {detail.labels.map((label) => {
                   const dot = pullRequestLabelColor(label.color);
@@ -632,7 +661,7 @@ export function PullRequestSummaryTab({
               </span>
             </MetaRow>
           ) : null}
-          <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
+          <MetaRow icon={<MessageSquareIcon className="size-4" />} label="Comments">
             {activityPending
               ? "Loading conversation…"
               : activityError
@@ -646,40 +675,25 @@ export function PullRequestSummaryTab({
 
       <Section title="Description">
         <div className="group">
-          {bodyScope === detail.url ? (
-            <PullRequestMarkdownEditor
-              // Empty is a real answer here: saving nothing is how a description is cleared.
-              allowEmpty
-              value={detail.body}
+          <div className="flex items-start gap-1">
+            <PullRequestMarkdown
+              className="min-w-0 flex-1"
+              text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
               cwd={detail.workspaceRoot}
               environmentId={environmentId}
-              label="Pull request description"
-              placeholder="Describe this pull request"
-              saving={bodySaving}
-              onSave={(body) => void saveBody(body)}
-              onCancel={() => setBodyScope(null)}
             />
-          ) : (
-            <div className="flex items-start gap-1">
-              <PullRequestMarkdown
-                className="min-w-0 flex-1"
-                text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
-                cwd={detail.workspaceRoot}
-                environmentId={environmentId}
-              />
-              {canEditPullRequestChangeRequest(detail) ? (
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
-                  aria-label="Edit description"
-                  onClick={() => setBodyScope(detail.url)}
-                >
-                  <PencilIcon className="size-3" />
-                </Button>
-              ) : null}
-            </div>
-          )}
+            {canEditPullRequestChangeRequest(detail) ? (
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                aria-label="Edit description"
+                onClick={onEdit}
+              >
+                <PencilIcon className="size-3" />
+              </Button>
+            ) : null}
+          </div>
           <PullRequestReactionBar
             className="mt-2"
             reactions={detail.reactions ?? []}
@@ -695,7 +709,13 @@ export function PullRequestSummaryTab({
         {detail.checks.length === 0 ? (
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
-          <div className="space-y-0.5">
+          <div>
+            <div className="flex items-center gap-3 border-b border-border pb-3 text-xs text-muted-foreground">
+              <span className="w-4 shrink-0" />
+              <span className="flex-1">Check</span>
+              <span className="w-20 text-right">Result</span>
+              <span className="w-16 text-right">Action</span>
+            </div>
             {detail.checks.map((check, index) => {
               const finding = { kind: "check", check } as const;
               const failing = check.status === "failure" || check.status === "cancelled";
@@ -704,20 +724,22 @@ export function PullRequestSummaryTab({
                   // Position too: the host decides how many runs share a name, and a repeated
                   // key would be a rendering fault on top of whatever the list already says.
                   key={`${index}:${check.name}:${check.url ?? ""}`}
-                  className="group flex items-center gap-1 rounded-md pr-1 hover:bg-accent/60"
+                  className="group flex items-center gap-3 border-b border-border py-5"
                 >
                   <button
                     type="button"
                     disabled={!check.url}
                     onClick={() => check.url && openCheck(check.url)}
                     className={cn(
-                      "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs",
+                      "flex min-w-0 flex-1 items-center gap-3 text-left text-[13px]",
                       check.url ? undefined : "cursor-default",
                     )}
                   >
                     <PullRequestCheckStatusIcon status={check.status} />
-                    <span className="min-w-0 flex-1 truncate">{check.name}</span>
-                    <span className="shrink-0 text-muted-foreground">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                      {check.name}
+                    </span>
+                    <span className="w-20 shrink-0 text-right text-muted-foreground">
                       {pullRequestCheckStatusLabel(check.status)}
                     </span>
                   </button>
@@ -727,7 +749,7 @@ export function PullRequestSummaryTab({
                     <Button
                       size="xs"
                       variant="ghost"
-                      className="shrink-0"
+                      className="w-16 shrink-0"
                       disabled={pendingFinding !== null && pendingFinding !== undefined}
                       onClick={() => onFixFinding(finding)}
                     >
@@ -736,7 +758,9 @@ export function PullRequestSummaryTab({
                         ? "Preparing..."
                         : fixCheckLabel}
                     </Button>
-                  ) : null}
+                  ) : (
+                    <span className="w-16 shrink-0" />
+                  )}
                 </div>
               );
             })}

@@ -1,3 +1,4 @@
+import { cn } from "~/lib/utils";
 import type {
   EnvironmentId,
   ProjectId,
@@ -73,10 +74,10 @@ export function PullRequestFilterOptionIcon<Value extends string>({
       environmentId={option.favicon.environmentId}
       cwd={option.favicon.cwd}
       fallbackIcon={FolderGit2Icon}
-      className="size-3.5"
+      className="size-[18px]"
     />
   ) : (
-    <option.Icon aria-hidden className="size-3.5" />
+    <option.Icon aria-hidden className="size-[18px]" />
   );
 }
 
@@ -395,6 +396,7 @@ function PullRequestLabelFilter({
 }
 
 export function PullRequestFiltersMenu({
+  compact = false,
   onOpenChange,
   state,
   stateOptions,
@@ -418,6 +420,7 @@ export function PullRequestFiltersMenu({
   unavailable,
   onProject,
 }: {
+  compact?: boolean;
   onOpenChange?: (open: boolean) => void;
   state: PullRequestListState;
   stateOptions: ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
@@ -517,14 +520,21 @@ export function PullRequestFiltersMenu({
         render={
           <Button
             className={filterCount > 0 ? "[--control-icon-color:currentColor]" : undefined}
-            variant="outline"
+            variant={compact ? "ghost" : "outline"}
+            size={compact ? "icon-sm" : "default"}
+            aria-label="Filter pull requests"
           />
         }
       >
         <ListFilterIcon className="size-4" />
-        <span>Filters</span>
+        {compact ? null : <span>Filters</span>}
         {filterCount > 0 ? (
-          <span className="rounded-full bg-primary/10 px-1.5 text-xs text-primary tabular-nums">
+          <span
+            className={cn(
+              "rounded-full bg-primary/10 px-1.5 text-xs text-primary tabular-nums",
+              compact && "absolute -right-1 -top-1 text-[10px]",
+            )}
+          >
             {filterCount}
           </span>
         ) : null}

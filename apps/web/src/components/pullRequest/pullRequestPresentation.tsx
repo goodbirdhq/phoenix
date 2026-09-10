@@ -119,7 +119,11 @@ export function PullRequestStateGlyph({
 }
 
 const CHECK_STATUS_PRESENTATION = {
-  pending: { label: "Running", Icon: LoaderIcon, toneClassName: "animate-spin text-amber-500" },
+  pending: {
+    label: "Running",
+    Icon: LoaderIcon,
+    toneClassName: "text-amber-600 dark:text-amber-400",
+  },
   success: {
     label: "Passed",
     Icon: CircleCheckIcon,
@@ -141,10 +145,7 @@ export function pullRequestCheckStatusLabel(status: PullRequestCheckStatus): str
 export function PullRequestCheckStatusIcon({ status }: { status: PullRequestCheckStatus }) {
   const presentation = CHECK_STATUS_PRESENTATION[status];
   return (
-    <presentation.Icon
-      aria-hidden
-      className={cn("size-3.5 shrink-0", presentation.toneClassName)}
-    />
+    <presentation.Icon aria-hidden className={cn("size-4 shrink-0", presentation.toneClassName)} />
   );
 }
 
@@ -279,7 +280,7 @@ export function PullRequestReviewOutcomeIcon({
   return (
     <presentation.Icon
       aria-hidden
-      className={cn("size-3.5 shrink-0", presentation.toneClassName, className)}
+      className={cn("size-4 shrink-0", presentation.toneClassName, className)}
     />
   );
 }

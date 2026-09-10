@@ -572,7 +572,7 @@ export function PullRequestTimelineTab({
   };
 
   return (
-    <div className="h-full overflow-y-auto px-4 py-5">
+    <div className="h-full overflow-y-auto px-4 @3xl/pr-detail:px-8 py-5">
       <div className="mx-auto max-w-3xl">
         <div className="relative">
           <span aria-hidden className="absolute bottom-5 left-[15px] top-1 w-px bg-border/45" />

@@ -95,6 +95,7 @@ export function PullRequestChecksPopover({
   environmentId,
   reference,
   className,
+  showLabel = false,
 }: {
   checksState: PullRequestChecksState;
   /** The checks already in hand, for the detail header. Absent on a listing row. */
@@ -102,27 +103,34 @@ export function PullRequestChecksPopover({
   environmentId?: EnvironmentId;
   reference?: PullRequestRef;
   className?: string;
+  showLabel?: boolean;
 }) {
   const presentation = pullRequestChecksStatePresentation(checksState);
   // Counts beat the rollup's own wording where they are known, the way GitHub's own header reads.
   const summary = checks === undefined ? null : summarizePullRequestChecks(checks);
   return (
     <Popover>
-      {/* A listing row is itself a button, so the trigger renders as a span: a nested button is
-          not valid inside one. The click is stopped here so opening the checks does not also
-          select the row it sits on. */}
+      {/* The checks control is separate from row selection. */}
       <PopoverTrigger
         render={
-          <span
-            role="button"
-            tabIndex={0}
+          <button
+            type="button"
             aria-label={`Checks: ${presentation.label}`}
-            className={cn("inline-flex shrink-0 cursor-pointer items-center", className)}
+            className={cn("inline-flex shrink-0 cursor-pointer items-center gap-1", className)}
           />
         }
         onClick={(event) => event.stopPropagation()}
       >
         <presentation.Icon aria-hidden className={cn("size-3.5", presentation.toneClassName)} />
+        {showLabel ? (
+          <span className="truncate">
+            {checksState === "passing"
+              ? "Checks passed"
+              : checksState === "failing"
+                ? "Checks failed"
+                : "Checks running"}
+          </span>
+        ) : null}
       </PopoverTrigger>
       <PopoverPopup align="start" className="w-80 max-w-full" side="bottom">
         <p className="mb-2 font-medium text-sm">{presentation.label}</p>
