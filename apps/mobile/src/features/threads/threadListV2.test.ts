@@ -322,6 +322,62 @@ describe("sortThreadsForListV2", () => {
 });
 
 describe("buildThreadListV2Items", () => {
+  it("toggles attention ordering while preserving pinned and parked sections", () => {
+    const threads = [
+      makeThread({ id: ThreadId.make("newer"), title: "Newer", createdAt: NOW }),
+      makeThread({ id: ThreadId.make("approval"), title: "Approval", hasPendingApprovals: true }),
+      makeThread({ id: ThreadId.make("pinned"), title: "Pinned", pinnedAt: NOW }),
+      makeThread({
+        id: ThreadId.make("settled"),
+        title: "Settled",
+        settledOverride: "settled",
+        settledAt: NOW,
+      }),
+      makeThread({
+        id: ThreadId.make("snoozed"),
+        title: "Snoozed",
+        snoozedAt: NOW,
+        snoozedUntil: "2026-06-03T00:00:00.000Z",
+      }),
+    ];
+    const input = {
+      threads,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      snoozedShelfExpanded: true,
+    };
+    const ids = (attentionFirstEnabled: boolean) =>
+      buildThreadListV2Items({ ...input, attentionFirstEnabled }).items.map(
+        (item) => item.thread.id,
+      );
+    expect(ids(false)).toEqual(["pinned", "newer", "approval", "snoozed", "settled"]);
+    expect(ids(true)).toEqual(["pinned", "approval", "newer", "snoozed", "settled"]);
+    expect(ids(false)).toEqual(["pinned", "newer", "approval", "snoozed", "settled"]);
+  });
+
+  it("moves a family for child input and keeps that child nested in the visible list", () => {
+    const parent = makeThread({ id: ThreadId.make("parent"), title: "Parent" });
+    const child = makeThread({
+      id: ThreadId.make("child"),
+      title: "Child",
+      spawnedByThreadId: parent.id,
+      hasPendingUserInput: true,
+    });
+    const newest = makeThread({ id: ThreadId.make("newest"), title: "Newest", createdAt: NOW });
+    const layout = buildThreadListV2Items({
+      threads: [newest, parent, child],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      attentionFirstEnabled: true,
+    });
+    const rows = buildThreadListV2ListItems({ ...layout, pendingTasks: [] }).filter(
+      (row) => row.type === "v2-thread",
+    );
+    expect(rows.map((row) => row.item.thread.id)).toEqual(["parent", "newest"]);
+  });
+
   it("places a persisted settled thread in the settled shelf", () => {
     const thread = makeThread({
       id: ThreadId.make("linked-merged"),

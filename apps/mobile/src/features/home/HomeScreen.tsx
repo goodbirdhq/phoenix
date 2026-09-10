@@ -1,3 +1,4 @@
+import { useThreadAttentionPreferences } from "../threads/use-thread-attention";
 import type { useSessionRefresh } from "./use-session-refresh";
 import type { ThreadListActions } from "./useThreadListActions";
 import {
@@ -588,6 +589,7 @@ export function HomeScreen(props: HomeScreenProps) {
     );
     return pinned.map((thread) => `${thread.environmentId}:${thread.id}`);
   }, [pinReorderEnvironmentIds, props.threads]);
+  const { attentionFirstEnabled, lastVisitedAtByKey } = useThreadAttentionPreferences();
   const threadListV2Layout = useMemo(() => {
     if (!threadListV2Enabled)
       return {
@@ -602,6 +604,8 @@ export function HomeScreen(props: HomeScreenProps) {
     // Settled threads are live shells; archived threads keep their original
     // "hidden from lists" meaning.
     return buildThreadListV2Items({
+      attentionFirstEnabled,
+      lastVisitedAtByKey,
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       environmentId: props.selectedEnvironmentId,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
@@ -616,6 +620,8 @@ export function HomeScreen(props: HomeScreenProps) {
       selectedThreadKey: null,
     });
   }, [
+    attentionFirstEnabled,
+    lastVisitedAtByKey,
     nowMinute,
     snoozeWakeTick,
     snoozedShelfExpanded,

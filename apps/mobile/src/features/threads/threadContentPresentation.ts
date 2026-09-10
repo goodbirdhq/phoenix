@@ -1,7 +1,7 @@
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 
 export type ThreadContentPresentation =
-  | { readonly kind: "ready" }
+  | { readonly kind: "ready"; readonly completedAt: string | null }
   | { readonly kind: "loading" }
   | {
       readonly kind: "unavailable";
@@ -11,12 +11,13 @@ export type ThreadContentPresentation =
 
 export function projectThreadContentPresentation(input: {
   readonly hasDetail: boolean;
+  readonly detailCompletedAt?: string | null;
   readonly detailError: string | null;
   readonly detailDeleted: boolean;
   readonly connectionState: EnvironmentConnectionPhase;
 }): ThreadContentPresentation {
   if (input.hasDetail) {
-    return { kind: "ready" };
+    return { kind: "ready", completedAt: input.detailCompletedAt ?? null };
   }
   if (input.detailDeleted) {
     return {

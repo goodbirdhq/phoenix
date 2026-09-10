@@ -11,7 +11,7 @@ describe("thread content presentation", () => {
         detailDeleted: false,
         connectionState: "reconnecting",
       }),
-    ).toEqual({ kind: "ready" });
+    ).toEqual({ kind: "ready", completedAt: null });
   });
 
   it("loads missing detail inside the thread screen when connected", () => {

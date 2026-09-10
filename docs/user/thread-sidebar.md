@@ -160,3 +160,30 @@ Long-press a conversation for its actions. Snooze opens a sheet with available w
 Action and confirmation sheets show the conversation's avatar and keep options below the heading.
 Cancel, the backdrop, a downward drag on the handle, or Android Back dismisses the sheet.
 Deleting requires the explicit Delete conversation button and permanently removes its terminal history.
+
+## Attention first
+
+Turn on **Settings → General → Attention first** on web, desktop, or mobile to
+move work that needs you to the top of the active thread list. It is off by
+default. The setting is available with the current thread list; turn off the
+legacy sidebar or legacy thread list to use it.
+
+Decisions and actionable plans come first, followed by failures, unread results,
+work continuing autonomously, and quiet threads. Within each group, threads keep
+their usual order. Turning the setting off restores the usual order immediately.
+Pinned threads keep their manual positions, snoozed threads keep their wake order,
+and settled threads stay in history.
+
+With session hierarchy on, a parent's priority includes its visible descendants, even
+when collapsed. Flat lists rank each session by its own requests. A child asking
+for human approval can bring the family up. A child waiting for its parent, or
+finishing work for its parent to process, does not count as a result for you to
+review. A quiet parent stays below reviewable results while children are working
+or have a newer result to hand back. A new result from the parent can
+bring it up once that work is processed. Explicit decisions and failures remain
+visible at the top even while other agents work.
+
+Opening a completed conversation marks its result as seen on that client. Results
+from conversations you have never opened also count as unread with Attention first
+on. Read state is local to each client, and mobile saves the setting on each device.
+Turning Attention first on in desktop or web does not enable it on your phone.

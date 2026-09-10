@@ -151,6 +151,7 @@ import {
   sortPinnedThreadsForSidebar,
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
+  orderActiveSidebarThreads,
   useRetainedValue,
   useSidebarRowSubscriptionLease,
   useThreadJumpHintVisibility,
@@ -801,6 +802,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const threadKey = scopedThreadKey(threadRef);
   const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(props.isActive);
   const isRegeneratingTitle = thread.titleRegeneration != null;
+  const attentionFirstEnabled = useClientSettings((s) => s.sidebarAttentionFirstEnabled);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const openPrLink = useOpenPrLink();
@@ -838,14 +840,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     linkedPullRequestStatus,
   });
 
-  // Same semantics as the legacy sidebar (never-visited counts as read):
-  // switching sidebars must not light up every historical thread as unread.
-  const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
+  // Attention mode includes never-visited results in its inbox. The normal
+  // sidebar retains its historical read-marker semantics.
+  const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt }, attentionFirstEnabled);
   const teamMembers = useMemo(() => props.teamMembers ?? [thread], [props.teamMembers, thread]);
   const teamStatus = resolveSidebarTeamStatus(thread, teamMembers, props.teamExpanded);
   const status = teamStatus.status;
-  // A woken thread reappears at its original position (the sort is
-  // deliberately static), so the pill has to carry the weight. Snoozing is
+  // Waking alone does not change attention priority, so the pill identifies
+  // the wake even when the thread keeps its position. Snoozing is
   // an explicit act, so the pill clears only when the user re-engages:
   // reading a completion-triggered wake, clicking the pill, sending a
   // message, settling, archiving, or a change request state that settles the
@@ -1374,13 +1376,14 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 }) {
   const { thread } = props;
   const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  const attentionFirstEnabled = useClientSettings((s) => s.sidebarAttentionFirstEnabled);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const emphasized =
     props.isRouteActive ||
     props.isHighlighted ||
     isSelected ||
-    hasUnseenCompletion({ ...thread, lastVisitedAt }) ||
+    hasUnseenCompletion({ ...thread, lastVisitedAt }, attentionFirstEnabled) ||
     hasUnseenSidebarWake(threadWokeAt(thread, { now: new Date().toISOString() }), lastVisitedAt);
 
   const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(
@@ -1499,6 +1502,7 @@ export default function Sidebar() {
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const attentionFirstEnabled = useClientSettings((s) => s.sidebarAttentionFirstEnabled);
   const sessionHierarchyEnabled = useClientSettings((s) => s.sidebarSessionHierarchyEnabled);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -1887,7 +1891,9 @@ export default function Sidebar() {
     router,
   ]);
   const lastVisitedByKey = useUiStateStore((state) =>
-    filters.statuses.includes("unread") || filters.statuses.includes("woke")
+    attentionFirstEnabled ||
+    filters.statuses.includes("unread") ||
+    filters.statuses.includes("woke")
       ? state.threadLastVisitedAtById
       : null,
   );
@@ -2001,7 +2007,12 @@ export default function Sidebar() {
     };
   }, [nowMinute, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
 
-  const { pinnedThreads, activeThreads, snoozedThreads, settledThreads } = useMemo(() => {
+  const {
+    pinnedThreads,
+    activeThreads: filteredActiveThreads,
+    snoozedThreads,
+    settledThreads,
+  } = useMemo(() => {
     if (
       filters.accounts.length === 0 &&
       filters.models.length === 0 &&
@@ -2025,7 +2036,12 @@ export default function Sidebar() {
           ? threadWokeAt(thread, { now: snoozeNow })
           : null;
         const woke = hasUnseenSidebarWake(wokeAt, lastVisitedAt);
-        return matchesSidebarThreadFilters(thread, filters, { section, lastVisitedAt, woke });
+        return matchesSidebarThreadFilters(thread, filters, {
+          section,
+          lastVisitedAt,
+          woke,
+          attentionFirstEnabled,
+        });
       });
     return {
       pinnedThreads: select(allPinnedThreads, "pinned"),
@@ -2034,11 +2050,37 @@ export default function Sidebar() {
       settledThreads: select(allSettledThreads, "settled"),
     };
   }, [
+    attentionFirstEnabled,
     allPinnedThreads,
     allActiveThreads,
     allSnoozedThreads,
     allSettledThreads,
     filters,
+    lastVisitedByKey,
+    snoozeNow,
+  ]);
+
+  const activeThreads = useMemo(() => {
+    if (!attentionFirstEnabled) return filteredActiveThreads;
+    return orderActiveSidebarThreads(filteredActiveThreads, {
+      enabled: attentionFirstEnabled,
+      hierarchyEnabled: sessionHierarchyEnabled,
+      pinnedThreads,
+      contextThreads: threads.filter(
+        (thread) =>
+          thread.archivedAt === null &&
+          thread.settledOverride !== "settled" &&
+          !effectiveSnoozed(thread, { now: snoozeNow }),
+      ),
+      lastVisitedAtByKey: lastVisitedByKey ?? undefined,
+      now: snoozeNow,
+    });
+  }, [
+    attentionFirstEnabled,
+    sessionHierarchyEnabled,
+    filteredActiveThreads,
+    pinnedThreads,
+    threads,
     lastVisitedByKey,
     snoozeNow,
   ]);

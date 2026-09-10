@@ -682,3 +682,37 @@ age, because `oldestUndeliveredMessageAt` includes ordinary queue waiting time.
 
 Provider send request metrics measure input acceptance, including ACP dispatch; they do not measure
 model work duration. Completion and failure remain observable through provider runtime events.
+
+## Attention ordering
+
+The opt-in `sidebarAttentionFirstEnabled` client setting ranks the current active
+list using `packages/client-runtime/src/state/threadAttention.ts`. Priority is
+human decisions, session errors, unread completed results, autonomous work, then
+quiet history. Each group preserves the usual order. Pins and parked sections
+retain their own ordering. Mobile stores its preference and read markers locally;
+it does not synchronize this toggle with web/desktop client settings.
+
+Family context includes active threads outside display filters so a hidden working
+child cannot make its parent look finished. Descendant decisions propagate only
+through visible hierarchy links. Web disables that propagation in flat mode;
+mobile always groups children. Expansion does not change rank.
+
+A child result belongs to its parent. A parent remains in autonomous work while
+children are busy or have a newer result to hand back. Shells include optional
+`latestReportAt`, derived from the existing thread-report index. A current-turn
+report's timestamp takes precedence over its turn's completion: reports can wake
+a parent before the child finishes its final response. Older servers, and turns
+that have not posted a report, fall back to turn completion. These are liveness
+and handoff inferences, not proof of delivery or human intent. The optional
+`hasPendingTurnStart` shell flag is authoritative for pending, queued, interrupting,
+and releasing starts. It keeps a parent autonomous across unrelated turn completion,
+queue release, and provider adoption; consumed and cancelled receipts do not count.
+Only older servers without this flag use the short message-timestamp inference. A stopped parent is
+resumable; absence from active family context alone does not prove it is deleted.
+
+Native read tracking is inert when the feature or current list is disabled. It
+records the completion attached to loaded conversation detail only while visible
+and foregrounded; a fresh shell cannot acknowledge content still absent from a
+cached detail. Read markers are not count-capped: evicting a marker would turn a
+reviewed result unread again. Long-term compaction needs an explicit read-state
+retention policy rather than silent eviction.

@@ -221,6 +221,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "sidebar-attention-first",
+    title: "Attention first",
+    to: "/settings/general",
+    searchTerms: ["sidebar order sort priority inbox unread approval children"],
+  },
+  {
     id: "sidebar-session-hierarchy",
     title: "Sidebar session hierarchy",
     to: "/settings/general",

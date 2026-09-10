@@ -187,6 +187,10 @@
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"
     },
+    "./state/thread-attention": {
+      "types": "./src/state/threadAttention.ts",
+      "default": "./src/state/threadAttention.ts"
+    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"

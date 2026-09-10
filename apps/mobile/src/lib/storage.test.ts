@@ -116,6 +116,30 @@ const managedConnection = {
 } as const;
 
 describe("mobile connection storage", () => {
+  it("persists attention ordering and seen results while discarding malformed visit timestamps", async () => {
+    mocks.clear();
+    const completedAt = "2026-09-10T12:00:00.000Z";
+    mocks.setPreferencesJson(
+      JSON.stringify({
+        threadLastVisitedAtByKey: {
+          "local:valid": completedAt,
+          "local:bad": "invalid",
+          "local:wrong": 12,
+        },
+      }),
+      1,
+    );
+    await savePreferencesPatch({ sidebarAttentionFirstEnabled: true });
+    expect(await loadPreferences()).toMatchObject({
+      sidebarAttentionFirstEnabled: true,
+      threadLastVisitedAtByKey: { "local:valid": completedAt },
+    });
+    expect((await loadPreferences()).threadLastVisitedAtByKey).not.toHaveProperty("local:bad");
+    expect((await loadPreferences()).threadLastVisitedAtByKey).not.toHaveProperty("local:wrong");
+    await savePreferencesPatch({ sidebarAttentionFirstEnabled: false });
+    expect((await loadPreferences()).sidebarAttentionFirstEnabled).toBe(false);
+  });
+
   beforeEach(() => {
     mocks.clear();
     vi.clearAllMocks();

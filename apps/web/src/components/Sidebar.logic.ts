@@ -1,3 +1,8 @@
+import {
+  sortThreadsByAttention,
+  hasUnreadThreadCompletion,
+  type ThreadAttentionInput,
+} from "@t3tools/client-runtime/state/thread-attention";
 import * as React from "react";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import type { ContextMenuItem } from "@t3tools/contracts";
@@ -305,7 +310,11 @@ export function useThreadJumpHintVisibility(): {
   };
 }
 
-export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
+export function hasUnseenCompletion(
+  thread: ThreadStatusInput,
+  includeNeverVisited = false,
+): boolean {
+  if (includeNeverVisited) return hasUnreadThreadCompletion(thread, thread.lastVisitedAt);
   if (!thread.latestTurn?.completedAt) return false;
   const completedAt = Date.parse(thread.latestTurn.completedAt);
   if (Number.isNaN(completedAt)) return false;
@@ -1188,4 +1197,32 @@ export function sortScopedProjectsForSidebar<
       left.environmentId.localeCompare(right.environmentId) ||
       left.id.localeCompare(right.id),
   );
+}
+
+/** Ranking uses all active family members for liveness, but only visible
+ * nested rows may lend a parent's row their decision or failure priority.
+ */
+export function orderActiveSidebarThreads<T extends ThreadAttentionInput>(
+  orderedThreads: readonly T[],
+  options: {
+    readonly enabled: boolean;
+    readonly hierarchyEnabled: boolean;
+    readonly pinnedThreads: readonly ThreadAttentionInput[];
+    readonly contextThreads: readonly ThreadAttentionInput[];
+    readonly lastVisitedAtByKey?: Readonly<Record<string, string>> | undefined;
+    readonly now: string;
+  },
+): readonly T[] {
+  if (!options.enabled) return orderedThreads;
+  return sortThreadsByAttention(orderedThreads, {
+    threads: options.contextThreads,
+    now: options.now,
+    lastVisitedAtByKey: options.lastVisitedAtByKey,
+    propagateDescendantRank: options.hierarchyEnabled,
+    visibleThreadKeys: new Set(
+      [...orderedThreads, ...options.pinnedThreads].map(
+        (thread) => `${thread.environmentId}:${thread.id}`,
+      ),
+    ),
+  });
 }

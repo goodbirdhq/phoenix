@@ -1,3 +1,4 @@
+import { useThreadAttentionPreferences } from "./use-thread-attention";
 import { useSessionRefresh } from "../home/use-session-refresh";
 import { HomeHeader } from "../home/HomeHeader";
 import { NavigationFooter } from "../home/NavigationFooter";
@@ -403,6 +404,7 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
     );
     return pinned.map((thread) => `${thread.environmentId}:${thread.id}`);
   }, [pinReorderEnvironmentIds, threads]);
+  const { attentionFirstEnabled, lastVisitedAtByKey } = useThreadAttentionPreferences();
   const threadListV2Layout = useMemo(() => {
     if (!threadListV2Enabled)
       return {
@@ -415,6 +417,8 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
         nextSnoozeWakeAt: null,
       };
     return buildThreadListV2Items({
+      attentionFirstEnabled,
+      lastVisitedAtByKey,
       threads: threads.filter((thread) => thread.archivedAt === null),
       environmentId: options.selectedEnvironmentId,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
@@ -429,6 +433,8 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
       selectedThreadKey: props.selectedThreadKey ?? null,
     });
   }, [
+    attentionFirstEnabled,
+    lastVisitedAtByKey,
     nowMinute,
     snoozeWakeTick,
     snoozedShelfExpanded,

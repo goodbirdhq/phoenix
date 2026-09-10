@@ -996,6 +996,10 @@ export const OrchestrationThreadShell = Schema.Struct({
   // session-message.sent activity, cleared by the next turn start. Optional
   // so payloads from pre-feature servers still decode.
   awaitingParentReplySince: Schema.optional(Schema.NullOr(IsoDateTime)),
+  // A report can be delivered before the reporting turn completes.
+  latestReportAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  // Includes queued delivery and an accepted start awaiting a provider turn.
+  hasPendingTurnStart: Schema.optional(Schema.Boolean),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
