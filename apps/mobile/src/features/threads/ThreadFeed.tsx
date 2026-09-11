@@ -8,12 +8,10 @@ import type {
   ChatImageAttachment,
   EnvironmentId,
   MessageId,
-  OrchestrationMessage,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
-import { useEnvironmentThreadTitles } from "../../state/entities";
 import {
   codexArtifactTemplatePresentationLabel,
   type CodexArtifactTemplate,
@@ -1474,80 +1472,6 @@ function PendingDeliveryNote(props: { readonly state: "queued" | "releasing" | u
   );
 }
 
-/**
- * A user-role message another session (or Phoenix) authored. Left-aligned in
- * a bordered card so it can never read as the human's own bubble, with a
- * tappable header naming — and routing to — the speaker. The body is the
- * exact text the agent consumed.
- */
-function SessionOriginUserMessage(props: {
-  readonly message: OrchestrationMessage;
-  readonly environmentId: EnvironmentId;
-  readonly markdownStyles: MarkdownStyleSets;
-  readonly reviewCommentColors: ReviewCommentColors;
-  readonly skills: ThreadFeedProps["skills"];
-  readonly linkHandlers: MarkdownLinkHandlers;
-  readonly renderImage: MarkdownImageRenderer;
-  readonly deliveryState: "queued" | "releasing" | undefined;
-  readonly threadTitles: ReadonlyMap<string, string>;
-  readonly maxWidth: number;
-}) {
-  const navigation = useNavigation();
-  const origin = props.message.origin;
-  if (!origin) return null;
-  const linkedTitle =
-    origin.threadId == null ? null : (props.threadTitles.get(origin.threadId) ?? null);
-  const label =
-    origin.kind === "phoenix"
-      ? linkedTitle !== null
-        ? `Phoenix · about ${linkedTitle}`
-        : "Phoenix"
-      : (linkedTitle ?? "Another session");
-  const openThreadId = origin.threadId ?? null;
-
-  return (
-    <View className="mb-5 items-start">
-      <View
-        className="min-w-0 gap-2 rounded-[20px] border border-adaptive-neutral-300-a60-white-a12 px-3.5 py-2.5"
-        style={{ maxWidth: props.maxWidth }}
-      >
-        <Pressable
-          disabled={openThreadId === null}
-          accessibilityRole={openThreadId === null ? undefined : "button"}
-          accessibilityLabel={`Open ${label}`}
-          hitSlop={4}
-          onPress={() => {
-            if (openThreadId === null) return;
-            navigation.navigate("Thread", {
-              environmentId: String(props.environmentId),
-              threadId: String(openThreadId),
-            });
-          }}
-          className="flex-row items-center gap-1"
-        >
-          <Text className="font-t3-medium text-xs text-adaptive-neutral-600-400">
-            {label}
-            {openThreadId !== null ? " ›" : ""}
-          </Text>
-        </Pressable>
-        {props.message.text.trim().length > 0 ? (
-          <UserMessageContent
-            text={props.message.text}
-            markdownStyles={props.markdownStyles.assistant}
-            reviewCommentColors={props.reviewCommentColors}
-            skills={props.skills}
-            linkHandlers={props.linkHandlers}
-            renderImage={props.renderImage}
-          />
-        ) : null}
-      </View>
-      <View className="mt-1 items-start pl-0.5">
-        <PendingDeliveryNote state={props.deliveryState} />
-      </View>
-    </View>
-  );
-}
-
 const EMPTY_PENDING_DELIVERIES: ReadonlyMap<string, "queued" | "releasing"> = new Map();
 
 function renderFeedEntry(
@@ -1575,7 +1499,6 @@ function renderFeedEntry(
     readonly reviewCommentBubbleWidth: number;
     readonly userBubbleMaxWidth: number;
     readonly pendingDeliveries: ReadonlyMap<string, "queued" | "releasing">;
-    readonly threadTitles: ReadonlyMap<string, string>;
   },
 ) {
   const entry = info.item;
@@ -1651,22 +1574,6 @@ function renderFeedEntry(
       !message.streaming;
 
     if (isUser) {
-      if (message.origin !== undefined) {
-        return (
-          <SessionOriginUserMessage
-            message={message}
-            environmentId={props.environmentId}
-            markdownStyles={props.markdownStyles}
-            reviewCommentColors={props.reviewCommentColors}
-            skills={props.skills}
-            linkHandlers={props.markdownLinkHandlers}
-            renderImage={props.renderMarkdownImage}
-            deliveryState={props.pendingDeliveries.get(message.id)}
-            threadTitles={props.threadTitles}
-            maxWidth={props.userBubbleMaxWidth}
-          />
-        );
-      }
       const enterAnimated = isFreshTimestamp(message.createdAt);
       return (
         <Animated.View
@@ -2090,7 +1997,6 @@ function ThreadFeedPlaceholder(props: {
 }
 
 export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
-  const threadTitles = useEnvironmentThreadTitles(props.environmentId);
   const navigation = useNavigation();
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const disclosureSettleFrameRef = useRef<number | null>(null);
@@ -2856,7 +2762,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             skills: props.skills,
             onUseArtifactTemplate: props.onUseArtifactTemplate,
             pendingDeliveries,
-            threadTitles,
           })}
         </ThreadMediaVisibility>
       </Animated.View>
@@ -2888,7 +2793,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       pendingDeliveries,
       renderMarkdownImage,
       renderViewedImage,
-      threadTitles,
     ],
   );
 

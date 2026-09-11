@@ -89,7 +89,6 @@ import {
   ThreadComposer,
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
-import { SessionReportDigest } from "./SessionReportDigest";
 import { ThreadUsageLimitMigrationEntryPoint } from "./ThreadUsageLimitMigrationEntryPoint";
 import { ThreadUsageWarningBanner } from "./ThreadUsageWarningBanner";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
@@ -764,10 +763,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             {/* No paddingTop here: the overlay's measured height becomes the
                 list's bottom inset, so any padding above the pill/composer
                 pushes the resting content floor up by the same amount. */}
-            <SessionReportDigest
-              activities={props.activities}
-              environmentId={props.environmentId}
-            />
             <ThreadUsageLimitMigrationEntryPoint
               environmentId={props.environmentId}
               thread={props.boundThread}
