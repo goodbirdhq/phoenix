@@ -407,7 +407,9 @@ function deriveWorkLogEntries(
     if (isNoContentRuntimeWarning(activity)) continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
-    entries.push(toDerivedWorkLogEntry(activity));
+    const entry = toDerivedWorkLogEntry(activity);
+    if (entry.sessionMessage) continue;
+    entries.push(entry);
   }
   return collapseDerivedWorkLogEntries(entries);
 }
@@ -2018,12 +2020,14 @@ export function buildThreadFeed(
   const unsettledTurnId = deriveUnsettledTurnId(thread.latestTurn);
   const entries = Arr.sortWith(
     [
-      ...messages.map<RawThreadFeedEntry>((message) => ({
-        type: "message",
-        id: message.id,
-        createdAt: message.createdAt,
-        message,
-      })),
+      ...messages
+        .filter((message) => message.origin === undefined)
+        .map<RawThreadFeedEntry>((message) => ({
+          type: "message",
+          id: message.id,
+          createdAt: message.createdAt,
+          message,
+        })),
       ...workLogEntries
         .filter((entry) => {
           if (options?.loadedMessages === undefined) {

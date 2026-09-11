@@ -281,6 +281,52 @@ function makeThread(
 }
 
 describe("buildThreadFeed", () => {
+  it("hides session exchanges while preserving ordinary chat messages", () => {
+    const base = {
+      role: "user" as const,
+      text: "Please continue",
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+    };
+    const human = { ...base, id: MessageId.make("human") };
+    const assistant = { ...base, id: MessageId.make("assistant"), role: "assistant" as const };
+    const thread = makeThread({
+      id: ThreadId.make("thread-exchanges"),
+      projectId: ProjectId.make("project-1"),
+      title: "Exchanges",
+      messages: [
+        human,
+        {
+          ...base,
+          id: MessageId.make("parent"),
+          origin: { kind: "session", threadId: ThreadId.make("parent") },
+        },
+        { ...base, id: MessageId.make("notice"), origin: { kind: "phoenix" } },
+        assistant,
+      ],
+      activities: ["send_to_parent", "send_to_session"].map((tool) =>
+        makeActivity({
+          id: EventId.make(tool),
+          kind: "tool.completed",
+          summary: tool,
+          createdAt: base.createdAt,
+          payload: {
+            itemType: "mcp_tool_call",
+            data: {
+              toolName: `mcp__phoenix__${tool}`,
+              input: { threadId: "child", message: "Update" },
+            },
+          },
+        }),
+      ),
+    });
+    const feed = buildThreadFeed(thread);
+    expect(feed.map((entry) => entry.id)).toEqual([human.id, assistant.id]);
+    expect(buildThreadFeed(thread, { loadedMessages: thread.messages })).toEqual(feed);
+  });
+
   it("keeps session report bookkeeping out of mobile work rows", () => {
     const thread = makeThread({
       id: ThreadId.make("thread-reports"),

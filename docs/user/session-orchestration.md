@@ -137,18 +137,19 @@ Every row opens that session's chat, so you can drop into a spawned session, rea
 come back. The panel is per thread — it shows the sessions that thread spawned, not every session
 in the environment.
 
-Messages between sessions are attributed in the chat, on every platform: a message another
+Messages between sessions are attributed in the desktop and web chat: a message another
 session sent into a thread renders as its own card naming the speaker ("the parent session, a
 child, or Phoenix itself for death and wedge notices") and routes to that session — it never
 looks like something you typed. A message that has not reached the agent yet — yours or another
 session's — carries a small "queued — delivers after the current turn" marker until the agent
 actually takes it in, and the mailbox lists everything still waiting alongside unread reports.
 
-The conversation between sessions is also visible in the chat itself, on every platform. A spawn
+The conversation between sessions is also visible in the desktop and web chat itself. A spawn
 leaves a "Spawned session" row that links to the child; a message sent to a spawned session leaves
 a "Messaged session" row with a preview of what was said; and a spawned session's question to its
 parent leaves a "Messaged parent" row (marked when it is blocked awaiting the answer). Each row
-routes to the other end of the exchange — on mobile, tap the row to jump into that session.
+routes to the other end of the exchange. Mobile does not show session-message cards, outgoing
+message rows, or the child report inbox.
 
 ## Limits
 
