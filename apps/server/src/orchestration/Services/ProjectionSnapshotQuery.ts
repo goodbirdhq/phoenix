@@ -77,6 +77,15 @@ export interface ProjectionThreadDetailQuery {
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
  */
 export interface ProjectionSnapshotQueryShape {
+  /** Read the latest tool audit fields without loading message or activity payloads. */
+  readonly getThreadStopAudit: (threadId: ThreadId) => Effect.Effect<
+    {
+      readonly lastToolKind: string | null;
+      readonly lastCompletedOperation: string | null;
+    },
+    ProjectionRepositoryError
+  >;
+
   /** Read the latest request or resolution without loading the thread history. */
   readonly getUserInputActivity: (input: {
     readonly threadId: ThreadId;

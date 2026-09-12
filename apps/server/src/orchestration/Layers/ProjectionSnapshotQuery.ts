@@ -1647,6 +1647,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const getThreadStopAuditRow = SqlSchema.findOne({
+    Request: ThreadIdLookupInput,
+    Result: Schema.Struct({
+      lastToolKind: Schema.NullOr(Schema.String),
+      lastCompletedOperation: Schema.NullOr(Schema.String),
+    }),
+    execute: ({ threadId }) => sql`
+      SELECT
+        (SELECT kind FROM projection_thread_activities
+         WHERE thread_id = ${threadId} AND kind IN ('tool.started', 'tool.completed')
+         ORDER BY sequence DESC, created_at DESC, activity_id DESC LIMIT 1) AS "lastToolKind",
+        (SELECT summary FROM projection_thread_activities
+         WHERE thread_id = ${threadId} AND kind = 'tool.completed'
+         ORDER BY sequence DESC, created_at DESC, activity_id DESC LIMIT 1) AS "lastCompletedOperation"
+    `,
+  });
+
   // Independent of turn boundaries: the newest turn can be user-only (no
   // assistant reply yet), so scoping this to "the latest turn's messages"
   // would wrongly report no assistant message even when an earlier one
@@ -4205,6 +4222,16 @@ pending_approval_requests AS (
       ),
     );
 
+  const getThreadStopAudit: ProjectionSnapshotQueryShape["getThreadStopAudit"] = (threadId) =>
+    getThreadStopAuditRow({ threadId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getThreadStopAudit:query",
+          "ProjectionSnapshotQuery.getThreadStopAudit:decodeRow",
+        ),
+      ),
+    );
+
   const getLastAssistantMessage: ProjectionSnapshotQueryShape["getLastAssistantMessage"] = (
     threadId,
   ) =>
@@ -4266,6 +4293,7 @@ pending_approval_requests AS (
     getThreadDetailSnapshot,
     getThreadHasReport,
     getLastAssistantMessage,
+    getThreadStopAudit,
     getLatestUsageActivity,
     getThreadTurnCount,
   } satisfies ProjectionSnapshotQueryShape;

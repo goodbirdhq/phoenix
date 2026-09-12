@@ -665,18 +665,11 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         .pipe(Effect.map(Option.getOrUndefined));
     });
 
-    // Alias kept for the reactor's existing call sites, none of which read
-    // `.activities` — they only need thread-level fields, so the cheaper
-    // activity-free detail read upstream introduced is a safe substitute.
-    const resolveThread = resolveThreadDetail;
-
-    // The stop-audit path inspects recent tool activities to detect an
-    // interrupted tool call, so unlike `resolveThread` it needs the full
-    // (unfiltered) activity list.
-    const resolveThreadWithActivities = Effect.fnUntraced(function* (threadId: ThreadId) {
-      return yield* projectionSnapshotQuery
-        .getThreadDetailById(threadId)
-        .pipe(Effect.map(Option.getOrUndefined));
+    // Stop needs only the latest tool audit entries, never conversation bodies.
+    const resolveThreadStopContext = Effect.fnUntraced(function* (threadId: ThreadId) {
+      const thread = yield* resolveThreadShell(threadId);
+      if (!thread) return undefined;
+      return { ...thread, ...(yield* projectionSnapshotQuery.getThreadStopAudit(threadId)) };
     });
 
     const rejectStartedThreadModelChangeIfRequired = Effect.fnUntraced(function* (input: {
@@ -1091,7 +1084,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       readonly queuedDeliveryMessageId?: MessageId | null;
       readonly createdAt: string;
     }) {
-      const thread = yield* resolveThread(input.threadId);
+      const thread = yield* resolveThreadShell(input.threadId);
       if (!thread) {
         return yield* Effect.die(
           new Error(`Thread '${input.threadId}' was not found in read model.`),
@@ -1488,7 +1481,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           threadId,
           Effect.gen(function* () {
             if (yield* delivery.isPending(threadId, messageId)) return false;
-            const thread = yield* resolveThread(threadId);
+            const thread = yield* resolveThreadDetail(threadId);
             if (
               thread?.session?.stopRequestedAt != null ||
               !thread?.queuedTurnStarts?.some(
@@ -1824,7 +1817,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       yield* Effect.gen(function* () {
         const messageId = event.payload.queuedDeliveryMessageId;
         if (messageId != null) {
-          const current = yield* resolveThread(event.payload.threadId);
+          const current = yield* resolveThreadDetail(event.payload.threadId);
           if (current?.session?.stopRequestedAt != null) return;
           if (
             !current?.queuedTurnStarts?.some(
@@ -2173,7 +2166,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     });
 
     const rearmGraceStopDeadlines = Effect.fn("rearmGraceStopDeadlines")(function* () {
-      const snapshot = yield* projectionSnapshotQuery.getSnapshot();
+      const snapshot = yield* projectionSnapshotQuery.getCommandReadModel();
       for (const thread of snapshot.threads) {
         if (
           thread.session?.status !== "stopped" &&
@@ -2192,7 +2185,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
       event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
     ) {
-      const thread = yield* resolveThreadWithActivities(event.payload.threadId);
+      const thread = yield* resolveThreadStopContext(event.payload.threadId);
       if (!thread) {
         return;
       }
@@ -2206,14 +2199,6 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         "The session was stopped during context compaction. Send this message again to continue.",
       );
       const stopAudit = (current: typeof thread) => {
-        const lastToolActivity = current.activities
-          .filter(
-            (activity) => activity.kind === "tool.started" || activity.kind === "tool.completed",
-          )
-          .at(-1);
-        const lastCompletedOperation =
-          current.activities.filter((activity) => activity.kind === "tool.completed").at(-1)
-            ?.summary ?? null;
         return {
           stoppedBy: event.payload.stoppedBy ?? "user",
           stopRequestedAt: event.payload.createdAt,
@@ -2221,8 +2206,8 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           interruptedToolCall:
             current.session?.activeTurnId !== undefined &&
             current.session.activeTurnId !== null &&
-            lastToolActivity?.kind === "tool.started",
-          lastCompletedOperation,
+            current.lastToolKind === "tool.started",
+          lastCompletedOperation: current.lastCompletedOperation,
         } as const;
       };
       const setStoppedSession = (current: typeof thread) =>
@@ -2247,7 +2232,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           createdAt: now,
         });
       const hardStop = Effect.fnUntraced(function* () {
-        const current = yield* resolveThreadWithActivities(event.payload.threadId);
+        const current = yield* resolveThreadStopContext(event.payload.threadId);
         if (!current || current.session?.status === "stopped") {
           return;
         }
@@ -2266,7 +2251,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           });
           yield* providerService.stopSession({ threadId: current.id });
         }
-        const afterStop = yield* resolveThreadWithActivities(current.id);
+        const afterStop = yield* resolveThreadStopContext(current.id);
         if (
           !afterStop ||
           (afterStop.session?.episodeStartedAt ?? null) !==
@@ -2274,16 +2259,6 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         )
           return;
         yield* setStoppedSession(afterStop);
-        if (wasCompacting && !compactingThreadIds.has(thread.id)) {
-          yield* restoreCompaction(thread.id).pipe(
-            Effect.catchCause((restoreCause) =>
-              Effect.logWarning("failed to restore provider session after compaction failure", {
-                threadId: thread.id,
-                cause: Cause.pretty(restoreCause),
-              }),
-            ),
-          );
-        }
       });
 
       yield* Effect.gen(function* () {
@@ -2350,7 +2325,25 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           graceStopNotice: true,
           createdAt: now,
         });
-      }).pipe(Effect.ensuring(clearStopping));
+      }).pipe(
+        Effect.ensuring(
+          Effect.gen(function* () {
+            yield* clearStopping;
+            // Compaction may settle while provider stop is still pending. Restore
+            // its transient state on either outcome, preserving stopped/running.
+            if (wasCompacting && !compactingThreadIds.has(thread.id)) {
+              yield* restoreCompaction(thread.id).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("failed to restore provider session after compaction", {
+                    threadId: thread.id,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              );
+            }
+          }),
+        ),
+      );
     });
     const processDomainEvent = Effect.fn("processDomainEvent")(function* (
       event: ProviderIntentEvent,
@@ -2461,7 +2454,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           // Auto-failover retries the failed turn here, after the rebind, so the
           // retry can never race the session restart into the instance guard.
           if (event.payload.trigger === "auto-failover") {
-            const migrated = yield* resolveThread(event.payload.threadId);
+            const migrated = yield* resolveThreadDetail(event.payload.threadId);
             const failedMessage = migrated?.messages.findLast((message) => message.role === "user");
             if (migrated && failedMessage) {
               // Same message id: the projection upserts on message_id, so the

@@ -298,8 +298,9 @@ describe("OrchestrationEngine", () => {
         ).toEqual([
           "thread.activity-appended",
           "thread.message-sent",
-          "thread.turn-start-requested",
+          status === "running" ? "thread.turn-start-queued" : "thread.turn-start-requested",
         ]);
+        expect(after.threads[0]?.queuedTurnStarts ?? []).toHaveLength(status === "running" ? 1 : 0);
         await expect(
           system.run(
             system.engine.dispatch({
@@ -421,6 +422,7 @@ describe("OrchestrationEngine", () => {
     const layer = OrchestrationEngineLive.pipe(
       Layer.provide(
         Layer.succeed(ProjectionSnapshotQuery, {
+          getThreadStopAudit: () => Effect.die("unused"),
           getUserInputActivity: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.succeed(commandReadModel),
           getSnapshot: () =>

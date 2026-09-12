@@ -829,6 +829,9 @@ describe("ProviderRuntimeIngestion", () => {
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
+        // Internal immediate steering may open a replacement turn before the
+        // old terminal arrives; ordinary busy-thread prompts queue instead.
+        graceStopNotice: true,
         createdAt: base.createdAt,
       });
       harness.setProviderSession({
@@ -847,6 +850,11 @@ describe("ProviderRuntimeIngestion", () => {
           eventId: asEventId("new-active-started"),
           turnId: newTurnId,
         },
+      ]);
+      expect(
+        (await harness.readModel()).threads.find((entry) => entry.id === threadId)?.session,
+      ).toMatchObject({ activeTurnId: newTurnId, status: "running" });
+      await harness.emitAndDrain([
         {
           ...base,
           type: terminalType,
