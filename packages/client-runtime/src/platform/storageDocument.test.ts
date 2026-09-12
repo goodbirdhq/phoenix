@@ -69,23 +69,38 @@ describe("ConnectionCatalogDocument", () => {
         credential: BEARER_CREDENTIAL,
       }),
     );
+    const sshTarget = new SshConnectionTarget({
+      environmentId: EnvironmentId.make("saved-ssh"),
+      label: "SSH",
+      connectionId: "ssh-1",
+    });
+    const sshProfile = new SshConnectionProfile({
+      environmentId: sshTarget.environmentId,
+      label: sshTarget.label,
+      connectionId: sshTarget.connectionId,
+      target: { alias: "devbox", hostname: "100.64.0.3", username: "developer", port: 22 },
+    });
+    const saved = registerConnectionInCatalog(
+      direct,
+      new SshConnectionRegistration({ target: sshTarget, profile: sshProfile }),
+    );
     const decoded = decodeCatalog({
-      ...direct,
+      ...saved,
       targets: [
-        ...direct.targets,
+        ...saved.targets,
         { _tag: "RelayConnectionTarget", environmentId: "old-managed", label: "Old managed" },
       ],
       remoteDpopTokens: [REMOTE_TOKEN],
     });
     const cleaned = clearUnsupportedManagedCredentials(decoded);
     expect(cleaned.targets).toEqual(decoded.targets);
-    expect(cleaned.targets[1]).toMatchObject({
+    expect(cleaned.targets[2]).toMatchObject({
       _tag: "RelayConnectionTarget",
       environmentId: "old-managed",
       label: "Old managed",
     });
-    expect(cleaned.profiles).toEqual(direct.profiles);
-    expect(cleaned.credentials).toEqual(direct.credentials);
+    expect(cleaned.profiles).toEqual(saved.profiles);
+    expect(cleaned.credentials).toEqual(saved.credentials);
     expect(cleaned.remoteDpopTokens).toEqual([]);
   });
   it.each([
