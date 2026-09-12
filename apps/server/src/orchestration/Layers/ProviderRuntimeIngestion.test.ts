@@ -799,7 +799,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBeNull();
   });
 
-  it("settles an active turn when the provider reports a session error", async () => {
+  it("settles an active turn at the error time after a mid-turn checkpoint", async () => {
     const harness = await createHarness();
     const threadId = asThreadId("thread-1");
     const turnId = asTurnId("turn-system-error");
@@ -817,6 +817,42 @@ describe("ProviderRuntimeIngestion", () => {
       status: "running",
       activeTurnId: turnId,
     });
+
+    harness.emit({
+      type: "turn.diff.updated",
+      eventId: asEventId("evt-checkpoint-before-system-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: "2026-09-12T12:28:56.500Z",
+      payload: { unifiedDiff: "diff --git a/file.txt b/file.txt\n+hello\n" },
+    });
+    await harness.drain();
+    expect(Option.getOrThrow(await harness.readProjectionTurn(turnId))).toMatchObject({
+      state: "running",
+      completedAt: "2026-09-12T12:28:56.500Z",
+    });
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-text-before-system-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      itemId: asItemId("item-before-system-error"),
+      createdAt: "2026-09-12T12:28:56.600Z",
+      payload: { streamKind: "assistant_text", delta: "Partial answer" },
+    });
+    harness.emit({
+      type: "turn.proposed.delta",
+      eventId: asEventId("evt-plan-before-system-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: "2026-09-12T12:28:56.700Z",
+      payload: { delta: "## Partial plan" },
+    });
+    await harness.drain();
 
     harness.emit({
       type: "session.state.changed",
@@ -839,6 +875,14 @@ describe("ProviderRuntimeIngestion", () => {
       state: "error",
       completedAt: "2026-09-12T12:28:57.013Z",
     });
+    expect(thread.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: "Partial answer", streaming: false }),
+      ]),
+    );
+    expect(thread.proposedPlans).toEqual(
+      expect.arrayContaining([expect.objectContaining({ planMarkdown: "## Partial plan" })]),
+    );
   });
 
   effectIt.effect(

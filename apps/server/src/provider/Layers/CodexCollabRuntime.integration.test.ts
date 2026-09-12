@@ -13,7 +13,12 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { type ProviderApprovalDecision, type ProviderEvent, ThreadId } from "@t3tools/contracts";
+import {
+  type ProviderApprovalDecision,
+  type ProviderEvent,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -650,8 +655,8 @@ describe("CodexSessionRuntime collab integration", () => {
 
   it.live("clears a root system-error turn before starting the next turn", () =>
     Effect.gen(function* () {
-      const activeTurnId = "root-turn-before-system-error";
-      const nextTurnId = "root-turn-after-system-error";
+      const activeTurnId = TurnId.make("root-turn-before-system-error");
+      const nextTurnId = TurnId.make("root-turn-after-system-error");
       const script = {
         rootThreadId: ROOT,
         holdTurnOpen: true,
@@ -700,7 +705,7 @@ describe("CodexSessionRuntime collab integration", () => {
 
   it.live("does not let a child system error terminalize the root turn", () =>
     Effect.gen(function* () {
-      const activeTurnId = "root-turn-with-child-system-error";
+      const activeTurnId = TurnId.make("root-turn-with-child-system-error");
       const script = {
         rootThreadId: ROOT,
         holdTurnOpen: true,
