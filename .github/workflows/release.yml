@@ -177,7 +177,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      relay_url: ${{ steps.config.outputs.relay_url }}
       web_router_url: ${{ steps.config.outputs.web_router_url }}
       web_latest_domain: ${{ steps.config.outputs.web_latest_domain }}
       web_nightly_domain: ${{ steps.config.outputs.web_nightly_domain }}
@@ -188,9 +187,8 @@ jobs:
           sparse-checkout: .github/scripts
           persist-credentials: false
       - id: config
-        name: Validate optional relay URL and requested publishers
+        name: Validate requested publishers and hosted web targets
         env:
-          T3CODE_RELAY_URL: ${{ vars.T3CODE_RELAY_URL }}
           T3CODE_WEB_ROUTER_URL: ${{ vars.T3CODE_WEB_ROUTER_URL }}
           T3CODE_WEB_LATEST_DOMAIN: ${{ vars.T3CODE_WEB_LATEST_DOMAIN }}
           T3CODE_WEB_NIGHTLY_DOMAIN: ${{ vars.T3CODE_WEB_NIGHTLY_DOMAIN }}
@@ -263,8 +261,6 @@ jobs:
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.public_config.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
-    env:
-      T3CODE_RELAY_URL: ${{ needs.public_config.outputs.relay_url }}
     strategy:
       fail-fast: false
       matrix:
@@ -618,8 +614,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      T3CODE_RELAY_URL: ${{ needs.public_config.outputs.relay_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -790,7 +784,6 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     env:
-      T3CODE_RELAY_URL: ${{ needs.public_config.outputs.relay_url }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -862,7 +855,6 @@ jobs:
               --token "$VERCEL_TOKEN" \
               "${vercel_scope_args[@]}" \
               --build-env "APP_VERSION=${{ needs.preflight.outputs.version }}" \
-              --build-env "T3CODE_RELAY_URL=${T3CODE_RELAY_URL:-}" \
               --build-env "T3CODE_WEB_ROUTER_URL=$T3CODE_WEB_ROUTER_URL" \
               --build-env "T3CODE_WEB_LATEST_DOMAIN=$T3CODE_WEB_LATEST_DOMAIN" \
               --build-env "T3CODE_WEB_NIGHTLY_DOMAIN=$T3CODE_WEB_NIGHTLY_DOMAIN" \

@@ -43,9 +43,7 @@ function phoenixHost(raw, name) {
 }
 
 function resolvePublicConfig(env) {
-  const relayUrl = value(env, "T3CODE_RELAY_URL");
   const result = {
-    relay_url: relayUrl ? httpsOrigin(relayUrl, "T3CODE_RELAY_URL") : "",
     web_router_url: "",
     web_latest_domain: "",
     web_nightly_domain: "",

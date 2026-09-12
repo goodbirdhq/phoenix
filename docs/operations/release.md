@@ -39,17 +39,8 @@ Label-driven desktop previews remain separate from production releases.
 ## Public client configuration
 
 Client release jobs do not deploy relay infrastructure, read production state, or fetch
-tracing credentials. The inherited `deploy-relay.yml` workflow was removed, not the runtime or
-infrastructure product code.
-
-Optional **repository Actions variable**:
-
-- `T3CODE_RELAY_URL`: explicit HTTPS origin of a separately deployed relay, baked into clients
-  that should offer one. Leave unset for clients with no baked-in relay.
-
-No relay URL is derived from a DNS zone, and no Cloudflare, PlanetScale, Axiom or relay tracing
-token is required by the release workflow. This is public client configuration, not
-infrastructure credentials. Configure the same intended relay for stable and nightly clients.
+tracing credentials. The managed relay product was removed; no Cloudflare, PlanetScale, Axiom or
+relay tracing token is required by the release workflow.
 
 ## Optional hosted web publication
 

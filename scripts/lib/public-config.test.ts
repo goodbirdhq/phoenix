@@ -18,85 +18,50 @@ describe("loadRepoEnv", () => {
   it("does not project cloud configuration for an unconfigured clone", () => {
     const env = loadRepoEnv({ baseEnv: {}, repoRoot: makeTemporaryDirectory() });
 
-    expect(env.T3CODE_RELAY_URL).toBeUndefined();
-    expect(env.VITE_T3CODE_RELAY_URL).toBeUndefined();
     expect(env.T3CODE_MOBILE_OTLP_TRACES_URL).toBeUndefined();
     expect(env.T3CODE_MOBILE_OTLP_TRACES_DATASET).toBeUndefined();
     expect(env.T3CODE_MOBILE_OTLP_TRACES_TOKEN).toBeUndefined();
     expect(env.EXPO_PUBLIC_OTLP_TRACES_URL).toBeUndefined();
     expect(env.EXPO_PUBLIC_OTLP_TRACES_DATASET).toBeUndefined();
     expect(env.EXPO_PUBLIC_OTLP_TRACES_TOKEN).toBeUndefined();
-    expect(env.T3CODE_RELAY_CLIENT_OTLP_TRACES_URL).toBeUndefined();
-    expect(env.T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET).toBeUndefined();
-    expect(env.T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN).toBeUndefined();
-    expect(env.VITE_RELAY_OTLP_TRACES_URL).toBeUndefined();
-    expect(env.VITE_RELAY_OTLP_TRACES_DATASET).toBeUndefined();
-    expect(env.VITE_RELAY_OTLP_TRACES_TOKEN).toBeUndefined();
   });
 
   it("applies process, root local, and root precedence in that order", () => {
     const repoRoot = makeTemporaryDirectory();
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env"),
-      "T3CODE_RELAY_URL=https://root.example.test\n",
+      "T3CODE_MOBILE_OTLP_TRACES_DATASET=root-dataset\n",
     );
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env.local"),
-      "T3CODE_RELAY_URL=https://local.example.test\n",
+      "T3CODE_MOBILE_OTLP_TRACES_DATASET=local-dataset\n",
     );
 
-    expect(loadRepoEnv({ baseEnv: {}, repoRoot }).T3CODE_RELAY_URL).toBe(
-      "https://local.example.test",
+    expect(loadRepoEnv({ baseEnv: {}, repoRoot }).T3CODE_MOBILE_OTLP_TRACES_DATASET).toBe(
+      "local-dataset",
     );
     expect(
       loadRepoEnv({
-        baseEnv: {
-          T3CODE_RELAY_URL: "https://ci.example.test",
-        },
+        baseEnv: { T3CODE_MOBILE_OTLP_TRACES_DATASET: "ci-dataset" },
         repoRoot,
       }),
     ).toMatchObject({
-      T3CODE_RELAY_URL: "https://ci.example.test",
-      VITE_T3CODE_RELAY_URL: "https://ci.example.test",
+      T3CODE_MOBILE_OTLP_TRACES_DATASET: "ci-dataset",
+      EXPO_PUBLIC_OTLP_TRACES_DATASET: "ci-dataset",
     });
   });
 
   it("accepts legacy framework aliases as root overrides", () => {
     expect(
       resolvePublicConfig({
-        VITE_T3CODE_RELAY_URL: "https://legacy.example.test",
         EXPO_PUBLIC_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
         EXPO_PUBLIC_OTLP_TRACES_DATASET: "mobile-traces",
         EXPO_PUBLIC_OTLP_TRACES_TOKEN: "mobile-token",
       }),
     ).toEqual({
-      relayUrl: "https://legacy.example.test",
       mobileOtlpTracesUrl: "https://api.axiom.co/v1/traces",
       mobileOtlpTracesDataset: "mobile-traces",
       mobileOtlpTracesToken: "mobile-token",
-      relayClientOtlpTracesUrl: undefined,
-      relayClientOtlpTracesDataset: undefined,
-      relayClientOtlpTracesToken: undefined,
-    });
-  });
-
-  it("projects canonical relay client tracing values to web build aliases", () => {
-    expect(
-      loadRepoEnv({
-        baseEnv: {
-          T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
-          T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "relay-client-traces",
-          T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "relay-client-token",
-        },
-        repoRoot: makeTemporaryDirectory(),
-      }),
-    ).toEqual({
-      T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
-      T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "relay-client-traces",
-      T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "relay-client-token",
-      VITE_RELAY_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
-      VITE_RELAY_OTLP_TRACES_DATASET: "relay-client-traces",
-      VITE_RELAY_OTLP_TRACES_TOKEN: "relay-client-token",
     });
   });
 
@@ -104,7 +69,6 @@ describe("loadRepoEnv", () => {
     expect(
       loadRepoEnv({
         baseEnv: {
-          T3CODE_RELAY_URL: "https://relay.example.test",
           T3CODE_MOBILE_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
           T3CODE_MOBILE_OTLP_TRACES_DATASET: "mobile-traces",
           T3CODE_MOBILE_OTLP_TRACES_TOKEN: "mobile-token",
@@ -112,8 +76,6 @@ describe("loadRepoEnv", () => {
         repoRoot: makeTemporaryDirectory(),
       }),
     ).toEqual({
-      T3CODE_RELAY_URL: "https://relay.example.test",
-      VITE_T3CODE_RELAY_URL: "https://relay.example.test",
       T3CODE_MOBILE_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
       T3CODE_MOBILE_OTLP_TRACES_DATASET: "mobile-traces",
       T3CODE_MOBILE_OTLP_TRACES_TOKEN: "mobile-token",
@@ -121,6 +83,25 @@ describe("loadRepoEnv", () => {
       EXPO_PUBLIC_OTLP_TRACES_DATASET: "mobile-traces",
       EXPO_PUBLIC_OTLP_TRACES_TOKEN: "mobile-token",
     });
+  });
+
+  it("no longer projects managed-relay configuration to client build aliases", () => {
+    const env = loadRepoEnv({
+      baseEnv: {
+        T3CODE_RELAY_URL: "https://relay.example.test",
+        T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
+        T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "relay-client-traces",
+        T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "relay-client-token",
+      },
+      repoRoot: makeTemporaryDirectory(),
+    });
+
+    // Explicitly set values still pass through for local tooling, but the
+    // managed relay is gone, so nothing derives client-facing aliases from them.
+    expect(env.VITE_T3CODE_RELAY_URL).toBeUndefined();
+    expect(env.VITE_RELAY_OTLP_TRACES_URL).toBeUndefined();
+    expect(env.VITE_RELAY_OTLP_TRACES_DATASET).toBeUndefined();
+    expect(env.VITE_RELAY_OTLP_TRACES_TOKEN).toBeUndefined();
   });
 });
 
