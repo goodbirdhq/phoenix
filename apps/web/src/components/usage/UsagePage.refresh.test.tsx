@@ -6,19 +6,31 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   presentations: new Map(),
-  refreshProviders: vi.fn(async () => undefined),
+  refreshUsage: vi.fn(),
+  refreshCapacity: vi.fn(),
 }));
+vi.mock("@tanstack/react-router", () => ({ useSearch: () => ({ account: null }) }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => state.presentations }));
 vi.mock("../../state/presentation", () => ({
   environmentPresentations: { presentationsAtom: null },
 }));
-vi.mock("../../state/server", () => ({ serverEnvironment: { refreshProviders: null } }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.refreshProviders }));
+vi.mock("../../state/server", () => ({ serverEnvironment: {} }));
+vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../../env", () => ({ isElectron: false }));
 vi.mock("../../hooks/useSettings", () => ({ usePrimarySettings: () => "24h" }));
 vi.mock("../../state/usage", () => ({
   useUsage: () => ({
     merged: mergeUsage([], USAGE_CONTRACT_VERSION),
+    accounts: [],
+    allEnvironments: [
+      {
+        environmentId: EnvironmentId.make("test"),
+        label: "Test",
+        isPending: false,
+        error: null,
+        summary: null,
+      },
+    ],
     environments: [
       {
         environmentId: EnvironmentId.make("test"),
@@ -39,7 +51,13 @@ vi.mock("../../state/usage", () => ({
     ],
     isPending: false,
     isPartial: false,
-    refresh: async () => undefined,
+    isUsageRefreshing: false,
+    refreshUsage: state.refreshUsage,
+    refreshCapacity: state.refreshCapacity,
+    providerAvailability: [],
+    isProviderAvailabilityPending: false,
+    isCapacityRefreshing: false,
+    hasProviderAvailabilityError: false,
   }),
 }));
 vi.mock("./usagePagePreferences", () => ({
@@ -56,6 +74,12 @@ vi.mock("../ui/select", () => ({
   SelectValue: "span",
 }));
 vi.mock("../ui/sidebar", () => ({ SidebarInset: "div" }));
+vi.mock("../ui/tabs", () => ({
+  Tabs: "div",
+  TabsList: "div",
+  TabsTrigger: "button",
+  TabsContent: "div",
+}));
 vi.mock("../ui/toggle-group", () => ({ Toggle: "button", ToggleGroup: "div" }));
 vi.mock("../ui/tooltip", () => ({ Tooltip: "div", TooltipPopup: "div", TooltipTrigger: "div" }));
 vi.mock("../ui/popover", () => ({ Popover: "div", PopoverPopup: "div", PopoverTrigger: "div" }));
@@ -86,7 +110,8 @@ let renderer: ReactTestRenderer;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-11T12:00:00Z"));
-  state.refreshProviders.mockClear();
+  state.refreshUsage.mockClear();
+  state.refreshCapacity.mockClear();
   state.presentations = new Map([
     [
       EnvironmentId.make("test"),
@@ -133,47 +158,41 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it.each([0, 1])(
-  "refreshes the visible limits countdown with refresh button %i without switching tabs, even when quota is unchanged",
-  async (buttonIndex) => {
-    await act(() => {
-      renderer = create(<UsagePage />);
-    });
-    expect(
-      JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
-    ).toContain("in 2h 0m");
-    vi.mocked(Date.now).mockReturnValue(Date.parse("2026-09-11T12:30:00Z"));
-    await act(async () => {
-      renderer.root
-        .findAllByProps({ "aria-label": "Refresh limits" })
-        .filter((node) => node.type === "button")
-        .at(buttonIndex)!
-        .props.onClick();
-    });
-    expect(state.refreshProviders).toHaveBeenCalledWith({ environmentId: "test", input: {} });
-    expect(
-      JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
-    ).toContain("in 1h 30m");
-    expect(
-      JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
-    ).not.toContain("in 2h 0m");
-  },
-);
+function text(): string {
+  return JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value));
+}
 
-it("uses the current time when returning to limits from tokens", async () => {
+function clickRefresh(): void {
+  renderer.root
+    .findAllByProps({ "aria-label": "Refresh usage" })
+    .filter((node) => node.type === "button")[0]!
+    .props.onClick();
+}
+
+it("advances the limits countdown on refresh, even when quota is unchanged", async () => {
   await act(() => {
     renderer = create(<UsagePage />);
   });
-  const selectMetric = (metric: string) => {
-    renderer.root
-      .findAll((node) => node.type === "div" && node.props["aria-label"] === "Usage metric")[0]!
-      .props.onValueChange([metric]);
-  };
-  await act(() => selectMetric("tokens"));
+  expect(text()).toContain("in 2h 0m");
+  vi.mocked(Date.now).mockReturnValue(Date.parse("2026-09-11T12:30:00Z"));
+  await act(async () => {
+    clickRefresh();
+  });
+  expect(state.refreshCapacity).toHaveBeenCalled();
+  expect(state.refreshUsage).toHaveBeenCalled();
+  expect(text()).toContain("in 1h 30m");
+  expect(text()).not.toContain("in 2h 0m");
+});
+
+it("recomputes the limits countdown from the current time on a later refresh", async () => {
+  await act(() => {
+    renderer = create(<UsagePage />);
+  });
+  expect(text()).toContain("in 2h 0m");
   vi.mocked(Date.now).mockReturnValue(Date.parse("2026-09-11T13:00:00Z"));
-  await act(() => selectMetric("limits"));
-  expect(
-    JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
-  ).toContain("in 1h 0m");
-  expect(state.refreshProviders).not.toHaveBeenCalled();
+  await act(async () => {
+    clickRefresh();
+  });
+  expect(text()).toContain("in 1h 0m");
+  expect(text()).not.toContain("in 2h 0m");
 });
