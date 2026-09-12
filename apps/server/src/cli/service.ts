@@ -72,6 +72,9 @@ export function formatServiceStatus(
     return "Phoenix service\n  Status: not installed\n  Next: Run `phoenix service install`.";
   }
   const installedVersion = status.installedVersion ?? cliVersion;
+  const problems = (status.problems ?? []).map(
+    (problem) => `  [${problem}] ${BootService.formatBootServiceProblem(problem)}`,
+  );
   if (
     !status.current &&
     status.installedVersion !== undefined &&
@@ -84,7 +87,8 @@ export function formatServiceStatus(
       `  CLI build: ${cliBuild}`,
       `  Unit: ${status.unitPath}`,
       `  Logs: ${status.logPath}`,
-      `  Next: Run \`npx ${PUBLISHED_PACKAGE_NAME}@${installedVersion} service update\`, or pass \`--allow-downgrade\` explicitly.`,
+      ...problems,
+      `  Next: Use \`npx ${PUBLISHED_PACKAGE_NAME}@${installedVersion} service update\` to repair it, or pass \`--allow-downgrade\` explicitly.`,
     ].join("\n");
   }
   return [
@@ -94,9 +98,10 @@ export function formatServiceStatus(
     `  CLI build: ${cliBuild}`,
     `  Unit: ${status.unitPath}`,
     `  Logs: ${status.logPath}`,
+    ...problems,
     ...(status.current
       ? []
-      : [`  Next: Run \`npx ${PUBLISHED_PACKAGE_NAME}@latest service update\`.`]),
+      : [`  Next: Run \`npx ${PUBLISHED_PACKAGE_NAME}@${cliVersion} service update\`.`]),
   ].join("\n");
 }
 
@@ -199,6 +204,9 @@ export const offerServiceDuringOnboarding = Effect.gen(function* () {
     yield* Console.log("Phoenix is already set up to run in the background on this machine.");
     return true;
   }
+  for (const problem of status.problems ?? []) {
+    yield* Console.warn(`[${problem}] ${BootService.formatBootServiceProblem(problem)}`);
+  }
   if (
     installed &&
     status.installedVersion !== undefined &&
@@ -248,6 +256,8 @@ export const recoverServiceOnboardingOffer = <R>(
       BootServiceCommandError: (error) =>
         Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
       BootServiceInstallError: (error) =>
+        Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
+      BootServicePrerequisiteError: (error) =>
         Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
       BootServiceUpdatePendingError: (error) =>
         Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),

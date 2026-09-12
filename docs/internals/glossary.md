@@ -13,6 +13,8 @@ This is a living glossary for Phoenix. It explains what common terms mean in thi
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
 - [Appearance](#appearance)
+- [Pull requests](#pull-requests)
+- [Composer context](#composer-context)
 
 ## Concepts
 
@@ -232,16 +234,50 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 
 #### Environment theme
 
-A theme an environment's machine publishes for clients to follow, one file per theme under `themes/` in that environment's state directory; the filename is the theme id. [environmentTheme.ts][25] watches the directory and streams the set over `subscribeServerConfig`; clients render each as a library card, generating a full palette when the file carries seed colors and using the palette directly when it is a standard exported theme file. A desktop that retints its apps when the system theme changes rewrites its file, so T3 Code follows along without a restart. See [environment-theme.md][26].
+A theme an environment's machine publishes for clients to follow, one file per theme under `themes/` in that environment's state directory; the filename is the theme id. [environmentTheme.ts][25] watches the directory and streams the set over `subscribeServerConfig`; clients render each as a library card, generating a full palette when the file carries seed colors and using the palette directly when it is a standard exported theme file. A desktop that retints its apps when the system theme changes rewrites its file, so Phoenix follows along without a restart. See [environment-theme.md][26].
 
 #### Default theme
 
 The environment's theme, held in its `settings.json` as `defaultTheme` (with `defaultThemeSetAt`
-as the set-generation) and set with `t3 theme set <id>`. Web and desktop clients apply each set
+as the set-generation) and set with `phoenix theme set <id>`. Web and desktop clients apply each set
 once — live when connected, on the next connect otherwise — so setting it switches them, while a
 theme a user picks in Settings afterwards sticks until the next set; mobile keeps its own
 appearance settings. Naming a published [environment theme](#environment-theme) is how a desktop
-ships T3 Code already matching it.
+ships Phoenix already matching it.
+
+### Pull requests
+
+#### Pull request link
+
+A persisted thread association identified by host, repository, and number. Links can cross projects within an environment and carry a server-maintained snapshot. See [the contracts][1].
+
+#### Pull request sync
+
+The reactor that refreshes each distinct linked review once per cadence and discovers native stack layers. Explicit refreshes and failed stack reads trigger another read.
+
+#### Current pull request
+
+The link used by single-review controls and older clients. Open work takes precedence; a completed single chain points at its top layer. Unrelated terminal links use the latest update. See [pull request linking compatibility][24].
+
+### Composer context
+
+#### Context record
+
+The typed payload behind a composer chip, keyed by `contextId` in `message.context.records`. It never holds bytes.
+
+#### Context reference
+
+One occurrence of a record in message text: `[label](t3-context://v1/<kind>/<contextId>)`. Several references can share one record.
+
+#### Attachment binding
+
+The link from an image or file record to its server-owned attachment. Its attachment ID can change without changing `contextId`.
+
+#### Attachment inventory
+
+The ordered image records shown as thumbnails above the prose, including images with no inline references.
+
+See [composer context references][30] for the contract and lifecycle.
 
 ## Practical Shortcuts
 
@@ -286,3 +322,7 @@ ships T3 Code already matching it.
 [24]: ./overview.md
 [25]: ../../apps/server/src/environmentTheme.ts
 [26]: ../user/environment-theme.md
+[27]: ./schedules.md
+[28]: ./birdhouse.md
+[29]: ../../packages/shared/src/providerRetryActivity.ts
+[30]: ./composer-context-references.md

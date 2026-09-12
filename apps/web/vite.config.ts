@@ -1,6 +1,5 @@
 import * as NodeZlib from "node:zlib";
 
-import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
@@ -10,9 +9,11 @@ import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
-import { createDevProxyEntries } from "@t3tools/shared/devProxy";
+import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
+import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
+import { tailwindPlugins } from "./vite/tailwind";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -80,6 +81,7 @@ const unitTestProject = {
     // run, those async tests can exceed Vitest's default 5s budget.
     hookTimeout: 15_000,
     testTimeout: 15_000,
+    setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
   },
 } satisfies TestProjectInlineConfiguration;
 
@@ -119,8 +121,6 @@ function resolveDevProxyTarget(
 
 const devProxyTarget = resolveDevProxyTarget(process.env.PHOENIX_PORT, configuredWsUrl);
 
-const devProxyEntries = createDevProxyEntries(devProxyTarget);
-
 // Vite's dev server sends JS uncompressed. On localhost that is free; over a
 // shared origin (tailnet, LAN) it is the whole cold-start: bundled dev serves
 // one ~25 MB chunk, and a typical uplink moves that in about a minute while
@@ -158,6 +158,15 @@ export default defineConfig(() => {
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),
+      thirdPartyLicensesPlugin({
+        bundleName: "web",
+        configFile: new URL("../../third-party-licenses.config.json", import.meta.url),
+        packageManifests: [
+          { bundle: "web", path: new URL("./package.json", import.meta.url) },
+          { bundle: "server", path: new URL("../server/package.json", import.meta.url) },
+          { bundle: "desktop", path: new URL("../desktop/package.json", import.meta.url) },
+        ],
+      }),
       // Route components load as split chunks so settings, pull-request, and
       // usage code stay out of the cold-start payload; the router prefetches
       // them on navigation intent (see getRouter's defaultPreload).
@@ -171,7 +180,7 @@ export default defineConfig(() => {
         parserOpts: { plugins: ["typescript", "jsx"] },
         presets: [reactCompilerPreset()],
       }),
-      tailwindcss(),
+      tailwindPlugins(bundledDev),
     ],
     optimizeDeps: {
       include: [
@@ -227,14 +236,24 @@ export default defineConfig(() => {
       warmup: {
         clientFiles: ["./src/main.tsx"],
       },
-      ...(devProxyEntries
+      ...(devProxyTarget
         ? {
             // One entry per shared prefix; the server's dev catch-all 404s the
             // same list, so the two sides cannot drift. `/ws` is the app's own
-            // socket — Vite's HMR socket is matched separately and exactly
-            // (path "/" plus a vite-hmr subprotocol), so the two upgrade
-            // handlers don't collide.
-            proxy: devProxyEntries,
+            // socket and `/api` carries the device hub's stream sockets —
+            // Vite's HMR socket is matched separately and exactly (path "/"
+            // plus a vite-hmr subprotocol), so the upgrade handlers don't
+            // collide.
+            proxy: Object.fromEntries(
+              DEV_PROXIED_PATH_PREFIXES.map((prefix) => [
+                prefix,
+                {
+                  target: devProxyTarget,
+                  changeOrigin: true,
+                  ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
+                },
+              ]),
+            ),
           }
         : {}),
       // Electron's BrowserWindow needs the HMR socket pinned to an explicit
@@ -253,9 +272,15 @@ export default defineConfig(() => {
           }
         : {}),
     },
+    // @tailwindcss/vite only emits a CSS sourcemap when devSourcemap is on; without it
+    // rolldown flags the transform as SOURCEMAP_BROKEN on every sourcemapped build.
+    css: {
+      devSourcemap: buildSourcemap !== false,
+    },
     build: {
       outDir: "dist",
       emptyOutDir: true,
+      manifest: true,
       sourcemap: buildSourcemap,
     },
     test: {

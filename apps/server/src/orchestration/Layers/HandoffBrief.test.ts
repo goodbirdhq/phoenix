@@ -25,11 +25,13 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../../config.ts";
+import { CheckpointStore } from "../../checkpointing/CheckpointStore.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
+import { ProviderAuthService } from "../../provider/Services/ProviderAuthService.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -150,6 +152,7 @@ const makeProviderHarness = Effect.fn("makeProviderHarness")(function* (outcome:
   const service = ProviderService.of({
     startSession: () => unsupported(),
     sendTurn,
+    compactThread: () => unsupported(),
     interruptTurn: () => unsupported(),
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
@@ -172,6 +175,7 @@ const makeProviderHarness = Effect.fn("makeProviderHarness")(function* (outcome:
         },
       }),
     rollbackConversation: () => unsupported(),
+    assertConversationRollbackSupported: () => unsupported(),
     uploadFeedback: () => unsupported(),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEvents);
@@ -243,6 +247,8 @@ const makeTestLayer = (providerLayer: Layer.Layer<ProviderService>) => {
           Effect.die("refreshLocalStatus should not be called in handoff brief tests"),
         refreshStatus: () =>
           Effect.die("refreshStatus should not be called in handoff brief tests"),
+        refreshPullRequestStatus: () =>
+          Effect.die("refreshPullRequestStatus should not be called in handoff brief tests"),
         streamStatus: () => Stream.die("streamStatus should not be called in handoff brief tests"),
       }),
     ),
@@ -250,6 +256,8 @@ const makeTestLayer = (providerLayer: Layer.Layer<ProviderService>) => {
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mock(CheckpointStore)({})),
+    Layer.provideMerge(Layer.mock(ProviderAuthService)({ tryHandlePromptCommand: () => Effect.succeed(false) })),
   );
 };
 
@@ -309,6 +317,10 @@ const runHandoffCase = Effect.fn("runHandoffCase")(function* (providerOutcome: P
 
     yield* providerRuntimeIngestion.start();
     yield* providerCommandReactor.start();
+    // Both reactors subscribe through parked fibers. Yield once before issuing
+    // the handoff command so its terminal provider events cannot precede the
+    // runtime-ingestion subscription.
+    yield* Effect.yieldNow;
 
     const result = yield* Effect.exit(handoffBrief.create(THREAD_ID));
     yield* providerCommandReactor.drain;

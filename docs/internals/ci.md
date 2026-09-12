@@ -12,12 +12,16 @@ possible.** Anything we can turn off outside the repository, we do.
 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs these quality gates on pull
 requests and pushes to `main`:
 
-- **Check**: `vp check` (format and lint; this repo sets `typeCheck: false` in its lint options),
-  then `vpr typecheck` for the workspace type check. The same job
-  builds the desktop pipeline (`vp run build:desktop`) and verifies the preload bundle exists and
-  uses only imports that Electron's sandbox can load. The verifier parses imports, then executes the
-  trusted artifact with controlled bridge stubs to confirm that its required APIs are callable.
-- **Test**: `vp run test` across the workspace.
+- **Check**: `vp run knip:check` (unused files/dependencies across the repo, then unused runtime
+  exports per workspace), `vp check` (format and lint; this repo sets `typeCheck: false` in its
+  lint options), then `vpr typecheck` for the workspace type check. The same job installs the
+  browser-secret helper's native build libraries (`libsecret-1-dev`, `pkg-config`) through the
+  Blacksmith mirror fallback, builds the desktop pipeline (`vp run build:desktop`) and verifies the
+  preload bundle exists and uses only imports that Electron's sandbox can load. The verifier parses
+  imports, then executes the trusted artifact with controlled bridge stubs to confirm that its
+  required APIs are callable.
+- **Test**: `vp run test` across the workspace, plus the same browser-secret helper build
+  libraries.
 - **Mobile Native Static Analysis**: `vp run lint:mobile` on macOS, wrapping
   `scripts/mobile-native-static-check.ts`. A cheap Linux **Mobile Native Changes** job gates it:
   the macOS runner only boots when the diff touches `apps/mobile` Swift/Kotlin sources, the

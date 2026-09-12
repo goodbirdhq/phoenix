@@ -45,6 +45,7 @@ import {
 import { validateProviderFailoverGroupName } from "../settings/ProviderFailoverGroups.logic";
 import { resolveAppModelSelectionState } from "../../modelSelection";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import { readCustomModelEntries } from "@t3tools/shared/model";
 import { toastManager } from "../ui/toast";
 
 const COLORS = ["#2563eb", "#4f46e5", "#16a34a", "#ea580c", "#dc2626", "#7c3aed", "#0891b2"];
@@ -91,7 +92,7 @@ export function UsageProviderDialog({
   const config: Record<string, unknown> =
     draft.config && typeof draft.config === "object" ? { ...draft.config } : {};
   const customModels = Array.isArray(config.customModels)
-    ? config.customModels.filter((value): value is string => typeof value === "string")
+    ? readCustomModelEntries(config.customModels)
     : [];
   const models = deriveProviderModelsForDisplay({
     liveModels: live?.models,
@@ -436,7 +437,7 @@ export function UsageProviderDialog({
                           ...draft,
                           config: {
                             ...config,
-                            customModels: customModels.filter((name) => name !== model.slug),
+                            customModels: customModels.filter((entry) => entry.slug !== model.slug),
                           },
                         })
                       }
@@ -462,7 +463,13 @@ export function UsageProviderDialog({
                   onClick={() => {
                     setDraft({
                       ...draft,
-                      config: { ...config, customModels: [...customModels, customModel.trim()] },
+                      config: {
+                        ...config,
+                        customModels: [
+                          ...customModels,
+                          { slug: customModel.trim(), name: customModel.trim(), capabilities: null },
+                        ],
+                      },
                     });
                     setCustomModel("");
                   }}

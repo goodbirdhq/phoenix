@@ -10,19 +10,23 @@ import { describe, expect, it } from "vite-plus/test";
 import { resolveWorkEntryToolPresentation } from "@t3tools/client-runtime/work-log/presentation";
 
 import {
+  createMessageAttachmentPreviewProjector,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
   derivePendingApprovals,
   derivePendingUserInputs,
   deriveTimelineEntries,
+  deriveTimelineEntriesWithState,
   deriveWorkLogEntries,
   findLatestProposedPlan,
   hasActionableProposedPlan,
   isLatestTurnSettled,
   workEntryDisplayIndicatesToolFailure,
   workEntryIndicatesToolFailure,
-  workEntryIndicatesToolNeutralStatus,
   workEntryIndicatesToolSuccess,
+  selectHandoffImageResources,
+  selectMessageImageResources,
+  workEntryIndicatesToolNeutralStatus,
 } from "./session-logic";
 
 let nextActivityId = 0;
@@ -346,6 +350,7 @@ describe("derivePendingUserInputs", () => {
       {
         requestId: "req-user-input-1",
         createdAt: "2026-02-23T00:00:01.000Z",
+        dismissible: false,
         questions: [
           {
             id: "sandbox_mode",
@@ -409,6 +414,33 @@ describe("derivePendingUserInputs", () => {
 });
 
 describe("deriveActivePlanState", () => {
+  it("orders plan snapshots by sequence while ignoring unrelated activities", () => {
+    const activities = Object.freeze([
+      makeActivity({
+        id: "completed",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        sequence: 3,
+        createdAt: "2026-02-23T00:00:05.000Z",
+        payload: { plan: [{ step: "Check", status: "completed" }] },
+      }),
+      makeActivity({ sequence: 4, kind: "tool.completed" }),
+      makeActivity({
+        id: "started",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        sequence: 1,
+        payload: { plan: [{ step: "Check", status: "inProgress" }] },
+      }),
+      makeActivity({ sequence: 2, kind: "context-window.updated" }),
+    ]);
+    expect(deriveActivePlanState(activities, TurnId.make("turn-1"))?.steps).toEqual([
+      { step: "Check", status: "completed", durationMs: 5_000 },
+    ]);
+    expect(activities[0]?.id).toBe("completed");
+    expect(deriveActivePlanState([makeActivity({ kind: "tool.completed" })], undefined)).toBeNull();
+  });
+
   it("returns the latest plan update for the active turn", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -869,26 +901,31 @@ describe("workEntryIndicatesToolFailure", () => {
       }),
     ).toBe(false);
     expect(workEntryIndicatesToolSuccess({ ...base, tone: "thinking", detail: "…" })).toBe(false);
+  });
+});
+
+describe("workEntryIndicatesToolNeutralStatus", () => {
+  it("keeps active tools neutral and agent spawns visible", () => {
+    const entry = {
+      id: "work-1",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      label: "Read",
+      tone: "tool" as const,
+      toolLifecycleStatus: "inProgress" as const,
+    };
+    expect(workEntryIndicatesToolNeutralStatus(entry)).toBe(true);
     expect(
       workEntryIndicatesToolNeutralStatus({
-        ...base,
-        tone: "tool",
-        toolLifecycleStatus: "inProgress",
-        detail: "…",
-      }),
-    ).toBe(true);
-    expect(
-      workEntryIndicatesToolNeutralStatus({
-        ...base,
-        tone: "tool",
-        toolLifecycleStatus: "completed",
-        detail: "ok",
+        ...entry,
+        agentSpawn: { workflowId: null, agentTaskIds: ["agent-1"] },
       }),
     ).toBe(false);
     expect(
+      workEntryIndicatesToolNeutralStatus({ ...entry, toolLifecycleStatus: "completed" }),
+    ).toBe(false);
+    expect(
       workEntryIndicatesToolNeutralStatus({
-        ...base,
-        tone: "tool",
+        ...entry,
         itemType: "mcp_tool_call",
         toolLifecycleStatus: "inProgress",
         spawnedSession: { title: "Review the renderer" },
@@ -896,16 +933,22 @@ describe("workEntryIndicatesToolFailure", () => {
     ).toBe(false);
   });
 
-  it("does not run heuristics on non-tool info rows", () => {
-    expect(
-      workEntryIndicatesToolFailure({
-        ...base,
-        label: "Context compacted",
-        tone: "info",
-        detail: "File not found in conversation",
-      }),
-    ).toBe(false);
-  });
+  it.each(["waiting", "cancelled", "interrupted"])(
+    "keeps the status of a %s background task",
+    (status) => {
+      const entries = deriveWorkLogEntries([
+        makeActivity({
+          kind: "task.progress",
+          payload: { taskId: "background-1", agentKind: "background", status },
+        }),
+      ]);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        toolLifecycleStatus: status === "waiting" ? "inProgress" : "stopped",
+      });
+      expect(workEntryIndicatesToolNeutralStatus(entries[0]!)).toBe(true);
+    },
+  );
 });
 
 describe("deriveWorkLogEntries", () => {
@@ -1310,6 +1353,13 @@ describe("deriveWorkLogEntries", () => {
         payload: {
           itemType: "mcp_tool_call",
           title: "t3-code · preview_status",
+          toolSurface: "browser",
+          toolIcon: { _tag: "website", pageUrl: "https://example.com/checkout" },
+          toolSource: {
+            key: "browser-use:browser",
+            name: "Browser",
+            kind: "browser",
+          },
           data: { item },
         },
       }),
@@ -1317,6 +1367,16 @@ describe("deriveWorkLogEntries", () => {
 
     const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.toolTitle).toBe("t3-code · preview_status");
+    expect(entry?.toolSurface).toBe("browser");
+    expect(entry?.toolIcon).toEqual({
+      _tag: "website",
+      pageUrl: "https://example.com/checkout",
+    });
+    expect(entry?.toolSource).toEqual({
+      key: "browser-use:browser",
+      name: "Browser",
+      kind: "browser",
+    });
     expect(entry?.toolData).toEqual(item);
   });
 
@@ -1366,6 +1426,7 @@ describe("deriveWorkLogEntries", () => {
         payload: {
           itemType: "mcp_tool_call",
           toolCallId: "call-1",
+          toolSurface: "browser",
           data: { item },
         },
       }),
@@ -1376,6 +1437,7 @@ describe("deriveWorkLogEntries", () => {
         payload: {
           itemType: "mcp_tool_call",
           toolCallId: "call-1",
+          toolIcon: { _tag: "website", pageUrl: "https://example.com/result" },
         },
       }),
     ];
@@ -1383,6 +1445,11 @@ describe("deriveWorkLogEntries", () => {
     const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.toolData).toEqual(item);
     expect(entry?.toolCallId).toBe("call-1");
+    expect(entry?.toolSurface).toBe("browser");
+    expect(entry?.toolIcon).toEqual({
+      _tag: "website",
+      pageUrl: "https://example.com/result",
+    });
     expect(resolveWorkEntryToolPresentation(entry!)?.displayName).toBe(
       "Took a snapshot of the preview page",
     );
@@ -1577,6 +1644,26 @@ describe("deriveWorkLogEntries", () => {
 
     const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.command).toBe("bash script.sh");
+    expect(entry?.rawCommand).toBeUndefined();
+  });
+
+  it("preserves serialized shell wrappers with non-matching boundary quotes", () => {
+    const command =
+      "/bin/zsh -lc 'git status\nsed -n '\"'1,20p' apps/web/src/components/DiffPanel.tsx\"";
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-tool-serialized-wrapper",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          data: { item: { command } },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities);
+    expect(entry?.command).toBe(command);
     expect(entry?.rawCommand).toBeUndefined();
   });
 
@@ -2024,7 +2111,295 @@ describe("deriveWorkLogEntries", () => {
   });
 });
 
+describe("image asset requests", () => {
+  const image = {
+    type: "image" as const,
+    id: "image",
+    name: "image.png",
+    mimeType: "image/png",
+    sizeBytes: 42,
+  };
+  const message = {
+    id: MessageId.make("image-message"),
+    role: "user" as const,
+    text: "Inspect these images",
+    turnId: null,
+    createdAt: "2026-09-04T00:00:00.000Z",
+    updatedAt: "2026-09-04T00:00:00.000Z",
+    streaming: false,
+    attachments: [image],
+  };
+
+  it("requests the whole row's gallery and crops without signing local preview IDs", () => {
+    const attachments = Object.freeze([
+      image,
+      { ...image, id: "second" },
+      { ...image, id: "crop", name: "preview-annotation-1.png" },
+      { ...image, id: "local", previewUrl: "blob:local" },
+      { ...image, id: "inline", previewUrl: "data:image/png;base64,AA==" },
+      { ...image, id: "provided", previewUrl: "https://preview.test/image" },
+      { ...image, type: "file" as const, id: "file", mimeType: "application/pdf" },
+      { ...image, type: "future", id: "unknown" },
+      image,
+    ]);
+
+    expect(selectMessageImageResources(attachments)).toEqual([
+      { _tag: "attachment", attachmentId: "image" },
+      { _tag: "attachment", attachmentId: "second" },
+      { _tag: "attachment", attachmentId: "crop" },
+      { _tag: "attachment", attachmentId: "provided" },
+    ]);
+  });
+
+  it("requests offscreen handoffs without signing the rest of the loaded history", () => {
+    const history = {
+      ...message,
+      id: MessageId.make("history"),
+      attachments: [{ ...image, id: "history-image" }],
+    };
+    const offscreen = {
+      ...message,
+      id: MessageId.make("offscreen"),
+      attachments: [image, { ...image, id: "crop", name: "preview-annotation-1.png" }],
+    };
+    const empty = {
+      ...message,
+      id: MessageId.make("empty"),
+      attachments: [{ ...image, id: "empty" }],
+    };
+    const assistant = {
+      ...message,
+      id: MessageId.make("assistant"),
+      role: "assistant" as const,
+      attachments: [{ ...image, id: "assistant-image" }],
+    };
+    expect(
+      selectHandoffImageResources([history, message, offscreen, empty, assistant], {
+        [message.id]: ["blob:message"],
+        [offscreen.id]: ["blob:offscreen", "blob:crop"],
+        [empty.id]: [],
+        [assistant.id]: ["blob:unused"],
+      }),
+    ).toEqual([
+      { _tag: "attachment", attachmentId: "image" },
+      { _tag: "attachment", attachmentId: "crop" },
+    ]);
+  });
+
+  it("does not scan history when no handoff is pending", () => {
+    let reads = 0;
+    const messages = new Proxy([message], {
+      get(target, property, receiver) {
+        if (property === "0") reads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const empty = selectHandoffImageResources(messages, {});
+    expect(reads).toBe(0);
+    expect(empty).toHaveLength(0);
+    expect(selectHandoffImageResources(undefined, { missing: ["blob:missing"] })).toBe(empty);
+    expect(selectMessageImageResources(undefined)).toBe(empty);
+  });
+
+  it("hands signed URLs to a mounted row only after the local preview is released", () => {
+    const server = createMessageAttachmentPreviewProjector();
+    const handoff = createMessageAttachmentPreviewProjector();
+    const row = createMessageAttachmentPreviewProjector();
+    const pending = handoff(
+      server(message, () => undefined),
+      () => "blob:pending",
+    );
+    expect(selectMessageImageResources(pending.attachments)).toEqual([]);
+    expect(selectHandoffImageResources([message], { [message.id]: ["blob:pending"] })).toEqual([
+      { _tag: "attachment", attachmentId: image.id },
+    ]);
+
+    const ready = server(message, () => "https://server.test/image");
+    expect(selectMessageImageResources(handoff(ready, () => "blob:pending").attachments)).toEqual(
+      [],
+    );
+    const released = server(message, () => undefined);
+    expect(selectMessageImageResources(released.attachments)).toEqual([
+      { _tag: "attachment", attachmentId: image.id },
+    ]);
+    const displayed = row(released, () => "https://server.test/image");
+    expect(displayed).toEqual(ready);
+    expect(pending.attachments?.[0]).toMatchObject({ previewUrl: "blob:pending" });
+    expect(row(released, () => "https://server.test/renewed").attachments?.[0]).toMatchObject({
+      previewUrl: "https://server.test/renewed",
+    });
+    expect(displayed.attachments?.[0]).toMatchObject({ previewUrl: "https://server.test/image" });
+    expect(row(released, () => undefined)).toBe(message);
+  });
+});
+
 describe("deriveTimelineEntries", () => {
+  const streamingMessage = {
+    id: MessageId.make("streaming-message"),
+    role: "assistant" as const,
+    text: "",
+    turnId: TurnId.make("streaming-turn"),
+    createdAt: "2026-02-23T00:00:03.000Z",
+    updatedAt: "2026-02-23T00:00:03.000Z",
+    streaming: true,
+  };
+
+  it("reuses preview objects while preserving URL and attachment metadata changes", () => {
+    const image = {
+      type: "image" as const,
+      id: "image",
+      name: "image.png",
+      mimeType: "image/png",
+      sizeBytes: 42,
+    };
+    const file = {
+      type: "file" as const,
+      id: "file",
+      name: "file.txt",
+      mimeType: "text/plain",
+      sizeBytes: 8,
+    };
+    const message = { ...streamingMessage, attachments: Object.freeze([image, file]) };
+    const project = createMessageAttachmentPreviewProjector();
+    const urls = new Map([[image.id, "https://first.test/image"]]);
+    const first = project(message, (attachment) => urls.get(attachment.id));
+    Object.freeze(first.attachments);
+    expect(project(message, (attachment) => new Map(urls).get(attachment.id))).toBe(first);
+    const streamed = project({ ...message, text: "Next" }, (attachment) => urls.get(attachment.id));
+    expect(streamed.attachments).toBe(first.attachments);
+    expect(streamed.text).toBe("Next");
+    expect(first.text).toBe("");
+    expect(first.attachments?.[1]).toBe(file);
+
+    urls.set(image.id, "https://second.test/image");
+    const renewed = project(message, (attachment) => urls.get(attachment.id));
+    expect(renewed.attachments?.[0]).toMatchObject({ previewUrl: "https://second.test/image" });
+    expect(first.attachments?.[0]).toMatchObject({ previewUrl: "https://first.test/image" });
+    const renamed = project(
+      { ...message, attachments: [{ ...image, name: "renamed.png" }, file] },
+      (attachment) => urls.get(attachment.id),
+    );
+    expect(renamed.attachments?.[0]).toMatchObject({
+      name: "renamed.png",
+      previewUrl: "https://second.test/image",
+    });
+    expect(project(message, () => undefined)).toBe(message);
+  });
+
+  it("keeps pending preview handoffs stable and restores the current server URL", () => {
+    const message = {
+      ...streamingMessage,
+      role: "user" as const,
+      streaming: false,
+      attachments: [
+        {
+          type: "image" as const,
+          id: "image",
+          name: "image.png",
+          mimeType: "image/png",
+          sizeBytes: 42,
+        },
+      ],
+    };
+    const server = createMessageAttachmentPreviewProjector();
+    const handoff = createMessageAttachmentPreviewProjector();
+    const first = handoff(
+      server(message, () => undefined),
+      () => "blob:handoff",
+    );
+    expect(
+      handoff(
+        server(message, () => undefined),
+        () => "blob:handoff",
+      ),
+    ).toBe(first);
+    const ready = server(message, () => "https://server.test/image");
+    expect(handoff(ready, () => "blob:handoff").attachments?.[0]).toMatchObject({
+      previewUrl: "blob:handoff",
+    });
+    expect(handoff(ready, () => undefined)).toBe(ready);
+    expect(ready.attachments?.[0]).toMatchObject({ previewUrl: "https://server.test/image" });
+    expect(first.attachments?.[0]).toMatchObject({ previewUrl: "blob:handoff" });
+  });
+
+  it("reuses ordered history without changing an earlier projection", () => {
+    const history = { ...streamingMessage, id: MessageId.make("history"), streaming: false };
+    const work = [
+      { id: "work", createdAt: history.createdAt, label: "Ran tests", tone: "tool" as const },
+    ];
+    const first = deriveTimelineEntriesWithState([history, streamingMessage], [], work);
+    Object.freeze(first.entries);
+    for (const entry of first.entries) Object.freeze(entry);
+
+    const firstMessage = {
+      ...streamingMessage,
+      text: "First",
+      updatedAt: "2026-02-23T00:00:04.000Z",
+    };
+    const secondMessage = {
+      ...streamingMessage,
+      text: "Second",
+      updatedAt: "2026-02-23T00:00:05.000Z",
+    };
+    const firstBranch = deriveTimelineEntriesWithState([history, firstMessage], [], work, first);
+    const secondBranch = deriveTimelineEntriesWithState([history, secondMessage], [], work, first);
+
+    expect(firstBranch.entries).toEqual(deriveTimelineEntries([history, firstMessage], [], work));
+    expect(secondBranch.entries).toEqual(deriveTimelineEntries([history, secondMessage], [], work));
+    expect(firstBranch.entries[0]).toBe(first.entries[0]);
+    expect(firstBranch.entries[2]).toBe(first.entries[2]);
+    expect(first.entries[1]).toMatchObject({ message: { text: "" } });
+    expect(firstBranch.entries[1]).toMatchObject({ message: { text: "First" } });
+  });
+
+  it("preserves stable source ordering for ties, append, and older pages", () => {
+    const plan = {
+      id: "plan:thread:turn",
+      turnId: streamingMessage.turnId,
+      planMarkdown: "Plan",
+      implementedAt: null,
+      implementationThreadId: null,
+      createdAt: streamingMessage.createdAt,
+      updatedAt: streamingMessage.createdAt,
+    };
+    const firstWork = {
+      id: "work-1",
+      createdAt: streamingMessage.createdAt,
+      label: "Ran tests",
+      tone: "tool" as const,
+    };
+    const first = deriveTimelineEntriesWithState([streamingMessage], [plan], [firstWork]);
+    const appendedMessage = { ...streamingMessage, id: MessageId.make("appended") };
+    const appendedWork = { ...firstWork, id: "work-2" };
+    const messages = [streamingMessage, appendedMessage];
+    const work = [firstWork, appendedWork];
+    const appended = deriveTimelineEntriesWithState(messages, [plan], work, first);
+    expect(appended.entries.map((entry) => entry.id)).toEqual([
+      streamingMessage.id,
+      appendedMessage.id,
+      plan.id,
+      firstWork.id,
+      appendedWork.id,
+    ]);
+    expect(appended.entries[0]).toBe(first.entries[0]);
+
+    const older = {
+      ...streamingMessage,
+      id: MessageId.make("older"),
+      createdAt: "2026-02-22T00:00:00.000Z",
+    };
+    const prepended = deriveTimelineEntriesWithState([older, ...messages], [plan], work, appended);
+    expect(prepended.entries).toEqual(deriveTimelineEntries([older, ...messages], [plan], work));
+    const corrected = {
+      ...streamingMessage,
+      createdAt: "2026-02-24T00:00:00.000Z",
+      streaming: false,
+    };
+    expect(
+      deriveTimelineEntriesWithState([corrected, appendedMessage], [plan], work, appended).entries,
+    ).toEqual(deriveTimelineEntries([corrected, appendedMessage], [plan], work));
+  });
+
   it("includes proposed plans alongside messages and work entries in chronological order", () => {
     const entries = deriveTimelineEntries(
       [

@@ -37,6 +37,17 @@ becomes a Phoenix name. If it only exists inside the repository, it stays exactl
 | MCP server id           | `t3-code`                    | `phoenix`                                                                 |
 | Worktree dev state      | `<worktree>/.t3`             | `<worktree>/.phoenix`                                                     |
 
+Linux window capture also uses Phoenix-owned identifiers:
+
+| Concern                     | Phoenix identifier                           |
+| --------------------------- | -------------------------------------------- |
+| GNOME extension UUID        | `snap-shot@phoenix.codes`                    |
+| GNOME D-Bus interface       | `org.gnome.Shell.Extensions.PhoenixSnapShot` |
+| Niri D-Bus service          | `com.goodbird.Phoenix.SnapShot`              |
+| KDE D-Bus interface         | `com.goodbird.Phoenix.KdeCapture`            |
+| KDE capture executable      | `phoenix-kde-snap-shot`                      |
+| Hyprland capture executable | `phoenix-hyprland-snap-shot`                 |
+
 ### Two deliberate subtleties
 
 **No legacy-userData adoption.** Upstream migrates its own pre-rename userData directory

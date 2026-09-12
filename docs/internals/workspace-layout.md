@@ -2,7 +2,8 @@
 
 > For maintainers. Using Phoenix? See [docs/user](../user/).
 
-A pnpm workspace driven by [vite-plus](https://vite.plus) (`vp`). See [scripts.md](./scripts.md) for
+A pnpm workspace driven by [vite-plus](https://vite.plus) (`vp`). See
+[development runbook](../operations/development.md) for
 the task commands.
 
 ## apps
@@ -16,7 +17,6 @@ the task commands.
   loads the web bundle over the `phoenix://` protocol, and owns SSH-managed remote environments.
 - `apps/mobile` (`@t3tools/mobile`): Expo/React Native client. Same client runtime composition as
   web, different platform layer and UI.
-- `apps/marketing` (`@t3tools/marketing`): Astro marketing site.
 
 ## packages
 

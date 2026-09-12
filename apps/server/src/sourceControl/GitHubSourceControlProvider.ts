@@ -1,6 +1,5 @@
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import {
@@ -31,6 +30,9 @@ function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeReq
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
     ...(summary.headRefOid !== undefined ? { headRefOid: summary.headRefOid } : {}),
+    ...(summary.isDraft === true ? { isDraft: true } : {}),
+    closedAt: summary.closedAt ?? null,
+    mergedAt: summary.mergedAt ?? null,
     updatedAt:
       summary.updatedAt === undefined
         ? Option.none()
@@ -156,7 +158,7 @@ export const make = Effect.gen(function* () {
             "--json",
             // headRefOid is what proves a merged PR was merged *from this
             // branch head*, which squash-merge histories cannot show.
-            "number,title,url,baseRefName,headRefName,headRefOid,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            "number,title,url,baseRefName,headRefName,headRefOid,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         })
         .pipe(
@@ -322,5 +324,3 @@ export const make = Effect.gen(function* () {
       ),
   });
 });
-
-export const layer = Layer.effect(SourceControlProvider.SourceControlProvider, make);

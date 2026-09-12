@@ -352,7 +352,7 @@ export const ScheduleOperationFailure = Schema.Literals([
 ]);
 export type ScheduleOperationFailure = typeof ScheduleOperationFailure.Type;
 
-export class ScheduleOperationError extends Schema.TaggedErrorClass<ScheduleOperationError>()(
+export class ScheduleOperationError extends Schema.TaggedError<ScheduleOperationError>()(
   "ScheduleOperationError",
   {
     message: TrimmedNonEmptyString,

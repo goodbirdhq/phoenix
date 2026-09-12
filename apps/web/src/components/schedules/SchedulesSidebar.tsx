@@ -425,9 +425,7 @@ function ScheduleSidebarRow({
           >
             {project ? (
               <ProjectFavicon
-                environmentId={row.environmentId}
-                cwd={project.workspaceRoot}
-                faviconPath={project.faviconPath}
+                project={project}
                 className="size-4"
               />
             ) : (

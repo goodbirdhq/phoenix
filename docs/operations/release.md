@@ -219,6 +219,11 @@ the selected distro, then reuses it for later launches of the same update. The
 Windows-side `wsl-server-tree/<version>` extraction remains a fallback and is
 removed after the distro-local runtime passes preflight.
 
+Windows keeps JavaScript and package metadata inside `app.asar` and unpacks only
+native libraries and helper executables. Avoid enabling whole-package smart
+unpacking: each loose file adds work to NSIS installation and counts against
+the payload limit.
+
 The artifact builder rejects a Windows package when any of these invariants
 break:
 
@@ -297,7 +302,7 @@ Checklist:
    - `APPLE_API_KEY`: contents of the downloaded `.p8`
    - `APPLE_API_KEY_ID`: Key ID
    - `APPLE_API_ISSUER`: Issuer ID
-10. Complete the Clerk Native API and AASA setup in [T3 Connect Clerk Setup](../internals/t3-connect.md#desktop-passkeys).
+10. Complete the Clerk Native API and AASA setup in [T3 Connect setup](./connect-setup.md#desktop-passkeys).
 11. Re-run a tag release and confirm macOS artifacts are signed/notarized and contain the expected
     `com.apple.developer.associated-domains` entitlement.
 

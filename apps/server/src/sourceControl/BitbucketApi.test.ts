@@ -60,6 +60,7 @@ const repositoryJson = {
 
 function makeLayer(input: {
   readonly response: (request: HttpClientRequest.HttpClientRequest) => Response;
+  readonly env?: Readonly<Record<string, string>>;
   readonly requestFailure?: (
     request: HttpClientRequest.HttpClientRequest,
   ) => HttpClientError.HttpClientError;
@@ -154,6 +155,7 @@ function makeLayer(input: {
             T3CODE_BITBUCKET_API_BASE_URL: "https://api.test.local/2.0",
             T3CODE_BITBUCKET_EMAIL: "user@example.com",
             T3CODE_BITBUCKET_API_TOKEN: "token",
+            ...input.env,
           },
         }),
       ),
@@ -163,6 +165,29 @@ function makeLayer(input: {
 
   return { execute, git: gitMock, layer };
 }
+
+it.effect("prefers PHOENIX_BITBUCKET settings over compatible T3 Code aliases", () => {
+  const { execute, layer } = makeLayer({
+    env: {
+      PHOENIX_BITBUCKET_API_BASE_URL: "https://phoenix.test.local/2.0",
+      PHOENIX_BITBUCKET_EMAIL: "phoenix@example.com",
+      PHOENIX_BITBUCKET_API_TOKEN: "phoenix-token",
+    },
+    response: () => Response.json(bitbucketPullRequest),
+  });
+
+  return Effect.gen(function* () {
+    const bitbucket = yield* BitbucketApi.BitbucketApi;
+    yield* bitbucket.getPullRequest({ cwd: "/repo", reference: "#42" });
+
+    const request = execute.mock.calls[0]?.[0];
+    assert.strictEqual(
+      request?.url,
+      "https://phoenix.test.local/2.0/repositories/pingdotgg/t3code/pullrequests/42",
+    );
+    assert.strictEqual(request?.headers.authorization, "Basic cGhvZW5peEBleGFtcGxlLmNvbTpwaG9lbml4LXRva2Vu");
+  }).pipe(Effect.provide(layer));
+});
 
 it.effect("parses pull request responses from the Bitbucket REST API", () => {
   const { execute, layer } = makeLayer({

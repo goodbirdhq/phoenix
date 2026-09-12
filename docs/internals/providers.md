@@ -3,19 +3,26 @@
 > For maintainers. Using Phoenix? See [docs/user](../user/).
 
 A provider is the agent runtime that does the actual work. Phoenix supports several, and the
-orchestration layer does not know which one is behind a thread.
+orchestration layer does not know which one is behind a thread. Provider protocols, account
+ownership, permissions, and capabilities belong at the [adapter boundary][adapter]. Normalize
+there instead of spreading provider checks through reactors and clients.
+
+A driver kind identifies an integration; an instance identifies one configuration and account
+lifecycle. Route work by instance, so two accounts using the same driver do not share mutable
+session or catalog state.
 
 ## Built-in drivers
 
-[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with five entries:
+[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with six entries:
 
-| Driver kind   | Driver source                           |
-| ------------- | --------------------------------------- |
-| `codex`       | [`Drivers/CodexDriver.ts`][codex]       |
-| `claudeAgent` | [`Drivers/ClaudeDriver.ts`][claude]     |
-| `cursor`      | [`Drivers/CursorDriver.ts`][cursor]     |
-| `grok`        | [`Drivers/GrokDriver.ts`][grok]         |
-| `opencode`    | [`Drivers/OpenCodeDriver.ts`][opencode] |
+| Driver kind   | Driver source                                 |
+| ------------- | ---------------------------------------------- |
+| `codex`       | [`Drivers/CodexDriver.ts`][codex]             |
+| `claudeAgent` | [`Drivers/ClaudeDriver.ts`][claude]           |
+| `cursor`      | [`Drivers/CursorDriver.ts`][cursor]           |
+| `grok`        | [`Drivers/GrokDriver.ts`][grok]               |
+| `opencode`    | [`Drivers/OpenCodeDriver.ts`][opencode]       |
+| `antigravity` | [`Drivers/AntigravityDriver.ts`][antigravity] |
 
 Each driver declares its `driverKind`, a `configSchema`, and a `create` function that builds an
 adapter in a child scope. Adapter implementations live beside them in
@@ -110,14 +117,87 @@ active text-generation work can extend process reuse. Changes to the provider co
 environment replace the instance and start a new discovery. Changes to unrelated settings only
 update snapshot enrichment. Other providers retain their existing refresh policy.
 
-T3 Code does not own an external OpenCode process. Native configuration changes there can require
-an external reload or restart before T3 Code's next refresh sees them.
+Phoenix does not own an external OpenCode process. Native configuration changes there can require
+an external reload or restart before Phoenix's next refresh sees them.
 
 The shared server's idle shutdown does not clear the catalog. Failed discovery keeps the last
 known models, slash commands, and skills through the registry's existing merge rules. A successful
 empty inventory is authoritative. Existing threads keep their explicit model identifier and
 options when catalog metadata is missing; the catalog is not permission to choose a different
 model for a thread.
+
+## Antigravity account isolation
+
+Antigravity separates account profiles per instance while sharing installed executables across the
+environment. It forces file-based credential storage because the native macOS keychain entry would
+otherwise be shared across instances. The launch environment removes ambient Google credentials,
+so an instance cannot silently use another account or billing project. The agent also resolves
+its user-global skill directories under that profile, so the profile links those two directories
+back to the user's real `~/.gemini`; MCP servers, hooks, and rules there stay out of the profile.
+See [profile isolation][antigravity-auth-support].
+
+The [Antigravity installer][antigravity-installation] outlives client connections and
+provider-instance rebuilds. Releases are immutable, with an atomic pointer selecting the version
+for new processes. Running processes hold leases on their version. Updates and removal must
+respect those leases instead of replacing executables under a running agent.
+
+## Antigravity session lifecycle
+
+Opening a provider session can start MCP servers, run hooks, or launch a login browser.
+[Grok probes][grok-provider] avoid authentication and session creation for this reason. Antigravity
+likewise reserves authenticated catalog sessions for explicit setup or model refresh; background
+checks use initialization only.
+
+[Antigravity sign-in][antigravity-auth] belongs to the initiating Phoenix auth session. The client
+carries the return URL back to the environment because the provider's loopback listener may be on
+another machine. Forward only the callback for the owned pending flow; a successful callback HTTP
+request is not proof that provider authentication finished. The native process owns token exchange
+and storage.
+
+Antigravity sign-out closes admission to new processes and stops existing processes before clearing
+account metadata. Otherwise a helper or resumed session could retain the old account. Cached model
+lists do not establish current access, and an authoritative empty catalog must clear the old list.
+
+Antigravity text-generation helpers deny tool requests, but native hooks and MCP configuration can
+run before the prompt. They reject profiles with such configuration before launch. Prompt
+instructions and tool denial do not create a native sandbox.
+See [helper constraints][antigravity-textgen].
+
+## Provider updates run only through the owning installer
+
+A one-click update is offered only when the resolved executable's path proves which installer owns
+it. Homebrew and npm are proven by the real path (symlinks followed): a versioned keg or cask under
+`brew --prefix`, or `<prefix>/lib/node_modules/<pkg>/` (Windows: the shim beside `node_modules`).
+Native installer layouts and the global bin directories of pnpm, Bun, and Vite+ may match on either
+the resolved path or its real target, since those installers place real files or their own symlinks
+there. Anything unproven stays manual-only but still reports the version gap. npm updates pin
+`--prefix` because the `npm` on `PATH` can belong to a different Node than the one that owns the
+provider. Homebrew compares against `brew info` since casks trail npm by hours; native installs
+share npm's version train, so the registry stays authoritative for them.
+See the [resolver][provider-maintenance].
+
+Ownership is cached per instance and re-read immediately before an update runs. The
+[runner][provider-maintenance-runner] refuses when the lock key changed since the advisory, and
+reports success only when the refreshed provider is still installed with a readable, current
+version.
+
+## Protocol traps
+
+Codex async questions arrive as notifications and are answered with a new user message. There is
+no pending RPC response to send. Blocking questions still use the request/response path. The
+[adapter](../../apps/server/src/provider/Layers/CodexAdapter.ts) distinguishes them; the
+[decider](../../apps/server/src/orchestration/decider.ts) records an async answer and its user
+message together.
+
+An async question can outlive the turn or a server restart. The engine reads that request's
+durable activity before resolving it because the in-memory command snapshot omits old activities.
+Do not infer that a request has disappeared merely because it is outside the recent window.
+
+Capabilities must describe what the provider can actually do. Antigravity can capture workspace
+checkpoints but cannot roll back its conversation. The
+[checkpoint boundary](./overview.md#turn-completion-and-checkpoints) therefore rejects revert
+before touching files. Native permission and question option IDs must also survive normalization;
+a display label is not necessarily a valid reply.
 
 ## Model manifest
 
@@ -357,3 +437,11 @@ when a request opens (approval) or user input is requested, via
 [ingest]: ../../apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts
 [cmd]: ../../apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
 [checkpoint]: ../../apps/server/src/orchestration/Layers/CheckpointReactor.ts
+[antigravity]: ../../apps/server/src/provider/Drivers/AntigravityDriver.ts
+[antigravity-auth-support]: ../../apps/server/src/provider/antigravityAuthSupport.ts
+[antigravity-installation]: ../../apps/server/src/provider/AntigravityInstallation.ts
+[antigravity-auth]: ../../apps/server/src/provider/AntigravityAuth.ts
+[antigravity-textgen]: ../../apps/server/src/textGeneration/AntigravityTextGeneration.ts
+[grok-provider]: ../../apps/server/src/provider/Layers/GrokProvider.ts
+[provider-maintenance]: ../../apps/server/src/provider/providerMaintenance.ts
+[provider-maintenance-runner]: ../../apps/server/src/provider/providerMaintenanceRunner.ts

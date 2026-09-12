@@ -55,8 +55,15 @@ export const capacityRefreshKey = (targets: readonly CapacityRefreshTarget[]): s
     ),
   );
 
-export const parseCapacityRefreshKey = (key: string): readonly CapacityRefreshTarget[] =>
-  JSON.parse(key) as readonly CapacityRefreshTarget[];
+export const parseCapacityRefreshKey = (key: string): readonly CapacityRefreshTarget[] => {
+  if (typeof key !== "string") return [];
+  try {
+    const parsed = JSON.parse(key);
+    return Array.isArray(parsed) ? (parsed as readonly CapacityRefreshTarget[]) : [];
+  } catch {
+    return [];
+  }
+};
 
 export const replaceAvailabilityEntries = (
   cached: readonly ProviderAvailabilityEntry[],
@@ -110,11 +117,11 @@ export function capacityRefreshTargets(
     if (
       environment.isConnected === false ||
       environment.isPending ||
-      environment.serverProviders === null
+      !environment.serverProviders
     )
       continue;
     const availabilityByInstance = new Map(
-      environment.providers.map((entry) => [entry.instanceId, entry.availability]),
+      (environment.providers ?? []).map((entry) => [entry.instanceId, entry.availability]),
     );
     for (const provider of environment.serverProviders) {
       if (!canRefreshProviderAvailability(provider)) continue;

@@ -21,7 +21,7 @@ Summarize:
 
 Reference artifacts such as files, commits, and issues by path or identifier instead of duplicating their contents. Include only the context needed to continue. Redact all secrets, credentials, tokens, and other sensitive values. Return only the handoff brief.`;
 
-export class HandoffBriefTurnFailedError extends Schema.TaggedErrorClass<HandoffBriefTurnFailedError>()(
+export class HandoffBriefTurnFailedError extends Schema.TaggedError<HandoffBriefTurnFailedError>()(
   "HandoffBriefTurnFailedError",
   {
     threadId: ThreadIdSchema,
@@ -34,7 +34,7 @@ export class HandoffBriefTurnFailedError extends Schema.TaggedErrorClass<Handoff
   }
 }
 
-export class HandoffBriefMissingResponseError extends Schema.TaggedErrorClass<HandoffBriefMissingResponseError>()(
+export class HandoffBriefMissingResponseError extends Schema.TaggedError<HandoffBriefMissingResponseError>()(
   "HandoffBriefMissingResponseError",
   {
     threadId: ThreadIdSchema,

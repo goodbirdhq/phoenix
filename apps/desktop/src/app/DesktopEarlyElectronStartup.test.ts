@@ -81,7 +81,9 @@ describe("DesktopEarlyElectronStartup", () => {
     });
 
     assert.deepEqual(options, {
+      isDevelopment: true,
       linuxWmClass: "phoenix-dev",
+      linuxDesktopEntryName: "phoenix-dev.desktop",
       passwordStore: "gnome-libsecret",
     });
   });

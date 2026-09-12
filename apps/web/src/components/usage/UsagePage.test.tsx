@@ -12,6 +12,7 @@ describe("Usage model table", () => {
       costUsd: 12 - index,
       totalTokens: index * 100,
       records: 1,
+      unpricedRecords: 0,
       costShare: (12 - index) / 78,
     })),
   };
@@ -24,5 +25,28 @@ describe("Usage model table", () => {
   it("orders the complete table by the selected metric without mutating the input", () => {
     expect(usageOverviewRows(merged, [], [], "model", "tokens")[0]?.label).toBe("model-11");
     expect(merged.models[0]?.model).toBe("model-0");
+  });
+  it("keeps all-unpriced models distinct from zero-cost models", () => {
+    const rows = usageOverviewRows(
+      {
+        ...merged,
+        models: [
+          {
+            provider: "codex",
+            model: "unpriced",
+            costUsd: 0,
+            totalTokens: 100,
+            records: 1,
+            unpricedRecords: 1,
+            costShare: 0,
+          },
+        ],
+      },
+      [],
+      [],
+      "model",
+      "cost",
+    );
+    expect(rows[0]?.costUnknown).toBe(true);
   });
 });

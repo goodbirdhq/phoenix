@@ -80,6 +80,7 @@ export interface AggregateOptions {
   readonly untilDay: string;
   readonly rates: RateTable;
   readonly includeSessions?: boolean;
+  readonly priceOverrides?: RateTable;
   readonly resolution?: UsageResolution;
   readonly sinceTimeMs?: number;
   readonly untilTimeMs?: number;
@@ -208,6 +209,7 @@ export class UsageAggregator {
       record.model,
       record.totals,
       record.reportedCostUsd,
+      this.#options.priceOverrides,
     );
 
     if (this.#options.includeSessions && sourceId && record.sessionId) {
@@ -256,7 +258,12 @@ export class UsageAggregator {
 
     bucket.totals = addTotals(bucket.totals, record.totals);
     bucket.costUsd += priced.costUsd;
-    bucket.cacheSavingsUsd += cacheSavingsUsd(this.#options.rates, record.model, record.totals);
+    bucket.cacheSavingsUsd += cacheSavingsUsd(
+      this.#options.rates,
+      record.model,
+      record.totals,
+      this.#options.priceOverrides,
+    );
     bucket.records += 1;
     if (priced.costSource === "unpriced") bucket.unpricedRecords += 1;
     if (priced.costSource === "providerReported") bucket.providerReportedRecords += 1;

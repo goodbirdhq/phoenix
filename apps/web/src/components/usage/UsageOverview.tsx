@@ -28,11 +28,16 @@ export function UsageTotals({
   readonly pending: boolean;
   readonly windowLabel: string;
 }) {
+  const costQuality = [
+    merged.costQuality.providerReportedShare > 0 ? "Provider-reported usage" : null,
+    merged.costQuality.modelPricedShare > 0 ? "Model-priced estimate" : null,
+    merged.costQuality.unpricedShare > 0 ? "Some usage unpriced" : null,
+  ].filter((value): value is string => value !== null);
   const metrics = [
     {
-      label: "Estimated API cost",
+      label: "API cost estimate",
       value: formatUsd(merged.costUsd),
-      detail: "API equivalent · not your subscription bill",
+      detail: `${costQuality.join(" · ") || "No priced usage reported"} · not a subscription bill`,
       Icon: CoinsIcon,
     },
     {
@@ -286,13 +291,17 @@ export function UsageOverview({
                         </td>
                       )}
                       <td className="text-right tabular-nums">{formatTokens(row.totalTokens)}</td>
-                      <td className="text-right font-medium tabular-nums">{formatUsd(cost)}</td>
+                      <td className="text-right font-medium tabular-nums">
+                        {row.costUnknown ? "Unpriced" : formatUsd(cost)}
+                      </td>
                       <td className="text-right text-muted-foreground">
                         <span
                           className="inline-block size-[5px] rounded-full"
                           style={{ backgroundColor: color }}
                         />{" "}
-                        {formatPercent(merged.costUsd ? cost / merged.costUsd : 0)}
+                        {row.costUnknown
+                          ? "—"
+                          : formatPercent(merged.costUsd ? cost / merged.costUsd : 0)}
                       </td>
                     </tr>
                   );

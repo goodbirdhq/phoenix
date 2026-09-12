@@ -28,7 +28,7 @@ import {
 import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
 import { scopeAccountHistory } from "@t3tools/client-runtime/usage/account-history";
-import { mergeUsageCost } from "@t3tools/shared/usageMerge";
+import { mergeUsageCostSummary } from "@t3tools/shared/usageMerge";
 import { formatUsd } from "@t3tools/shared/usageFormat";
 import { USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
 import { sidebarQuotaPresentation } from "./usageSidebarPresentation";
@@ -47,7 +47,14 @@ export function UsageSidebarNav() {
     () => buildUsageAccounts(environments, history).toSorted(compareUsageAccountProviders),
     [environments, history],
   );
-  const costCache = useMemo(() => new Map<string, number | null>(), [history]);
+  const costCache = useMemo(
+    () =>
+      new Map<
+        string,
+        { readonly costUsd: number; readonly records: number; readonly unpricedRecords: number } | null
+      >(),
+    [history],
+  );
   const costs = useMemo(
     () =>
       new Map(
@@ -74,7 +81,11 @@ export function UsageSidebarNav() {
               : [],
           );
           const cost = scoped.some((environment) => environment.summary.sources.length > 0)
-            ? mergeUsageCost(scoped, USAGE_CONTRACT_VERSION)
+            ? (() => {
+                const summary = mergeUsageCostSummary(scoped, USAGE_CONTRACT_VERSION);
+                // With no records, there is no observed cost to call zero.
+                return summary.records === 0 ? null : summary;
+              })()
             : null;
           costCache.set(cacheKey, cost);
           return [account.key, cost];
@@ -113,7 +124,10 @@ export function UsageSidebarNavView({
   footer,
 }: {
   readonly accounts: readonly UsageAccount[];
-  readonly costs: ReadonlyMap<string, number | null>;
+  readonly costs: ReadonlyMap<
+    string,
+    { readonly costUsd: number; readonly records: number; readonly unpricedRecords: number } | null
+  >;
   readonly environments: readonly EnvironmentProviderAvailabilityStatus[];
   readonly historyPending: boolean;
   readonly selected?: string | undefined;
@@ -294,6 +308,21 @@ export function UsageSidebarNavView({
                       ? "Sign in to view limits"
                       : quota.status;
               const cost = costs.get(account.key);
+              const allCostUnpriced =
+                cost !== undefined &&
+                cost !== null &&
+                cost.records > 0 &&
+                cost.unpricedRecords >= cost.records;
+              const hasIncompleteCost =
+                cost !== undefined && cost !== null && cost.unpricedRecords > 0;
+              const costLabel =
+                cost === undefined || cost === null
+                  ? "unavailable"
+                  : allCostUnpriced
+                    ? "unpriced"
+                    : hasIncompleteCost
+                      ? `${formatUsd(cost.costUsd)} plus unpriced usage`
+                      : formatUsd(cost.costUsd);
               return (
                 <SidebarMenuItem key={account.key}>
                   <SidebarMenuButton
@@ -304,7 +333,7 @@ export function UsageSidebarNavView({
                       const member = account.memberships[0];
                       if (member) select(usageAccountMemberKey(member));
                     }}
-                    aria-label={`${account.name || label}${cost == null ? "" : ` · ${formatUsd(cost)}`}${status ? ` · ${status}` : ""}${quota.bars.map((bar) => ` · ${bar.label} ${Math.round(bar.usedPercent)}% used`).join("")}`}
+                    aria-label={`${account.name || label}${cost == null ? "" : ` · ${costLabel}`}${status ? ` · ${status}` : ""}${quota.bars.map((bar) => ` · ${bar.label} ${Math.round(bar.usedPercent)}% used`).join("")}`}
                     aria-busy={pending}
                     style={{ minHeight: kind === "codex" || kind === "claude" ? 90 : 69 }}
                     className="h-auto flex-col items-stretch gap-[9px] p-3 text-sidebar-foreground data-[active=true]:bg-sidebar-border"
@@ -332,14 +361,18 @@ export function UsageSidebarNavView({
                       )}
                       <span
                         className="w-16 shrink-0 text-right text-xs leading-4 font-normal tabular-nums text-sidebar-muted-foreground"
-                        aria-label={`Estimated API cost for the selected period and environment: ${cost == null ? "unavailable" : formatUsd(cost)}`}
+                        aria-label={`API cost estimate for the selected period and environment: ${costLabel}`}
                       >
                         {cost == null && historyPending ? (
                           <span className="ml-auto block h-2 w-12 rounded-sm bg-sidebar-border" />
                         ) : cost == null ? (
                           "—"
+                        ) : allCostUnpriced ? (
+                          "Unpriced"
+                        ) : hasIncompleteCost ? (
+                          `${formatUsd(cost.costUsd)} +?`
                         ) : (
-                          formatUsd(cost)
+                          formatUsd(cost.costUsd)
                         )}
                       </span>
                     </span>
