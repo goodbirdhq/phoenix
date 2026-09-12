@@ -5,7 +5,7 @@ import * as CodexSchema from "./schema.ts";
 
 const isGetAccountResponse = Schema.is(CodexSchema.V2GetAccountResponse);
 
-it("accepts Codex 0.150 multi-agent values and newer resume error codes", () => {
+it("preserves Codex resume errors introduced after the generated protocol", () => {
   const schemas = [
     CodexSchema.ServerNotification__SubAgentActivityKind,
     CodexSchema.V2ItemStartedNotification__SubAgentActivityKind,
@@ -40,7 +40,7 @@ it("accepts Codex 0.150 multi-agent values and newer resume error codes", () => 
     modelProvider: "openai",
     sandbox: { type: "dangerFullAccess" },
     thread: {
-      cliVersion: "0.150.0",
+      cliVersion: "0.154.0",
       createdAt: 0,
       cwd: "/tmp/project",
       ephemeral: false,
@@ -57,7 +57,7 @@ it("accepts Codex 0.150 multi-agent values and newer resume error codes", () => 
             message: "The prior turn was blocked by policy.",
           },
           id: "turn-1",
-          status: "completed",
+          status: "failed",
           items: [
             {
               agentsStates: {},
@@ -75,7 +75,45 @@ it("accepts Codex 0.150 multi-agent values and newer resume error codes", () => 
     },
   };
 
-  assert.equal(Schema.is(CodexSchema.V2ThreadResumeResponse)(resumeResponse), true);
+  const decoded = Schema.decodeUnknownSync(CodexSchema.V2ThreadResumeResponse)(resumeResponse);
+  assert.deepEqual(decoded.thread.turns[0]?.error, {
+    codexErrorInfo: "misalignmentPolicyViolation",
+    message: "The prior turn was blocked by policy.",
+  });
+
+  const structuredErrorResponse = {
+    ...resumeResponse,
+    thread: {
+      ...resumeResponse.thread,
+      turns: [
+        {
+          ...resumeResponse.thread.turns[0],
+          error: {
+            codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 503 } },
+            message: "The response stream disconnected.",
+          },
+        },
+      ],
+    },
+  };
+  assert.equal(Schema.is(CodexSchema.V2ThreadResumeResponse)(structuredErrorResponse), true);
+
+  const malformedErrorResponse = {
+    ...resumeResponse,
+    thread: {
+      ...resumeResponse.thread,
+      turns: [
+        {
+          ...resumeResponse.thread.turns[0],
+          error: {
+            codexErrorInfo: 503,
+            message: "Malformed error code.",
+          },
+        },
+      ],
+    },
+  };
+  assert.equal(Schema.is(CodexSchema.V2ThreadResumeResponse)(malformedErrorResponse), false);
 });
 
 it("accepts Codex 0.150 account plan values", () => {
