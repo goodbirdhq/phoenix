@@ -19,6 +19,7 @@ const emptyCatalog = {
   remoteDpopTokens: [],
 } as const;
 const decodeCatalog = Schema.decodeUnknownSync(Schema.fromJsonString(ConnectionCatalogDocument));
+const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -29,7 +30,7 @@ describe("makeCatalogStore", () => {
   it.effect("retires managed credentials without removing saved connection metadata", () =>
     Effect.gen(function* () {
       const environmentId = EnvironmentId.make("legacy-managed-environment");
-      const raw = JSON.stringify({
+      const raw = encodeUnknownJson({
         schemaVersion: 1,
         targets: [
           {

@@ -6,6 +6,7 @@ import { remoteHttpClientLayer } from "@t3tools/client-runtime/rpc";
 
 import { tracingLayer } from "../features/observability/tracing";
 import * as Persistence from "../persistence/layer";
+import { mobileCryptoLayer } from "./effectCrypto";
 import { disposeOnFoundationReplace, type FoundationHotModule } from "./foundation-fast-refresh";
 
 declare const module: { readonly hot?: FoundationHotModule } | undefined;
@@ -14,11 +15,13 @@ const httpClientLayer = remoteHttpClientLayer(fetch);
 
 type RuntimeLayerSource =
   | typeof Socket.layerWebSocketConstructorGlobal
+  | typeof mobileCryptoLayer
   | typeof httpClientLayer
   | typeof Persistence.layer
   | typeof tracingLayer;
 
 const runtimeLayer = Socket.layerWebSocketConstructorGlobal.pipe(
+  Layer.provideMerge(mobileCryptoLayer),
   Layer.provideMerge(httpClientLayer),
   Layer.provideMerge(tracingLayer.pipe(Layer.provide(httpClientLayer))),
   Layer.provideMerge(Persistence.layer),

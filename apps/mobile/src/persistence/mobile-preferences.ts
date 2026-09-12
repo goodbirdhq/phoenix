@@ -14,6 +14,9 @@ import { MobileStorageDecodeError, MobileStorageEncodeError } from "./mobile-sto
 
 const PREFERENCES_KEY = "t3code.preferences";
 const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
+const UnknownJsonString = Schema.fromJsonString(Schema.Unknown);
+const decodeUnknownJsonString = Schema.decodeUnknownSync(UnknownJsonString);
+const encodeUnknownJsonString = Schema.encodeUnknownSync(UnknownJsonString);
 
 export interface Preferences {
   readonly sidebarAttentionFirstEnabled?: boolean;
@@ -206,7 +209,7 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
     if (raw === null || !raw.trim()) return null;
     let parsed: unknown;
     try {
-      parsed = JSON.parse(raw);
+      parsed = decodeUnknownJsonString(raw);
     } catch (cause) {
       console.warn(
         "[mobile-storage] ignored invalid JSON",
@@ -223,7 +226,7 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
     if (raw === null || !raw.trim()) return null;
     let parsed: unknown;
     try {
-      parsed = JSON.parse(raw);
+      parsed = decodeUnknownJsonString(raw);
     } catch (cause) {
       console.warn(
         "[mobile-storage] ignored invalid JSON",
@@ -252,7 +255,7 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
     value: unknown,
   ) {
     return yield* Effect.try({
-      try: () => JSON.stringify(value),
+      try: () => encodeUnknownJsonString(value),
       catch: (cause) => new MobileStorageEncodeError({ key, cause }),
     });
   });
