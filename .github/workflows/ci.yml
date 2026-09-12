@@ -62,6 +62,9 @@ jobs:
           sudo sed -i 's|http://|https://|g' /etc/apt/blacksmith-ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
 
+      - name: Validate hosted-web routing configuration
+        run: node --test .github/scripts/hosted-web-config.test.cjs
+
       - name: Build desktop pipeline
         run: vp run build:desktop
 
@@ -346,6 +349,9 @@ jobs:
           run-install: |
             args:
               - --filter=@t3tools/scripts...
+
+      - name: Validate release public configuration
+        run: node --test .github/scripts/release-public-config.test.cjs
 
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts
