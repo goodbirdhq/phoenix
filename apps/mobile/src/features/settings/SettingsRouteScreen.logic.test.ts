@@ -6,17 +6,19 @@ import {
 } from "./SettingsRouteScreen.logic";
 
 describe("resolveAgentAwarenessPlatformPresentation", () => {
-  it("supports agent awareness settings on Android", () => {
+  it("presents Android notification capability as unavailable without delivery", () => {
     expect(resolveAgentAwarenessPlatformPresentation("android")).toEqual({
-      supported: true,
-      subtitle: undefined,
+      activityLabel: "Ongoing Agent Activity",
+      status: "Unavailable",
+      subtitle: "Requires a configured notification delivery service.",
     });
   });
 
-  it("leaves supported iOS settings unchanged", () => {
+  it("presents iOS Live Activity capability as unavailable without delivery", () => {
     expect(resolveAgentAwarenessPlatformPresentation("ios")).toEqual({
-      supported: true,
-      subtitle: undefined,
+      activityLabel: "Live Activity Updates",
+      status: "Unavailable",
+      subtitle: "Requires a configured notification delivery service.",
     });
   });
 });

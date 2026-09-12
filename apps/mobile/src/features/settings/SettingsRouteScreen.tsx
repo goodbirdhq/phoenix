@@ -4,7 +4,7 @@ import { useNavigation } from "@react-navigation/native";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { SymbolView } from "../../components/AppSymbol";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -35,7 +35,10 @@ import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SessionOrchestrationSettingsRows } from "./SessionOrchestrationSettingsRows";
-import { GENERAL_INSIGHT_SETTINGS_ROWS } from "./SettingsRouteScreen.logic";
+import {
+  GENERAL_INSIGHT_SETTINGS_ROWS,
+  resolveAgentAwarenessPlatformPresentation,
+} from "./SettingsRouteScreen.logic";
 import { useScheduleSettingsValue } from "../schedules/SchedulesRouteScreen";
 import { planAutoSettleSettingsSync, type AutoSettleSettings } from "./autoSettleSettingsSync";
 
@@ -79,6 +82,7 @@ function LocalSettingsRouteScreen() {
   const insets = useSafeAreaInsets();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const environmentCount = Object.keys(savedConnectionsById).length;
+  const agentAwareness = resolveAgentAwarenessPlatformPresentation(Platform.OS);
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
@@ -100,6 +104,21 @@ function LocalSettingsRouteScreen() {
           />
         </SettingsSection>
 
+        <SettingsSection title="Agent activity">
+          <UnavailableCapabilityRow
+            icon="bell.badge"
+            label="Device Notifications"
+            status={agentAwareness.status}
+            subtitle={agentAwareness.subtitle}
+          />
+          <UnavailableCapabilityRow
+            icon="bolt.circle"
+            label={agentAwareness.activityLabel}
+            status={agentAwareness.status}
+            subtitle={agentAwareness.subtitle}
+          />
+        </SettingsSection>
+
         <GeneralSettingsSection />
 
         <SettingsSection title="Appearance">
@@ -112,6 +131,30 @@ function LocalSettingsRouteScreen() {
 
         <AppSettingsSection />
       </ScrollView>
+    </View>
+  );
+}
+
+function UnavailableCapabilityRow(props: {
+  readonly icon: ComponentProps<typeof SymbolView>["name"];
+  readonly label: string;
+  readonly status: string;
+  readonly subtitle: string;
+}) {
+  return (
+    <View className="flex-row items-center gap-4 p-4 opacity-60">
+      <SymbolView
+        name={props.icon}
+        size={22}
+        tintColorClassName="accent-icon"
+        type="monochrome"
+        weight="regular"
+      />
+      <View className="min-w-0 flex-1">
+        <Text className="text-lg text-foreground">{props.label}</Text>
+        <Text className="text-sm text-foreground-muted">{props.subtitle}</Text>
+      </View>
+      <Text className="text-sm text-foreground-muted">{props.status}</Text>
     </View>
   );
 }

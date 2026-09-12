@@ -13,10 +13,13 @@ export const GENERAL_INSIGHT_SETTINGS_ROWS = [
 ] as const;
 
 export function resolveAgentAwarenessPlatformPresentation(platform: string): {
-  readonly supported: boolean;
-  readonly subtitle: string | undefined;
+  readonly activityLabel: string;
+  readonly status: "Unavailable";
+  readonly subtitle: string;
 } {
-  return platform === "ios" || platform === "android"
-    ? { supported: true, subtitle: undefined }
-    : { supported: false, subtitle: "Unavailable on this platform" };
+  return {
+    activityLabel: platform === "android" ? "Ongoing Agent Activity" : "Live Activity Updates",
+    status: "Unavailable",
+    subtitle: "Requires a configured notification delivery service.",
+  };
 }

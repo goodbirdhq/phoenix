@@ -18,6 +18,8 @@ const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
 export interface Preferences {
   readonly sidebarAttentionFirstEnabled?: boolean;
   readonly threadLastVisitedAtByKey?: Readonly<Record<string, string>>;
+  /** Retained while notification delivery is unavailable so future delivery does not reset consent. */
+  readonly liveActivitiesEnabled?: boolean;
   readonly themeId?: MobileThemeId;
   readonly lightThemeId?: MobileThemeId;
   readonly darkThemeId?: MobileThemeId;
@@ -84,10 +86,11 @@ export class MobilePreferencesStore extends Context.Service<
   }
 >()("@t3tools/mobile/persistence/MobilePreferencesStore") {}
 
-function sanitizePreferences(parsed: Preferences): Preferences {
+export function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     sidebarAttentionFirstEnabled?: boolean;
     threadLastVisitedAtByKey?: Record<string, string>;
+    liveActivitiesEnabled?: boolean;
     themeId?: MobileThemeId;
     lightThemeId?: MobileThemeId;
     darkThemeId?: MobileThemeId;
@@ -120,6 +123,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
         ([, value]) => typeof value === "string" && Number.isFinite(Date.parse(value)),
       ),
     );
+  }
+  if (typeof parsed.liveActivitiesEnabled === "boolean") {
+    preferences.liveActivitiesEnabled = parsed.liveActivitiesEnabled;
   }
   if (
     typeof parsed.themeId === "string" &&
