@@ -10,7 +10,7 @@ mobile production are disabled are not reliable configuration.
 [CI](../../.github/workflows/ci.yml) runs on PRs and main pushes with read-only
 repository access: checks/typechecks, package and sharded server tests, Rust checks,
 desktop build verification, and release smoke checks. Release configuration tests
-reject partial Connect tuples and inherited hosted-web destinations.
+validate requested publishers and reject inherited hosted-web destinations.
 
 Required branch checks must match the actual job names, including `Test Server 1`,
 `Test Server 2`, `Test Server 3` and `Rust`. CI uses the checked-in Blacksmith runner
@@ -26,8 +26,8 @@ workflows rather than production publishers.
 only `workflow_dispatch`. There are no cron, main-push or tag production releases.
 Desktop/npm/hosted web publication uses one canonical Release workflow. The duplicate
 Phoenix Build publisher and inherited hosted-relay deployment workflow were removed.
-T3 Connect runtime/infra code and Cursor provider/dev integration remain in place;
-Cursor's CI webhook/configuration removal does not remove the provider.
+The managed connection runtime and infrastructure were also removed. Cursor provider/dev
+integration remains; its CI webhook/configuration removal does not remove the provider.
 
 See [Releasing Phoenix](../operations/release.md) for dispatch controls, credentials,
 public configuration, optional hosted web, and mobile build/update procedures.

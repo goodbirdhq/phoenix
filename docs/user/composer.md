@@ -53,8 +53,8 @@ See [images and videos](#images-and-videos-in-messages) for previewing and savin
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue
 messages while disconnected. Uploads resume when you reconnect. Drafts and queued
-messages survive app restarts. Signing out of T3 Connect keeps that work on your
-device until you sign back into the same account.
+messages survive app restarts. Reconnect to the same environment to resume uploads
+and send queued work.
 
 ## Custom models
 

@@ -40,9 +40,8 @@ npx @goodbirdhq/phoenix@nightly service update
 npx @goodbirdhq/phoenix@1.2.3 service update
 ```
 
-The install and update commands refuse to replace a newer service with an older version. Setup
-through T3 Connect leaves a newer service unchanged. To downgrade, select the exact older version
-and pass `--allow-downgrade`:
+The install and update commands refuse to replace a newer service with an older version.
+To downgrade, select the exact older version and pass `--allow-downgrade`:
 
 ```sh
 npx @goodbirdhq/phoenix@1.2.3 service update --allow-downgrade
@@ -84,9 +83,9 @@ A few more macOS notes:
 
 **Windows** is not supported yet.
 
-T3 Connect and the background service have independent lifecycles. Signing out of T3 Connect does
-not remove an existing service. Use `phoenix service uninstall` when you no longer want Phoenix to
-start in the background.
+Disconnecting a client does not uninstall the background service. Use
+`phoenix service uninstall` when you no longer want Phoenix to start in the background.
+To connect another device, create a [pairing link](./remote-access.md).
 
 ## Troubleshooting
 
@@ -107,7 +106,7 @@ ssh -t your-server 'sudo loginctl enable-linger "$(id -un)"'
 ```
 
 Then retry service setup as your normal user. Run only the `loginctl` command with sudo; running
-Phoenix as root creates a separate installation and Connect identity. Without administrator access,
+Phoenix as root creates a separate installation and environment identity. Without administrator access,
 run `phoenix serve` in a terminal and keep that session open.
 
 | Status problem                          | Next step                                                                                                                      |
@@ -121,5 +120,5 @@ login. If agent work cannot access Desktop, Documents, or Downloads, it may need
 for the Node executable listed in `ProgramArguments` in
 `~/Library/LaunchAgents/com.goodbird.phoenix.service.plist`.
 
-For failures after signing in to T3 Connect, see
-[connection troubleshooting](./remote-access.md#t3-connect-troubleshooting).
+For problems reaching a running service, see
+[connection troubleshooting](./remote-access.md#connection-troubleshooting).

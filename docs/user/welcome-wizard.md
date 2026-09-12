@@ -10,18 +10,17 @@ server or the desktop app, that computer is already connected and selected.
 It is identified by its name, which may differ from the device running your
 browser.
 
-You can add more computers before continuing:
+Use **Add a computer** to pair directly with a server on your network or tailnet.
+Start the server with `npx @goodbirdhq/phoenix serve --host <address>`, then paste
+its pairing link. For an already-running server, generate a fresh link with
+`npx @goodbirdhq/phoenix pair`.
 
-- **T3 Connect** connects computers that are signed in to your account. Run
-  `npx @goodbirdhq/phoenix connect` on each computer you want to add, then start Phoenix or run
-  `npx @goodbirdhq/phoenix serve` so the computer stays available.
-- **Add a computer** connects directly to a server on your network or tailnet.
-  Start the server with `npx @goodbirdhq/phoenix serve`, then run `npx @goodbirdhq/phoenix pair --tailscale` and
-  paste the pairing link. You can also run `npx @goodbirdhq/phoenix serve --host <address>` and
-  use `npx @goodbirdhq/phoenix pair` when the server is already reachable on your network.
+For Tailscale HTTPS, join both devices to the same tailnet and use
+`npx @goodbirdhq/phoenix pair --tailscale` on the running host. See
+[remote access](./remote-access.md) for network-access and HTTPS setup.
 
-Saved computers and computers discovered through T3 Connect are selected by
-default. Uncheck any you do not want to set up; this does not disconnect them.
+Saved computers are selected by default. Uncheck any you do not want to set up;
+this does not disconnect them.
 Continue when your selected computers are connected. Setup checks
 agents across the selected computers, then offers project import grouped by computer.
 

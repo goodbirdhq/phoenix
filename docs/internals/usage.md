@@ -22,7 +22,7 @@ Separate stores can be broken down individually. A current login alone does not 
 
 These are active-session counts in the requested window, not session creation counts. The existing per-source distinct counts avoid summing a session repeatedly across days and models.
 
-Web and mobile use this same merger; desktop inherits web. The wire changes are additive and do not change local, relay or tunnel transport. Compatibility for older contracts and missing source IDs remains at the data boundary.
+Web and mobile use this same merger; desktop inherits web. The wire changes are additive and do not change local, direct or SSH-forwarded transport. Compatibility for older contracts and missing source IDs remains at the data boundary.
 
 ## Account directory
 

@@ -2,15 +2,15 @@
 
 > For maintainers. Using Phoenix? See [docs/user](../user/).
 
-The environment issues its own sessions and enforces their capabilities. Cloud
-identity and relay credentials belong to a separate trust boundary, described in
-[T3 Connect](./t3-connect.md). A relay token is never an environment login.
+The environment issues its own sessions and enforces their capabilities. Direct
+pairing delegates access without a cloud identity service. Retired managed-service
+sessions are rejected; that retirement does not remove direct proof-bound DPoP.
 
 ## Authority survives transport changes
 
 Pairing delegates a set of scopes. Exchanging a bootstrap credential can narrow
 that grant but cannot widen it. Ordinary pairing does not grant access-management
-or relay-management authority. Creating another pairing link requires both
+authority. Creating another pairing link requires both
 `access:write` and every scope being delegated. The
 [auth handlers](../../apps/server/src/auth/http.ts) enforce this at issuance;
 client labels and device metadata have no authorization role.

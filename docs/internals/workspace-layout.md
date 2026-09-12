@@ -23,7 +23,7 @@ the task commands.
 - `packages/contracts` (`@t3tools/contracts`): shared Effect Schema definitions. RPC group,
   orchestration commands/events/read model, auth scopes, environment descriptors, settings.
 - `packages/shared` (`@t3tools/shared`): framework-agnostic utilities used by server and clients
-  (`DrainableWorker`, git and source-control helpers, relay auth and signing, DPoP, semver, logging,
+  (`DrainableWorker`, git and source-control helpers, DPoP, semver, logging,
   observability, and more).
 - `packages/client-runtime` (`@t3tools/client-runtime`): connection lifecycle, authorization, RPC
   session, environment registry, and Atom-based domain state shared by web and mobile. See its
@@ -36,13 +36,6 @@ the task commands.
   Protocol, used by ACP-speaking provider drivers.
 - `packages/effect-codex-app-server` (`effect-codex-app-server`): Effect client for the
   `codex app-server` JSON-RPC protocol.
-
-## infra
-
-- `infra/relay` (`t3code-relay`): the hosted T3 Connect relay, deployed with Alchemy. Handles
-  environment discovery, cloud-side records, and mobile notifications. It is not in the hot path;
-  after connect, client traffic goes directly to the environment. See
-  [t3-connect.md](./t3-connect.md).
 
 ## Other top-level directories
 
@@ -60,4 +53,4 @@ the task commands.
 no root export. Import the narrow path (`@t3tools/shared/DrainableWorker`,
 `@t3tools/client-runtime/state/threads`) rather than the package root. Files that are not exported
 are implementation details. `@t3tools/contracts` does export a root alongside `./settings` and
-`./relay`.
+`./notifications`.

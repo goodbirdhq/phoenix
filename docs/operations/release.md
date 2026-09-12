@@ -62,8 +62,8 @@ to the latest and router hostnames; nightly publication changes only the nightly
 alias. Keep the Vercel project root at `apps/web`; automatic Git deployments remain
 disabled in `apps/web/vercel.ts`.
 
-Connect configuration is optional even for hosted web: a standalone client can use
-manual pairing. With no routing tuple, preview deployments serve their own client
+The hosted web client uses direct pairing; no managed connection service is configured.
+With no routing tuple, preview deployments serve their own client
 and do not forward requests to an upstream host. The channel selector continues to
 use `/__t3code/channel` and the existing channel cookie when routing is configured.
 

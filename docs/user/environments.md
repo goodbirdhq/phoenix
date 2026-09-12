@@ -53,7 +53,7 @@ an open conversation to another machine.
   shared draft; Cancel discards it. Runtime updates are available when the provider supports them.
   Changing provider configuration requires Operate tasks permission.
 - **Connections** shows the selected endpoint, connection status and editor handoff settings.
-  Hosting, Tailscale, WSL and T3 Connect controls depend on the hosting desktop and platform.
+  Hosting, Tailscale and WSL controls depend on the hosting desktop and platform.
   For a remote environment, open Phoenix on its host to change host-level networking.
 - **Access** shows pairing links and authorized clients when your session has View access
   permission. Manage access permission allows creating links with selected permissions and revoking

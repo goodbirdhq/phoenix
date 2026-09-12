@@ -44,7 +44,6 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Resource telemetry](./internals/resource-telemetry.md)
 - [Product analytics](./internals/product-analytics.md)
 - [Environment auth](./internals/environment-auth.md)
-- [T3 Connect](./internals/t3-connect.md)
 - [Birdhouse (business workflows)](./internals/birdhouse.md)
 - [CI gates](./internals/ci.md)
 - [Assistant citations](./internals/assistant-citations.md)
@@ -57,10 +56,8 @@ source alone does not explain. Most code changes do not need an internal documen
 ### Runbooks
 
 - [Development and local builds](./operations/development.md)
-- [T3 Connect setup](./operations/connect-setup.md)
 - [Updating a self-managed server](./operations/updating-a-self-managed-server.md)
 - [Integrating upstream T3 Code](./operations/upstream-integration.md)
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
-- [Relay observability](./operations/relay-observability.md)
 - [Mobile app store screenshots](./operations/mobile-app-store-screenshots.md)
