@@ -191,7 +191,7 @@ export function createAuthEnvironmentAtoms<R, E>(
     accessChanges: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:auth-access-changes",
       subscribe: (_input: null) =>
-        subscribe(WS_METHODS.subscribeAuthAccess, {}).pipe(
+        subscribe(WS_METHODS.subscribeAuthAccess, { pairingLinkMode: "metadata" }).pipe(
           Stream.mapAccum(() => EMPTY_AUTH_ACCESS_SNAPSHOT, projectAuthAccessSnapshot),
         ),
     }),

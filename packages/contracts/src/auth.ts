@@ -253,6 +253,13 @@ export const AuthClientSession = Schema.Struct({
 });
 export type AuthClientSession = typeof AuthClientSession.Type;
 
+// Older clients require reusable credentials on pairing-link read models. They
+// receive session state only unless they opt into the metadata-only link format.
+export const AuthAccessSubscriptionInput = Schema.Struct({
+  pairingLinkMode: Schema.optionalKey(Schema.Literal("metadata")),
+});
+export type AuthAccessSubscriptionInput = typeof AuthAccessSubscriptionInput.Type;
+
 export const AuthAccessSnapshot = Schema.Struct({
   pairingLinks: Schema.Array(AuthPairingLink),
   clientSessions: Schema.Array(AuthClientSession),

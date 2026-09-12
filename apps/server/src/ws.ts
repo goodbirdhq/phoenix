@@ -3079,7 +3079,7 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
-        [WS_METHODS.subscribeAuthAccess]: (_input) =>
+        [WS_METHODS.subscribeAuthAccess]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeAuthAccess,
             Effect.gen(function* () {
@@ -3090,6 +3090,12 @@ const makeWsRpcLayer = (
               > = Stream.merge(bootstrapCredentials.streamChanges, sessions.streamChanges);
 
               const liveEvents: Stream.Stream<AuthAccessStreamEvent> = accessChanges.pipe(
+                Stream.filter(
+                  (change) =>
+                    input.pairingLinkMode === "metadata" ||
+                    change.type === "clientUpserted" ||
+                    change.type === "clientRemoved",
+                ),
                 Stream.mapEffect((change) =>
                   Ref.updateAndGet(revisionRef, (revision) => revision + 1).pipe(
                     Effect.map((revision) =>
@@ -3104,7 +3110,11 @@ const makeWsRpcLayer = (
                   version: 1 as const,
                   revision: 1,
                   type: "snapshot" as const,
-                  payload: initialSnapshot,
+                  payload: {
+                    ...initialSnapshot,
+                    pairingLinks:
+                      input.pairingLinkMode === "metadata" ? initialSnapshot.pairingLinks : [],
+                  },
                 }),
                 liveEvents,
               );

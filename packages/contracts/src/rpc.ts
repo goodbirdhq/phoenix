@@ -14,6 +14,7 @@ import {
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
+  AuthAccessSubscriptionInput,
   AuthAccessStreamError,
   AuthAccessStreamEvent,
   EnvironmentAuthorizationError,
@@ -1294,7 +1295,7 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
 });
 
 const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
-  payload: Schema.Struct({}),
+  payload: AuthAccessSubscriptionInput,
   success: AuthAccessStreamEvent,
   error: Schema.Union([AuthAccessStreamError, EnvironmentAuthorizationError]),
   stream: true,

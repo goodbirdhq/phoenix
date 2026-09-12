@@ -7,6 +7,10 @@ import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hos
 import {
   type DeviceServiceState,
   AuthAccessTokenType,
+  AuthAccessStreamEvent,
+  AuthClientSession,
+  AuthEnvironmentScopes,
+  TrimmedNonEmptyString,
   AuthStandardClientScopes,
   AuthEnvironmentBootstrapTokenType,
   AuthTokenExchangeGrantType,
@@ -85,6 +89,38 @@ import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 import { vi } from "vite-plus/test";
+
+// Pairing-link wire schema from f7de01cc8b (before metadata-only links).
+// Session and removal schemas are unchanged by the migration.
+const legacyLink = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  scopes: AuthEnvironmentScopes,
+  subject: TrimmedNonEmptyString,
+  label: Schema.optionalKey(TrimmedNonEmptyString),
+  createdAt: Schema.DateTimeUtc,
+  expiresAt: Schema.DateTimeUtc,
+  credential: TrimmedNonEmptyString,
+});
+const legacyEvent = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(1),
+    revision: Schema.Number,
+    type: Schema.Literal("snapshot"),
+    payload: Schema.Struct({
+      pairingLinks: Schema.Array(legacyLink),
+      clientSessions: Schema.Array(AuthClientSession),
+    }),
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    revision: Schema.Number,
+    type: Schema.Literal("pairingLinkUpserted"),
+    payload: legacyLink,
+  }),
+  ...AuthAccessStreamEvent.members.slice(2),
+]);
+const decodeLegacyAuthAccessEvent = Schema.decodeUnknownSync(legacyEvent);
+const encodeAuthAccessEvent = Schema.encodeSync(AuthAccessStreamEvent);
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 const decodeTransferThreadSnapshot = Schema.decodeUnknownEffect(
@@ -2997,75 +3033,106 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("returns only pairing metadata in access-read WebSocket snapshots and updates", () =>
-    Effect.gen(function* () {
-      const changesSubscribed = yield* Deferred.make<void>();
-      yield* buildAppUnderTest({
-        onPairingChangesSubscribed: Deferred.succeed(changesSubscribed, undefined).pipe(
-          Effect.asVoid,
-        ),
-      });
-      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
-      const createLink = Effect.gen(function* () {
-        const response = yield* HttpClient.post("/api/auth/pairing-token", {
-          headers: { cookie: ownerCookie },
-          body: yield* HttpBody.json({}),
-        });
-        assert.equal(response.status, 200);
-        return (yield* response.json) as { id: string; credential: string };
-      });
-      const initialLink = yield* createLink;
-      const reader = yield* exchangeAccessToken(defaultDesktopBootstrapToken, {
-        scope: "access:read",
-      });
-      assert.equal(reader.body.scope, "access:read");
-      const ticketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
-        headers: { authorization: `Bearer ${reader.body.access_token ?? ""}` },
-      });
-      assert.equal(ticketResponse.status, 200);
-      const { ticket } = (yield* ticketResponse.json) as { ticket: string };
-      const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(ticket)}`;
-      const frames: string[] = [];
-      yield* withWsRpcClient(
-        wsUrl,
-        (client) =>
-          Effect.gen(function* () {
-            const snapshotReceived = yield* Deferred.make<void>();
-            const eventsFiber = yield* client.subscribeAuthAccess({}).pipe(
-              Stream.tap((event) =>
-                event.type === "snapshot"
-                  ? Deferred.succeed(snapshotReceived, undefined)
-                  : Effect.void,
-              ),
-              Stream.takeUntil((event) => event.type === "pairingLinkUpserted"),
-              Stream.runCollect,
-              Effect.forkChild,
-            );
-            yield* Deferred.await(snapshotReceived);
-            yield* Deferred.await(changesSubscribed);
-            const liveLink = yield* createLink;
-            const events = yield* Fiber.join(eventsFiber);
-            const snapshot = events.find((event) => event.type === "snapshot");
-            const update = events.find((event) => event.type === "pairingLinkUpserted");
-            assert.isDefined(snapshot);
-            assert.isDefined(update);
-            assert.isTrue(
-              snapshot?.payload.pairingLinks.some((link) => link.id === initialLink.id),
-            );
-            assert.equal(update?.payload.id, liveLink.id);
-            // Inspect the wire frames so client schema decoding cannot hide a leak.
-            assert.notInclude(frames.join(""), '"credential"');
-            assert.notInclude(frames.join(""), initialLink.credential);
-            assert.notInclude(frames.join(""), liveLink.credential);
-            const paired = yield* exchangeAccessToken(liveLink.credential, {
-              scope: AuthStandardClientScopes.join(" "),
+  for (const pairingLinkMode of [undefined, "metadata"] as const) {
+    it.effect(
+      `keeps access-read WebSocket snapshots and updates compatible (${pairingLinkMode ?? "legacy"})`,
+      () =>
+        Effect.gen(function* () {
+          const changesSubscribed = yield* Deferred.make<void>();
+          yield* buildAppUnderTest({
+            onPairingChangesSubscribed: Deferred.succeed(changesSubscribed, undefined).pipe(
+              Effect.asVoid,
+            ),
+          });
+          const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+          const createLink = Effect.gen(function* () {
+            const response = yield* HttpClient.post("/api/auth/pairing-token", {
+              headers: { cookie: ownerCookie },
+              body: yield* HttpBody.json({}),
             });
-            assert.equal(paired.response.status, 200);
-          }),
-        (frame) => frames.push(frame),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
-  );
+            assert.equal(response.status, 200);
+            return (yield* response.json) as { id: string; credential: string };
+          });
+          const initialLink = yield* createLink;
+          const reader = yield* exchangeAccessToken(defaultDesktopBootstrapToken, {
+            scope: "access:read",
+          });
+          assert.equal(reader.body.scope, "access:read");
+          const ticketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+            headers: { authorization: `Bearer ${reader.body.access_token ?? ""}` },
+          });
+          assert.equal(ticketResponse.status, 200);
+          const { ticket } = (yield* ticketResponse.json) as { ticket: string };
+          const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(ticket)}`;
+          const frames: string[] = [];
+          yield* withWsRpcClient(
+            wsUrl,
+            (client) =>
+              Effect.gen(function* () {
+                const snapshotReceived = yield* Deferred.make<void>();
+                const eventsFiber = yield* client
+                  .subscribeAuthAccess(pairingLinkMode ? { pairingLinkMode } : {})
+                  .pipe(
+                    Stream.tap((event) =>
+                      event.type === "snapshot"
+                        ? Deferred.succeed(snapshotReceived, undefined)
+                        : Effect.void,
+                    ),
+                    Stream.takeUntil(
+                      (event) =>
+                        event.type === "clientUpserted" &&
+                        event.payload.method === "bearer-access-token",
+                    ),
+                    Stream.runCollect,
+                    Effect.forkChild,
+                  );
+                yield* Deferred.await(snapshotReceived);
+                yield* Deferred.await(changesSubscribed);
+                const liveLink = yield* createLink;
+                const paired = yield* exchangeAccessToken(liveLink.credential, {
+                  scope: AuthStandardClientScopes.join(" "),
+                });
+                assert.equal(paired.response.status, 200);
+                const events = yield* Fiber.join(eventsFiber);
+                const snapshot = events.find((event) => event.type === "snapshot");
+                const update = events.find((event) => event.type === "pairingLinkUpserted");
+                assert.isDefined(snapshot);
+                assert.isNotEmpty(snapshot?.payload.clientSessions ?? []);
+                if (pairingLinkMode === "metadata") {
+                  assert.isDefined(update);
+                  assert.isTrue(
+                    snapshot?.payload.pairingLinks.some((link) => link.id === initialLink.id),
+                  );
+                  assert.equal(update?.payload.id, liveLink.id);
+                  // Reproduce the original break for both snapshot and live upsert.
+                  for (const event of [snapshot!, update!]) {
+                    assert.throws(
+                      () => decodeLegacyAuthAccessEvent(encodeAuthAccessEvent(event)),
+                      /credential/,
+                    );
+                  }
+                } else {
+                  assert.deepEqual(snapshot?.payload.pairingLinks, []);
+                  assert.isUndefined(update);
+                  for (const event of events) {
+                    decodeLegacyAuthAccessEvent(encodeAuthAccessEvent(event));
+                  }
+                  assert.isTrue(events.some((event) => event.type === "clientUpserted"));
+                  assert.deepEqual(
+                    events.map((event) => event.revision),
+                    events.map((_, index) => index + 1),
+                  );
+                }
+                // Inspect the wire frames so client schema decoding cannot hide a leak.
+                assert.notInclude(frames.join(""), '"credential"');
+                assert.notInclude(frames.join(""), initialLink.credential);
+                assert.notInclude(frames.join(""), liveLink.credential);
+              }),
+            (frame) => frames.push(frame),
+          );
+        }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+    );
+  }
 
   it.effect("lists and revokes pairing links for access management sessions", () =>
     Effect.gen(function* () {
