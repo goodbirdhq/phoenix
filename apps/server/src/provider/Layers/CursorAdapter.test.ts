@@ -237,9 +237,21 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
         assert.equal(error.detail, "Cursor reported a transport failure.");
         assert.equal(error.cause, "Error: RetriableError: WritableIterable is closed");
       }
+      const afterFailure = (yield* adapter.listSessions()).find(
+        (session) => session.threadId === threadId,
+      );
+      assert.equal(afterFailure?.status, "ready");
+      assert.equal(afterFailure?.activeTurnId, undefined);
+      assert.isTrue(yield* adapter.hasSession(threadId));
       yield* adapter.stopSession(threadId);
       const runtimeEvents = yield* Fiber.join(runtimeEventsFiber);
-      assert.isFalse(runtimeEvents.some((event) => event.type === "turn.completed"));
+      const completions = runtimeEvents.filter((event) => event.type === "turn.completed");
+      assert.lengthOf(completions, 1);
+      const terminal = completions[0];
+      assert.equal(terminal?.type, "turn.completed");
+      if (terminal?.type === "turn.completed") {
+        assert.equal(terminal.payload.state, "failed");
+      }
     }),
   );
 
