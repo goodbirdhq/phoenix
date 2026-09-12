@@ -6,6 +6,7 @@ import {
   ConnectionTargetStore,
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
   EnvironmentCacheStore,
+  clearUnsupportedManagedCredentials,
   registerConnectionInCatalog,
   removeCatalogValue,
   removeConnectionFromCatalog,
@@ -379,6 +380,10 @@ export const makeCatalogStore = Effect.fn("web.connectionStorage.makeCatalogStor
           }),
         ),
       );
+      if (catalog.remoteDpopTokens.length > 0) {
+        catalog = clearUnsupportedManagedCredentials(catalog);
+        yield* backend.write(yield* encodeCatalog(catalog));
+      }
     }
     yield* Ref.set(state, Option.some(catalog));
     return catalog;

@@ -26,27 +26,71 @@ afterEach(() => {
 });
 
 describe("makeCatalogStore", () => {
-  it.effect("preserves unsupported managed connection metadata without rewriting it", () =>
+  it.effect("retires managed credentials without removing saved connection metadata", () =>
     Effect.gen(function* () {
       const environmentId = EnvironmentId.make("legacy-managed-environment");
-      const document = {
-        ...emptyCatalog,
+      const raw = JSON.stringify({
+        schemaVersion: 1,
         targets: [
-          new RelayConnectionTarget({
+          {
+            _tag: "BearerConnectionTarget",
+            environmentId: "direct-environment",
+            label: "Direct environment",
+            connectionId: "bearer:direct-environment",
+          },
+          {
+            _tag: "RelayConnectionTarget",
             environmentId,
             label: "Legacy managed environment",
-          }),
+          },
         ],
-      };
-      const raw = Schema.encodeSync(Schema.fromJsonString(ConnectionCatalogDocument))(document);
+        profiles: [
+          {
+            _tag: "BearerConnectionProfile",
+            environmentId: "direct-environment",
+            label: "Direct environment",
+            connectionId: "bearer:direct-environment",
+            httpBaseUrl: "https://direct.example.test",
+            wsBaseUrl: "wss://direct.example.test",
+          },
+        ],
+        credentials: [
+          {
+            connectionId: "bearer:direct-environment",
+            credential: { _tag: "BearerConnectionCredential", token: "direct-token" },
+          },
+        ],
+        remoteDpopTokens: [
+          {
+            environmentId,
+            label: "Legacy managed environment",
+            endpoint: {
+              httpBaseUrl: "https://relay.example.test",
+              wsBaseUrl: "wss://relay.example.test",
+              providerKind: "cloudflare_tunnel",
+            },
+            accessToken: "retired-token",
+            expiresAtEpochMs: 1,
+            dpopThumbprint: "legacy-thumbprint",
+          },
+        ],
+      });
       const writes: string[] = [];
       const store = yield* makeCatalogStore({
         read: Effect.succeed(raw),
         write: (value) => Effect.sync(() => writes.push(value)),
       });
 
-      expect(yield* store.read).toEqual(document);
-      expect(writes).toEqual([]);
+      const loaded = yield* store.read;
+      expect(loaded.targets).toHaveLength(2);
+      expect(loaded.targets[1]).toEqual(
+        new RelayConnectionTarget({ environmentId, label: "Legacy managed environment" }),
+      );
+      expect(loaded.profiles).toHaveLength(1);
+      expect(loaded.credentials).toHaveLength(1);
+      expect(loaded.remoteDpopTokens).toEqual([]);
+      expect(writes).toHaveLength(1);
+      expect(decodeCatalog(writes[0]!)).toEqual(loaded);
     }),
   );
 
