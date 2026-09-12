@@ -18,7 +18,6 @@ const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
 export interface Preferences {
   readonly sidebarAttentionFirstEnabled?: boolean;
   readonly threadLastVisitedAtByKey?: Readonly<Record<string, string>>;
-  readonly liveActivitiesEnabled?: boolean;
   readonly themeId?: MobileThemeId;
   readonly lightThemeId?: MobileThemeId;
   readonly darkThemeId?: MobileThemeId;
@@ -29,7 +28,6 @@ export interface Preferences {
   readonly markdownFontSize?: number;
   readonly codeFontSize?: number | null;
   readonly codeWordBreak?: boolean;
-  readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
   readonly collapsedProjectGroups?: readonly string[];
   /** @deprecated Kept temporarily so older OTA bundles retain the selected mode. */
   readonly projectGroupingEnabled?: boolean;
@@ -90,7 +88,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     sidebarAttentionFirstEnabled?: boolean;
     threadLastVisitedAtByKey?: Record<string, string>;
-    liveActivitiesEnabled?: boolean;
     themeId?: MobileThemeId;
     lightThemeId?: MobileThemeId;
     darkThemeId?: MobileThemeId;
@@ -101,7 +98,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     markdownFontSize?: number;
     codeFontSize?: number | null;
     codeWordBreak?: boolean;
-    connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
@@ -124,9 +120,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
         ([, value]) => typeof value === "string" && Number.isFinite(Date.parse(value)),
       ),
     );
-  }
-  if (typeof parsed.liveActivitiesEnabled === "boolean") {
-    preferences.liveActivitiesEnabled = parsed.liveActivitiesEnabled;
   }
   if (
     typeof parsed.themeId === "string" &&
@@ -167,11 +160,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.codeFontSize = parsed.codeFontSize;
   }
   if (typeof parsed.codeWordBreak === "boolean") preferences.codeWordBreak = parsed.codeWordBreak;
-  if (Array.isArray(parsed.connectOnboardingOptOutAccounts)) {
-    preferences.connectOnboardingOptOutAccounts = parsed.connectOnboardingOptOutAccounts.filter(
-      (account): account is string => typeof account === "string",
-    );
-  }
   if (Array.isArray(parsed.collapsedProjectGroups)) {
     preferences.collapsedProjectGroups = parsed.collapsedProjectGroups.filter(
       (key): key is string => typeof key === "string",

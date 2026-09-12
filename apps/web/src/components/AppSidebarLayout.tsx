@@ -52,7 +52,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "90px";
 
-// The settings nav (and the Clerk profile surfaces behind it) only renders on
+// The settings navigation only renders on
 // settings routes; lazy-loading it keeps that subtree out of the startup chunk.
 const EnvironmentsSidebar = lazy(() =>
   import("./environments/EnvironmentsSidebar").then((module) => ({

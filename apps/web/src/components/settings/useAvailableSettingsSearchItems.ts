@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import { AuthAccessWriteScope } from "@t3tools/contracts";
 
-import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { isElectron } from "~/env";
 import { desktopWslStateAtom } from "~/state/desktopWslState";
 import { useEnvironments } from "~/state/environments";
@@ -27,7 +26,6 @@ export function useAvailableSettingsSearchItems() {
   return useMemo(
     () =>
       filterAvailableSettingsSearchItems({
-        hasCloudPublicConfig: hasCloudPublicConfig(),
         hasEnvironment: environments.some((environment) => environment.serverConfig !== null),
         hasProviderSettingsEnvironment: environments.some((environment) =>
           isProviderSettingsEnvironmentAvailable({
