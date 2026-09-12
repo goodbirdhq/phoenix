@@ -1,5 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
+import { RelayConnectionTarget } from "@t3tools/client-runtime/connection";
+import { ConnectionCatalogDocument } from "@t3tools/client-runtime/platform";
+import { EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { vi } from "vite-plus/test";
 
 vi.mock("react-native", () => ({
@@ -34,6 +38,33 @@ function makeStorage(initial: Readonly<Record<string, string>>) {
 }
 
 describe("mobile connection catalog storage", () => {
+  it.effect("preserves unsupported managed connection metadata without rewriting it", () =>
+    Effect.gen(function* () {
+      const environmentId = EnvironmentId.make("legacy-managed-environment");
+      const document = {
+        schemaVersion: 1 as const,
+        targets: [
+          new RelayConnectionTarget({
+            environmentId,
+            label: "Legacy managed environment",
+          }),
+        ],
+        profiles: [],
+        credentials: [],
+        remoteDpopTokens: [],
+      };
+      const raw = Schema.encodeSync(Schema.fromJsonString(ConnectionCatalogDocument))(document);
+      const memory = makeStorage({ [CONNECTION_CATALOG_KEY]: raw });
+      const catalog = yield* make().pipe(
+        Effect.provideService(MobileSecureStorage, memory.storage),
+      );
+
+      expect(yield* catalog.read).toEqual(document);
+      expect(memory.values.get(CONNECTION_CATALOG_KEY)).toBe(raw);
+      expect(memory.deleted).toEqual([]);
+    }),
+  );
+
   it.effect("recovers from a corrupt current catalog", () =>
     Effect.gen(function* () {
       const memory = makeStorage({

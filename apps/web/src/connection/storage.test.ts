@@ -1,5 +1,9 @@
-import { ConnectionTransientError } from "@t3tools/client-runtime/connection";
+import {
+  ConnectionTransientError,
+  RelayConnectionTarget,
+} from "@t3tools/client-runtime/connection";
 import { ConnectionCatalogDocument } from "@t3tools/client-runtime/platform";
+import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -22,6 +26,30 @@ afterEach(() => {
 });
 
 describe("makeCatalogStore", () => {
+  it.effect("preserves unsupported managed connection metadata without rewriting it", () =>
+    Effect.gen(function* () {
+      const environmentId = EnvironmentId.make("legacy-managed-environment");
+      const document = {
+        ...emptyCatalog,
+        targets: [
+          new RelayConnectionTarget({
+            environmentId,
+            label: "Legacy managed environment",
+          }),
+        ],
+      };
+      const raw = Schema.encodeSync(Schema.fromJsonString(ConnectionCatalogDocument))(document);
+      const writes: string[] = [];
+      const store = yield* makeCatalogStore({
+        read: Effect.succeed(raw),
+        write: (value) => Effect.sync(() => writes.push(value)),
+      });
+
+      expect(yield* store.read).toEqual(document);
+      expect(writes).toEqual([]);
+    }),
+  );
+
   it.effect("quarantines malformed catalogs and starts from an empty document", () =>
     Effect.gen(function* () {
       const writes: string[] = [];
