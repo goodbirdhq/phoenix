@@ -1,5 +1,4 @@
 import type { AuthClientPresentationMetadata } from "@t3tools/contracts";
-import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -22,7 +21,6 @@ import type {
   ConnectionTarget,
   PreparedConnection,
   PrimaryConnectionTarget,
-  RelayConnectionTarget,
   SshConnectionTarget,
 } from "./model.ts";
 import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
@@ -140,28 +138,6 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
   });
 });
 
-const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(function* () {
-  const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
-
-  return Effect.fnUntraced(
-    function* (target: RelayConnectionTarget) {
-      const authorized = yield* remote.authorizeDpop({
-        expectedEnvironmentId: target.environmentId,
-      });
-      return {
-        environmentId: authorized.environmentId,
-        label: authorized.label,
-        httpBaseUrl: authorized.httpBaseUrl,
-        socketUrl: authorized.socketUrl,
-        httpAuthorization: authorized.httpAuthorization,
-        target,
-      } satisfies PreparedConnection;
-    },
-    Effect.withSpan("clientRuntime.connection.broker.relay"),
-    withRelayClientTracing,
-  );
-});
-
 const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(function* () {
   const profiles = yield* ConnectionProfileStore.ConnectionProfileStore;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
@@ -222,7 +198,6 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
 export const make = Effect.gen(function* () {
   const primary = yield* makePrimaryBroker();
   const bearer = yield* makeBearerBroker();
-  const relay = yield* makeRelayBroker();
   const ssh = yield* makeSshBroker();
 
   const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
@@ -239,7 +214,11 @@ export const make = Effect.gen(function* () {
       case "BearerConnectionTarget":
         return yield* bearer({ ...entry, target });
       case "RelayConnectionTarget":
-        return yield* relay(target);
+        return yield* new ConnectionBlockedError({
+          reason: "unsupported",
+          detail:
+            "Managed T3 Connect is no longer supported. Remove this connection and pair directly using its HTTP address.",
+        });
       case "SshConnectionTarget":
         return yield* ssh({ ...entry, target });
     }

@@ -26,6 +26,7 @@ export class BearerConnectionTarget extends Schema.TaggedClass<BearerConnectionT
   },
 ) {}
 
+/** Decode-only compatibility for old catalogs. The resolver rejects this retired connection kind. */
 export class RelayConnectionTarget extends Schema.TaggedClass<RelayConnectionTarget>()(
   "RelayConnectionTarget",
   {

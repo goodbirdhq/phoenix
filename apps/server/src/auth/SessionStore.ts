@@ -754,7 +754,7 @@ export const make = Effect.gen(function* () {
             (cause) => new SessionCredentialVerificationError({ sessionId: claims.sid, cause }),
           ),
         );
-      if (Option.isNone(row)) {
+      if (Option.isNone(row) || row.value.subject === "cloud-connect") {
         return yield* new UnknownSessionTokenError({ sessionId: claims.sid });
       }
       if (row.value.revokedAt !== null) {
@@ -853,7 +853,7 @@ export const make = Effect.gen(function* () {
           (cause) => new WebSocketTokenVerificationError({ sessionId: claims.sid, cause }),
         ),
       );
-    if (Option.isNone(row)) {
+    if (Option.isNone(row) || row.value.subject === "cloud-connect") {
       return yield* new UnknownWebSocketSessionError({ sessionId: claims.sid });
     }
     if (row.value.expiresAt.epochMilliseconds <= observedAt.epochMilliseconds) {

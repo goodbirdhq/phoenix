@@ -17,7 +17,6 @@ import { Atom } from "effect/unstable/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { ConnectionBlockedError, type PreparedConnection } from "../connection/model.ts";
-import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { executeEnvironmentHttpRequest, makeEnvironmentHttpApiClient } from "../rpc/http.ts";
 import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
@@ -48,13 +47,7 @@ export const executeAuthAccessAction = Effect.fn("auth.executeAccessAction")(fun
           ? "/api/auth/clients/revoke"
           : "/api/auth/clients/revoke-others";
   const url = environmentEndpointUrl(prepared.httpBaseUrl, path);
-  const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
-  const headers = yield* buildEnvironmentAuthHeaders(
-    prepared.httpAuthorization,
-    "POST",
-    url,
-    signer,
-  );
+  const headers = yield* buildEnvironmentAuthHeaders(prepared.httpAuthorization);
   const client = yield* makeEnvironmentHttpApiClient(prepared.httpBaseUrl);
   switch (action.kind) {
     case "create":

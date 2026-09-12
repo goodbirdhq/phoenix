@@ -82,6 +82,30 @@ const failingSessionLookupCredentialLayer = Layer.effect(
 );
 
 it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
+  it.effect(
+    "rejects retired cloud sessions and tickets while preserving paired sessions and history",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* SessionStore.SessionStore;
+        const retired = yield* sessions.issue({ subject: "cloud-connect" });
+        const ticket = yield* sessions.issueWebSocketToken(retired.sessionId);
+        const direct = yield* sessions.issue({
+          subject: "paired-client",
+          method: "bearer-access-token",
+        });
+        expect((yield* sessions.verify(retired.token).pipe(Effect.flip))._tag).toBe(
+          "UnknownSessionTokenError",
+        );
+        expect((yield* sessions.verifyWebSocketToken(ticket.token).pipe(Effect.flip))._tag).toBe(
+          "UnknownWebSocketSessionError",
+        );
+        expect((yield* sessions.verify(direct.token)).subject).toBe("paired-client");
+        expect(
+          (yield* sessions.listActive()).some((row) => row.sessionId === retired.sessionId),
+        ).toBe(true);
+      }).pipe(Effect.provide(makeSessionStoreLayer())),
+  );
+
   it.effect("keys remote cookies by environment identity instead of state directory", () =>
     Effect.gen(function* () {
       const cookieName = (stateDir: string, environmentId: EnvironmentId) =>

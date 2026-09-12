@@ -1,7 +1,5 @@
 import type { ClientConnectionMethod, EnvironmentId } from "@t3tools/contracts";
-import type { RelayProtectedError } from "@t3tools/contracts/relay";
-import type { ManagedRelayClientError } from "../relay/managedRelay.ts";
-import { dpopFailureMessage, relayProtectedErrorMessage } from "../relay/errorPresentation.ts";
+import { dpopFailureMessage } from "../relay/errorPresentation.ts";
 import type { RemoteEnvironmentAuthError } from "../authorization/remote.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import {
@@ -32,84 +30,6 @@ export function environmentMismatchError(input: {
     reason: "configuration",
     detail: `Connected environment ${input.actual} does not match ${input.expected}.`,
   });
-}
-
-function relayProtectedError(error: RelayProtectedError): ConnectionAttemptError {
-  switch (error._tag) {
-    case "RelayAuthInvalidError":
-    case "RelayEnvironmentLinkProofExpiredError":
-    case "RelayAgentActivityPublishProofExpiredError":
-    case "RelayAgentActivityPublishProofInvalidError":
-      return new ConnectionBlockedError({
-        reason: "authentication",
-        detail: relayProtectedErrorMessage(error),
-        traceId: error.traceId,
-      });
-    case "RelayEnvironmentConnectNotAuthorizedError":
-    case "RelayEnvironmentLinkProofInvalidError":
-    case "RelayEnvironmentLinkLimitExceededError":
-      return new ConnectionBlockedError({
-        reason: "permission",
-        detail: relayProtectedErrorMessage(error),
-        traceId: error.traceId,
-      });
-    case "RelayEnvironmentEndpointTimedOutError":
-      return new ConnectionTransientError({
-        reason: "timeout",
-        detail: relayProtectedErrorMessage(error),
-        traceId: error.traceId,
-      });
-    case "RelayEnvironmentEndpointUnavailableError":
-    case "RelayEnvironmentLinkUnavailableError":
-      return new ConnectionTransientError({
-        reason: "endpoint-unavailable",
-        detail: relayProtectedErrorMessage(error),
-        traceId: error.traceId,
-      });
-    case "RelayEnvironmentLinkFailedError":
-    case "RelayInternalError":
-      return new ConnectionTransientError({
-        reason: "relay-unavailable",
-        detail: relayProtectedErrorMessage(error),
-        traceId: error.traceId,
-      });
-  }
-}
-
-export function mapManagedRelayError(error: ManagedRelayClientError): ConnectionAttemptError {
-  switch (error._tag) {
-    case "ManagedRelayRequestFailedError":
-      if (error.relayError) {
-        return relayProtectedError(error.relayError);
-      }
-      return new ConnectionTransientError({
-        reason: "relay-unavailable",
-        detail: error.message,
-        ...(error.traceId ? { traceId: error.traceId } : {}),
-      });
-    case "ManagedRelayRequestTimeoutError":
-      return new ConnectionTransientError({
-        reason: "timeout",
-        detail: error.message,
-      });
-    case "ManagedRelayUrlInvalidError":
-      return new ConnectionBlockedError({
-        reason: "configuration",
-        detail: error.message,
-      });
-    case "ManagedRelayAccessTokenScopesUnexpectedError":
-      return new ConnectionBlockedError({
-        reason: "permission",
-        detail: error.message,
-      });
-    case "ManagedRelayDpopKeyLoadError":
-    case "ManagedRelayTokenProofCreationError":
-    case "ManagedRelayRequestProofCreationError":
-      return new ConnectionBlockedError({
-        reason: "authentication",
-        detail: error.message,
-      });
-  }
 }
 
 export function mapRemoteEnvironmentError(

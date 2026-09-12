@@ -38,7 +38,6 @@ import {
 } from "./assets/AttachmentUpload.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { traceRelayRequest } from "./cloud/traceRelayRequest.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentScopeRequired,
@@ -301,7 +300,7 @@ export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
       Effect.fn("environment.metadata.descriptor")(function* (args) {
         yield* annotateEnvironmentRequest(args.endpoint.name);
         return yield* serverEnvironment.getDescriptor;
-      }, traceRelayRequest),
+      }),
     );
   }),
 );
@@ -504,6 +503,14 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
 
     if (Option.isNone(url)) {
       return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+
+    // Retired API paths must not fall through to the web client's SPA fallback.
+    if (
+      url.value.pathname.startsWith("/api/connect/") ||
+      url.value.pathname.startsWith("/api/t3-connect/")
+    ) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
     }
 
     const config = yield* ServerConfig.ServerConfig;

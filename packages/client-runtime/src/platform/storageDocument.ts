@@ -6,7 +6,6 @@ import {
   ConnectionProfile,
 } from "../connection/catalog.ts";
 import { type ConnectionTarget, PersistedConnectionTarget } from "../connection/model.ts";
-import * as TokenStore from "../authorization/tokenStore.ts";
 
 export const StoredConnectionCredential = Schema.Struct({
   connectionId: Schema.String,
@@ -19,7 +18,8 @@ export const ConnectionCatalogDocument = Schema.Struct({
   targets: Schema.Array(PersistedConnectionTarget),
   profiles: Schema.Array(ConnectionProfile),
   credentials: Schema.Array(StoredConnectionCredential),
-  remoteDpopTokens: Schema.Array(TokenStore.RemoteDpopAccessToken),
+  // Legacy managed credentials are decoded only so load-time retirement can discard them.
+  remoteDpopTokens: Schema.Array(Schema.Unknown),
 });
 export type ConnectionCatalogDocument = typeof ConnectionCatalogDocument.Type;
 
@@ -62,7 +62,6 @@ function connectionIdOf(target: ConnectionTarget): string | null {
 function removeConnectionMetadata(
   document: ConnectionCatalogDocument,
   target: ConnectionTarget,
-  removeRemoteToken: boolean,
 ): ConnectionCatalogDocument {
   const connectionId = connectionIdOf(target);
   return {
@@ -80,13 +79,7 @@ function removeConnectionMetadata(
       connectionId === null
         ? document.credentials
         : removeCatalogValue(document.credentials, (value) => value.connectionId, connectionId),
-    remoteDpopTokens: removeRemoteToken
-      ? removeCatalogValue(
-          document.remoteDpopTokens,
-          (value) => value.environmentId,
-          target.environmentId,
-        )
-      : document.remoteDpopTokens,
+    remoteDpopTokens: [],
   };
 }
 
@@ -98,8 +91,7 @@ export function registerConnectionInCatalog(
   const previous = document.targets.find(
     (candidate) => candidate.environmentId === target.environmentId,
   );
-  const cleaned =
-    previous === undefined ? document : removeConnectionMetadata(document, previous, false);
+  const cleaned = previous === undefined ? document : removeConnectionMetadata(document, previous);
   const next: ConnectionCatalogDocument = {
     ...cleaned,
     targets: replaceCatalogValue(cleaned.targets, (value) => value.environmentId, target),
@@ -137,26 +129,16 @@ export function removeConnectionFromCatalog(
   document: ConnectionCatalogDocument,
   target: ConnectionTarget,
 ): ConnectionCatalogDocument {
-  return removeConnectionMetadata(document, target, true);
+  return removeConnectionMetadata(document, target);
 }
 
-export function putRemoteDpopTokenInCatalog(
+/** Retire managed entries after decoding older catalogs; never turn them into direct endpoints. */
+export function clearUnsupportedManagedConnections(
   document: ConnectionCatalogDocument,
-  token: TokenStore.RemoteDpopAccessToken,
 ): ConnectionCatalogDocument {
-  const registered = document.targets.some(
-    (target) =>
-      target._tag === "RelayConnectionTarget" && target.environmentId === token.environmentId,
-  );
-  if (!registered) {
-    return document;
-  }
   return {
     ...document,
-    remoteDpopTokens: replaceCatalogValue(
-      document.remoteDpopTokens,
-      (value) => value.environmentId,
-      token,
-    ),
+    targets: document.targets.filter((target) => target._tag !== "RelayConnectionTarget"),
+    remoteDpopTokens: [],
   };
 }

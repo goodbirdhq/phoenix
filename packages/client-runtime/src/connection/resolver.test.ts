@@ -1,11 +1,9 @@
 import { EnvironmentId, type DesktopSshEnvironmentTarget } from "@t3tools/contracts";
-import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Tracer from "effect/Tracer";
 
 import * as ConnectionResolver from "./resolver.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
@@ -21,7 +19,6 @@ import {
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import {
   BearerConnectionTarget,
-  ConnectionTransientError,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
@@ -48,25 +45,10 @@ function catalogEntry(
   return { target, profile };
 }
 
-function collectingTracer(spans: Array<string>): Tracer.Tracer {
-  return Tracer.make({
-    span: (options) => {
-      const span = new Tracer.NativeSpan(options);
-      const end = span.end.bind(span);
-      span.end = (endTime, exit) => {
-        end(endTime, exit);
-        spans.push(span.name);
-      };
-      return span;
-    },
-  });
-}
-
 const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((options?: {
   readonly profiles?: ReadonlyArray<ConnectionProfile>;
   readonly credentials?: ReadonlyArray<readonly [string, ConnectionCredential]>;
   readonly authorizeBearer?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeBearer"];
-  readonly authorizeDpop?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeDpop"];
   readonly primaryBearerToken?: string;
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
 }) => {
@@ -100,21 +82,6 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
             token: input.bearerToken,
           },
         })),
-    authorizeDpop:
-      options?.authorizeDpop ??
-      ((input) =>
-        Effect.succeed({
-          environmentId: input.expectedEnvironmentId,
-          label: "Authorized relay environment",
-          httpBaseUrl: ENDPOINT.httpBaseUrl,
-          socketUrl: "wss://authorized.example.test/ws?wsTicket=dpop",
-          httpAuthorization: {
-            _tag: "Dpop" as const,
-            accessToken: "dpop-access-token",
-            expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-          },
-        })),
-    authorizeDpopHttp: () => Effect.die("unused"),
   });
   const ssh = ClientCapabilities.SshEnvironmentGateway.of({
     provision: () => Effect.die("unused"),
@@ -262,68 +229,6 @@ describe("ConnectionResolver", () => {
     }),
   );
 
-  it.effect("prepares relay connections with the authorized endpoint and credentials", () =>
-    Effect.gen(function* () {
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
-      });
-      const brokerLayer = yield* makeDependencies();
-      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
-
-      expect(yield* broker.prepare(catalogEntry(target))).toEqual({
-        environmentId: ENVIRONMENT_ID,
-        label: "Authorized relay environment",
-        httpBaseUrl: ENDPOINT.httpBaseUrl,
-        socketUrl: "wss://authorized.example.test/ws?wsTicket=dpop",
-        httpAuthorization: {
-          _tag: "Dpop",
-          accessToken: "dpop-access-token",
-          expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-        },
-        target,
-      });
-    }),
-  );
-
-  it.effect("exports the complete relay authorization flow through the product tracer", () =>
-    Effect.gen(function* () {
-      const userSpans: Array<string> = [];
-      const productSpans: Array<string> = [];
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
-      });
-      const brokerLayer = yield* makeDependencies({
-        authorizeDpop: (input) =>
-          Effect.succeed({
-            environmentId: input.expectedEnvironmentId,
-            label: "Cloud",
-            httpBaseUrl: ENDPOINT.httpBaseUrl,
-            socketUrl: "wss://environment.example.test/ws?wsTicket=dpop",
-            httpAuthorization: {
-              _tag: "Dpop" as const,
-              accessToken: "dpop-access-token",
-              expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-            },
-          }).pipe(Effect.withSpan("test.remote.authorizeDpop")),
-      });
-      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
-
-      yield* broker
-        .prepare(catalogEntry(target))
-        .pipe(
-          Effect.provideService(RelayClientTracer, Option.some(collectingTracer(productSpans))),
-          Effect.withTracer(collectingTracer(userSpans)),
-        );
-
-      expect(productSpans).toContain("clientRuntime.connection.broker.relay");
-      expect(productSpans).toContain("test.remote.authorizeDpop");
-      expect(userSpans).toContain("clientRuntime.connection.broker.prepare");
-      expect(userSpans).not.toContain("test.remote.authorizeDpop");
-    }),
-  );
-
   it.effect("delegates SSH launch to the platform gateway before remote authorization", () =>
     Effect.gen(function* () {
       const preparedTargets = yield* Ref.make<ReadonlyArray<DesktopSshEnvironmentTarget>>([]);
@@ -376,24 +281,19 @@ describe("ConnectionResolver", () => {
     }),
   );
 
-  it.effect("preserves relay authorization failure classification and trace details", () =>
+  it.effect("rejects legacy managed targets without invoking direct authorization", () =>
     Effect.gen(function* () {
-      const target = new RelayConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Cloud",
+      const layer = yield* makeDependencies({
+        authorizeBearer: () => Effect.die("must not authorize"),
       });
-      const authorizationError = new ConnectionTransientError({
-        reason: "timeout",
-        detail: "Relay environment connection timed out.",
-        traceId: "relay-trace",
-      });
-      const brokerLayer = yield* makeDependencies({
-        authorizeDpop: () => Effect.fail(authorizationError),
-      });
-      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
-      const error = yield* Effect.flip(broker.prepare(catalogEntry(target)));
-
-      expect(error).toBe(authorizationError);
+      const result = yield* ConnectionResolver.ConnectionResolver.use((resolver) =>
+        resolver.prepare(
+          catalogEntry(
+            new RelayConnectionTarget({ environmentId: ENVIRONMENT_ID, label: "Legacy" }),
+          ),
+        ),
+      ).pipe(Effect.flip, Effect.provide(layer));
+      expect(result).toMatchObject({ _tag: "ConnectionBlockedError", reason: "unsupported" });
     }),
   );
 });
