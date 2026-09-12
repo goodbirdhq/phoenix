@@ -163,6 +163,9 @@ packageExtensions:
     dependencies:
       vite: "catalog:"
 
+# Patches apply to one exact version, so the matching dependency must be pinned
+# exactly too: a range can drift to a newer release on fresh resolution, leaving
+# the patch unused and failing the install with ERR_PNPM_UNUSED_PATCH.
 patchedDependencies:
   "@clerk/expo@4.2.0": patches/@clerk__expo@4.2.0.patch
   "@effect/vitest@4.0.0-rc.112": patches/@effect__vitest@4.0.0-rc.112.patch

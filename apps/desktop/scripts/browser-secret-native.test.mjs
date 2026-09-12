@@ -10,7 +10,14 @@ const hostArch = process.arch;
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Native compilation only runs on the actual Linux host.
 const hostPlatform = process.platform;
 
-describe.skipIf(hostPlatform !== "linux")("bundled libsecret helper", () => {
+// The helper compiles against libsecret, which only CI and Linux dev machines with the
+// desktop capture dependencies installed have. Skip rather than fail elsewhere.
+const hasLibsecretToolchain =
+  hostPlatform === "linux" &&
+  NodeChildProcess.spawnSync("pkg-config", ["--exists", "libsecret-1"], { stdio: "ignore" })
+    .status === 0;
+
+describe.skipIf(!hasLibsecretToolchain)("bundled libsecret helper", () => {
   let directory;
   let executable;
   beforeAll(() => {
