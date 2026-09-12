@@ -3,12 +3,14 @@ import {
   ChartNoAxesColumnIcon,
   BoxIcon,
   FolderIcon,
+  GaugeIcon,
   MessageSquareIcon,
   ServerIcon,
 } from "lucide-react";
 import { UsageReportChart } from "./UsageReportChart";
 import { UsageReport } from "./UsageReport";
 import { UsageToolbar } from "./UsageToolbar";
+import { UsagePriceOverrides } from "./UsagePriceOverrides";
 import { findUsageAccount } from "@t3tools/client-runtime/usage/accounts";
 import { scopeAccountHistory } from "@t3tools/client-runtime/usage/account-history";
 import { useSearch } from "@tanstack/react-router";
@@ -40,28 +42,45 @@ import {
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import type { UsageChartMetric } from "@t3tools/client-runtime/usage/chart-series";
+import { UsageLimitsSection } from "./UsageLimits";
 import { UsageQuotas } from "./UsageQuotas";
 import { subscriptionAvailabilitySources } from "@t3tools/client-runtime/usage/usage-warning";
+import { readUsagePagePreferences, saveUsagePagePreferences } from "./usagePagePreferences";
+
+function isUsageWindowDays(value: number): value is 1 | 7 | 30 | 90 {
+  return value === 1 || value === 7 || value === 30 || value === 90;
+}
 
 export function UsagePage() {
   const { account: accountKey } = useSearch({ from: "/usage" });
   const [pageTab, setPageTab] = useState("overview");
   useEffect(() => setPageTab("overview"), [accountKey]);
+  const initialPreferences = useMemo(readUsagePagePreferences, []);
   const [windowSelection, setWindowSelection] = useState(() => ({
-    days: 7,
-    window: makeWindow(7),
+    days: initialPreferences.windowDays,
+    window: makeWindow(initialPreferences.windowDays),
   }));
-  const [metric, setMetric] = useState<UsageChartMetric>("cost");
+  // "limits" only means something for the upstream chart metric toggle; Phoenix
+  // surfaces Limits as its own tab, so a saved "limits" preference falls back to
+  // the chart's default metric instead.
+  const [metric, setMetric] = useState<UsageChartMetric>(
+    initialPreferences.metric === "tokens" ? "tokens" : "cost",
+  );
   const [historicalEnvironmentId, setHistoricalEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
+  const [pricesOpen, setPricesOpen] = useState(false);
+  const [limitsNow, setLimitsNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (pageTab === "limits") setLimitsNow(Date.now());
+  }, [pageTab]);
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
   const {
     merged,
     accounts,
     allEnvironments,
-    environments,
+    selectedEnvironments: environments,
     isPending,
     isPartial,
     isUsageRefreshing,
@@ -76,6 +95,14 @@ export function UsagePage() {
     accountKey ?? null,
   );
   const selectedAccount = findUsageAccount(accounts, accountKey);
+  const limitsEnvironmentIds = useMemo(() => {
+    if (selectedAccount) {
+      return new Set(
+        selectedAccount.memberships.map((member) => EnvironmentId.make(member.environmentId)),
+      );
+    }
+    return historicalEnvironmentId === null ? null : new Set([historicalEnvironmentId]);
+  }, [selectedAccount, historicalEnvironmentId]);
   const hasMappedHistory = useMemo(
     () =>
       !accountKey ||
@@ -133,10 +160,16 @@ export function UsagePage() {
     [window.sinceTime, window.untilTime],
   );
   const selectWindow = (days: number) => {
-    setWindowSelection({
-      days,
-      window: makeWindow(days, undefined, days === 1 ? "hour" : "day"),
-    });
+    if (!isUsageWindowDays(days)) return;
+    const nextWindow = makeWindow(days, undefined, days === 1 ? "hour" : "day");
+    setWindowSelection({ days, window: nextWindow });
+    saveUsagePagePreferences({ metric, windowDays: days });
+  };
+  const selectMetric = (nextMetric: UsageChartMetric) => {
+    setMetric(nextMetric);
+    if (isUsageWindowDays(windowDays)) {
+      saveUsagePagePreferences({ metric: nextMetric, windowDays });
+    }
   };
   const refreshWindow = () => {
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
@@ -146,6 +179,7 @@ export function UsagePage() {
       includeSessions: pageTab === "projects" || pageTab === "sessions",
     });
     setWindowSelection({ days: windowDays, window: nextWindow });
+    setLimitsNow(Date.now());
   };
   const windowLabel =
     isPast24Hours && window.sinceTime !== undefined && window.untilTime !== undefined
@@ -178,6 +212,7 @@ export function UsagePage() {
         )
       }
       onRefresh={refreshWindow}
+      onOpenModelPrices={() => setPricesOpen(true)}
     />
   );
   const topbarContent = (
@@ -247,6 +282,10 @@ export function UsagePage() {
                   <MessageSquareIcon className="size-3.5" />
                   Sessions
                 </TabsTrigger>
+                <TabsTrigger value="limits">
+                  <GaugeIcon className="size-3.5" />
+                  Limits
+                </TabsTrigger>
                 {selectedAccount && (
                   <TabsTrigger value="environments">
                     <ServerIcon className="size-3.5" />
@@ -259,6 +298,9 @@ export function UsagePage() {
                   </TabsTrigger>
                 )}
               </TabsList>
+              <TabsContent value="limits">
+                <UsageLimitsSection selectedEnvironmentIds={limitsEnvironmentIds} now={limitsNow} />
+              </TabsContent>
               {selectedAccount && (
                 <TabsContent value="environments">
                   <UsageEnvironments
@@ -293,7 +335,7 @@ export function UsagePage() {
                       />
                       {mode === "projects" && (
                         <div className="flex justify-end">
-                          <UsageMetricToggle metric={metric} onChange={setMetric} />
+                          <UsageMetricToggle metric={metric} onChange={selectMetric} />
                         </div>
                       )}
                       <UsageReportChart
@@ -365,7 +407,7 @@ export function UsagePage() {
                   accounts={accounts}
                   periods={isPast24Hours ? hours : days}
                   metric={metric}
-                  onMetricChange={setMetric}
+                  onMetricChange={selectMetric}
                   timeZone={window.timeZone}
                   models={pageTab === "models"}
                   allAccounts={!selectedAccount}
@@ -391,6 +433,13 @@ export function UsagePage() {
             </Tabs>
           </WorkspacePageContainer>
         </ScrollArea>
+        {pricesOpen ? (
+          <UsagePriceOverrides
+            usage={allEnvironments}
+            initialSelectedEnvironmentIds={limitsEnvironmentIds}
+            onOpenChange={(open) => setPricesOpen(open)}
+          />
+        ) : null}
       </div>
     </SidebarInset>
   );

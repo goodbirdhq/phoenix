@@ -10,7 +10,7 @@ export interface SchedulesSearch {
   readonly duplicate?: boolean;
 }
 
-export function parseSchedulesSearch(raw: Record<string, unknown>): SchedulesSearch {
+function parseSchedulesSearch(raw: Record<string, unknown>): SchedulesSearch {
   return {
     ...(typeof raw.create === "string" && raw.create
       ? { create: raw.create }

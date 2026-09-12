@@ -33,25 +33,24 @@ import {
   nextGrokPlanModeActive,
   selectGrokPermissionOptionId,
 } from "./GrokAdapter.ts";
+import { execScriptSource, writeFakeCli } from "../../testUtils/fakeCli.ts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);
 
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockAgentPath = NodePath.join(__dirname, "../../../scripts/acp-mock-agent.ts");
-const mockAgentCommand = process.execPath;
+// Stopping a session kills the agent with SIGTERM; Windows terminates the
+// process instead, so the mock never sees a signal to log.
+const windowsHost = HostProcessPlatform.defaultValue() === "win32";
 
 async function makeMockGrokWrapper(extraEnv?: Record<string, string>) {
   const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-acp-mock-"));
-  const wrapperPath = NodePath.join(dir, "fake-grok.sh");
-  const envExports = Object.entries(extraEnv ?? {})
-    .map(([key, value]) => `export ${key}=${JSON.stringify(value)}`)
-    .join("\n");
-  const script = `#!/bin/sh
-${envExports}
-exec ${JSON.stringify(mockAgentCommand)} ${JSON.stringify(mockAgentPath)} "$@"
-`;
-  await NodeFSP.writeFile(wrapperPath, script, "utf8");
-  await NodeFSP.chmod(wrapperPath, 0o755);
-  return wrapperPath;
+  return writeFakeCli({
+    directory: dir,
+    name: "fake-grok",
+    env: extraEnv ?? {},
+    source: execScriptSource({ scriptPath: mockAgentPath }),
+  });
 }
 
 function waitForFileContent(
@@ -234,6 +233,88 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }),
   );
 
+  it.effect("rejects rollback without discarding the provider conversation", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-unsupported-rollback");
+      const wrapperPath = yield* Effect.promise(() => makeMockGrokWrapper());
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      yield* adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId, input: "Remember this turn" });
+      const originalTurns = [...(yield* adapter.readThread(threadId)).turns];
+      assert.isFalse(adapter.capabilities.supportsConversationRollback);
+      const error = yield* adapter.rollbackThread(threadId, 1).pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterRequestError");
+      assert.deepStrictEqual((yield* adapter.readThread(threadId)).turns, originalTurns);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("sends runtime context with the current model without changing saved prompts", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-runtime-context");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-runtime-context-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockGrokWrapper({ T3_ACP_REQUEST_LOG_PATH: requestLogPath }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      yield* adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("grok"), model: "grok-mock-alt" },
+      });
+      yield* adapter.sendTurn({ threadId, input: "First prompt" });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "Second prompt",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-4.6",
+          options: [{ id: "reasoningEffort", value: "low" }],
+        },
+      });
+      const snapshot = yield* adapter.readThread(threadId);
+      assert.deepEqual(
+        snapshot.turns.map((turn) => turn.items),
+        [
+          [
+            {
+              prompt: [{ type: "text", text: "First prompt" }],
+              result: { stopReason: "end_turn" },
+            },
+          ],
+          [
+            {
+              prompt: [{ type: "text", text: "Second prompt" }],
+              result: { stopReason: "end_turn" },
+            },
+          ],
+        ],
+      );
+      yield* adapter.stopSession(threadId);
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const prompts = requests
+        .filter((request) => request.method === "session/prompt")
+        .map(
+          (request) => (request.params as { prompt: Array<{ type: string; text: string }> }).prompt,
+        );
+      assert.equal(prompts.length, 2);
+      assert.deepEqual(prompts[0]?.[0], { type: "text", text: "First prompt" });
+      assert.include(prompts[0]?.[1]?.text, "Grok harness, as grok-mock-alt");
+      assert.deepEqual(prompts[1]?.[0], { type: "text", text: "Second prompt" });
+      assert.include(prompts[1]?.[1]?.text, "Grok harness, as grok-4.6");
+      assert.include(prompts[1]?.[1]?.text, "with low reasoning effort");
+      assert.include(prompts[1]?.[1]?.text, "embed images and videos");
+    }),
+  );
+
   it.effect("starts a session and maps mock ACP prompt flow to runtime events", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("grok-mock-thread");
@@ -299,7 +380,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }),
   );
 
-  it.effect("closes the ACP child process when a session stops", () =>
+  it.effect.skipIf(windowsHost)("closes the ACP child process when a session stops", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("grok-stop-session-close");
       const tempDir = yield* Effect.promise(() =>
@@ -2456,13 +2537,17 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       assert.lengthOf(prompts, 2);
       assert.deepEqual(
         prompts[0]?.map((part) => part.type),
-        ["text", "text"],
+        ["text", "text", "text"],
       );
       assert.isTrue(prompts[0]?.[0]?.text?.startsWith("<phoenix-prior-conversation>"));
       assert.include(prompts[0]?.[0]?.text ?? "", "added it in GrokAdapter.test.ts");
       assert.equal(prompts[0]?.[1]?.text, "carry on");
-      // The seed rides on the first prompt only.
-      assert.deepEqual(prompts[1], [{ type: "text", text: "and now the docs" }]);
+      assert.include(prompts[0]?.[2]?.text ?? "", "Grok harness");
+      // The seed rides on the first prompt only. Runtime context is a trailing
+      // part on every prompt, matching "sends runtime context with the current model".
+      assert.equal(prompts[1]?.[0]?.text, "and now the docs");
+      assert.include(prompts[1]?.[1]?.text ?? "", "Grok harness");
+      assert.isFalse((prompts[1]?.[0]?.text ?? "").includes("phoenix-prior-conversation"));
 
       yield* adapter.stopSession(threadId);
     }).pipe(TestClock.withLive),

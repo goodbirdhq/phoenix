@@ -53,6 +53,7 @@ export function HomeRouteScreen() {
     pinThread,
     unpinThread,
     movePinnedThread,
+    moveThread,
     regenerateThreadTitle,
     unsettleThread,
   } = useThreadListActions();
@@ -152,6 +153,12 @@ export function HomeRouteScreen() {
           onProjectChange={setSelectedProjectKey}
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
+          onOpenEnvironmentSettings={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsEnvironments" },
+            })
+          }
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
           onThreadSortOrderChange={setThreadSortOrder}
         />
@@ -176,6 +183,7 @@ export function HomeRouteScreen() {
           onPinThread={pinThread}
           onUnpinThread={unpinThread}
           onMovePinnedThread={movePinnedThread}
+          onMoveThread={moveThread}
           onRegenerateThreadTitle={regenerateThreadTitle}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
@@ -184,6 +192,17 @@ export function HomeRouteScreen() {
           onSelectThread={handleSelectThread}
           onSelectPendingTask={openPendingTask}
           onDeletePendingTask={confirmDeletePendingTask}
+          onNewThreadOnBranch={(thread) => {
+            navigation.navigate("NewTaskSheet", {
+              screen: "NewTaskDraft",
+              params: {
+                environmentId: String(thread.environmentId),
+                projectId: String(thread.projectId),
+                branch: thread.branch,
+                worktreePath: thread.worktreePath,
+              },
+            });
+          }}
           onNewThreadInProject={(project) => {
             navigation.navigate("NewTaskSheet", {
               screen: "NewTaskDraft",

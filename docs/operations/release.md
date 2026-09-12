@@ -1,189 +1,92 @@
-# Release Checklist
+# Releasing Phoenix
 
 > For maintainers. Using Phoenix? See [docs/user](../user/).
 
-This document covers the unified release workflow for stable and nightly desktop releases.
+All production publication is manual. Main pushes and tags run no desktop, npm,
+hosted-web, or mobile production release. A version bump alone publishes nothing.
 
-## What the workflow does
+## Desktop and npm
 
-- Workflow: `.github/workflows/release.yml`
-- Triggers:
-  - push tag matching `v*.*.*` for stable releases
-  - scheduled nightly check every three hours
-  - manual `workflow_dispatch` for either channel
-- Runs lint, typecheck, and tests alongside artifact builds. Publishing waits for every check.
-- Reads the shared production T3 Connect relay URL and Clerk client configuration before packaging clients.
-- Builds four artifacts in parallel for both channels:
-  - macOS `arm64` DMG
-  - macOS `x64` DMG
-  - Linux `x64` AppImage
-  - Windows `x64` NSIS installer
-- Publishes one GitHub Release with all produced files.
-  - Stable tags with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
-  - Only plain stable `X.Y.Z` releases are marked as the repository's latest release.
-  - Nightly runs are always GitHub prereleases and never marked latest.
-  - Automatically generated release notes are pinned to the previous tag in the same channel, so stable compares to the previous stable tag and nightly compares to the previous nightly tag.
-- Includes Electron auto-update metadata (for example `latest*.yml`, `nightly*.yml`, and `*.blockmap`) in release assets.
-- Does not publish a CLI package. Phoenix is built from source and must not publish the upstream
-  `t3` npm package.
-- Deploys the hosted web app to Vercel only after a release is published:
-  - stable releases are aliased to the `latest` hosted app channel
-  - nightly releases are aliased to the `nightly` hosted app channel
-- Signing is optional and auto-detected per platform from secrets.
+Use **Actions → Release → Run workflow**, selecting the intended ref:
 
-## Required release credentials
+- `channel=stable` requires `version` (for example `1.2.3` or `1.2.3-alpha.1`).
+- `channel=nightly` derives a prerelease version from the selected commit and run.
+  There is no nightly schedule.
+- `publish_npm` defaults to false. Enable it to publish `@goodbirdhq/phoenix` using
+  npm trusted publishing; repository variable `NPM_TRUSTED_PUBLISHING=true` and
+  the matching npm-side publisher configuration are required. The workspace name
+  `t3` is retained for compatibility and must never be used as the npm identity.
+- `publish_web` defaults to false. Enable it only after configuring Phoenix's
+  Vercel targets below.
 
-Stable releases require these GitHub Actions secrets in addition to the platform and deployment
-credentials documented below:
+The workflow retains lint, typecheck, tests, native packaging and updater metadata.
+The currently enabled desktop target is macOS arm64; other platform entries remain
+parked. A requested npm publication must succeed before the GitHub Release publishes.
+Stable versions without a suffix become latest; suffixed stable versions and all
+nightlies are prereleases. Release notes compare against the previous tag in the
+same channel. Existing release assets can be replaced by rerunning a release;
+use the same source ref and version when repairing a failed publication.
 
-- `RELEASE_APP_ID`
-- `RELEASE_APP_PRIVATE_KEY`
+Stable finalization aligns package versions on main. Optional `RELEASE_APP_ID` and
+`RELEASE_APP_PRIVATE_KEY` authorize a repository-scoped contents-write App token;
+without them it uses the workflow token, subject to branch policy. Nightlies do not
+write version bumps. These commits do not trigger another production publication.
+Signing/notarization remains conditional on configured platform credentials.
 
-The finalize job uses them to commit and push aligned package versions to `main` as the Release App.
-GitHub Release publication uses the repository-scoped workflow token so it has a rate-limit quota
-independent from the shared Release App installation.
+Phoenix Build was removed: it duplicated desktop publication on each main push.
+Label-driven desktop previews remain separate from production releases.
 
-## T3 Connect relay deployment
+## Public client configuration
 
-The relay is a shared control plane versioned separately from client releases. Stable and nightly
-client builds must point at the same relay so users see the same linked environments when switching
-release channels.
+Client release jobs do not deploy relay infrastructure, read production state, or fetch
+tracing credentials. The managed relay product was removed; no Cloudflare, PlanetScale, Axiom or
+relay tracing token is required by the release workflow.
 
-`.github/workflows/deploy-relay.yml` deploys Alchemy stage `prod` on every push to `main`. The
-release workflow reads the relay URL and Clerk client configuration from the existing `production`
-GitHub Actions environment before building desktop, CLI, or hosted web artifacts.
+## Optional hosted web publication
 
-Required repository variables shared by relay deployments:
+The web client remains available for future hosting. A Release dispatch must set
+`publish_web=true`; otherwise there is no hosted production deployment. Configure
+Phoenix's Vercel project with repository secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
+and `VERCEL_PROJECT_ID`, plus optional variable `VERCEL_TEAM_SLUG`.
 
-- `CLOUDFLARE_ACCOUNT_ID`
-- `PLANETSCALE_ORGANIZATION`
-- `AXIOM_ORG_ID`
+All three repository variables are required for hosted publication:
 
-Required repository secrets shared by relay deployments:
+- `T3CODE_WEB_ROUTER_URL`: the Phoenix HTTPS origin users open
+- `T3CODE_WEB_LATEST_DOMAIN`: Phoenix stable channel hostname
+- `T3CODE_WEB_NIGHTLY_DOMAIN`: Phoenix nightly channel hostname
 
-- `CLOUDFLARE_API_TOKEN`
-- `PLANETSCALE_API_TOKEN_ID`
-- `PLANETSCALE_API_TOKEN`
-- `AXIOM_TOKEN`
+Use three distinct targets owned by Phoenix and configured on that Vercel project.
+There are no upstream `t3.codes` fallbacks. The deployment config receives the same
+validated targets as the alias commands. Stable publication aliases the deployment
+to the latest and router hostnames; nightly publication changes only the nightly
+alias. Keep the Vercel project root at `apps/web`; automatic Git deployments remain
+disabled in `apps/web/vercel.ts`.
 
-Required `production` environment variables:
+The hosted web client uses direct pairing; no managed connection service is configured.
+With no routing tuple, preview deployments serve their own client
+and do not forward requests to an upstream host. The channel selector continues to
+use `/__t3code/channel` and the existing channel cookie when routing is configured.
 
-- `RELAY_API_ZONE_NAME`
-- `RELAY_TUNNEL_ZONE_NAME`
-- `CLERK_PUBLISHABLE_KEY`
-- `CLERK_JWT_AUDIENCE`
-- `CLERK_JWT_TEMPLATE`
-- `CLERK_CLI_OAUTH_CLIENT_ID`
-- `APNS_ENVIRONMENT`
-- `APNS_TEAM_ID`
-- `APNS_KEY_ID`
-- `APNS_BUNDLE_ID`
+## Mobile production
 
-Optional `production` environment variables:
+Use **Actions → Mobile EAS Production → Run workflow**, selecting the intended ref:
 
-- `RELAY_DOMAIN` when overriding the derived `relay.<RELAY_API_ZONE_NAME>` domain
+- `mode=build` builds and auto-submits the selected platform (`ios`, `android`, or
+  `all`) using the production profile. iOS submission goes to TestFlight; releasing
+  to the App Store remains a separate App Store Connect action. Android submission
+  requires the Phoenix Play credentials to have been configured.
+- `mode=update` explicitly publishes an OTA to the production channel for the
+  selected platform. Confirm compatible production binaries exist before choosing
+  this mode. There is no automatic merge-driven build reconciliation or OTA.
+- Optional `version` applies only to build mode and commits the version override to
+  the selected branch with the Release App identity before building. It requires a
+  branch ref and the App credentials. Leave it blank to use `app.config.ts`.
 
-Required `production` environment secrets:
-
-- `CLERK_SECRET_KEY`
-- `APNS_PRIVATE_KEY`
-
-The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages; they
-are not bound into the relay Worker. The production deployment uses an Axiom personal access token,
-so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The `prod` stage owns the retained PlanetScale
-database. Local personal stages provision isolated branches from it and are never deployed by CI.
-Production adopts the configured relay API and tunnel DNS zones as retained Cloudflare resources.
-Personal stages reference the production-owned zones.
-
-Developers deploy personal stages locally rather than through pull-request automation:
-
-```sh
-vp run --filter t3code-relay deploy -- --stage "$USER" --env-file .env.local
-```
-
-## Hosted web app release deployment
-
-The hosted app is intentionally not deployed by Vercel's Git integration. The
-web project disables automatic Git deployments in `apps/web/vercel.ts` via
-`git.deploymentEnabled: false`, and `.github/workflows/release.yml` deploys the
-web app with Vercel CLI after the GitHub Release succeeds.
-
-Required GitHub Actions secrets:
-
-- `VERCEL_TOKEN`
-- `VERCEL_ORG_ID`
-- `VERCEL_PROJECT_ID`
-
-Optional GitHub Actions variables:
-
-- `VERCEL_TEAM_SLUG`: overrides the Vercel CLI scope when the team slug is preferred over the `VERCEL_ORG_ID` secret.
-- `T3CODE_WEB_ROUTER_URL`: defaults to `https://app.t3.codes`.
-- `T3CODE_WEB_LATEST_DOMAIN`: defaults to `latest.app.t3.codes`.
-- `T3CODE_WEB_NIGHTLY_DOMAIN`: defaults to `nightly.app.t3.codes`.
-
-Required Vercel domains:
-
-- `app.t3.codes`: the router domain users open, updated by stable releases.
-- `latest.app.t3.codes`: channel alias updated by stable releases.
-- `nightly.app.t3.codes`: channel alias updated by nightly releases.
-
-The router domain uses `apps/web/vercel.ts` routes. Users opt into a channel by
-visiting `/__t3code/channel?channel=latest` or
-`/__t3code/channel?channel=nightly`; the router stores the
-`t3code_web_channel` cookie and rewrites future requests on `app.t3.codes` to
-the matching channel alias.
-
-The release deploy job rewrites release package versions before upload so the
-hosted app's About panel renders the release version. Stable deploys alias the
-same deployment to both the `latest` channel and the router domain so the router
-rules stay current. Nightly deploys only alias the `nightly` channel. The job
-also passes `VITE_HOSTED_APP_CHANNEL=latest|nightly`, which renders the hosted
-update track selector in the About panel. Changing the selector navigates
-through `/__t3code/channel` on the router domain so the user's channel cookie is
-updated before redirecting to the hosted app root.
-
-One-time Vercel dashboard setup:
-
-1. Confirm the web project root directory remains `apps/web`.
-2. Add the three domains above to the web project.
-3. Disable automatic Git deployments in the dashboard if desired; the committed
-   `vercel.ts` setting is the source-of-truth, but disconnecting Git in the
-   dashboard is also safe.
-4. Run one stable release deployment, or manually alias the current stable
-   deployment, so `app.t3.codes` points at a deployment containing the router
-   rules in `apps/web/vercel.ts`. Future stable releases keep this alias current.
-
-## Nightly builds
-
-- Workflow: `.github/workflows/release.yml`
-- Triggers:
-  - scheduled check every three hours
-  - manual `workflow_dispatch` with `channel=nightly`
-- Runs the same desktop quality gates and artifact matrix as the tagged release flow.
-- Publishes a GitHub prerelease only:
-  - current tag format: `vX.Y.Z-nightly.YYYYMMDD.<run_number>`
-  - `nightly-v...` is accepted only as a legacy previous-nightly tag
-  - release name includes the short commit SHA
-  - `make_latest` is always `false`
-- Uses the next stable patch version as the nightly base. For example, `0.0.17` produces nightlies on `0.0.18-nightly.*`.
-- Publishes Electron auto-update metadata to the dedicated `nightly` updater channel, so desktop users can opt into that track independently from stable.
-- Does not commit version bumps back to `main`.
-
-## Server distribution invariant
-
-Phoenix publishes to npm as `@goodbirdhq/phoenix`: the release workflow's `publish_cli` job rewrites
-the workspace package (named `t3` for upstream compatibility) to that identity at publish time.
-Never publish under the workspace name itself; `t3` on npm belongs to upstream.
-
-Upstream's ordering invariant — `publish_cli` before `release` before `deploy_web`, so a client is
-never released ahead of the server package it updates to — does not apply while there is no package
-to publish. Preserve it in shape if Phoenix ever gains one.
-
-For a release smoke test, connect the new client to a server on the previous version and verify that
-the update action reconnects to the matching server. When the release adds database migrations,
-verify that the remote update applies them and reconnects. A failed trial must restore the database
-snapshot and restart the previous server. Also test the manual and desktop-managed guidance when
-those environments are available.
+`EXPO_TOKEN` is required; a missing token fails the requested release. Builds run on
+Linux with the repository toolchain so local fingerprint calculation and EAS agree.
+The existing Phoenix identities are preserved: Expo `@neilbarton/phoenix`, Apple
+team `39DYB2TD96`, ASC app `6807867658`. Update messages are passed as data, not shell
+source. Explicit release requests queue without cancelling an active publication.
 
 ## Desktop auto-update notes
 
@@ -219,6 +122,11 @@ the selected distro, then reuses it for later launches of the same update. The
 Windows-side `wsl-server-tree/<version>` extraction remains a fallback and is
 removed after the distro-local runtime passes preflight.
 
+Windows keeps JavaScript and package metadata inside `app.asar` and unpacks only
+native libraries and helper executables. Avoid enabling whole-package smart
+unpacking: each loose file adds work to NSIS installation and counts against
+the payload limit.
+
 The artifact builder rejects a Windows package when any of these invariants
 break:
 
@@ -244,21 +152,11 @@ NSIS differential packaging remains enabled. A sidecar layout transition can
 produce a larger one-time download; subsequent small releases retain their
 blockmaps, with a 60 MB maximum for a representative sidecar-to-sidecar update.
 
-## 1) Release validation and unsigned builds
+## 1) Release authorization
 
-There is no dry-run tag path. Pushing any accepted non-nightly tag, including
-`v0.0.0-test.1`, classifies the run as the stable channel. It creates a real GitHub Release, aliases the hosted app to `latest.app.t3.codes` and
-`app.t3.codes`, and can commit a version bump to `main` in the finalize job. Do not push a test tag
-to validate the workflow.
-
-The workflow has no non-publishing `workflow_dispatch` mode. Use normal CI or local quality gates to
-validate checks and builds without shipping. To exercise the complete release graph at lower stable
-risk, manually dispatch `channel=nightly`; this still publishes a real GitHub prerelease, desktop
-updater release, and hosted nightly alias, but it does not update stable aliases or
-commit a version bump to `main`. Only run it when a real nightly release is acceptable.
-
-Manual `channel=stable` with a version input is also a real stable-channel release. Omitting signing
-secrets only makes platform artifacts unsigned; it does not prevent publication.
+A Release dispatch publishes a GitHub Release, optionally npm and hosted web, and
+may commit stable version alignment to main. Use a reviewed source ref and verify
+selected publication options before dispatching. Tags alone publish nothing.
 
 ## 2) Apple signing + notarization setup (macOS)
 
@@ -269,44 +167,34 @@ Required secrets used by the workflow:
 - `APPLE_API_KEY`
 - `APPLE_API_KEY_ID`
 - `APPLE_API_ISSUER`
-- `MACOS_PROVISIONING_PROFILE` (base64-encoded provisioning profile with Associated Domains)
 
 Required repository variables:
 
 - `APPLE_TEAM_ID`
 
-Optional repository variables:
-
-- `CLERK_PASSKEY_RP_DOMAINS`: comma-separated RP-domain override. By default, the build derives the
-  domain from the production Clerk publishable key.
-
 Checklist:
 
 1. Apple Developer account access:
    - Team has rights to create Developer ID certificates.
-2. Create an explicit App ID for `com.goodbird.phoenix` and enable Associated Domains.
-3. Create a `Developer ID Application` certificate and a compatible provisioning profile for that
-   App ID with Associated Domains enabled.
+2. Create an explicit App ID for `com.goodbird.phoenix`.
+3. Create a `Developer ID Application` certificate.
 4. Export the certificate + private key as `.p12` from Keychain.
 5. Base64-encode the `.p12` and store as `CSC_LINK`.
-6. Base64-encode the provisioning profile and store it as `MACOS_PROVISIONING_PROFILE`.
-7. Store the `.p12` export password as `CSC_KEY_PASSWORD`, and set `APPLE_TEAM_ID` to the
+6. Store the `.p12` export password as `CSC_KEY_PASSWORD`, and set `APPLE_TEAM_ID` to the
    10-character Apple Developer Team ID.
-8. In App Store Connect, create an API key (Team key).
-9. Add API key values:
+7. In App Store Connect, create an API key (Team key).
+8. Add API key values:
    - `APPLE_API_KEY`: contents of the downloaded `.p8`
    - `APPLE_API_KEY_ID`: Key ID
    - `APPLE_API_ISSUER`: Issuer ID
-10. Complete the Clerk Native API and AASA setup in [T3 Connect Clerk Setup](../internals/t3-connect.md#desktop-passkeys).
-11. Re-run a tag release and confirm macOS artifacts are signed/notarized and contain the expected
-    `com.apple.developer.associated-domains` entitlement.
+9. Dispatch a release and confirm macOS artifacts are signed and notarized. Signed builds carry
+   only hardened-runtime entitlements (JIT, unsigned executable memory, library-validation
+   disabled for bundled native modules); no provisioning profile is required.
 
 Notes:
 
 - `APPLE_API_KEY` is stored as raw key text in secrets.
 - The workflow writes it to a temporary `AuthKey_<id>.p8` file at runtime.
-- The workflow decodes `MACOS_PROVISIONING_PROFILE`, validates it with `security cms`, and passes it
-  to the desktop packager.
 
 ## 3) Azure Trusted Signing setup (Windows)
 
@@ -332,14 +220,14 @@ Checklist:
 4. Grant service principal permissions required by Trusted Signing.
 5. Create a client secret for the service principal.
 6. Add Azure secrets listed above in GitHub Actions secrets.
-7. Re-run a tag release and confirm Windows installer is signed.
+7. Dispatch a release and confirm Windows installer is signed.
 
 ## 4) Ongoing release checklist
 
 1. Ensure `main` is green in CI.
 2. Bump app version as needed.
-3. Create release tag: `vX.Y.Z`.
-4. Push tag.
+3. Dispatch Release with `channel=stable` and the intended version/ref.
+4. Select npm or hosted-web publication only when intended.
 5. Verify workflow steps:
    - preflight passes
    - release quality checks pass

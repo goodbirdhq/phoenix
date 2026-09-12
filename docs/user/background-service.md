@@ -1,5 +1,7 @@
 # Running Phoenix in the Background
 
+## Manage the service
+
 Phoenix publishes its server as `@goodbirdhq/phoenix` on npm, and the background service installs
 exact pinned versions of that package. From an npm-installed CLI:
 
@@ -38,9 +40,8 @@ npx @goodbirdhq/phoenix@nightly service update
 npx @goodbirdhq/phoenix@1.2.3 service update
 ```
 
-The install and update commands refuse to replace a newer service with an older version. Setup
-through T3 Connect leaves a newer service unchanged. To downgrade, select the exact older version
-and pass `--allow-downgrade`:
+The install and update commands refuse to replace a newer service with an older version.
+To downgrade, select the exact older version and pass `--allow-downgrade`:
 
 ```sh
 npx @goodbirdhq/phoenix@1.2.3 service update --allow-downgrade
@@ -82,6 +83,42 @@ A few more macOS notes:
 
 **Windows** is not supported yet.
 
-T3 Connect and the background service have independent lifecycles. Signing out of T3 Connect does
-not remove an existing service. Use `phoenix service uninstall` when you no longer want Phoenix to
-start in the background.
+Disconnecting a client does not uninstall the background service. Use
+`phoenix service uninstall` when you no longer want Phoenix to start in the background.
+To connect another device, create a [pairing link](./remote-access.md).
+
+## Troubleshooting
+
+Start with `phoenix service status` on the host. It prints the log path and, on Linux, checks
+whether the installed service is running, enabled, and allowed to survive logout.
+
+If it stops when your SSH session closes, check for `linger-disabled`. An administrator can enable
+lingering with:
+
+```sh
+sudo loginctl enable-linger "$(id -un)"
+```
+
+Over SSH, allow sudo to prompt:
+
+```sh
+ssh -t your-server 'sudo loginctl enable-linger "$(id -un)"'
+```
+
+Then retry service setup as your normal user. Run only the `loginctl` command with sudo; running
+Phoenix as root creates a separate installation and environment identity. Without administrator access,
+run `phoenix serve` in a terminal and keep that session open.
+
+| Status problem                          | Next step                                                                                                                      |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `linger-unavailable`                    | Run `loginctl show-user "$(id -un)" --property=Linger` and check that systemd-logind is available.                             |
+| `user-manager-unavailable`              | Run `systemctl --user status` in a login session for the service user; check your distribution's systemd user-session support. |
+| `service-disabled` or `service-stopped` | Read the log and `systemctl --user status phoenix.service`, then use the repair command printed by Phoenix.                    |
+
+On macOS, check **System Settings → General → Login Items** if the service no longer starts at
+login. If agent work cannot access Desktop, Documents, or Downloads, it may need Full Disk Access
+for the Node executable listed in `ProgramArguments` in
+`~/Library/LaunchAgents/com.goodbird.phoenix.service.plist`.
+
+For problems reaching a running service, see
+[connection troubleshooting](./remote-access.md#connection-troubleshooting).

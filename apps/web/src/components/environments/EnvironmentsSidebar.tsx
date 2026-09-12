@@ -123,7 +123,7 @@ export function EnvironmentsSidebar() {
               },
               {
                 title: "Connection type",
-                values: ["Local", "SSH", "Remote link", "T3 Connect"],
+                values: ["Local", "SSH", "Remote link", "Legacy managed connection"],
                 selected: kinds,
                 set: setKinds,
               },

@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import { afterAll, assert, describe } from "vite-plus/test";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
+import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import { readWorkflowScript } from "./workflowScriptQuery.ts";
 
 const root = NodePath.join(NodeOS.homedir(), ".claude", "projects", "__wf_script_test__");
@@ -25,18 +26,14 @@ NodeFS.mkdirSync(secondRoot, { recursive: true });
 const secondScriptPath = NodePath.join(secondRoot, "run.js");
 NodeFS.writeFileSync(secondScriptPath, "export const meta = { name: 'b' };\n");
 const link = NodePath.join(root, "sneaky.js");
-try {
+// Planted only where the host allows it; the escape test is skipped
+// otherwise rather than passing vacuously on "not-found".
+if (symlinksSupported) {
+  NodeFS.rmSync(link, { force: true });
   NodeFS.symlinkSync(outside, link);
-} catch (error) {
-  // Tolerate only "already exists" from a prior run — any other failure
-  // (EPERM etc.) must fail setup, or the escape test below would pass
-  // vacuously on "not-found" without testing containment.
-  if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-    throw error;
+  if (!NodeFS.lstatSync(link).isSymbolicLink()) {
+    throw new Error("test setup: sneaky.js must be a symlink");
   }
-}
-if (!NodeFS.lstatSync(link).isSymbolicLink()) {
-  throw new Error("test setup: sneaky.js must be a symlink");
 }
 
 afterAll(() => {
@@ -81,24 +78,26 @@ describe("readWorkflowScript containment", () => {
     }).pipe(Effect.provide(defaultInstance)),
   );
 
-  effectIt.effect("rejects paths outside the root and symlink escapes", () =>
-    Effect.gen(function* () {
-      const escaped = yield* Effect.exit(readWorkflowScript({ scriptPath: outside }));
-      assert.equal(escaped._tag, "Failure");
-      // A symlink INSIDE the root pointing outside must fail specifically on
-      // realpath re-containment — a "not-found" would mean the link was
-      // never exercised and the assertion proves nothing.
-      const sneaky = yield* Effect.exit(
-        readWorkflowScript({ scriptPath: link }).pipe(
-          Effect.flip,
-          Effect.map((error) => error.reason),
-        ),
-      );
-      assert.equal(sneaky._tag, "Success");
-      if (sneaky._tag === "Success") {
-        assert.equal(sneaky.value, "outside-root");
-      }
-    }).pipe(Effect.provide(defaultInstance)),
+  effectIt.effect.skipIf(!symlinksSupported)(
+    "rejects paths outside the root and symlink escapes",
+    () =>
+      Effect.gen(function* () {
+        const escaped = yield* Effect.exit(readWorkflowScript({ scriptPath: outside }));
+        assert.equal(escaped._tag, "Failure");
+        // A symlink INSIDE the root pointing outside must fail specifically on
+        // realpath re-containment — a "not-found" would mean the link was
+        // never exercised and the assertion proves nothing.
+        const sneaky = yield* Effect.exit(
+          readWorkflowScript({ scriptPath: link }).pipe(
+            Effect.flip,
+            Effect.map((error) => error.reason),
+          ),
+        );
+        assert.equal(sneaky._tag, "Success");
+        if (sneaky._tag === "Success") {
+          assert.equal(sneaky.value, "outside-root");
+        }
+      }).pipe(Effect.provide(defaultInstance)),
   );
 
   effectIt.effect("serves a script under a second Claude instance's home", () =>

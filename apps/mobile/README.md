@@ -16,10 +16,6 @@ This app has three variants:
 
 Run commands from `apps/mobile`.
 
-T3 Connect is optional and disabled in a fresh clone. Public configuration belongs in the
-repository-root `.env` or `.env.local`, not an `apps/mobile/.env` file. See
-[`../../.env.example`](../../.env.example).
-
 ## Development
 
 Start Metro for the dev client:
@@ -38,12 +34,8 @@ vp run dev:client:reset
 Run that reset once after installing or changing the Uniwind dependency patch. Cached transforms
 can otherwise reference its previous pnpm package path. Ordinary Metro starts still keep the cache.
 
-Component edits use Fast Refresh. Connection-runtime edits replace the active Effect layer through
-a stable atom runtime, preserving navigation and existing atom subscribers. Replaced registries
-and managed runtimes dispose their resources; the app does not force a JavaScript reload. The Uniwind patch
-skips global style invalidation when generated styles and themes are unchanged, while real style
-changes still refresh. See [mobile development lifecycle](../../docs/internals/mobile-development.md)
-for the lifetime boundaries.
+Component edits use Fast Refresh. See [mobile development lifecycle](../../docs/internals/mobile-development.md)
+before changing runtime ownership or refresh behavior.
 
 Build and run the local iOS dev client:
 
@@ -51,9 +43,13 @@ Build and run the local iOS dev client:
 vp run ios:dev
 ```
 
+After changing a native dependency patch, rerun CocoaPods before rebuilding an existing iOS
+project. pnpm gives each patch hash a new package path; Pods can otherwise keep compiling the
+previous directory.
+
 If your Xcode account only has a Personal Team, use a bundle identifier you control and opt into the
-reduced-capability local build. Personal Team builds omit the widget and share extensions, push
-entitlement, and native Sign in with Apple entitlement; builds without this opt-in are unchanged.
+reduced-capability local build. Personal Team builds omit the widget and share extensions and push
+entitlement; builds without this opt-in are unchanged.
 
 ```bash
 T3CODE_IOS_PERSONAL_TEAM=1 \
@@ -109,10 +105,6 @@ The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin.
 Preview and production variants use Expo fingerprinting so OTA updates only reach binaries with matching native dependencies, config plugins, and patches. CI uses the `preview:dev` profile to reuse a compatible native build when possible.
 
 The development variant uses `appVersion` to avoid recalculating the native fingerprint for each Metro launch manifest. `MOBILE_VERSION_POLICY` can override either default. If you distribute a custom Release build with the development identity and publish OTA updates to it, set `MOBILE_VERSION_POLICY=fingerprint` for both its build and updates. Changing the runtime policy requires a native rebuild for OTA matching; an existing dev client can still load local Metro bundles.
-
-For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
-`T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL`
-as EAS environment variables. Expo config maps the canonical values into the mobile build.
 
 Create a PR preview dev-client build manually:
 

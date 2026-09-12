@@ -1,30 +1,65 @@
-# Remote Access
+# Remote access
 
-Use this when you want to connect to a Phoenix server from another device such as a phone, tablet, or separate desktop app.
+Use this when you want to connect to a Phoenix server from another device such as a phone,
+tablet, or separate desktop app. That machine must stay running and reachable while you work.
 
-## Quick Pairing for a Running Server
+## Pair over a LAN or private network
 
-If a server is already running on this machine, mint a fresh pairing token and QR code without restarting anything:
+Use direct pairing when the other device can reach the host's HTTP or HTTPS address,
+including over Tailscale. No Phoenix cloud account is required. To keep a host
+running unattended, see [background services](./background-service.md).
+
+On a desktop host, open **Settings → Connections**, enable **Network access**,
+then create a pairing link using an address the other device can reach. Changing
+network access restarts the desktop app. You can turn it off in the same place.
+
+For a command-line host, replace `<private-ip>` with the host's LAN or tailnet
+address:
+
+```bash
+npx @goodbirdhq/phoenix serve --host <private-ip>
+```
+
+If a server is already running, generate a fresh link without restarting it:
 
 ```bash
 phoenix pair
 ```
 
-`phoenix pair` finds the running server (the shared `~/.phoenix` install, or the current worktree's dev server when run inside one), issues a one-time pairing token, and prints the pairing URL as a QR code you can scan from your phone.
+`phoenix pair` finds the running server (the shared `~/.phoenix` install, or the current worktree's dev server when run inside one), issues a one-time pairing token, and prints the pairing URL as a QR code you can scan from your phone. If no server is running, start one with `phoenix serve` before pairing.
 
-If the server is only bound to loopback, the printed URL is not reachable from another device. Pair over your tailnet instead:
+Scan the QR code on your phone or paste the pairing URL into **Add environment**
+in the receiving app. Connection settings are under **Settings → Connections**
+on web and desktop and **Settings → Environments** on mobile. A loopback address
+such as `127.0.0.1` reaches only the device opening the link.
 
-```bash
-phoenix pair --tailscale
-```
+Pairing authorizes that device for future connections. Use a fresh one-time link
+for each new device; you do not need the original token to reconnect. Links
+created in Settings can only be copied from the client that created them while
+its Connections page stays open. If you leave or reload that page, create
+another link to share.
 
-This publishes the server over Tailscale Serve HTTPS (configuring the mapping if needed — it persists until you run `tailscale serve --https=443 off`) and pairs through the `https://machine.tailnet.ts.net/` URL. Use `--tailscale-serve-port` for a different HTTPS port, `--ttl` to change the token lifetime, and `--base-dir` to target a specific data directory.
+### Balance new threads across machines
 
-If no server is running, `phoenix pair` says so and points you at `phoenix serve` or `phoenix connect`.
+Auto balance is off by default. On web and desktop, enable it in
+**Settings → Connections → Load balancing** to automatically choose a machine for
+new threads in projects grouped across connected environments.
+Each machine starts at **Normal**. Choose **Prefer** to favor it when it has CPU and
+memory available, **Less often** to reduce its share, or **Manual only** to exclude
+it from automatic selection. These are preferences, not fixed traffic percentages.
+Preferences are saved separately in each client.
 
-## Recommended Setup
+The composer checks eligible machines when choosing a draft's environment, then keeps
+that choice stable. Choose **Auto balance** again to check current resources, or choose
+a specific machine to override it. Choosing a branch or worktree also keeps the draft
+on that machine. Existing threads stay where they started. If resource checks are
+unavailable or all eligible machines are full, choose a machine manually to continue.
+Mobile keeps its manual environment selection.
 
-Use a trusted private network that meshes your devices together, such as a tailnet.
+### Tailscale HTTPS
+
+Join both devices to the same tailnet. In the desktop app, enable **Tailscale
+HTTPS** in **Settings → Connections**. Turn it off there to remove that route.
 
 That gives you:
 
@@ -76,7 +111,7 @@ on the **Tailscale HTTPS** row in **Settings** → **Connections**. The desktop 
 backend with the same server-side behavior as `phoenix serve --tailscale-serve`, then the server asks
 Tailscale Serve to proxy HTTPS traffic to the local backend. Turn the same switch off to stop it.
 
-The Tailscale support is an endpoint provider add-on. The core remote model still works without Tailscale: LAN HTTP endpoints, custom HTTPS endpoints, future tunnels, and SSH-launched environments all use the same saved environment and pairing flow.
+The Tailscale support is an endpoint provider add-on. The core remote model still works without Tailscale: LAN HTTP endpoints, custom HTTPS endpoints, and SSH-launched environments all use the same saved environment and pairing flow.
 
 For `https://app.t3.codes`, prefer an HTTPS Tailnet or other HTTPS endpoint. A plain `http://100.x.y.z:3873` endpoint can still work from a desktop client or another browser page served over HTTP, but it will not work from the hosted HTTPS app because of browser mixed-content rules.
 
@@ -112,15 +147,22 @@ For hosted web pairing over Tailscale HTTPS, opt in to Tailscale Serve:
 phoenix serve --tailscale-serve
 ```
 
-By default this configures Tailscale Serve on HTTPS port 443 and advertises
-`https://machine.tailnet.ts.net/`. Advanced users can choose a different HTTPS port:
+For an already-running server:
 
 ```bash
-phoenix serve --tailscale-serve --tailscale-serve-port 8443
+phoenix pair --tailscale
 ```
 
-Once paired, add projects normally: open the Command Palette and choose **Add Project**, then pick
-the environment the project lives on. Every saved environment is offered, not only the local one.
+The pairing link uses an address such as `https://machine.tailnet.ts.net/`.
+The mapping created by `pair --tailscale` persists across restarts. Remove its
+default-port mapping with:
+
+```bash
+tailscale serve --https=443 off
+```
+
+If that port is already in use, choose another with
+`--tailscale-serve-port`. See `phoenix pair --help` for other pairing options.
 
 ### Option 3: Desktop-Managed SSH Launch
 
@@ -134,7 +176,7 @@ Use this when you want the desktop app to start or reuse Phoenix on another mach
 
 After setup, the renderer connects to a local forwarded HTTP/WebSocket endpoint. The remote host still owns the actual T3 server, projects, files, git state, terminals, and provider sessions.
 
-SSH launch is a desktop feature because it needs local process and SSH access. Once the environment is paired and saved, it uses the same environment list and connection model as direct LAN, Tailscale, HTTPS, or future tunnel-backed environments.
+SSH launch is a desktop feature because it needs local process and SSH access. Once the environment is paired and saved, it uses the same environment list and connection model as direct LAN, Tailscale, or HTTPS environments.
 
 #### SSH Launch Troubleshooting
 
@@ -157,24 +199,31 @@ If launch fails with `node: command not found`, a port-scan failure, or a messag
 ssh user@example.com 'sh -lc "command -v node && node --version"'
 ```
 
-If that does not print a compatible Node version, configure your version manager for non-interactive shells or install a compatible Node binary in one of the searched locations. For example, with nvm you may need a default alias:
+Configure your version manager for non-interactive shells if this differs from
+your normal terminal. With nvm, setting a compatible default, such as
+`nvm alias default 24`, can resolve the problem.
 
-```bash
-nvm alias default 24
-```
+If SSH reconnecting fails after an app update, retry the launch once. Removing
+the connection stops a server that Phoenix launched; a server that was already
+running is left alone.
 
-With mise, asdf, fnm, or nodenv, make sure the tool's shim directory is installed and resolves to a Node version satisfying the range above without an interactive shell.
+For Antigravity's Google callback on a remote host, see
+[remote sign-in](./providers-antigravity.md#sign-in-from-a-remote-device).
 
 If reconnecting after an app update fails, retry the SSH launch once. The launcher now compares its generated runner script, stops stale launcher-managed remote servers, clears the SSH launch PID/port state, and starts a fresh remote server. You should not normally need to delete `~/.phoenix/ssh-launch` or kill `t3` processes manually.
 
-## Updating a Remote Server
+## Manage or revoke access
+
+On the host, **Settings → Connections** lets authorized administrators create
+pairing links and revoke client sessions. Revoking an unused link prevents new
+pairings; revoke a device's session to remove its existing access. Command-line
+management is available through `phoenix auth --help`. A session with an open
+connection stays listed after its access credential expires.
 
 When the Phoenix web or desktop app and a remote server use different versions, a warning appears in
 the conversation and in **Settings** → **Connections**. Follow the action shown there: Phoenix may
 be able to update and reconnect the server for you, or it may ask you to update the desktop app or
 run a copied command on the server machine.
-
-If T3 Connect cannot connect, check the date and time on both devices, then try again.
 
 Finish active work before updating because the server restarts briefly. For step-by-step guidance,
 see [Keeping Phoenix in Sync](./updating.md).
@@ -182,17 +231,29 @@ see [Keeping Phoenix in Sync](./updating.md).
 On a Linux host, you can keep the server running after logout and manage it independently of the
 connection method. See [Running Phoenix in the Background](./background-service.md).
 
-## How Pairing Works
+Treat pairing URLs and authorization codes as passwords. Do not include them in
+screenshots, logs, or bug reports.
 
-The remote device does not need a long-lived secret up front.
+## Connection troubleshooting
 
-Instead:
+Check that the host is running and that the receiving device can reach the address
+in its pairing link. For a background host, run `phoenix service status` and read
+the displayed log. If it stops when SSH closes, see
+[background-service troubleshooting](./background-service.md#troubleshooting).
 
-1. `phoenix serve` issues a one-time owner pairing token.
-2. The remote device exchanges that token with the server.
-3. The server creates an authenticated session for that device.
+A loopback address only works on the host itself. For a tailnet address, both
+devices need access to that tailnet. A hosted HTTPS web client requires an HTTPS
+backend; use the server's own HTTP web page or a desktop/mobile client for a plain
+HTTP endpoint.
 
-After pairing, future access is session-based. You do not need to keep reusing the original token unless you are pairing a new device.
+If a pairing link has expired or was already used, create a new one with
+`phoenix pair`. If an existing device's session was revoked, pair that device again.
+Check the date and time on both devices if authentication continues to fail.
+For version warnings, follow [Keeping Phoenix in Sync](./updating.md).
+
+Saved connections from the retired managed service may still appear in your client
+with an unsupported-connection message. Pair directly with the environment's
+reachable HTTP or HTTPS address to reconnect.
 
 ## Hosted Web App Pairing
 
@@ -219,17 +280,6 @@ Typical uses:
 - revoke old pairing links or sessions
 
 Use `phoenix auth --help` and the nested subcommand help pages for the full reference.
-
-### Deregister a T3 Connect Environment
-
-Open your account menu and choose **T3 Connect** to see every environment registered to your
-account. On mobile, open **Settings** → **T3 Connect**. Choose **Deregister** to revoke an
-environment's T3 Connect access, remove any managed tunnel, and free its host space.
-
-Deregistration is an account action and does not need a connection to the environment, so it also
-works for a server that was wiped or is no longer reachable. Device-local connect and disconnect
-controls remain in **Settings** → **Connections** on web and desktop or **Settings** →
-**Environments** on mobile.
 
 ## Security Notes
 

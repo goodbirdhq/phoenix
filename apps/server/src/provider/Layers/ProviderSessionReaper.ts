@@ -68,15 +68,26 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         // persisted binding timestamp. Pre-boot bindings skip ahead because
         // only the active-turn watchdog below can fix them; ordinary reaping
         // re-checks the threshold inside the non-active-turn branch.
-        const idleDurationMs = now - lastSeenMs;
         const isPreboot = lastSeenMs < bootMs;
-        if (!isPreboot && idleDurationMs < inactivityThresholdMs) {
+        if (!isPreboot && now - lastSeenMs < inactivityThresholdMs) {
           continue;
         }
 
         const thread = yield* projectionSnapshotQuery
           .getThreadShellById(binding.threadId)
           .pipe(Effect.map(Option.getOrUndefined));
+        const activeSession = thread?.session;
+        const isActiveTurn =
+          activeSession?.activeTurnId != null &&
+          (activeSession.status === "starting" || activeSession.status === "running");
+        // Ingestion updates this timestamp alongside activeTurnId when a turn
+        // settles. Long turns must get a full idle window after that transition,
+        // even though the binding was last touched when the turn was sent.
+        const lastActivityMs = Math.max(
+          lastSeenMs,
+          Date.parse(thread?.session?.updatedAt ?? binding.lastSeenAt),
+        );
+        const idleDurationMs = now - lastActivityMs;
 
         // The turn can settle while background work runs on (subagent
         // fleets, workflow runs, Monitor watch loops). Those live inside the
@@ -91,10 +102,6 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        const activeSession = thread?.session;
-        const isActiveTurn =
-          activeSession?.activeTurnId != null &&
-          (activeSession.status === "starting" || activeSession.status === "running");
         if (isActiveTurn) {
           // Directory activity is intentionally not updated for every
           // provider event. The watchdog therefore uses the later session
@@ -161,6 +168,10 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
                 }),
               ),
             );
+          continue;
+        }
+
+        if (!isPreboot && idleDurationMs < inactivityThresholdMs) {
           continue;
         }
 

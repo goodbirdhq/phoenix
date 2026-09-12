@@ -1,8 +1,6 @@
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
-  AuthRelayReadScope,
-  AuthRelayWriteScope,
   SCHEDULE_WS_METHODS,
   WS_METHODS,
   WsRpcGroup,
@@ -31,13 +29,6 @@ describe("RPC authorization scopes", () => {
     );
   });
 
-  it("allows relay status reads without granting relay installation access", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.cloudGetRelayClientStatus)).toBe(
-      AuthRelayReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.cloudInstallRelayClient)).toBe(AuthRelayWriteScope);
-  });
-
   it("uses orchestration read for Schedule reads and operate for mutations", () => {
     expect(requiredScopeForRpcMethod(SCHEDULE_WS_METHODS.getSnapshot)).toBe(
       AuthOrchestrationReadScope,
@@ -55,6 +46,15 @@ describe("RPC authorization scopes", () => {
 
   it("requires permission to operate on a thread before uploading feedback", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.providerUploadFeedback)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
+  it("requires write access to import agent session history", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsScan)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsImport)).toBe(
       AuthOrchestrationOperateScope,
     );
   });

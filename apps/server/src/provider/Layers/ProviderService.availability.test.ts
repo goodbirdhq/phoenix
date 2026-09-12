@@ -43,11 +43,25 @@ const codexRateLimitEvent = {
   threadId: ThreadId.make("availability-thread"),
   createdAt: "2026-08-15T12:00:00.000Z",
   payload: {
-    rateLimits: {
-      rateLimits: {
-        primary: { usedPercent: 40, resetsAt: 1_786_272_000, windowDurationMins: 300 },
-        secondary: { usedPercent: 100, resetsAt: 1_786_331_400, windowDurationMins: 10_080 },
-      },
+    limits: {
+      windows: [
+        {
+          id: "primary",
+          kind: "session",
+          label: "Current session",
+          usedPercent: 40,
+          resetsAt: "2026-08-16T12:00:00.000Z",
+          windowDurationMins: 300,
+        },
+        {
+          id: "secondary",
+          kind: "weekly",
+          label: "Weekly allowance",
+          usedPercent: 100,
+          resetsAt: "2026-08-22T12:00:00.000Z",
+          windowDurationMins: 10_080,
+        },
+      ],
     },
   },
 } satisfies ProviderRuntimeEvent;
@@ -59,22 +73,25 @@ describe("availabilityFromRuntimeEvent", () => {
       source: "codex_app_server",
       observedAt: "2026-08-15T12:00:00.000Z",
       windows: [
-        { kind: "primary", usedPercent: 40, windowDurationMins: 300 },
-        { kind: "secondary", usedPercent: 100, windowDurationMins: 10_080 },
+        { id: "primary", kind: "session", usedPercent: 40, windowDurationMins: 300 },
+        { id: "secondary", kind: "weekly", usedPercent: 100, windowDurationMins: 10_080 },
       ],
     });
   });
 
-  it("keeps Claude native events honest until its SDK publishes a stable quota shape", () => {
+  it("accepts Claude normalized quota windows from the adapter boundary", () => {
     const event = {
       ...codexRateLimitEvent,
       provider: ProviderDriverKind.make("claudeAgent"),
     } satisfies ProviderRuntimeEvent;
-    expect(availabilityFromRuntimeEvent(event)).toEqual({
-      status: "unknown",
+    expect(availabilityFromRuntimeEvent(event)).toMatchObject({
+      status: "limited",
       source: "claude_agent_sdk",
       observedAt: "2026-08-15T12:00:00.000Z",
-      windows: [],
+      windows: [
+        { kind: "session", usedPercent: 40 },
+        { kind: "weekly", usedPercent: 100 },
+      ],
     });
   });
 
@@ -84,27 +101,25 @@ describe("availabilityFromRuntimeEvent", () => {
       ...codexRateLimitEvent,
       createdAt: "2026-08-15T12:01:00.000Z",
       payload: {
-        rateLimits: {
-          rateLimits: {
-            primary: { usedPercent: 55 },
-          },
+        limits: {
+          windows: [{ id: "primary", kind: "session", label: "Current session", usedPercent: 55 }],
         },
       },
     } satisfies ProviderRuntimeEvent)!;
     const metadataOnly = availabilityFromRuntimeEvent({
       ...codexRateLimitEvent,
       createdAt: "2026-08-15T12:02:00.000Z",
-      payload: { rateLimits: { rateLimits: {} } },
+      payload: { limits: { windows: [] } },
     } satisfies ProviderRuntimeEvent)!;
 
     expect(mergeProviderAvailability(initial, primaryOnly).windows).toMatchObject([
       {
-        kind: "primary",
+        id: "primary",
         usedPercent: 55,
         resetsAt: initial.windows[0]!.resetsAt,
         windowDurationMins: 300,
       },
-      { kind: "secondary", usedPercent: 100 },
+      { id: "secondary", usedPercent: 100 },
     ]);
     expect(mergeProviderAvailability(initial, metadataOnly)).toMatchObject({
       status: "limited",
@@ -227,6 +242,7 @@ const emptySdkUpdate = availabilityFromRuntimeEvent({
   provider: ProviderDriverKind.make("claudeAgent"),
   providerInstanceId: claudeInstanceId,
   createdAt: "2026-08-17T20:50:00.000Z",
+  payload: { limits: { windows: [] } },
 } satisfies ProviderRuntimeEvent)!;
 
 describe("mergeProviderAvailability window identity", () => {
@@ -456,29 +472,25 @@ describe("a refresh that came back with nothing", () => {
   });
 });
 
-it("keeps Codex Spark updates separate from the main allowance", () => {
+it("keeps distinct Codex allowance windows separate when merging sparse updates", () => {
   const main = availabilityFromRuntimeEvent(codexRateLimitEvent)!;
   const spark = availabilityFromRuntimeEvent({
     ...codexRateLimitEvent,
     payload: {
-      rateLimits: {
-        rateLimits: { limitId: "codex-spark", limitName: "Spark", primary: { usedPercent: 80 } },
+      limits: {
+        windows: [{ id: "spark", kind: "other", label: "Spark", usedPercent: 80 }],
       },
     },
   })!;
   const merged = mergeProviderAvailability(main, spark);
   expect(merged.windows).toContainEqual(
     expect.objectContaining({
-      kind: "primary",
-      scope: "codex-spark",
+      id: "spark",
       label: "Spark",
       usedPercent: 80,
     }),
   );
-  expect(
-    merged.windows.find((window) => window.kind === "primary" && window.scope === undefined)
-      ?.usedPercent,
-  ).toBe(40);
+  expect(merged.windows.find((window) => window.kind === "session")?.usedPercent).toBe(40);
 });
 
 it("retains Grok billing for its driver and marks failed refreshes stale", () => {

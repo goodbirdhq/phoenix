@@ -1,11 +1,31 @@
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
-import { it } from "@effect/vitest";
+import {
+  EnvironmentId,
+  type OrchestrationThreadShell,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
+import { describe, expect, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
-import { describe, expect } from "vite-plus/test";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
-import { normalizePreviewOpenInput, requirePreviewCapability } from "./handlers.ts";
+import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  createPendingAttachmentId,
+  parseThreadSegmentFromAttachmentId,
+} from "../../../attachmentStore.ts";
+import * as ServerConfig from "../../../config.ts";
+import {
+  claimPreviewRecording,
+  normalizePreviewOpenInput,
+  requirePreviewCapability,
+} from "./handlers.ts";
 
 describe("normalizePreviewOpenInput", () => {
   it("leaves an unstated visibility for the client preference to decide", () => {
@@ -57,6 +77,181 @@ describe("requirePreviewCapability", () => {
     }).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
       Effect.provide(ServerSettings.layerTest({ enableAgentBrowserAccess: true })),
+      Effect.provide(
+        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+          getThreadShellById: () => Effect.succeed(Option.none()),
+        }),
+      ),
     );
   });
+
+  it.effect("honors a project browser override at tool time", () => {
+    const projectId = ProjectId.make("project-preview-test");
+    const invocation: McpInvocationContext.McpInvocationScope = {
+      environmentId: EnvironmentId.make("environment-preview-test"),
+      threadId: ThreadId.make("thread-preview-test"),
+      providerSessionId: "provider-session-preview-test",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview"]),
+      issuedAt: 1,
+    };
+    const thread: OrchestrationThreadShell = {
+      id: invocation.threadId,
+      projectId,
+      title: "Preview test",
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      pullRequests: [],
+      latestTurn: null,
+      createdAt: "2026-09-12T00:00:00.000Z",
+      updatedAt: "2026-09-12T00:00:00.000Z",
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      session: null,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    };
+    const snapshots = Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+      getThreadShellById: () => Effect.succeed(Option.some(thread)),
+    });
+    const run = (settings: Parameters<typeof ServerSettings.layerTest>[0]) =>
+      requirePreviewCapability().pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provide(ServerSettings.layerTest(settings)),
+        Effect.provide(snapshots),
+        Effect.result,
+      );
+
+    return Effect.gen(function* () {
+      const projectSettingsOverrides = { [projectId]: { enableAgentBrowserAccess: false } };
+      expect((yield* run({ enableAgentBrowserAccess: true, projectSettingsOverrides }))._tag).toBe(
+        "Failure",
+      );
+
+      expect(
+        (yield* run({
+          enableAgentBrowserAccess: false,
+          projectSettingsOverrides: { [projectId]: { enableAgentBrowserAccess: true } },
+        }))._tag,
+      ).toBe("Success");
+    });
+  });
+});
+
+describe("claimPreviewRecording", () => {
+  it.effect("overlapping and repeated claims return the same retained recording", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const uploadedAttachmentId = createPendingAttachmentId(".webm");
+      const pendingPath = path.join(config.attachmentsDir, `${uploadedAttachmentId}.webm`);
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFileString(pendingPath, "video!");
+      const response = {
+        id: "desktop-recording",
+        tabId: "tab-1",
+        path: "/desktop/recording.webm",
+        mimeType: "video/webm",
+        sizeBytes: 6,
+        createdAt: "2026-09-07T00:00:00.000Z",
+        uploadedAttachmentId,
+      };
+      const claim = claimPreviewRecording(ThreadId.make("thread-1"), response);
+      const [first, second] = yield* Effect.all([claim, claim], { concurrency: "unbounded" });
+      expect(first).toEqual(second);
+      expect(yield* claim).toEqual(first);
+      expect(yield* fileSystem.readFileString(first.path)).toBe("video!");
+      expect(yield* fileSystem.exists(pendingPath)).toBe(false);
+      const wrongThread = yield* claimPreviewRecording(ThreadId.make("thread-2"), response).pipe(
+        Effect.result,
+      );
+      expect(wrongThread._tag).toBe("Failure");
+      const wrongPath = yield* claimPreviewRecording(ThreadId.make("thread-1"), {
+        ...response,
+        uploadedAttachmentId: `../${uploadedAttachmentId}`,
+      }).pipe(Effect.result);
+      expect(wrongPath._tag).toBe("Failure");
+    }).pipe(
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-preview-recording-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
+  it.effect.each([6, 5])(
+    "claims only a complete uploaded recording (reported bytes: %s)",
+    (sizeBytes) =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const uploadedAttachmentId = createPendingAttachmentId(".webm");
+        const pendingPath = path.join(config.attachmentsDir, `${uploadedAttachmentId}.webm`);
+        yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+        yield* fileSystem.writeFileString(pendingPath, "video!");
+        const response = {
+          id: "desktop-recording",
+          tabId: "tab-1",
+          path: "/desktop/recording.webm",
+          mimeType: "video/webm",
+          sizeBytes,
+          createdAt: "2026-09-07T00:00:00.000Z",
+          uploadedAttachmentId,
+        };
+        const result = yield* claimPreviewRecording(ThreadId.make("thread-1"), response).pipe(
+          Effect.result,
+        );
+        if (sizeBytes === 6) {
+          expect(result._tag).toBe("Success");
+          if (result._tag !== "Success") return;
+          expect(result.success.path).not.toBe(response.path);
+          expect(parseThreadSegmentFromAttachmentId(result.success.id)).toBe("thread-1");
+          expect(yield* fileSystem.readFileString(result.success.path)).toBe("video!");
+          expect(yield* fileSystem.exists(pendingPath)).toBe(false);
+        } else {
+          expect(result._tag).toBe("Failure");
+          if (result._tag !== "Failure") return;
+          expect(result.failure._tag).toBe("PreviewAutomationRecordingTransferError");
+          expect(yield* fileSystem.exists(pendingPath)).toBe(true);
+        }
+      }).pipe(
+        Effect.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-preview-recording-" }).pipe(
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+  );
+
+  it.effect("reports an older desktop without returning its inaccessible path", () =>
+    Effect.gen(function* () {
+      const result = yield* claimPreviewRecording(ThreadId.make("thread-1"), {
+        id: "desktop-recording",
+        tabId: "tab-1",
+        path: "/desktop/recording.webm",
+        mimeType: "video/webm",
+        sizeBytes: 6,
+        createdAt: "2026-09-07T00:00:00.000Z",
+      }).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag !== "Failure") return;
+      expect(result.failure._tag).toBe("PreviewAutomationRecordingDesktopUpdateRequiredError");
+      expect(result.failure.message).toContain("Update the desktop app");
+    }).pipe(
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-preview-recording-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+  );
 });

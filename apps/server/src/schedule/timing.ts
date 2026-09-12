@@ -156,14 +156,6 @@ export function countScheduleOccurrencesWithin(
   return count;
 }
 
-export function nextScheduleOccurrence(
-  timing: ScheduleTiming,
-  timeZone: string,
-  after: string,
-): string {
-  return previewScheduleTiming(timing, timeZone, after)[0] as string;
-}
-
 export function latestScheduleOccurrenceAtOrBefore(
   timing: ScheduleTiming,
   timeZone: string,

@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Schema from "effect/Schema";
 
-import * as TokenStore from "../authorization/tokenStore.ts";
 import {
   BearerConnectionCredential,
   BearerConnectionProfile,
@@ -16,13 +16,19 @@ import {
   SshConnectionTarget,
 } from "../connection/model.ts";
 import {
+  ConnectionCatalogDocument,
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
+  clearUnsupportedManagedCredentials,
   registerConnectionInCatalog,
   removeConnectionFromCatalog,
 } from "./storageDocument.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 
+const RELAY_TARGET = new RelayConnectionTarget({
+  environmentId: ENVIRONMENT_ID,
+  label: "Remote",
+});
 const BEARER_TARGET = new BearerConnectionTarget({
   environmentId: ENVIRONMENT_ID,
   label: "Remote",
@@ -38,7 +44,7 @@ const BEARER_PROFILE = new BearerConnectionProfile({
 const BEARER_CREDENTIAL = new BearerConnectionCredential({
   token: "bearer-token",
 });
-const REMOTE_TOKEN = new TokenStore.RemoteDpopAccessToken({
+const REMOTE_TOKEN = {
   environmentId: ENVIRONMENT_ID,
   label: "Remote",
   endpoint: {
@@ -49,9 +55,74 @@ const REMOTE_TOKEN = new TokenStore.RemoteDpopAccessToken({
   accessToken: "dpop-token",
   expiresAtEpochMs: 1_000_000,
   dpopThumbprint: "thumbprint",
-});
+};
+
+const decodeCatalog = Schema.decodeUnknownSync(ConnectionCatalogDocument);
 
 describe("ConnectionCatalogDocument", () => {
+  it("preserves managed connection metadata while discarding retired credentials", () => {
+    const direct = registerConnectionInCatalog(
+      EMPTY_CONNECTION_CATALOG_DOCUMENT,
+      new BearerConnectionRegistration({
+        target: BEARER_TARGET,
+        profile: BEARER_PROFILE,
+        credential: BEARER_CREDENTIAL,
+      }),
+    );
+    const sshTarget = new SshConnectionTarget({
+      environmentId: EnvironmentId.make("saved-ssh"),
+      label: "SSH",
+      connectionId: "ssh-1",
+    });
+    const sshProfile = new SshConnectionProfile({
+      environmentId: sshTarget.environmentId,
+      label: sshTarget.label,
+      connectionId: sshTarget.connectionId,
+      target: { alias: "devbox", hostname: "100.64.0.3", username: "developer", port: 22 },
+    });
+    const saved = registerConnectionInCatalog(
+      direct,
+      new SshConnectionRegistration({ target: sshTarget, profile: sshProfile }),
+    );
+    const decoded = decodeCatalog({
+      ...saved,
+      targets: [
+        ...saved.targets,
+        { _tag: "RelayConnectionTarget", environmentId: "old-managed", label: "Old managed" },
+      ],
+      remoteDpopTokens: [REMOTE_TOKEN],
+    });
+    const cleaned = clearUnsupportedManagedCredentials(decoded);
+    expect(cleaned.targets).toEqual(decoded.targets);
+    expect(cleaned.targets[2]).toMatchObject({
+      _tag: "RelayConnectionTarget",
+      environmentId: "old-managed",
+      label: "Old managed",
+    });
+    expect(cleaned.profiles).toEqual(saved.profiles);
+    expect(cleaned.credentials).toEqual(saved.credentials);
+    expect(cleaned.remoteDpopTokens).toEqual([]);
+  });
+  it.each([
+    { name: "legacy", accountId: undefined },
+    { name: "account-bound", accountId: "account-1" },
+  ])("round-trips a catalog containing a $name DPoP token", ({ accountId }) => {
+    const token = {
+      ...REMOTE_TOKEN,
+      ...(accountId === undefined ? {} : { accountId }),
+    };
+    const document = {
+      ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
+      targets: [RELAY_TARGET],
+      remoteDpopTokens: [token],
+    };
+    const schema = Schema.fromJsonString(ConnectionCatalogDocument);
+    const restored = Schema.decodeUnknownSync(schema)(Schema.encodeSync(schema)(document));
+
+    expect(restored).toEqual(document);
+    expect(restored.remoteDpopTokens[0]).toEqual(token);
+  });
+
   it("registers a bearer connection as one catalog mutation", () => {
     const document = registerConnectionInCatalog(
       EMPTY_CONNECTION_CATALOG_DOCUMENT,
@@ -72,7 +143,7 @@ describe("ConnectionCatalogDocument", () => {
     ]);
   });
 
-  it("replaces obsolete connection metadata without discarding a reusable DPoP token", () => {
+  it("replaces obsolete connection metadata and discards obsolete managed tokens", () => {
     const bearer = registerConnectionInCatalog(
       {
         ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
@@ -96,7 +167,7 @@ describe("ConnectionCatalogDocument", () => {
     expect(relay.targets).toEqual([relayTarget]);
     expect(relay.profiles).toEqual([]);
     expect(relay.credentials).toEqual([]);
-    expect(relay.remoteDpopTokens).toEqual([REMOTE_TOKEN]);
+    expect(relay.remoteDpopTokens).toEqual([]);
   });
 
   it("removes every catalog record owned by an explicit disconnect", () => {

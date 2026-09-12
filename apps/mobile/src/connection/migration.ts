@@ -2,7 +2,6 @@ import {
   BearerConnectionCredential,
   BearerConnectionProfile,
   BearerConnectionRegistration,
-  RelayConnectionRegistration,
   RelayConnectionTarget,
   BearerConnectionTarget,
 } from "@t3tools/client-runtime/connection";
@@ -10,6 +9,8 @@ import {
   type ConnectionCatalogDocument,
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
   registerConnectionInCatalog,
+  removeConnectionFromCatalog,
+  replaceCatalogValue,
 } from "@t3tools/client-runtime/platform";
 import { EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -33,7 +34,7 @@ const LegacyConnectionDocument = Schema.Struct({
 });
 const decodeLegacyConnectionDocument = Schema.decodeUnknownEffect(LegacyConnectionDocument);
 
-export class LegacyConnectionMigrationError extends Schema.TaggedErrorClass<LegacyConnectionMigrationError>()(
+export class LegacyConnectionMigrationError extends Schema.TaggedError<LegacyConnectionMigrationError>()(
   "LegacyConnectionMigrationError",
   {
     message: Schema.String,
@@ -49,15 +50,18 @@ function migrateConnection(
   connection: typeof LegacySavedRemoteConnection.Type,
 ): ConnectionCatalogDocument {
   if (isRelayManaged(connection)) {
-    return registerConnectionInCatalog(
-      document,
-      new RelayConnectionRegistration({
-        target: new RelayConnectionTarget({
-          environmentId: connection.environmentId,
-          label: connection.environmentLabel,
-        }),
-      }),
+    const target = new RelayConnectionTarget({
+      environmentId: connection.environmentId,
+      label: connection.environmentLabel,
+    });
+    const previous = document.targets.find(
+      (candidate) => candidate.environmentId === connection.environmentId,
     );
+    const cleaned = previous ? removeConnectionFromCatalog(document, previous) : document;
+    return {
+      ...cleaned,
+      targets: replaceCatalogValue(cleaned.targets, (candidate) => candidate.environmentId, target),
+    };
   }
 
   if (connection.bearerToken === null || connection.bearerToken.trim() === "") {

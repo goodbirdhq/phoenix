@@ -2,6 +2,7 @@ import {
   ConnectionCatalogDocument,
   type ConnectionCatalogDocument as ConnectionCatalogDocumentType,
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
+  clearUnsupportedManagedCredentials,
 } from "@t3tools/client-runtime/platform";
 import { ConnectionTransientError } from "@t3tools/client-runtime/connection";
 import * as Effect from "effect/Effect";
@@ -96,6 +97,10 @@ export const make = Effect.fn("mobile.connectionStorage.makeCatalogStore")(funct
           ),
         ),
       );
+      if (catalog.remoteDpopTokens.length > 0) {
+        catalog = clearUnsupportedManagedCredentials(catalog);
+        yield* setItem(CONNECTION_CATALOG_KEY, yield* encodeCatalog(catalog));
+      }
     } else {
       catalog = yield* loadLegacyCatalog();
     }

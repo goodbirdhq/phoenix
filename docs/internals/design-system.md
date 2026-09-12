@@ -21,7 +21,7 @@ Extend these layers as destinations migrate. Do not introduce a second button, t
 
 `LineAreaChart` takes ordered periods and series with stable IDs, labels, colors, optional icons and one finite nonnegative value per period. Zero means known inactivity. Features must communicate missing or offline sources separately. Series share a zero baseline and are not stacked. The scale uses visible series. Formatting and timezone handling remain in the caller.
 
-The renderer uses shape-preserving cubic curves, 2px strokes and 0.055 area opacity. One sample renders as a point. Mouse hover and left/right, Home/End keys expose the same period values; Escape dismisses the readout. It has no animation loop or chart dependency. `UsageBreakdownChart` and `UsageReportChart` adapt shared client-runtime series, preserving daily/hourly formatting and provider icons. Mobile uses `components/charts/LineAreaChart` with the same geometry and shared series; its previous platform-specific bar renderers have been removed.
+The renderer uses shape-preserving cubic curves, 2px strokes and 0.055 area opacity. One sample renders as a point. Mouse hover and left/right, Home/End keys expose the same period values; Escape dismisses the readout. It has no animation loop or chart dependency. `UsageOverview` and `UsageReportChart` adapt shared client-runtime series, preserving daily/hourly formatting and provider identity. Mobile uses `components/charts/LineAreaChart` with the same geometry and shared series; its previous platform-specific bar renderers have been removed.
 
 ## Gallery
 

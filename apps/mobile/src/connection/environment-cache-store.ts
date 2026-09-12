@@ -16,6 +16,7 @@ import * as Schema from "effect/Schema";
 
 import * as MobileDatabase from "../persistence/mobile-database";
 import { makeScheduleCacheStore } from "../features/schedules/schedule-cache-store";
+import { attachProjectFaviconDatabase, projectFaviconCache } from "../lib/projectFaviconCache";
 
 const SHELL_SNAPSHOT_CACHE_SCHEMA_VERSION = 1;
 // v3 adds windowed (paginated) snapshots carrying `page` metadata; the bump
@@ -121,6 +122,7 @@ function loadDecodedCache<A, B>(input: {
 export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
   const database = yield* MobileDatabase.MobileDatabase;
   const schedules = makeScheduleCacheStore(database);
+  attachProjectFaviconDatabase(database);
   return EnvironmentCacheStore.of({
     loadShell: Effect.fn("MobileEnvironmentCache.loadShell")((environmentId) =>
       loadDecodedCache({
@@ -132,7 +134,7 @@ export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
         decode: decodeStoredShellSnapshot,
         select: (stored) =>
           stored.environmentId === environmentId ? Option.some(stored.snapshot) : Option.none(),
-      }),
+      }).pipe(Effect.tap(() => Effect.promise(() => projectFaviconCache.hydrate()))),
     ),
     saveShell: Effect.fn("MobileEnvironmentCache.saveShell")(function* (environmentId, snapshot) {
       const payload = yield* encodeStoredShellSnapshot({
@@ -273,9 +275,10 @@ export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
           .pipe(Effect.mapError(mapDatabaseError("remove-schedule-detail"))),
     ),
     clear: Effect.fn("MobileEnvironmentCache.clear")((environmentId) =>
-      database
-        .clearEnvironmentCache(environmentId)
-        .pipe(Effect.mapError(mapDatabaseError("clear-environment"))),
+      Effect.promise(() => projectFaviconCache.clearEnvironment(environmentId)).pipe(
+        Effect.andThen(database.clearEnvironmentCache(environmentId)),
+        Effect.mapError(mapDatabaseError("clear-environment")),
+      ),
     ),
   });
 });

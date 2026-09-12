@@ -1,4 +1,5 @@
 import type {
+  AgentSessionImportSource,
   ProviderInstanceId,
   ProviderDriverKind,
   ProviderSessionRuntimeStatus,
@@ -40,9 +41,13 @@ export type ProviderSessionDirectoryWriteError =
   | ProviderValidationError
   | ProviderSessionDirectoryPersistenceError;
 
+export interface ProviderSessionDirectoryUpsertOptions {
+  readonly onConflict?: "update" | "ignore";
+}
+
 export interface ProviderSessionDirectoryShape {
   /** Observe runtime traffic without a database write. Used only for liveness enrichment. */
-  readonly recordActivity: (
+  readonly recordActivity?: (
     threadId: ThreadId,
     providerInstanceId: ProviderInstanceId,
     observedAt: string,
@@ -50,7 +55,14 @@ export interface ProviderSessionDirectoryShape {
 
   readonly upsert: (
     binding: ProviderRuntimeBinding,
+    options?: ProviderSessionDirectoryUpsertOptions,
   ) => Effect.Effect<void, ProviderSessionDirectoryWriteError>;
+
+  /** Record an imported file without changing the current provider session. */
+  readonly recordImportedTranscript: (input: {
+    readonly threadId: ThreadId;
+    readonly source: AgentSessionImportSource;
+  }) => Effect.Effect<void, ProviderSessionDirectoryPersistenceError>;
 
   readonly getProvider: (
     threadId: ThreadId,

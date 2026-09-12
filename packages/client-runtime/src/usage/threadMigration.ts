@@ -62,9 +62,7 @@ export function resolveNextTurnModelSelection(input: {
     : input.requestedModelSelection;
 }
 
-export function isProviderUsageLimited(
-  availability: ProviderAvailability | null | undefined,
-): boolean {
+function isProviderUsageLimited(availability: ProviderAvailability | null | undefined): boolean {
   if (!hasConfirmedAvailability(availability)) return false;
   return Boolean(
     availability.status === "limited" ||
@@ -88,7 +86,7 @@ const slugTokens = (value: string): string =>
  * is left out: a turn that really is blocked still fails with a typed
  * usage-limit error, which surfaces the popup on its own.
  */
-export function windowConstrainsModel(
+function windowConstrainsModel(
   window: ProviderAvailabilityWindow,
   model: string | null | undefined,
 ): boolean {
@@ -122,7 +120,7 @@ export function isProviderUsageLimitedForModel(
     : availability.status === "limited";
 }
 
-export function providerRemainingQuotaPercent(
+function providerRemainingQuotaPercent(
   availability: ProviderAvailability | null | undefined,
 ): number | null {
   if (!hasConfirmedAvailability(availability) || availability.windows.length === 0) return null;

@@ -15,7 +15,7 @@ export function environmentConnectionKind(environment: EnvironmentPresentation) 
     case "SshConnectionTarget":
       return "SSH";
     case "RelayConnectionTarget":
-      return "T3 Connect";
+      return "Legacy managed connection";
     default:
       return "Remote link";
   }

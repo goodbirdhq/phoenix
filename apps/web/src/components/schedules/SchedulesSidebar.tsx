@@ -424,12 +424,7 @@ function ScheduleSidebarRow({
             )}
           >
             {project ? (
-              <ProjectFavicon
-                environmentId={row.environmentId}
-                cwd={project.workspaceRoot}
-                faviconPath={project.faviconPath}
-                className="size-4"
-              />
+              <ProjectFavicon project={project} className="size-4" />
             ) : (
               <CalendarClockIcon className="size-[18px]" />
             )}

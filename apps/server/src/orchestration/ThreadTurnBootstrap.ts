@@ -59,7 +59,7 @@ function projectSetupScriptCompatibilityDetail(
   }
 }
 
-export const toBootstrapDispatchCommandCauseError = (cause: Cause.Cause<unknown>) => {
+const toBootstrapDispatchCommandCauseError = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
   return isOrchestrationDispatchCommandError(error)
     ? error
@@ -198,7 +198,7 @@ export class ThreadTurnBootstrap extends Context.Service<
   }
 >()("t3/orchestration/ThreadTurnBootstrap") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;

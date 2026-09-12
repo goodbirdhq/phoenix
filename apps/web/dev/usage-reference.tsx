@@ -135,10 +135,17 @@ function App() {
       definitions.findIndex((row) => row.name === b.name),
   );
   const costs = new Map(
-    accounts.map((account) => [
-      account.key,
-      pending ? null : definitions.find((row) => row.name === account.name)!.cost,
-    ]),
+    accounts.map((account) => {
+      const cost = definitions.find((row) => row.name === account.name)!.cost;
+      return [
+        account.key,
+        pending
+          ? null
+          : cost === null
+            ? { costUsd: 0, records: 1, unpricedRecords: 1 }
+            : { costUsd: cost, records: 1, unpricedRecords: 0 },
+      ] as const;
+    }),
   );
   const sources = subscriptionAvailabilitySources(environments);
   return (

@@ -1,7 +1,7 @@
 import { asRecord, asTrimmedString, parseJsonRecord } from "./toolActivityPayload.ts";
 
-export const PROVIDER_LIST_MAX_PROVIDERS = 8;
-export const PROVIDER_LIST_MAX_WINDOWS = 4;
+const PROVIDER_LIST_MAX_PROVIDERS = 8;
+const PROVIDER_LIST_MAX_WINDOWS = 4;
 
 function isPhoenixProviderListTool(
   data: Record<string, unknown>,
@@ -183,14 +183,6 @@ export function formatProviderListWindows(windows: ReadonlyArray<ProviderListWin
 
 export function formatProviderListReadyLabel(available: boolean): "ready" | "offline" {
   return available ? "ready" : "offline";
-}
-
-export function formatProviderListQuotaLabel(
-  status: ProviderListEntry["status"],
-): "ok" | "limited" | "unknown" {
-  if (status === "limited") return "limited";
-  if (status === "available") return "ok";
-  return "unknown";
 }
 
 /** Header summary tone: quota-limited wins over spawnable-ready. */

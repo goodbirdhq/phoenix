@@ -1,6 +1,7 @@
 import { preloadPatchFile } from "@pierre/diffs/ssr";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
+import { EMPTY_COMPOSER_CONTEXT_RECORDS } from "../composerContextPresentation";
 import { terminalThemeFromApp } from "../ThreadTerminalDrawer";
 import { useTheme } from "../../hooks/useTheme";
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
@@ -14,7 +15,6 @@ import { GhosttyTerminalSurface } from "~/terminal/ghostty/surface";
 // terminal, the settings passed down as props), so what the row shows is
 // exactly what the app renders.
 
-const EMPTY_TERMINAL_CONTEXTS: ReadonlyArray<never> = [];
 const EMPTY_SKILLS: ReadonlyArray<never> = [];
 
 // Serialized the way the composer stores inline tokens: the $skill and the
@@ -40,14 +40,14 @@ export function PromptFontPreview() {
     <div className="mt-1 mb-2 rounded-lg border border-border bg-background px-3 py-2">
       <ComposerPromptEditor
         editorRef={editorRef}
+        historyKey="settings-font-preview"
         value={prompt}
         cursor={cursor}
-        terminalContexts={EMPTY_TERMINAL_CONTEXTS}
+        contextRecords={EMPTY_COMPOSER_CONTEXT_RECORDS}
         skills={EMPTY_SKILLS}
         disabled={false}
         placeholder={DISCONNECTED_COMPOSER_PLACEHOLDER}
         className="max-h-40 min-h-12"
-        onRemoveTerminalContext={noop}
         onChange={onChange}
         onPaste={noop}
       />

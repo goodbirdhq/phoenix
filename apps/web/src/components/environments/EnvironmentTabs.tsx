@@ -8,7 +8,7 @@ import {
 import type { ReactNode } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../ui/tabs";
 
-export const ENVIRONMENT_TABS = [
+const ENVIRONMENT_TABS = [
   { value: "overview", label: "Overview", Icon: ChartNoAxesColumnIcon },
   { value: "projects", label: "Projects", Icon: FolderIcon },
   { value: "providers", label: "Providers", Icon: LayersIcon },

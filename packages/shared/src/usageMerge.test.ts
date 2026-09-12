@@ -9,7 +9,13 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { mergeUsageCost, mergeUsage, type EnvironmentUsage } from "./usageMerge.ts";
+import {
+  isModelCostUnknown,
+  mergeUsageCostSummary,
+  mergeUsageCost,
+  mergeUsage,
+  type EnvironmentUsage,
+} from "./usageMerge.ts";
 
 function bucket(overrides: Partial<UsageBucket> = {}): UsageBucket {
   return {
@@ -319,6 +325,95 @@ describe("mergeUsage", () => {
     expect(merged.costQuality.cacheSavingsUsd).toBe(4);
   });
 
+  it("marks a model with no known rates as unpriced rather than free", () => {
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({ costUsd: 75 }),
+              bucket({
+                provider: "codex",
+                model: "unknown-model",
+                costUsd: 0,
+                costSource: "unpriced",
+                unpricedRecords: 5,
+              }),
+            ],
+            [
+              { provider: "claude", hostId: "mac", homePath: "/a/.claude" },
+              { provider: "codex", hostId: "mac", homePath: "/a/.codex" },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.models.find((model) => model.model === "unknown-model")?.unpricedRecords).toBe(5);
+    expect(merged.models.filter(isModelCostUnknown).map((model) => model.model)).toEqual([
+      "unknown-model",
+    ]);
+  });
+
+  it("counts provider-reported records per record, not per cell, so model-priced share is not overstated", () => {
+    // One fully provider-reported cell (no per-record field: the fallback path)
+    // and one partial cell whose weakest label is "unpriced" but which carries
+    // its exact provider-reported count. The partial cell's provider-reported
+    // records must not be folded into the model-priced share.
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({ costSource: "providerReported", records: 3, unpricedRecords: 0 }),
+              bucket({
+                costSource: "unpriced",
+                records: 5,
+                unpricedRecords: 2,
+                providerReportedRecords: 2,
+              }),
+            ],
+            [{ provider: "claude", hostId: "mac", homePath: "/a/.claude" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    // records 8 = 5 provider-reported + 2 unpriced + 1 model-priced
+    expect(merged.costQuality.providerReportedShare).toBeCloseTo(5 / 8, 5);
+    expect(merged.costQuality.unpricedShare).toBeCloseTo(2 / 8, 5);
+    expect(merged.costQuality.modelPricedShare).toBeCloseTo(1 / 8, 5);
+  });
+
+  it("falls back to the cell label when a server omits the per-record provider count", () => {
+    // A server built before per-record provenance emits no providerReportedRecords
+    // field; only a fully provider-reported cell contributes to that share.
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({ costSource: "providerReported", records: 3, unpricedRecords: 0 }),
+              bucket({ costSource: "unpriced", records: 2, unpricedRecords: 2 }),
+            ],
+            [{ provider: "claude", hostId: "mac", homePath: "/a/.claude" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    // records 5 = 3 provider-reported + 2 unpriced, and no model-priced records.
+    expect(merged.costQuality.providerReportedShare).toBeCloseTo(3 / 5, 5);
+    expect(merged.costQuality.unpricedShare).toBeCloseTo(2 / 5, 5);
+    expect(merged.costQuality.modelPricedShare).toBeCloseTo(0, 5);
+  });
+
   it("keeps two machines apart when hostname and home path collide", () => {
     // Every Mac resolves /Users/theo/.claude, so a hostname clash used to make
     // one machine's usage vanish. Filesystem identity separates them.
@@ -588,4 +683,42 @@ it("cost-only aggregation agrees with the full merge across duplicated and incom
   expect(mergeUsageCost(entries, USAGE_CONTRACT_VERSION)).toBe(
     mergeUsage(entries, USAGE_CONTRACT_VERSION).costUsd,
   );
+});
+
+it("preserves unknown cost coverage while deduplicating account stores", () => {
+  const source = { provider: "claude" as const, hostId: "host", homePath: "/claude", id: "store" };
+  const entries: EnvironmentUsage[] = ["a", "b"].map((id) => ({
+    environmentId: id as EnvironmentId,
+    label: id,
+    summary: summary(
+      [
+        bucket({
+          sourceId: "store",
+          costUsd: 0,
+          records: 3,
+          unpricedRecords: 3,
+          costSource: "unpriced",
+        }),
+      ],
+      [source],
+    ),
+  }));
+  expect(mergeUsageCostSummary(entries, USAGE_CONTRACT_VERSION)).toEqual({
+    costUsd: 0,
+    records: 3,
+    unpricedRecords: 3,
+  });
+  entries.push({
+    environmentId: "c" as EnvironmentId,
+    label: "C",
+    summary: summary(
+      [bucket({ sourceId: "other", costUsd: 2, records: 1, unpricedRecords: 0 })],
+      [{ ...source, id: "other", homePath: "/other" }],
+    ),
+  });
+  expect(mergeUsageCostSummary(entries, USAGE_CONTRACT_VERSION)).toEqual({
+    costUsd: 2,
+    records: 4,
+    unpricedRecords: 3,
+  });
 });

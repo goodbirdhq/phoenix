@@ -43,6 +43,29 @@ describe("usage chart groups", () => {
       90,
     ]);
   });
+
+  it("carries per-series unpriced and total record counts for cost coverage", () => {
+    const unpriced = {
+      ...bucket,
+      bucket: {
+        ...bucket.bucket,
+        model: "mystery-model",
+        costUsd: 0,
+        costSource: "unpriced" as const,
+        records: 3,
+        unpricedRecords: 3,
+      },
+    };
+    const partial = {
+      ...bucket,
+      bucket: { ...bucket.bucket, costUsd: 4, records: 2, unpricedRecords: 1 },
+    };
+    const rows = usageChartSeries([unpriced, partial], [], ["2026-09-01"], "provider", "cost");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.records).toBe(5);
+    expect(rows[0]?.unpricedRecords).toBe(4);
+    expect(rows[0]?.values[0]).toBe(4);
+  });
   it("counts creation times with no token usage and respects local calendar days", () => {
     const merged = {
       ...mergeUsage([], 6),

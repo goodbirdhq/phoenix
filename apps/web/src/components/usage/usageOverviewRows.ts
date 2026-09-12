@@ -3,7 +3,7 @@ import {
   usageChartSeries,
   type UsageChartMetric,
 } from "@t3tools/client-runtime/usage/chart-series";
-import type { MergedUsage } from "@t3tools/shared/usageMerge";
+import { isModelCostUnknown, type MergedUsage } from "@t3tools/shared/usageMerge";
 
 /** Table rows remain complete even when the chart groups long tails into Other. */
 export function usageOverviewRows(
@@ -21,12 +21,21 @@ export function usageOverviewRows(
         provider: row.provider,
         costUsd: row.costUsd,
         totalTokens: row.totalTokens,
+        unpricedRecords: row.unpricedRecords,
+        costUnknown: isModelCostUnknown(row),
       }))
-    : usageChartSeries(merged.buckets, accounts, periods, grouping, "cost").map((row) => ({
-        ...row,
-        costUsd: row.values.reduce((a, b) => a + b, 0),
-        totalTokens: 0,
-      }));
+    : usageChartSeries(merged.buckets, accounts, periods, grouping, "cost").map((seriesRow) => {
+        const unpricedRecords = seriesRow.unpricedRecords;
+        return {
+          id: seriesRow.id,
+          label: seriesRow.label,
+          provider: seriesRow.provider,
+          costUsd: seriesRow.values.reduce((a, b) => a + b, 0),
+          totalTokens: 0,
+          unpricedRecords,
+          costUnknown: seriesRow.records > 0 && unpricedRecords >= seriesRow.records,
+        };
+      });
   const tokens = models
     ? new Map<string, number>()
     : new Map(

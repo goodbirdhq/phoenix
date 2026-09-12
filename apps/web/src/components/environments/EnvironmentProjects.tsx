@@ -6,7 +6,7 @@ import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { ArrowRightIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useProjects, useThreadShells } from "../../state/entities";
-import { useSettingsProjectGroups } from "../settings/ProjectSettingsPanel";
+import { useSettingsProjectGroups } from "../settings/useSettingsProjectGroups";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useEnvironmentSessionState } from "../../state/session";
 import { openCommandPalette } from "../../commandPaletteBus";
@@ -78,12 +78,7 @@ export function EnvironmentProjects({
                 <TableRow key={p.id}>
                   <TableCell>
                     <div className="flex items-center gap-3">
-                      <ProjectFavicon
-                        environmentId={environmentId}
-                        cwd={p.workspaceRoot}
-                        faviconPath={p.faviconPath}
-                        className="size-5"
-                      />
+                      <ProjectFavicon project={p} className="size-5" />
                       <div className="min-w-0">
                         <p className="text-[13px] leading-[18px] font-medium">{p.title}</p>
                         <Tooltip>

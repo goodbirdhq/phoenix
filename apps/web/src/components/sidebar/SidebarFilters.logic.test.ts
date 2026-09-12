@@ -21,6 +21,7 @@ const shell = (overrides: Partial<EnvironmentThreadShell> = {}): EnvironmentThre
   runtimeMode: "full-access",
   interactionMode: "default",
   branch: null,
+  pullRequests: [],
   worktreePath: null,
   latestTurn: null,
   session: null,

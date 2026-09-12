@@ -1,18 +1,11 @@
-import { AuthStandardClientScopes, EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
-
-import { DPOP_UNKNOWN_HINT } from "../relay/errorPresentation.ts";
-import * as ManagedRelay from "../relay/managedRelay.ts";
 import { remoteHttpClientLayer } from "../rpc/http.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as RemoteEnvironmentAuthorization from "./service.ts";
-import * as TokenStore from "./tokenStore.ts";
-
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const ENDPOINT = {
   httpBaseUrl: "https://environment.example.test",
@@ -31,12 +24,6 @@ const DESCRIPTOR = {
     repositoryIdentity: true,
   },
 };
-const BOOTSTRAP: RemoteEnvironmentAuthorization.RelayEnvironmentAuthorization = {
-  environmentId: ENVIRONMENT_ID,
-  endpoint: ENDPOINT,
-  credential: "relay-bootstrap",
-};
-
 function recordedFetch(responses: ReadonlyArray<Response>) {
   const calls: Array<readonly [RequestInfo | URL, RequestInit]> = [];
   let responseIndex = 0;
@@ -56,106 +43,21 @@ const websocketTicket = (ticket: string) =>
     expiresAt: "2026-06-06T01:00:00.000Z",
   });
 
-const accessToken = (token: string) =>
-  Response.json({
-    access_token: token,
-    issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
-    token_type: "DPoP",
-    expires_in: 3_600,
-    scope: AuthStandardClientScopes.join(" "),
-  });
-
-const authInvalid = () =>
-  Response.json(
-    {
-      _tag: "EnvironmentAuthInvalidError",
-      code: "auth_invalid",
-      reason: "invalid_credential",
-      traceId: "trace-auth-invalid",
-    },
-    { status: 401 },
-  );
-
-const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (input: {
-  readonly initialToken?: TokenStore.RemoteDpopAccessToken;
-  readonly responses: ReadonlyArray<Response>;
-}) {
-  const tokens = yield* Ref.make(
-    new Map(
-      input.initialToken === undefined
-        ? []
-        : [[input.initialToken.environmentId, input.initialToken]],
-    ),
-  );
-  const bootstrapCalls = yield* Ref.make(0);
-  const proofInputs = yield* Ref.make<
-    ReadonlyArray<{
-      readonly method: string;
-      readonly url: string;
-      readonly accessToken?: string;
-    }>
-  >([]);
+const makeHarness = Effect.fn(function* (input: { responses: ReadonlyArray<Response> }) {
   const fetch = recordedFetch(input.responses);
-
-  const tokenStore = TokenStore.RemoteDpopAccessTokenStore.of({
-    get: (environmentId) =>
-      Ref.get(tokens).pipe(
-        Effect.map((current) => Option.fromUndefinedOr(current.get(environmentId))),
-      ),
-    put: (token) =>
-      Ref.update(tokens, (current) => {
-        const next = new Map(current);
-        next.set(token.environmentId, token);
-        return next;
-      }),
-    remove: (environmentId) =>
-      Ref.update(tokens, (current) => {
-        const next = new Map(current);
-        next.delete(environmentId);
-        return next;
-      }),
-  });
-  const signer = ManagedRelay.ManagedRelayDpopSigner.of({
-    thumbprint: Effect.succeed("thumbprint-1"),
-    createProof: (proofInput) =>
-      Ref.update(proofInputs, (current) => [...current, proofInput]).pipe(
-        Effect.as(`proof:${proofInput.url}`),
-      ),
-  });
   const layer = RemoteEnvironmentAuthorization.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         remoteHttpClientLayer(fetch.fetchFn),
-        Layer.succeed(ManagedRelay.ManagedRelayDpopSigner, signer),
-        Layer.succeed(TokenStore.RemoteDpopAccessTokenStore, tokenStore),
-        Layer.succeed(
-          ClientCapabilities.ClientPresentation,
-          ClientCapabilities.ClientPresentation.of({
-            metadata: {
-              label: "Phoenix Test",
-              deviceType: "mobile",
-              os: "test",
-            },
-            scopes: AuthStandardClientScopes,
-          }),
-        ),
+        Layer.succeed(ClientCapabilities.ClientPresentation, {
+          metadata: { label: "Test", deviceType: "desktop", surface: "web" },
+          scopes: [],
+        }),
       ),
     ),
   );
-  const obtainBootstrap = Ref.update(bootstrapCalls, (count) => count + 1).pipe(
-    Effect.as(BOOTSTRAP),
-  );
-
-  return {
-    layer,
-    tokens,
-    bootstrapCalls,
-    proofInputs,
-    fetch,
-    obtainBootstrap,
-  };
+  return yield* Effect.succeed({ fetch, layer });
 });
-
 describe("RemoteEnvironmentAuthorization", () => {
   it.effect("reuses a validated bearer descriptor while issuing fresh websocket tickets", () =>
     Effect.gen(function* () {
@@ -231,203 +133,6 @@ describe("RemoteEnvironmentAuthorization", () => {
       expect(
         harness.fetch.calls.filter(([url]) => String(url).endsWith("/.well-known/t3/environment")),
       ).toHaveLength(2);
-    }),
-  );
-
-  it.effect("reuses a valid persisted environment token without contacting the relay", () =>
-    Effect.gen(function* () {
-      const cached = new TokenStore.RemoteDpopAccessToken({
-        environmentId: ENVIRONMENT_ID,
-        label: DESCRIPTOR.label,
-        endpoint: ENDPOINT,
-        accessToken: "cached-access-token",
-        expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-        dpopThumbprint: "thumbprint-1",
-      });
-      const harness = yield* makeHarness({
-        initialToken: cached,
-        responses: [websocketTicket("cached-ticket")],
-      });
-
-      const authorized = yield* Effect.gen(function* () {
-        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
-        return yield* remote.authorizeDpop({
-          expectedEnvironmentId: ENVIRONMENT_ID,
-          obtainBootstrap: harness.obtainBootstrap,
-        });
-      }).pipe(Effect.provide(harness.layer));
-
-      expect(authorized.socketUrl).toContain("wsTicket=cached-ticket");
-      expect(authorized.socketUrl).toContain("connectionMethod=relay");
-      expect(yield* Ref.get(harness.bootstrapCalls)).toBe(0);
-      expect(harness.fetch.calls).toHaveLength(1);
-      expect(String(harness.fetch.calls[0]?.[0])).toBe(
-        "https://environment.example.test/api/auth/websocket-ticket",
-      );
-    }),
-  );
-
-  it.effect("refreshes and persists an expired environment token", () =>
-    Effect.gen(function* () {
-      const expired = new TokenStore.RemoteDpopAccessToken({
-        environmentId: ENVIRONMENT_ID,
-        label: DESCRIPTOR.label,
-        endpoint: ENDPOINT,
-        accessToken: "expired-access-token",
-        expiresAtEpochMs: 0,
-        dpopThumbprint: "thumbprint-1",
-      });
-      const harness = yield* makeHarness({
-        initialToken: expired,
-        responses: [
-          Response.json(DESCRIPTOR),
-          accessToken("fresh-access-token"),
-          websocketTicket("fresh-ticket"),
-        ],
-      });
-
-      const authorized = yield* Effect.gen(function* () {
-        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
-        return yield* remote.authorizeDpop({
-          expectedEnvironmentId: ENVIRONMENT_ID,
-          obtainBootstrap: harness.obtainBootstrap,
-        });
-      }).pipe(Effect.provide(harness.layer));
-
-      expect(authorized.socketUrl).toContain("wsTicket=fresh-ticket");
-      expect(yield* Ref.get(harness.bootstrapCalls)).toBe(1);
-      expect((yield* Ref.get(harness.tokens)).get(ENVIRONMENT_ID)).toEqual(
-        expect.objectContaining({
-          accessToken: "fresh-access-token",
-          dpopThumbprint: "thumbprint-1",
-        }),
-      );
-      expect(harness.fetch.calls).toHaveLength(3);
-    }),
-  );
-
-  it.effect("evicts an auth-invalid cached token and obtains a fresh bootstrap", () =>
-    Effect.gen(function* () {
-      const cached = new TokenStore.RemoteDpopAccessToken({
-        environmentId: ENVIRONMENT_ID,
-        label: DESCRIPTOR.label,
-        endpoint: ENDPOINT,
-        accessToken: "invalid-access-token",
-        expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-        dpopThumbprint: "thumbprint-1",
-      });
-      const harness = yield* makeHarness({
-        initialToken: cached,
-        responses: [
-          authInvalid(),
-          Response.json(DESCRIPTOR),
-          accessToken("replacement-access-token"),
-          websocketTicket("replacement-ticket"),
-        ],
-      });
-
-      const authorized = yield* Effect.gen(function* () {
-        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
-        return yield* remote.authorizeDpop({
-          expectedEnvironmentId: ENVIRONMENT_ID,
-          obtainBootstrap: harness.obtainBootstrap,
-        });
-      }).pipe(Effect.provide(harness.layer));
-
-      expect(authorized.socketUrl).toContain("wsTicket=replacement-ticket");
-      expect(yield* Ref.get(harness.bootstrapCalls)).toBe(1);
-      expect((yield* Ref.get(harness.tokens)).get(ENVIRONMENT_ID)).toEqual(
-        expect.objectContaining({
-          accessToken: "replacement-access-token",
-        }),
-      );
-      expect(harness.fetch.calls).toHaveLength(4);
-    }),
-  );
-
-  it.effect("presents clock skew as one possible cause for a generic DPoP rejection", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness({
-        responses: [Response.json(DESCRIPTOR), authInvalid()],
-      });
-
-      const failure = yield* Effect.gen(function* () {
-        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
-        return yield* remote.authorizeDpop({
-          expectedEnvironmentId: ENVIRONMENT_ID,
-          obtainBootstrap: harness.obtainBootstrap,
-        });
-      }).pipe(Effect.provide(harness.layer), Effect.flip);
-
-      expect(failure).toMatchObject({
-        _tag: "ConnectionBlockedError",
-        reason: "authentication",
-        detail: `The environment credential is invalid. ${DPOP_UNKNOWN_HINT}`,
-        traceId: "trace-auth-invalid",
-      });
-    }),
-  );
-
-  it.effect("refreshes a cached endpoint after its first transient failure", () =>
-    Effect.gen(function* () {
-      const cached = new TokenStore.RemoteDpopAccessToken({
-        environmentId: ENVIRONMENT_ID,
-        label: DESCRIPTOR.label,
-        endpoint: ENDPOINT,
-        accessToken: "cached-access-token",
-        expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-        dpopThumbprint: "thumbprint-1",
-      });
-      const harness = yield* makeHarness({
-        initialToken: cached,
-        responses: [
-          new Response("endpoint unavailable", { status: 503 }),
-          Response.json(DESCRIPTOR),
-          accessToken("replacement-access-token"),
-          websocketTicket("replacement-ticket"),
-        ],
-      });
-
-      const authorized = yield* Effect.gen(function* () {
-        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
-        return yield* remote.authorizeDpop({
-          expectedEnvironmentId: ENVIRONMENT_ID,
-          obtainBootstrap: harness.obtainBootstrap,
-        });
-      }).pipe(Effect.provide(harness.layer));
-
-      expect(authorized.socketUrl).toContain("wsTicket=replacement-ticket");
-      expect(yield* Ref.get(harness.bootstrapCalls)).toBe(1);
-      expect((yield* Ref.get(harness.tokens)).get(ENVIRONMENT_ID)).toEqual(
-        expect.objectContaining({
-          accessToken: "replacement-access-token",
-        }),
-      );
-      expect(harness.fetch.calls).toHaveLength(4);
-    }),
-  );
-
-  it.effect("does not persist a refreshed token until its websocket ticket succeeds", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness({
-        responses: [
-          Response.json(DESCRIPTOR),
-          accessToken("unusable-access-token"),
-          new Response("endpoint unavailable", { status: 503 }),
-        ],
-      });
-
-      yield* Effect.gen(function* () {
-        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
-        return yield* remote.authorizeDpop({
-          expectedEnvironmentId: ENVIRONMENT_ID,
-          obtainBootstrap: harness.obtainBootstrap,
-        });
-      }).pipe(Effect.provide(harness.layer), Effect.flip);
-
-      expect((yield* Ref.get(harness.tokens)).has(ENVIRONMENT_ID)).toBe(false);
-      expect(yield* Ref.get(harness.bootstrapCalls)).toBe(1);
-      expect(harness.fetch.calls).toHaveLength(3);
     }),
   );
 });

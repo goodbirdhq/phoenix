@@ -1,6 +1,7 @@
 name: PR Size
 
 on:
+  workflow_dispatch:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
 
@@ -113,8 +114,8 @@ jobs:
             }
   label:
     name: Label PR size
-    needs: prepare-config
     if: github.event_name == 'pull_request_target'
+    needs: prepare-config
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -229,17 +230,17 @@ jobs:
               `${baseSha}...${resolvedHeadSha}`,
             ];
 
+            // Large upstream imports can exceed Node's default 1 MiB output buffer.
+            const numstatOptions = { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 };
             const totalChangedLines = sumNumstat(
               execFileSync(
                 "git",
                 diffArgs,
-                { encoding: "utf8" },
+                numstatOptions,
               ),
             );
             const nonTestChangedLines = sumNumstat(
-              execFileSync("git", [...diffArgs, "--", ".", ...testExcludePathspecs], {
-                encoding: "utf8",
-              }),
+              execFileSync("git", [...diffArgs, "--", ".", ...testExcludePathspecs], numstatOptions),
             );
             const testChangedLines = Math.max(0, totalChangedLines - nonTestChangedLines);
 

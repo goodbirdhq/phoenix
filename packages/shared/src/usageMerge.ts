@@ -39,7 +39,20 @@ export interface ModelTotals {
   readonly costUsd: number;
   readonly totalTokens: number;
   readonly records: number;
+  /**
+   * Records whose tokens are counted here but which contributed nothing to
+   * `costUsd`. When it equals `records` the cost is unknown, not zero.
+   */
+  readonly unpricedRecords: number;
   readonly costShare: number;
+}
+
+/**
+ * A model whose every record lacked rates has an unknown cost, not a zero one.
+ * Clients must not present its `costUsd` as a real dollar figure.
+ */
+export function isModelCostUnknown(model: ModelTotals): boolean {
+  return model.records > 0 && model.unpricedRecords >= model.records;
 }
 
 export interface DailyTotals {
@@ -299,7 +312,7 @@ function bucketTokens(bucket: UsageBucket): number {
   );
 }
 
-function isCompatibleContractVersion(version: number, expected: number): boolean {
+export function isCompatibleUsageContractVersion(version: number, expected: number): boolean {
   return version >= USAGE_MERGE_COMPATIBLE_SINCE && version <= expected;
 }
 
@@ -339,19 +352,27 @@ export function mergeUsageCost(
   environments: readonly EnvironmentUsage[],
   expectedContractVersion: number,
 ): number {
+  return mergeUsageCostSummary(environments, expectedContractVersion).costUsd;
+}
+
+/** Cost coverage follows the same account ownership rules as the full usage view. */
+export function mergeUsageCostSummary(
+  environments: readonly EnvironmentUsage[],
+  expectedContractVersion: number,
+): { costUsd: number; records: number; unpricedRecords: number } {
   const current = environments.filter((environment) =>
-    isCompatibleContractVersion(environment.summary.contractVersion, expectedContractVersion),
+    isCompatibleUsageContractVersion(environment.summary.contractVersion, expectedContractVersion),
   );
   const { ownerByFingerprint } = claimSources(current);
-  return current.reduce(
-    (total, environment) =>
-      total +
-      ownedContribution(environment, ownerByFingerprint).buckets.reduce(
-        (sum, bucket) => sum + bucket.costUsd,
-        0,
-      ),
-    0,
-  );
+  const totals = { costUsd: 0, records: 0, unpricedRecords: 0 };
+  for (const environment of current) {
+    for (const bucket of ownedContribution(environment, ownerByFingerprint).buckets) {
+      totals.costUsd += bucket.costUsd;
+      totals.records += bucket.records;
+      totals.unpricedRecords += bucket.unpricedRecords;
+    }
+  }
+  return totals;
 }
 
 /**
@@ -372,7 +393,9 @@ export function mergeUsage(
   const current: EnvironmentUsage[] = [];
   const staleEnvironments: EnvironmentId[] = [];
   for (const environment of environments) {
-    if (isCompatibleContractVersion(environment.summary.contractVersion, expectedContractVersion)) {
+    if (
+      isCompatibleUsageContractVersion(environment.summary.contractVersion, expectedContractVersion)
+    ) {
       current.push(environment);
     } else {
       staleEnvironments.push(environment.environmentId);
@@ -417,7 +440,13 @@ export function mergeUsage(
   >();
   const modelAccumulator = new Map<
     string,
-    { provider: UsageProviderKind; costUsd: number; totalTokens: number; records: number }
+    {
+      provider: UsageProviderKind;
+      costUsd: number;
+      totalTokens: number;
+      records: number;
+      unpricedRecords: number;
+    }
   >();
   const dailyAccumulator = new Map<
     string,
@@ -511,7 +540,15 @@ export function mergeUsage(
       reasoningTokens += bucket.totals.reasoningTokens;
       records += bucket.records;
       unpricedRecords += bucket.unpricedRecords;
-      if (bucket.costSource === "providerReported") providerReportedRecords += bucket.records;
+      // Provider-reported records are counted per record, not per cell: a cell
+      // labeled "providerReported" is fully provider-reported, while a cell whose
+      // weakest provenance is "unpriced" or "modelPriced" may still mix provider
+      // records and carries its exact count in `providerReportedRecords`. Servers
+      // built before per-record provenance omit the field, so fall back to the
+      // cell's label for those.
+      providerReportedRecords +=
+        bucket.providerReportedRecords ??
+        (bucket.costSource === "providerReported" ? bucket.records : 0);
 
       const provider = providerAccumulator.get(bucket.provider) ?? {
         costUsd: 0,
@@ -530,10 +567,12 @@ export function mergeUsage(
         costUsd: 0,
         totalTokens: 0,
         records: 0,
+        unpricedRecords: 0,
       };
       model.costUsd += bucket.costUsd;
       model.totalTokens += tokens;
       model.records += bucket.records;
+      model.unpricedRecords += bucket.unpricedRecords;
       modelAccumulator.set(modelKey, model);
 
       const day = dailyAccumulator.get(bucket.day) ?? {
@@ -592,6 +631,7 @@ export function mergeUsage(
       costUsd: totals.costUsd,
       totalTokens: totals.totalTokens,
       records: totals.records,
+      unpricedRecords: totals.unpricedRecords,
       costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
     }))
     .sort((a, b) => b.costUsd - a.costUsd || b.totalTokens - a.totalTokens);

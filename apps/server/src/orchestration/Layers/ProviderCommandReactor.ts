@@ -16,12 +16,14 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
+import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -40,9 +42,12 @@ import {
   ProviderAdapterRequestError,
   ProviderAdapterProcessError,
   ProviderAdapterSessionNotFoundError,
+  ProviderAdapterValidationError,
+  ProviderWorkspaceMissingError,
 } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
+import { ProviderAuthService } from "../../provider/Services/ProviderAuthService.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -57,11 +62,14 @@ import {
   resolveSourceControlWriterModelSelection,
   ServerSettingsService,
 } from "../../serverSettings.ts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterSessionNotFoundError = Schema.is(ProviderAdapterSessionNotFoundError);
+const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
+const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
 type ProviderIntentEvent = Extract<
@@ -85,6 +93,10 @@ function toNonEmptyProviderInput(value: string | undefined): string | undefined 
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
+const isCompactCommandMessage = (message: ThreadTitleMessage): boolean =>
+  message.role === "user" &&
+  (message.attachments?.length ?? 0) === 0 &&
+  message.text.trim().toLowerCase() === "/compact";
 function mapProviderSessionStatusToOrchestrationStatus(
   status: "connecting" | "ready" | "running" | "error" | "closed",
 ): OrchestrationSession["status"] {
@@ -334,6 +346,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     const crypto = yield* Crypto.Crypto;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const providerAuthService = yield* ProviderAuthService;
     const providerService = yield* ProviderService;
     const delivery = yield* QueuedDelivery.QueuedDelivery;
     const providerRegistry = yield* ProviderRegistry;
@@ -342,6 +355,16 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
     const textGeneration = yield* TextGeneration;
     const serverSettingsService = yield* ServerSettingsService;
+    /** Environment settings with the thread's project overrides applied. */
+    const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+      const settings = yield* serverSettingsService.getSettings;
+      if (Object.keys(settings.projectSettingsOverrides).length === 0) return settings;
+      const thread = yield* projectionSnapshotQuery
+        .getThreadShellById(threadId)
+        .pipe(Effect.orElseSucceed(() => Option.none()));
+      return resolveProjectSettings(settings, Option.isSome(thread) ? thread.value.projectId : null)
+        .settings;
+    });
     const serverCommandId = (tag: string) =>
       crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
     const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -363,6 +386,21 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       );
 
     const threadModelSelections = new Map<string, ModelSelection>();
+    const compactingThreadIds = new Set<ThreadId>();
+    type QueuedTurnStart = Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>;
+    // Turn starts received while a thread compacts, replayed in order once its session is restored.
+    const turnsAfterCompaction = new Map<ThreadId, Array<QueuedTurnStart>>();
+    // Replay command id → the queued turn start it re-requests. `sent` settles once the replay's
+    // provider send finishes, which is what lets the next queued turn follow it in order.
+    const resumedTurnStarts = new Map<
+      CommandId,
+      {
+        readonly event: QueuedTurnStart;
+        readonly queued: Array<QueuedTurnStart>;
+        readonly sent: Deferred.Deferred<void>;
+      }
+    >();
+    const stoppingThreadIds = new Set<ThreadId>();
     const armedGraceStopEpisodes = new Set<string>();
 
     const appendProviderFailureActivity = (input: {
@@ -405,13 +443,81 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         ),
       );
 
+    const cancelTurnsAfterCompaction = Effect.fn("cancelTurnsAfterCompaction")(function* (
+      threadId: ThreadId,
+      detail: string,
+    ) {
+      const queued = turnsAfterCompaction.get(threadId) ?? [];
+      turnsAfterCompaction.delete(threadId);
+      for (const event of queued) {
+        yield* appendProviderFailureActivity({
+          threadId,
+          kind: "provider.turn.start.failed",
+          summary: "Queued message was not sent",
+          detail,
+          turnId: null,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+          requestId: event.payload.messageId,
+        }).pipe(Effect.ignore({ log: true, message: "failed to report canceled queued message" }));
+      }
+    });
+
+    const resumeTurnsAfterCompaction = Effect.fn("resumeTurnsAfterCompaction")(function* (
+      threadId: ThreadId,
+    ) {
+      const queued = turnsAfterCompaction.get(threadId) ?? [];
+      while (queued.length > 0 && turnsAfterCompaction.get(threadId) === queued) {
+        const event = queued[0]!;
+        const turnStart = yield* projectionSnapshotQuery.getTurnStartMessage({
+          threadId,
+          messageId: event.payload.messageId,
+        });
+        if (turnsAfterCompaction.get(threadId) !== queued) return;
+        // In flight from here on: a cancellation reports it when the replay runs, not from the queue.
+        queued.shift();
+        if (Option.isNone(turnStart)) continue;
+        // Reissue the durable request after restoration clears compaction's
+        // pending slot. Reusing the message id preserves a single user bubble.
+        const commandId = yield* serverCommandId("after-compaction");
+        const sent = yield* Deferred.make<void>();
+        resumedTurnStarts.set(commandId, { event, queued, sent });
+        const { messageId, ...request } = event.payload;
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.turn.start",
+            commandId,
+            ...request,
+            message: {
+              messageId,
+              role: "user",
+              text: turnStart.value.message.text,
+              attachments: turnStart.value.message.attachments ?? [],
+            },
+          })
+          .pipe(
+            Effect.onError(() =>
+              Effect.sync(() => {
+                resumedTurnStarts.delete(commandId);
+                queued.unshift(event);
+              }),
+            ),
+          );
+        yield* Deferred.await(sent);
+        resumedTurnStarts.delete(commandId);
+      }
+      if (turnsAfterCompaction.get(threadId) === queued) turnsAfterCompaction.delete(threadId);
+    });
+
     const formatFailureDetail = (cause: Cause.Cause<unknown>): string => {
       const failReason = cause.reasons.find(Cause.isFailReason);
-      const providerError = isProviderAdapterRequestError(failReason?.error)
-        ? failReason.error
-        : undefined;
-      if (providerError) {
-        return providerError.detail;
+      if (isProviderAdapterRequestError(failReason?.error)) {
+        return failReason.error.detail;
+      }
+      if (isProviderAdapterValidationError(failReason?.error)) {
+        return failReason.error.issue;
+      }
+      if (isProviderWorkspaceMissingError(failReason?.error)) {
+        return failReason.error.message;
       }
       return Cause.pretty(cause);
     };
@@ -438,7 +544,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       readonly detail: string;
       readonly createdAt: string;
     }) {
-      const thread = yield* resolveThread(input.threadId);
+      const thread = yield* resolveThreadShell(input.threadId);
       if (!thread) {
         return;
       }
@@ -458,6 +564,40 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           updatedAt: input.createdAt,
         },
         createdAt: input.createdAt,
+      });
+    });
+
+    const restoreCompaction = Effect.fnUntraced(function* (
+      threadId: ThreadId,
+      fromRunning = false,
+    ) {
+      if (stoppingThreadIds.has(threadId)) {
+        compactingThreadIds.delete(threadId);
+        return;
+      }
+      const thread = yield* resolveThreadShell(threadId);
+      if (!thread?.session) return;
+      if (
+        thread.session.status !== "starting" &&
+        thread.session.status !== "ready" &&
+        (!fromRunning || thread.session.status !== "running")
+      )
+        return;
+      const completedAt = DateTime.formatIso(yield* DateTime.now);
+      if (stoppingThreadIds.has(threadId)) {
+        compactingThreadIds.delete(threadId);
+        return;
+      }
+      yield* setThreadSession({
+        threadId,
+        session: {
+          ...thread.session,
+          status: "ready",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: completedAt,
+        },
+        createdAt: completedAt,
       });
     });
 
@@ -513,10 +653,23 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       );
     });
 
-    const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const resolveThreadShell = Effect.fnUntraced(function* (threadId: ThreadId) {
       return yield* projectionSnapshotQuery
-        .getThreadDetailById(threadId)
+        .getThreadShellById(threadId)
         .pipe(Effect.map(Option.getOrUndefined));
+    });
+
+    const resolveThreadDetail = Effect.fnUntraced(function* (threadId: ThreadId) {
+      return yield* projectionSnapshotQuery
+        .getThreadDetailById(threadId, { activityKinds: [] })
+        .pipe(Effect.map(Option.getOrUndefined));
+    });
+
+    // Stop needs only the latest tool audit entries, never conversation bodies.
+    const resolveThreadStopContext = Effect.fnUntraced(function* (threadId: ThreadId) {
+      const thread = yield* resolveThreadShell(threadId);
+      if (!thread) return undefined;
+      return { ...thread, ...(yield* projectionSnapshotQuery.getThreadStopAudit(threadId)) };
     });
 
     const rejectStartedThreadModelChangeIfRequired = Effect.fnUntraced(function* (input: {
@@ -565,7 +718,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         readonly migrationBrief?: string;
       },
     ) {
-      const thread = yield* resolveThread(threadId);
+      const thread = yield* resolveThreadShell(threadId);
       if (!thread) {
         return yield* Effect.die(new Error(`Thread '${threadId}' was not found in read model.`));
       }
@@ -742,6 +895,11 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         thread,
         projects: project ? [project] : [],
       });
+      const refreshWorkspaceSnapshot = effectiveCwd
+        ? providerRegistry
+            .refreshWorkspaceSnapshot({ instanceId: desiredInstanceId, cwd: effectiveCwd })
+            .pipe(Effect.forkDetach)
+        : Effect.void;
 
       // A session on a different continuation identity cannot resume natively,
       // so a migrating thread is seeded from Phoenix's own transcript instead.
@@ -779,17 +937,19 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         readonly provider?: ProviderDriverKind;
         readonly seed?: ProviderConversationSeed;
       }) =>
-        providerService.startSession(threadId, {
-          threadId,
-          ...(preferredProvider ? { provider: preferredProvider } : {}),
-          providerInstanceId: desiredInstanceId,
-          ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-          ...(thread.title ? { title: thread.title } : {}),
-          modelSelection: desiredModelSelection,
-          ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-          ...(input?.seed !== undefined ? { seed: input.seed } : {}),
-          runtimeMode: desiredRuntimeMode,
-        });
+        providerService
+          .startSession(threadId, {
+            threadId,
+            ...(preferredProvider ? { provider: preferredProvider } : {}),
+            providerInstanceId: desiredInstanceId,
+            ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+            ...(thread.title ? { title: thread.title } : {}),
+            modelSelection: desiredModelSelection,
+            ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+            ...(input?.seed !== undefined ? { seed: input.seed } : {}),
+            runtimeMode: desiredRuntimeMode,
+          })
+          .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
 
       const bindSessionToThread = (session: ProviderSession) =>
         Effect.gen(function* () {
@@ -863,6 +1023,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           !shouldRestartForModelChange &&
           !shouldRestartForModelSelectionChange
         ) {
+          yield* refreshWorkspaceSnapshot;
           return existingSessionThreadId;
         }
 
@@ -923,7 +1084,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       readonly queuedDeliveryMessageId?: MessageId | null;
       readonly createdAt: string;
     }) {
-      const thread = yield* resolveThread(input.threadId);
+      const thread = yield* resolveThreadShell(input.threadId);
       if (!thread) {
         return yield* Effect.die(
           new Error(`Thread '${input.threadId}' was not found in read model.`),
@@ -998,7 +1159,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       const cwd = input.worktreePath;
       const attachments = input.attachments ?? [];
       yield* Effect.gen(function* () {
-        const settings = yield* serverSettingsService.getSettings;
+        const settings = yield* projectSettingsForThread(input.threadId);
         const modelSelection =
           settings.sourceControlWriterModelSelection === null
             ? settings.textGenerationModelSelection
@@ -1056,8 +1217,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       }) {
         const attachments = input.attachments ?? [];
         yield* Effect.gen(function* () {
-          const { textGenerationModelSelection: modelSelection } =
-            yield* serverSettingsService.getSettings;
+          const { textGenerationModelSelection: modelSelection } = yield* projectSettingsForThread(
+            input.threadId,
+          );
 
           const generated = yield* textGeneration
             .generateThreadTitle({
@@ -1074,7 +1236,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             );
           if (!generated) return;
 
-          const thread = yield* resolveThread(input.threadId);
+          const thread = yield* resolveThreadShell(input.threadId);
           if (!thread) return;
           if (!canReplaceThreadTitle(thread.title, input.titleSeed)) {
             return;
@@ -1109,7 +1271,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         return { _tag: "Superseded" } as const;
       }
 
-      const thread = yield* resolveThread(event.payload.threadId);
+      const thread = yield* resolveThreadDetail(event.payload.threadId);
       if (!thread || thread.titleRegeneration?.requestId !== requestId) {
         return { _tag: "Superseded" } as const;
       }
@@ -1129,8 +1291,10 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           thread,
           projects: project ? [project] : [],
         }) ?? process.cwd();
-      const { textGenerationModelSelection: modelSelection } =
-        yield* serverSettingsService.getSettings;
+      const { textGenerationModelSelection: modelSelection } = resolveProjectSettings(
+        yield* serverSettingsService.getSettings,
+        thread.projectId,
+      ).settings;
       const generated = yield* textGeneration.generateThreadTitle({
         cwd,
         message,
@@ -1142,7 +1306,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         return { _tag: "Completed", title: undefined } as const;
       }
 
-      const latestThread = yield* resolveThread(event.payload.threadId);
+      const latestThread = yield* resolveThreadShell(event.payload.threadId);
       if (
         !latestThread ||
         latestThread.titleRegeneration?.requestId !== requestId ||
@@ -1153,6 +1317,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
 
       return { _tag: "Completed", title: generated.title } as const;
     });
+
     const dispatchThreadTitleRegenerationCompletion = Effect.fn(
       "dispatchThreadTitleRegenerationCompletion",
     )(function* (input: {
@@ -1270,10 +1435,78 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     const threadTitleRegenerationWorker = yield* makeDrainableWorker(
       processThreadTitleRegenerationSafely,
     );
+    // A successful native command is an accepted delivery even when it creates no turn.
+    const acknowledgeQueuedDelivery = Effect.fn("acknowledgeQueuedDelivery")(function* (
+      event: QueuedTurnStart,
+      turnId: TurnId | null,
+    ) {
+      const messageId = event.payload.queuedDeliveryMessageId;
+      if (messageId == null) return;
+      const consumedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* Effect.suspend(() =>
+        orchestrationEngine.dispatch({
+          type: "thread.turn.queue.consume",
+          commandId: CommandId.make(`queued-turn-consumed:${event.payload.threadId}:${messageId}`),
+          threadId: event.payload.threadId,
+          messageId,
+          turnId,
+          createdAt: consumedAt,
+        }),
+      ).pipe(
+        Effect.retry({
+          schedule: Schedule.exponential("250 millis").pipe(
+            Schedule.modifyDelay(({ duration }) =>
+              Effect.succeed(Duration.min(duration, Duration.seconds(5))),
+            ),
+            Schedule.jittered,
+          ),
+          while: (error) =>
+            error._tag === "PersistenceSqlError" ||
+            error._tag === "OrchestrationListenerCallbackError",
+        }),
+      );
+    });
+
+    // Serialize admission with cancellation, but release the permit before provider work.
+    // Ownership remains until completion is persisted, preventing recovery from redelivering.
+    const withNativeDelivery = <A, E, R>(
+      event: QueuedTurnStart,
+      operation: Effect.Effect<A, E, R>,
+    ) => {
+      const threadId = event.payload.threadId;
+      const messageId = event.payload.queuedDeliveryMessageId;
+      if (messageId == null) return operation.pipe(Effect.map(Option.some));
+      return Effect.acquireUseRelease(
+        delivery.withPermit(
+          threadId,
+          Effect.gen(function* () {
+            if (yield* delivery.isPending(threadId, messageId)) return false;
+            const thread = yield* resolveThreadDetail(threadId);
+            if (
+              thread?.session?.stopRequestedAt != null ||
+              !thread?.queuedTurnStarts?.some(
+                (entry) => entry.messageId === messageId && entry.releasingAt !== undefined,
+              )
+            )
+              return false;
+            yield* delivery.setPending(threadId, messageId, true);
+            return true;
+          }),
+        ),
+        (admitted) =>
+          admitted ? operation.pipe(Effect.map(Option.some)) : Effect.succeed(Option.none<A>()),
+        (admitted) => (admitted ? delivery.setPending(threadId, messageId, false) : Effect.void),
+      );
+    };
 
     const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
-      event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+      receivedEvent: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
     ) {
+      const resumed =
+        receivedEvent.commandId !== null
+          ? resumedTurnStarts.get(receivedEvent.commandId)
+          : undefined;
+      const event = resumed ? { ...receivedEvent, payload: resumed.event.payload } : receivedEvent;
       const key = turnStartKeyForEvent(event);
       if (yield* hasHandledTurnStartRecently(key)) {
         return;
@@ -1281,13 +1514,15 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
 
       const queuedId = event.payload.queuedDeliveryMessageId;
       if (queuedId != null && (yield* delivery.isPending(event.payload.threadId, queuedId))) return;
-      const thread = yield* resolveThread(event.payload.threadId);
+      const thread = yield* resolveThreadShell(event.payload.threadId);
       if (!thread) {
         return;
       }
-
-      const message = thread.messages.find((entry) => entry.id === event.payload.messageId);
-      if (!message || message.role !== "user") {
+      const turnStart = yield* projectionSnapshotQuery.getTurnStartMessage({
+        threadId: thread.id,
+        messageId: event.payload.messageId,
+      });
+      if (Option.isNone(turnStart) || turnStart.value.message.role !== "user") {
         yield* appendProviderFailureActivity({
           threadId: event.payload.threadId,
           kind: "provider.turn.start.failed",
@@ -1295,6 +1530,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           detail: `User message '${event.payload.messageId}' was not found for turn start request.`,
           turnId: null,
           createdAt: event.payload.createdAt,
+          requestId: event.payload.messageId,
         });
         return;
       }
@@ -1304,12 +1540,110 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       if (event.payload.graceStopNotice === true && thread.session?.status === "stopped") {
         return;
       }
+      const { message, hasOtherUserMessages } = turnStart.value;
+      const appendTurnStartFailure = (summary: string, detail: string) =>
+        appendProviderFailureActivity({
+          threadId: event.payload.threadId,
+          kind: "provider.turn.start.failed",
+          summary,
+          detail,
+          turnId: null,
+          createdAt: event.payload.createdAt,
+          requestId: event.payload.messageId,
+        });
+      if (resumed && turnsAfterCompaction.get(event.payload.threadId) !== resumed.queued) {
+        return yield* appendTurnStartFailure(
+          "Queued message was not sent",
+          "The queued message was canceled before it could resume. Send it again to continue.",
+        );
+      }
+
+      const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.void;
+        }
+        const detail = formatFailureDetail(cause);
+        return setThreadSessionErrorOnTurnStartFailure({
+          threadId: event.payload.threadId,
+          detail,
+          createdAt: event.payload.createdAt,
+        }).pipe(
+          Effect.flatMap(() => appendTurnStartFailure("Provider turn start failed", detail)),
+          Effect.asVoid,
+        );
+      };
+
+      const recoverTurnStartFailure = (cause: Cause.Cause<unknown>) =>
+        handleTurnStartFailure(cause).pipe(
+          Effect.catchCause((recoveryCause) =>
+            Effect.logWarning("provider command reactor failed to recover turn start failure", {
+              eventType: event.type,
+              threadId: event.payload.threadId,
+              cause: Cause.pretty(recoveryCause),
+              originalCause: Cause.pretty(cause),
+            }),
+          ),
+        );
+
+      const authCommandHandled = yield* withNativeDelivery(
+        event,
+        Effect.gen(function* () {
+          // Native account commands belong to the thread's existing provider session.
+          const instanceId =
+            thread.session?.providerInstanceId ??
+            event.payload.modelSelection?.instanceId ??
+            thread.modelSelection.instanceId;
+          const handled = yield* providerAuthService.tryHandlePromptCommand({
+            instanceId,
+            text: message.text,
+            hasAttachments: (message.attachments?.length ?? 0) > 0,
+          });
+          if (!handled) {
+            return false;
+          }
+
+          yield* acknowledgeQueuedDelivery(event, null);
+          const instanceInfo = yield* providerService.getInstanceInfo(instanceId);
+          yield* setThreadSession({
+            threadId: thread.id,
+            session: {
+              threadId: thread.id,
+              status: "stopped",
+              providerName: instanceInfo.driverKind,
+              providerInstanceId: instanceId,
+              runtimeMode: thread.runtimeMode,
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: event.payload.createdAt,
+            },
+            createdAt: event.payload.createdAt,
+          });
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* serverCommandId("provider-sign-out"),
+            threadId: thread.id,
+            activity: {
+              id: yield* serverEventId(),
+              tone: "info",
+              kind: "provider.auth.signed-out",
+              summary: "Provider signed out",
+              payload: { providerInstanceId: instanceId },
+              turnId: null,
+              createdAt: event.payload.createdAt,
+            },
+            createdAt: event.payload.createdAt,
+          });
+          return true;
+        }).pipe(Effect.catchCause((cause) => recoverTurnStartFailure(cause).pipe(Effect.as(true)))),
+      );
+      if (Option.isNone(authCommandHandled) || authCommandHandled.value) {
+        return;
+      }
 
       yield* ensureThreadWorktree(thread);
 
-      const isFirstUserMessageTurn =
-        thread.messages.filter((entry) => entry.role === "user").length === 1;
-      if (isFirstUserMessageTurn) {
+      const isCompactCommand = isCompactCommandMessage(message);
+      if (!hasOtherUserMessages && !isCompactCommand) {
         const project = yield* resolveProject(thread.projectId);
         const generationCwd =
           resolveThreadWorkspaceCwd({
@@ -1338,34 +1672,40 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         }
       }
 
-      const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
+      let compactionSessionEnsured = false;
+      const handleCompactionFailure = (cause: Cause.Cause<unknown>) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.void;
         }
         const detail = formatFailureDetail(cause);
-        return setThreadSessionErrorOnTurnStartFailure({
-          threadId: event.payload.threadId,
-          detail,
-          createdAt: event.payload.createdAt,
-        }).pipe(
-          Effect.flatMap(() =>
-            appendProviderFailureActivity({
-              threadId: event.payload.threadId,
-              kind: "provider.turn.start.failed",
-              summary: "Provider turn start failed",
-              detail,
-              turnId: null,
-              createdAt: event.payload.createdAt,
-            }),
+        if (!compactionSessionEnsured) {
+          return setThreadSessionErrorOnTurnStartFailure({
+            threadId: event.payload.threadId,
+            detail,
+            createdAt: event.payload.createdAt,
+          }).pipe(
+            Effect.flatMap(() => appendTurnStartFailure("Context compaction failed", detail)),
+            Effect.asVoid,
+          );
+        }
+        return appendTurnStartFailure("Context compaction failed", detail).pipe(
+          Effect.ensuring(
+            restoreCompaction(event.payload.threadId).pipe(
+              Effect.catchCause((restoreCause) =>
+                Effect.logWarning("failed to restore provider session after compaction failure", {
+                  threadId: event.payload.threadId,
+                  cause: Cause.pretty(restoreCause),
+                }),
+              ),
+            ),
           ),
           Effect.asVoid,
         );
       };
-
-      const recoverTurnStartFailure = (cause: Cause.Cause<unknown>) =>
-        handleTurnStartFailure(cause).pipe(
+      const recoverCompactionFailure = (cause: Cause.Cause<unknown>) =>
+        handleCompactionFailure(cause).pipe(
           Effect.catchCause((recoveryCause) =>
-            Effect.logWarning("provider command reactor failed to recover turn start failure", {
+            Effect.logWarning("provider command reactor failed to recover compaction failure", {
               eventType: event.type,
               threadId: event.payload.threadId,
               cause: Cause.pretty(recoveryCause),
@@ -1373,22 +1713,88 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             }),
           ),
         );
-
-      if (event.payload.queuedDeliveryMessageId != null) {
-        const current = yield* resolveThread(event.payload.threadId);
+      if (isCompactCommand) {
+        if (!hasOtherUserMessages) {
+          return yield* appendTurnStartFailure(
+            "Context compaction failed",
+            "Context compaction requires an existing conversation.",
+          );
+        }
+        const latestThread = yield* resolveThreadShell(event.payload.threadId);
         if (
-          !current?.queuedTurnStarts?.some(
-            (entry) =>
-              entry.messageId === event.payload.queuedDeliveryMessageId &&
-              entry.releasingAt !== undefined,
-          )
-        )
+          compactingThreadIds.has(event.payload.threadId) ||
+          turnsAfterCompaction.has(event.payload.threadId) ||
+          latestThread?.session?.status === "starting" ||
+          latestThread?.session?.status === "running"
+        ) {
+          yield* appendTurnStartFailure(
+            "Context compaction failed",
+            "Context compaction is unavailable while a provider turn is running.",
+          );
           return;
+        }
+        compactingThreadIds.add(event.payload.threadId);
+        const clearCompacting = Effect.sync(
+          () => void compactingThreadIds.delete(event.payload.threadId),
+        );
+        yield* withNativeDelivery(
+          event,
+          Effect.gen(function* () {
+            yield* ensureSessionForThread(
+              event.payload.threadId,
+              event.payload.createdAt,
+              event.payload.modelSelection !== undefined
+                ? { modelSelection: event.payload.modelSelection, pendingTurnStart: true }
+                : { pendingTurnStart: true },
+            );
+            compactionSessionEnsured = true;
+            if (event.payload.modelSelection !== undefined) {
+              threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+            }
+            yield* providerService.compactThread(
+              event.payload.threadId,
+              event.payload.modelSelection,
+              event.payload.messageId,
+            );
+            yield* acknowledgeQueuedDelivery(event, null);
+          }),
+        ).pipe(
+          Effect.flatMap((admitted) =>
+            Option.isSome(admitted) ? restoreCompaction(event.payload.threadId, true) : Effect.void,
+          ),
+          Effect.andThen(clearCompacting),
+          Effect.andThen(resumeTurnsAfterCompaction(event.payload.threadId)),
+          Effect.catchCause((cause) =>
+            recoverCompactionFailure(cause).pipe(
+              Effect.ensuring(clearCompacting),
+              Effect.andThen(
+                cancelTurnsAfterCompaction(
+                  event.payload.threadId,
+                  "Context compaction failed. Send this message again to continue.",
+                ),
+              ),
+            ),
+          ),
+          Effect.forkScoped,
+        );
+        return;
       }
-
+      if (
+        !resumed &&
+        (compactingThreadIds.has(event.payload.threadId) ||
+          turnsAfterCompaction.has(event.payload.threadId))
+      ) {
+        const queued = turnsAfterCompaction.get(event.payload.threadId) ?? [];
+        queued.push(event);
+        turnsAfterCompaction.set(event.payload.threadId, queued);
+        return;
+      }
       const sendTurnRequest = yield* buildSendTurnRequestForThread({
         threadId: event.payload.threadId,
-        messageText: message.text,
+        messageText: projectComposerContextForProvider({
+          text: message.text,
+          records: message.context?.records ?? [],
+        }),
         ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
         ...(event.payload.modelSelection !== undefined
           ? { modelSelection: event.payload.modelSelection }
@@ -1406,10 +1812,12 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         return;
       }
 
+      // The forked send settles `sent` from here on, so drop the entry the post-processing hook uses.
+      if (resumed && event.commandId !== null) resumedTurnStarts.delete(event.commandId);
       yield* Effect.gen(function* () {
         const messageId = event.payload.queuedDeliveryMessageId;
         if (messageId != null) {
-          const current = yield* resolveThread(event.payload.threadId);
+          const current = yield* resolveThreadDetail(event.payload.threadId);
           if (current?.session?.stopRequestedAt != null) return;
           if (
             !current?.queuedTurnStarts?.some(
@@ -1432,36 +1840,15 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             ),
           );
           if (Option.isNone(accepted) || messageId == null) return;
-          const consumedAt = DateTime.formatIso(yield* DateTime.now);
-          yield* Effect.suspend(() =>
-            orchestrationEngine.dispatch({
-              type: "thread.turn.queue.consume",
-              commandId: CommandId.make(
-                `queued-turn-consumed:${event.payload.threadId}:${messageId}`,
-              ),
-              threadId: event.payload.threadId,
-              messageId,
-              turnId: accepted.value.turnId,
-              createdAt: consumedAt,
-            }),
-          ).pipe(
-            Effect.retry({
-              schedule: Schedule.exponential("250 millis").pipe(
-                Schedule.modifyDelay(({ duration }) =>
-                  Effect.succeed(Duration.min(duration, Duration.seconds(5))),
-                ),
-                Schedule.jittered,
-              ),
-              while: (error) =>
-                error._tag === "PersistenceSqlError" ||
-                error._tag === "OrchestrationListenerCallbackError",
-            }),
-          );
+          yield* acknowledgeQueuedDelivery(event, accepted.value.turnId);
         }).pipe(
           Effect.ensuring(
-            messageId == null
-              ? Effect.void
-              : delivery.setPending(event.payload.threadId, messageId, false),
+            Effect.all([
+              messageId == null
+                ? Effect.void
+                : delivery.setPending(event.payload.threadId, messageId, false),
+              resumed ? Deferred.succeed(resumed.sent, undefined) : Effect.void,
+            ]),
           ),
           Effect.forkScoped,
         );
@@ -1471,11 +1858,14 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           : delivery.withPermit(event.payload.threadId, send),
       );
     });
-
     const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
       event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
     ) {
-      const thread = yield* resolveThread(event.payload.threadId);
+      yield* cancelTurnsAfterCompaction(
+        event.payload.threadId,
+        "Context compaction was interrupted. Send this message again to continue.",
+      );
+      const thread = yield* resolveThreadShell(event.payload.threadId);
       if (!thread) {
         return;
       }
@@ -1571,7 +1961,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         return;
       }
       const phantom = outcome === "phantom";
-      const afterInterrupt = yield* resolveThread(event.payload.threadId);
+      const afterInterrupt = yield* resolveThreadShell(event.payload.threadId);
       const activeTurnId = afterInterrupt?.session?.activeTurnId ?? null;
       if (
         activeTurnId !== (thread.session?.activeTurnId ?? null) ||
@@ -1618,12 +2008,11 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           );
       }
     });
-
     const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(
       function* (
         event: Extract<ProviderIntentEvent, { type: "thread.approval-response-requested" }>,
       ) {
-        const thread = yield* resolveThread(event.payload.threadId);
+        const thread = yield* resolveThreadShell(event.payload.threadId);
         if (!thread) {
           return;
         }
@@ -1667,12 +2056,11 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           );
       },
     );
-
     const processUserInputResponseRequested = Effect.fn("processUserInputResponseRequested")(
       function* (
         event: Extract<ProviderIntentEvent, { type: "thread.user-input-response-requested" }>,
       ) {
-        const thread = yield* resolveThread(event.payload.threadId);
+        const thread = yield* resolveThreadShell(event.payload.threadId);
         if (!thread) {
           return;
         }
@@ -1696,6 +2084,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             threadId: event.payload.threadId,
             requestId: event.payload.requestId,
             answers: event.payload.answers,
+            ...(event.payload.attachmentsByQuestionId
+              ? { attachmentsByQuestionId: event.payload.attachmentsByQuestionId }
+              : {}),
           })
           .pipe(
             Effect.catchCause((cause) =>
@@ -1714,12 +2105,11 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           );
       },
     );
-
     const stopGraceEpisodeAtDeadline = Effect.fnUntraced(function* (input: {
       readonly threadId: ThreadId;
       readonly episodeId: EventId;
     }) {
-      const current = yield* resolveThread(input.threadId);
+      const current = yield* resolveThreadShell(input.threadId);
       if (
         !current?.session ||
         current.session.status === "stopped" ||
@@ -1776,7 +2166,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     });
 
     const rearmGraceStopDeadlines = Effect.fn("rearmGraceStopDeadlines")(function* () {
-      const snapshot = yield* projectionSnapshotQuery.getSnapshot();
+      const snapshot = yield* projectionSnapshotQuery.getCommandReadModel();
       for (const thread of snapshot.threads) {
         if (
           thread.session?.status !== "stopped" &&
@@ -1795,21 +2185,20 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
       event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
     ) {
-      const thread = yield* resolveThread(event.payload.threadId);
+      const thread = yield* resolveThreadStopContext(event.payload.threadId);
       if (!thread) {
         return;
       }
 
       const now = event.payload.createdAt;
+      const wasCompacting = compactingThreadIds.has(thread.id);
+      stoppingThreadIds.add(thread.id);
+      const clearStopping = Effect.sync(() => void stoppingThreadIds.delete(thread.id));
+      yield* cancelTurnsAfterCompaction(
+        thread.id,
+        "The session was stopped during context compaction. Send this message again to continue.",
+      );
       const stopAudit = (current: typeof thread) => {
-        const lastToolActivity = current.activities
-          .filter(
-            (activity) => activity.kind === "tool.started" || activity.kind === "tool.completed",
-          )
-          .at(-1);
-        const lastCompletedOperation =
-          current.activities.filter((activity) => activity.kind === "tool.completed").at(-1)
-            ?.summary ?? null;
         return {
           stoppedBy: event.payload.stoppedBy ?? "user",
           stopRequestedAt: event.payload.createdAt,
@@ -1817,8 +2206,8 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           interruptedToolCall:
             current.session?.activeTurnId !== undefined &&
             current.session.activeTurnId !== null &&
-            lastToolActivity?.kind === "tool.started",
-          lastCompletedOperation,
+            current.lastToolKind === "tool.started",
+          lastCompletedOperation: current.lastCompletedOperation,
         } as const;
       };
       const setStoppedSession = (current: typeof thread) =>
@@ -1843,7 +2232,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           createdAt: now,
         });
       const hardStop = Effect.fnUntraced(function* () {
-        const current = yield* resolveThread(event.payload.threadId);
+        const current = yield* resolveThreadStopContext(event.payload.threadId);
         if (!current || current.session?.status === "stopped") {
           return;
         }
@@ -1862,7 +2251,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           });
           yield* providerService.stopSession({ threadId: current.id });
         }
-        const afterStop = yield* resolveThread(current.id);
+        const afterStop = yield* resolveThreadStopContext(current.id);
         if (
           !afterStop ||
           (afterStop.session?.episodeStartedAt ?? null) !==
@@ -1872,68 +2261,90 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         yield* setStoppedSession(afterStop);
       });
 
-      if (event.payload.gracePeriodMs == null || thread.session === null) {
-        return yield* hardStop();
-      }
+      yield* Effect.gen(function* () {
+        if (event.payload.gracePeriodMs == null || thread.session === null) {
+          return yield* hardStop();
+        }
 
-      if (thread.session.graceStopDeadlineAt != null && thread.session.graceStopEpisodeId != null) {
-        // Multiple stop commands should not make the provider process several
-        // notices or replace the first deadline. Re-arm in case this reactor
-        // restarted after the deadline was recorded.
-        return yield* armGraceStopDeadline({
+        if (
+          thread.session.graceStopDeadlineAt != null &&
+          thread.session.graceStopEpisodeId != null
+        ) {
+          // Multiple stop commands should not make the provider process several
+          // notices or replace the first deadline. Re-arm in case this reactor
+          // restarted after the deadline was recorded.
+          return yield* armGraceStopDeadline({
+            threadId: thread.id,
+            episodeId: thread.session.graceStopEpisodeId,
+            deadlineAt: thread.session.graceStopDeadlineAt,
+          });
+        }
+
+        const episodeId = event.eventId;
+        const deadlineAt = DateTime.formatIso(
+          DateTime.add(DateTime.makeUnsafe(now), { milliseconds: event.payload.gracePeriodMs }),
+        );
+
+        // Provider adapters treat a send while a real turn is running as a steer,
+        // so this notice is queued after the in-flight tool work instead of
+        // cancelling it. The child can then use post_report before the deadline.
+        yield* setThreadSession({
           threadId: thread.id,
-          episodeId: thread.session.graceStopEpisodeId,
-          deadlineAt: thread.session.graceStopDeadlineAt,
+          session: {
+            ...thread.session,
+            ...stopAudit(thread),
+            graceStopDeadlineAt: deadlineAt,
+            graceStopEpisodeId: episodeId,
+            updatedAt: now,
+          },
+          createdAt: now,
         });
-      }
-
-      const episodeId = event.eventId;
-      const deadlineAt = DateTime.formatIso(
-        DateTime.add(DateTime.makeUnsafe(now), { milliseconds: event.payload.gracePeriodMs }),
+        // Arm before dispatching so a delivery failure cannot leave the child
+        // running indefinitely. The persisted deadline is re-armed at startup.
+        yield* armGraceStopDeadline({ threadId: thread.id, episodeId, deadlineAt });
+        const noticeMessageId = MessageId.make(yield* crypto.randomUUIDv4);
+        const partialReportInstruction =
+          event.payload.requestPartialReport === true
+            ? " Call post_report with a partial report before stopping."
+            : " Stop after completing the current operation.";
+        yield* orchestrationEngine.dispatch({
+          type: "thread.turn.start",
+          commandId: yield* serverCommandId("session-graceful-stop-notice"),
+          threadId: thread.id,
+          message: {
+            messageId: noticeMessageId,
+            role: "user",
+            text: `A parent session requested that you stop. Finish the current tool call if one is in progress, then stop working.${partialReportInstruction}`,
+            attachments: [],
+            // Phoenix relaying the parent's stop request — not the human, and
+            // not the parent speaking in its own words.
+            origin: { kind: "phoenix", threadId: thread.spawnedByThreadId ?? null },
+          },
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+          graceStopNotice: true,
+          createdAt: now,
+        });
+      }).pipe(
+        Effect.ensuring(
+          Effect.gen(function* () {
+            yield* clearStopping;
+            // Compaction may settle while provider stop is still pending. Restore
+            // its transient state on either outcome, preserving stopped/running.
+            if (wasCompacting && !compactingThreadIds.has(thread.id)) {
+              yield* restoreCompaction(thread.id).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("failed to restore provider session after compaction", {
+                    threadId: thread.id,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              );
+            }
+          }),
+        ),
       );
-
-      // Provider adapters treat a send while a real turn is running as a steer,
-      // so this notice is queued after the in-flight tool work instead of
-      // cancelling it. The child can then use post_report before the deadline.
-      yield* setThreadSession({
-        threadId: thread.id,
-        session: {
-          ...thread.session,
-          ...stopAudit(thread),
-          graceStopDeadlineAt: deadlineAt,
-          graceStopEpisodeId: episodeId,
-          updatedAt: now,
-        },
-        createdAt: now,
-      });
-      // Arm before dispatching so a delivery failure cannot leave the child
-      // running indefinitely. The persisted deadline is re-armed at startup.
-      yield* armGraceStopDeadline({ threadId: thread.id, episodeId, deadlineAt });
-      const noticeMessageId = MessageId.make(yield* crypto.randomUUIDv4);
-      const partialReportInstruction =
-        event.payload.requestPartialReport === true
-          ? " Call post_report with a partial report before stopping."
-          : " Stop after completing the current operation.";
-      yield* orchestrationEngine.dispatch({
-        type: "thread.turn.start",
-        commandId: yield* serverCommandId("session-graceful-stop-notice"),
-        threadId: thread.id,
-        message: {
-          messageId: noticeMessageId,
-          role: "user",
-          text: `A parent session requested that you stop. Finish the current tool call if one is in progress, then stop working.${partialReportInstruction}`,
-          attachments: [],
-          // Phoenix relaying the parent's stop request — not the human, and
-          // not the parent speaking in its own words.
-          origin: { kind: "phoenix", threadId: thread.spawnedByThreadId ?? null },
-        },
-        runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
-        graceStopNotice: true,
-        createdAt: now,
-      });
     });
-
     const processDomainEvent = Effect.fn("processDomainEvent")(function* (
       event: ProviderIntentEvent,
     ) {
@@ -1950,7 +2361,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           yield* threadTitleRegenerationWorker.enqueue(event);
           return;
         case "thread.runtime-mode-set": {
-          const thread = yield* resolveThread(event.payload.threadId);
+          const thread = yield* resolveThreadShell(event.payload.threadId);
           if (!thread?.session || thread.session.status === "stopped") {
             return;
           }
@@ -1978,7 +2389,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           yield* processSessionStopRequested(event).pipe(
             Effect.catchCause((cause) =>
               Effect.gen(function* () {
-                const current = yield* resolveThread(event.payload.threadId);
+                const current = yield* resolveThreadShell(event.payload.threadId);
                 const detail = Cause.pretty(cause);
                 if (current?.session)
                   yield* setThreadSession({
@@ -2027,7 +2438,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           // Keep the reactor's per-thread selection cache in step so unrelated
           // restarts (e.g. runtime-mode changes) do not resurrect the old account.
           threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
-          const thread = yield* resolveThread(event.payload.threadId);
+          const thread = yield* resolveThreadShell(event.payload.threadId);
           if (!thread?.session) {
             // Never started: the first turn starts on the target instance via
             // the rebound thread.modelSelection, seeded if history exists.
@@ -2043,7 +2454,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           // Auto-failover retries the failed turn here, after the rebind, so the
           // retry can never race the session restart into the instance guard.
           if (event.payload.trigger === "auto-failover") {
-            const migrated = yield* resolveThread(event.payload.threadId);
+            const migrated = yield* resolveThreadDetail(event.payload.threadId);
             const failedMessage = migrated?.messages.findLast((message) => message.role === "user");
             if (migrated && failedMessage) {
               // Same message id: the projection upserts on message_id, so the
@@ -2071,6 +2482,14 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
 
     const processDomainEventSafely = (event: ProviderIntentEvent) =>
       processDomainEvent(event).pipe(
+        // A replay that returned before forking its send still holds its entry; settle it so
+        // the compaction queue moves on. Forked sends drop the entry first and settle it themselves.
+        Effect.ensuring(
+          Effect.suspend(() => {
+            const resumed = event.commandId !== null && resumedTurnStarts.get(event.commandId);
+            return resumed ? Deferred.succeed(resumed.sent, undefined) : Effect.void;
+          }),
+        ),
         Effect.catchCause((cause) => {
           if (Cause.hasInterruptsOnly(cause)) {
             return Effect.interrupt;

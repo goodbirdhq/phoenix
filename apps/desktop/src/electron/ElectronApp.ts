@@ -14,7 +14,7 @@ export interface ElectronAppMetadata {
   readonly runningUnderArm64Translation: boolean;
 }
 
-export class ElectronAppMetadataReadError extends Schema.TaggedErrorClass<ElectronAppMetadataReadError>()(
+export class ElectronAppMetadataReadError extends Schema.TaggedError<ElectronAppMetadataReadError>()(
   "ElectronAppMetadataReadError",
   {
     property: Schema.Literals(["app-version", "app-path"]),
@@ -26,7 +26,7 @@ export class ElectronAppMetadataReadError extends Schema.TaggedErrorClass<Electr
   }
 }
 
-export class ElectronAppWhenReadyError extends Schema.TaggedErrorClass<ElectronAppWhenReadyError>()(
+export class ElectronAppWhenReadyError extends Schema.TaggedError<ElectronAppWhenReadyError>()(
   "ElectronAppWhenReadyError",
   {
     isPackaged: Schema.Boolean,
@@ -53,6 +53,12 @@ export class ElectronApp extends Context.Service<
     readonly whenReady: Effect.Effect<void, ElectronAppWhenReadyError>;
     readonly quit: Effect.Effect<void>;
     readonly exit: (code: number) => Effect.Effect<void>;
+    /**
+     * Electron's single-instance lock, scoped to the userData directory. The lock
+     * both lives in and creates that directory, so the real userData path must be
+     * set before this is acquired.
+     */
+    readonly requestSingleInstanceLock: Effect.Effect<boolean>;
     readonly relaunch: (options: Electron.RelaunchOptions) => Effect.Effect<void>;
     readonly setPath: (
       name: Parameters<Electron.App["setPath"]>[0],
@@ -98,6 +104,7 @@ const addScopedAppListener = <Args extends ReadonlyArray<unknown>>(
       }),
   ).pipe(Effect.asVoid);
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = ElectronApp.of({
   metadata: Effect.gen(function* () {
     const appVersion = yield* Effect.try({
@@ -140,6 +147,7 @@ export const make = ElectronApp.of({
   quit: Effect.sync(() => {
     Electron.app.quit();
   }),
+  requestSingleInstanceLock: Effect.sync(() => Electron.app.requestSingleInstanceLock()),
   exit: (code) =>
     Effect.sync(() => {
       Electron.app.exit(code);

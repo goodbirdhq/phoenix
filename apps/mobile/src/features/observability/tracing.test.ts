@@ -5,9 +5,7 @@ import * as Layer from "effect/Layer";
 import { vi } from "vite-plus/test";
 
 import { remoteHttpClientLayer } from "@t3tools/client-runtime/rpc";
-import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
-
-import { makeTracingLayer } from "./tracing";
+import { makeTracingLayer, withMobileClientTracing } from "./tracing";
 
 vi.mock("expo-constants", () => ({
   default: {
@@ -18,7 +16,9 @@ vi.mock("expo-constants", () => ({
 }));
 
 it.effect("exports spans through the scoped mobile OTLP layer", () => {
-  const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
+  const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    Promise.resolve(new Response(null, { status: 202 })),
+  );
   const tracingLayer = makeTracingLayer(
     {
       tracesUrl: "https://api.axiom.test/v1/traces",
@@ -31,7 +31,7 @@ it.effect("exports spans through the scoped mobile OTLP layer", () => {
     },
   ).pipe(Layer.provide(remoteHttpClientLayer(fetchFn)));
   const tracedApplication = Layer.effectDiscard(
-    Effect.void.pipe(Effect.withSpan("mobile.test.span"), withRelayClientTracing),
+    Effect.void.pipe(Effect.withSpan("mobile.test.span"), withMobileClientTracing),
   ).pipe(Layer.provide(tracingLayer));
 
   return Effect.gen(function* () {
@@ -54,7 +54,9 @@ it.effect("exports spans through the scoped mobile OTLP layer", () => {
 });
 
 it.effect("does not let OTLP serialization failures alter application effects", () => {
-  const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
+  const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    Promise.resolve(new Response(null, { status: 202 })),
+  );
   const tracingLayer = makeTracingLayer(
     {
       tracesUrl: "https://api.axiom.test/v1/traces",
@@ -70,7 +72,7 @@ it.effect("does not let OTLP serialization failures alter application effects", 
   const tracedApplication = Layer.effectDiscard(
     Effect.fail(failure).pipe(
       Effect.withSpan("mobile.test.failed-span"),
-      withRelayClientTracing,
+      withMobileClientTracing,
       Effect.exit,
       Effect.flatMap((exit) => {
         const reason = exit._tag === "Failure" ? exit.cause.reasons[0] : undefined;

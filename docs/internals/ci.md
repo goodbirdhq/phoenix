@@ -1,113 +1,47 @@
-# CI in the Phoenix fork
+# CI and publication policy
 
-Upstream T3 Code's pipelines assume T3 Tools' infrastructure: Blacksmith runners, Apple and Azure
-signing certificates, Vercel, Cloudflare, PlanetScale, Clerk, Expo, and their Discord. Phoenix has
-none of that, so most of it is switched off.
+Phoenix keeps validation automatic and production publication manual. The source
+workflow triggers express that policy; GitHub's enabled/disabled state is separate
+and must be checked when changing operations. Historical claims that Release or
+mobile production are disabled are not reliable configuration.
 
-The same rule as [branding.md](./branding.md) applies: **change as little of upstream's files as
-possible.** Anything we can turn off outside the repository, we do.
+## Validation
 
-## What runs
+[CI](../../.github/workflows/ci.yml) runs on PRs and main pushes with read-only
+repository access: checks/typechecks, package and sharded server tests, Rust checks,
+desktop build verification, and release smoke checks. Release configuration tests
+validate requested publishers and reject inherited hosted-web destinations.
 
-[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs these quality gates on pull
-requests and pushes to `main`:
+Required branch checks must match the actual job names, including `Test Server 1`,
+`Test Server 2`, `Test Server 3` and `Rust`. CI uses the checked-in Blacksmith runner
+labels; runner access and sizing are infrastructure configuration. The mobile-native
+analysis job remains explicitly parked with `false &&`; its detector is still wired.
+Manual Windows Tests and Mobile Showcase Screenshots remain diagnostic/artifact
+workflows rather than production publishers.
 
-- **Check**: `vp check` (format and lint; this repo sets `typeCheck: false` in its lint options),
-  then `vpr typecheck` for the workspace type check. The same job
-  builds the desktop pipeline (`vp run build:desktop`) and verifies the preload bundle exists and
-  uses only imports that Electron's sandbox can load. The verifier parses imports, then executes the
-  trusted artifact with controlled bridge stubs to confirm that its required APIs are callable.
-- **Test**: `vp run test` across the workspace.
-- **Mobile Native Static Analysis**: `vp run lint:mobile` on macOS, wrapping
-  `scripts/mobile-native-static-check.ts`. A cheap Linux **Mobile Native Changes** job gates it:
-  the macOS runner only boots when the diff touches `apps/mobile` Swift/Kotlin sources, the
-  SwiftLint/detekt/ktlint configuration, the `Brewfile`, the check script, the root `package.json`
-  that defines `lint:mobile`, or `ci.yml`. Otherwise the job is skipped, which GitHub reports as
-  success for the required check. Renames are matched on both their old and new path. The gate fails
-  open in every other case: if the changed-file list cannot be resolved, GitHub truncates it, or the
-  gate job itself fails, the lint runs.
-- **Release Smoke**: exercises release-only workflow steps through `scripts/release-smoke.ts`, so
-  release breakage surfaces on PRs rather than at tag time.
+## Release boundary
 
-New job names mean new required-check names. `Test Server 1`, `Test Server 2`, `Test Server 3`, and
-`Rust` have to be added to branch protection, and the old single `Test` check no longer covers the
-server.
+[Release](../../.github/workflows/release.yml) and
+[Mobile EAS Production](../../.github/workflows/mobile-eas-production.yml) accept
+only `workflow_dispatch`. There are no cron, main-push or tag production releases.
+Desktop/npm/hosted web publication uses one canonical Release workflow. The duplicate
+Phoenix Build publisher and inherited hosted-relay deployment workflow were removed.
+The managed connection runtime and infrastructure were also removed. Cursor provider/dev
+integration remains; its CI webhook/configuration removal does not remove the provider.
 
-| Workflow                              | State  | Notes                                                                                                              |
-| ------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------ |
-| `CI` (`ci.yml`)                       | **on** | `check`, `test`, `test_server`, `rust`, `release_smoke`. Our only edits are the runner labels and one `if: false`. |
-| `Phoenix Build` (`phoenix-build.yml`) | **on** | Phoenix-only file. Unsigned macOS build per merge to `main`.                                                       |
-| `PR Size`, `Issue Labels`             | on     | Self-contained, no external services.                                                                              |
+See [Releasing Phoenix](../operations/release.md) for dispatch controls, credentials,
+public configuration, optional hosted web, and mobile build/update procedures.
 
-## What is disabled, and why
+## PR automation
 
-Disabled **GitHub-side** with `gh workflow disable`, so the files stay byte-identical to upstream
-and never conflict on merge:
+Desktop and web previews remain label-driven, separate from production releases.
+Mobile EAS Preview remains a preview-profile workflow. These optional workflows may
+still be disabled in GitHub; source presence alone does not mean they run. Check
+`gh workflow list --all --repo goodbirdhq/phoenix` before relying on an optional lane.
+No cleanup here changes GitHub workflow settings.
 
-| Workflow                                       | Why                                                                                                                                 |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `Release`                                      | ~29 secrets: Apple notarisation, Azure Trusted Signing, Vercel, Cloudflare, PlanetScale, Clerk, Axiom. Replaced by `Phoenix Build`. |
-| `Deploy T3 Connect relay`                      | Deploys to T3's relay infrastructure.                                                                                               |
-| `Web Preview`                                  | Deploys to T3's Vercel/Cloudflare projects.                                                                                         |
-| `Mobile EAS Preview` / `Mobile EAS Production` | Needs T3's Expo account (`EXPO_TOKEN`).                                                                                             |
-| `Mobile Fingerprint Check`                     | Native mobile work is parked; would flag our bundle-ID and scheme changes on every PR.                                              |
-| `Mobile Showcase Screenshots`                  | Marketing screenshots for T3's app-store listings.                                                                                  |
-| `Desktop macOS Preview`                        | Per-PR macOS DMG on a Blacksmith runner behind a `preview:mac` label. Inert unlabelled; queues forever if labelled.                 |
-| `PR Vouch`                                     | Upstream's contributor-vouching process.                                                                                            |
-| `Thread Transfer Report`                       | Upstream-internal reporting.                                                                                                        |
-
-Re-enable any of them with `gh workflow enable "<name>"`. Because this is repository state rather
-than committed config, it is **invisible in a fresh clone** — that is the trade-off we accepted for
-zero merge conflicts. This table is the record.
-
-`ci.yml`'s `mobile_native_static_analysis` job is the exception: it is disabled in-repo because it
-is a job inside an otherwise-enabled workflow. Upstream's change-detection gate is kept wired
-underneath the park, so the condition reads `false && !cancelled() && ...`. Drop the `false &&`
-when mobile native work restarts and the job returns to running only on native diffs.
-
-## Runners
-
-Upstream targets Blacksmith (`blacksmith-8vcpu-ubuntu-2404`, `blacksmith-6vcpu-macos-26`). A fork
-without a Blacksmith installation queues those jobs forever — they never fail, they just never
-start. `ci.yml` therefore points at GitHub-hosted runners (`ubuntu-24.04`, `macos-15`), which are
-free on this public repository.
-
-If you connect Blacksmith to this repository, reverting to upstream's labels makes `ci.yml`
-byte-identical to upstream again and removes the last CI merge-conflict point:
-
-```bash
-git checkout upstream/main -- .github/workflows/ci.yml   # then re-apply `if: false` if still wanted
-```
-
-## Phoenix Build
-
-Runs on every merge to `main`, and on demand via **Actions → Phoenix Build → Run workflow**.
-
-It produces an **unsigned** arm64 macOS DMG, uploads it as a run artifact, publishes a GitHub
-pre-release tagged `build-<version>+<sha>`, and posts to Slack.
-
-Unsigned means Gatekeeper quarantines the app. The release notes and the Slack message both carry
-the fix, because it is not discoverable — macOS reports a missing signature as _"Phoenix is damaged
-and can't be opened"_, which reads like a corrupted download:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Phoenix.app
-```
-
-### Slack setup
-
-The notify step reads `SLACK_RELEASE_WEBHOOK_URL` and **skips silently when it is unset**, so the
-build does not fail before the secret exists.
-
-1. Create an incoming webhook at <https://api.slack.com/messaging/webhooks>.
-2. `gh secret set SLACK_RELEASE_WEBHOOK_URL --repo goodbirdhq/phoenix`
-
-It notifies on failure as well as success — a build pipeline that only reports good news is worse
-than none.
-
-### Not covered yet
-
-- **Signing and notarisation.** Needs an Apple Developer ID; until then every install needs the
-  `xattr` step above.
-- **Linux and Windows.** Add to the `build_macos` job as a matrix when needed.
-- **Auto-update.** Upstream's updater expects signed builds served from their update feed.
+Issue Labels manages issue-template labels. PR Size classifies PRs without executing
+PR code in its privileged job; use its manual dispatch to synchronize label definitions.
+The PR-only classification job is skipped on that dispatch, and label synchronization
+keeps its existing issues-write permission. PR Vouch and Thread Transfer Report remain
+optional; the latter reads trusted default-branch code and treats PR artifacts as data.

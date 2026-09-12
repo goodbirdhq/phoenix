@@ -15,13 +15,13 @@
       "types": "./src/settings.ts",
       "import": "./src/settings.ts"
     },
-    "./relay": {
-      "types": "./src/relay.ts",
-      "import": "./src/relay.ts"
+    "./notifications": {
+      "types": "./src/notifications.ts",
+      "import": "./src/notifications.ts"
     }
   },
   "scripts": {
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vp test run"
   },
   "dependencies": {

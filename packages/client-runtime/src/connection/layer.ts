@@ -7,25 +7,16 @@ import * as ConnectionDriver from "./driver.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import * as ConnectionOnboarding from "./onboarding.ts";
 import * as PlatformConnectionSource from "../platform/source.ts";
-import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
 
-const resolverLayer = ConnectionResolver.layer.pipe(
-  Layer.provide(RemoteEnvironmentAuthorization.layer),
-);
-
 export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   const driverLayer = ConnectionDriver.layer.pipe(
-    Layer.provide(Layer.mergeAll(resolverLayer, RpcSession.layerWithOptions(options))),
+    Layer.provide(Layer.mergeAll(ConnectionResolver.layer, RpcSession.layerWithOptions(options))),
   );
   const registryLayer = EnvironmentRegistry.layer.pipe(Layer.provide(driverLayer));
   const onboardingLayer = ConnectionOnboarding.layer.pipe(Layer.provide(registryLayer));
-  const connectionServicesLayer = Layer.mergeAll(
-    registryLayer,
-    RelayEnvironmentDiscovery.layer,
-    onboardingLayer,
-  );
+  const connectionServicesLayer = Layer.mergeAll(registryLayer, onboardingLayer);
   const connectionStartupLayer = Layer.effectDiscard(
     Effect.gen(function* () {
       const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
@@ -37,7 +28,10 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
       );
     }).pipe(Effect.withSpan("clientRuntime.connection.application.start")),
   );
-  return connectionStartupLayer.pipe(Layer.provideMerge(connectionServicesLayer));
+  return connectionStartupLayer.pipe(
+    Layer.provideMerge(connectionServicesLayer),
+    Layer.provideMerge(RemoteEnvironmentAuthorization.layer),
+  );
 }
 
 export const layer = layerWithOptions({});

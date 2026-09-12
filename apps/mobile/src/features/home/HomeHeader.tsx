@@ -1,4 +1,5 @@
 import { SearchIcon, FilterIcon, ComposeIcon } from "../../components/NavigationIcons";
+import { BrandMark } from "../../components/BrandMark";
 import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useMemo, useRef } from "react";
@@ -16,6 +17,7 @@ import {
   type HomeListFilterMenuEnvironment,
   type HomeListFilterMenuProject,
 } from "./home-list-filter-menu";
+import { WorkspaceConnectionTitle } from "./WorkspaceConnectionTitle";
 export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 export function HomeHeader(props: {
   readonly onRefresh: () => void;
@@ -34,6 +36,7 @@ export function HomeHeader(props: {
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
+  readonly onOpenEnvironmentSettings: () => void;
   readonly onStartNewTask: () => void;
 }) {
   const colors = useNavigationColors();
@@ -81,8 +84,14 @@ export function HomeHeader(props: {
           paddingTop: insets.top + 12,
           paddingHorizontal: 20,
           paddingBottom: 6,
+          gap: 6,
         }}
       >
+        <WorkspaceConnectionTitle
+          grow
+          onPress={props.onOpenEnvironmentSettings}
+          brand={<BrandMark compact />}
+        />
         <View style={{ height: 44, flexDirection: "row", alignItems: "center", gap: 6 }}>
           <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 10 }}>
             <SearchIcon size={18} color={colors.muted} />

@@ -196,7 +196,7 @@ const ScheduleOrchestrationErrorFields = {
   message: Schema.String,
 };
 
-export class ScheduleOrchestrationDeniedError extends Schema.TaggedErrorClass<ScheduleOrchestrationDeniedError>()(
+export class ScheduleOrchestrationDeniedError extends Schema.TaggedError<ScheduleOrchestrationDeniedError>()(
   "ScheduleOrchestrationDeniedError",
   {
     ...ScheduleOrchestrationErrorFields,
@@ -216,7 +216,7 @@ export class ScheduleOrchestrationDeniedError extends Schema.TaggedErrorClass<Sc
  * UI — this toolkit has no delete, so an agent that creates one cannot take it
  * back, only pause it and leave the user to clean up.
  */
-export class ScheduleOrchestrationNameConflictError extends Schema.TaggedErrorClass<ScheduleOrchestrationNameConflictError>()(
+export class ScheduleOrchestrationNameConflictError extends Schema.TaggedError<ScheduleOrchestrationNameConflictError>()(
   "ScheduleOrchestrationNameConflictError",
   {
     ...ScheduleOrchestrationErrorFields,
@@ -225,7 +225,7 @@ export class ScheduleOrchestrationNameConflictError extends Schema.TaggedErrorCl
   },
 ) {}
 
-export class ScheduleOrchestrationInvalidInputError extends Schema.TaggedErrorClass<ScheduleOrchestrationInvalidInputError>()(
+export class ScheduleOrchestrationInvalidInputError extends Schema.TaggedError<ScheduleOrchestrationInvalidInputError>()(
   "ScheduleOrchestrationInvalidInputError",
   ScheduleOrchestrationErrorFields,
 ) {}
@@ -235,7 +235,7 @@ export class ScheduleOrchestrationInvalidInputError extends Schema.TaggedErrorCl
  * rather than flattened into prose — `invalid_timing` and `provider_unavailable`
  * call for completely different responses from the agent.
  */
-export class ScheduleOrchestrationDomainError extends Schema.TaggedErrorClass<ScheduleOrchestrationDomainError>()(
+export class ScheduleOrchestrationDomainError extends Schema.TaggedError<ScheduleOrchestrationDomainError>()(
   "ScheduleOrchestrationDomainError",
   {
     ...ScheduleOrchestrationErrorFields,
@@ -244,7 +244,7 @@ export class ScheduleOrchestrationDomainError extends Schema.TaggedErrorClass<Sc
   },
 ) {}
 
-export class ScheduleOrchestrationOperationError extends Schema.TaggedErrorClass<ScheduleOrchestrationOperationError>()(
+export class ScheduleOrchestrationOperationError extends Schema.TaggedError<ScheduleOrchestrationOperationError>()(
   "ScheduleOrchestrationOperationError",
   ScheduleOrchestrationErrorFields,
 ) {}

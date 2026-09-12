@@ -3,5 +3,14 @@
   "compilerOptions": {
     "allowImportingTsExtensions": true,
     "strict": true
-  }
+  },
+  "include": [
+    "*.d.ts",
+    "index.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "modules/**/*.ts",
+    "modules/**/*.tsx"
+  ],
+  "exclude": ["**/*.test.ts", "**/*.test.tsx", "**/*.test-support.ts", "modules/**/scripts/**"]
 }

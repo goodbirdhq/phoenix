@@ -8,17 +8,17 @@ import * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
 
-export const DESKTOP_HOST = "app";
+const DESKTOP_HOST = "app";
 // Phoenix registers its own scheme so it can be installed alongside upstream
 // T3 Code; two apps claiming "t3code://" would leave the OS to pick a winner.
-export const DESKTOP_PRODUCTION_SCHEME = "phoenix";
-export const DESKTOP_DEVELOPMENT_SCHEME = "phoenix-dev";
+const DESKTOP_PRODUCTION_SCHEME = "phoenix";
+const DESKTOP_DEVELOPMENT_SCHEME = "phoenix-dev";
 
 export function getDesktopScheme(isDevelopment: boolean): string {
   return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;
 }
 
-export function getDesktopOrigin(isDevelopment: boolean): string {
+function getDesktopOrigin(isDevelopment: boolean): string {
   return `${getDesktopScheme(isDevelopment)}://${DESKTOP_HOST}`;
 }
 
@@ -26,7 +26,7 @@ export function getDesktopUrl(isDevelopment: boolean): string {
   return `${getDesktopOrigin(isDevelopment)}/`;
 }
 
-export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<ElectronProtocolRegistrationError>()(
+export class ElectronProtocolRegistrationError extends Schema.TaggedError<ElectronProtocolRegistrationError>()(
   "ElectronProtocolRegistrationError",
   {
     scheme: Schema.String,
@@ -38,7 +38,7 @@ export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<E
   }
 }
 
-export class ElectronProtocolUnregistrationError extends Schema.TaggedErrorClass<ElectronProtocolUnregistrationError>()(
+export class ElectronProtocolUnregistrationError extends Schema.TaggedError<ElectronProtocolUnregistrationError>()(
   "ElectronProtocolUnregistrationError",
   {
     scheme: Schema.String,
@@ -54,7 +54,6 @@ export interface DesktopProtocolRegistrationInput {
   readonly scheme: string;
   readonly targetOrigin: URL;
   readonly backendOrigin: URL;
-  readonly clerkFrontendApiHostname: string | undefined;
 }
 
 export class ElectronProtocol extends Context.Service<
@@ -67,19 +66,10 @@ export class ElectronProtocol extends Context.Service<
 >()("@t3tools/desktop/electron/ElectronProtocol") {}
 
 export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrationInput): string {
-  const clerkOrigin = input.clerkFrontendApiHostname
-    ? `https://${input.clerkFrontendApiHostname}`
-    : undefined;
-  const scriptSources = [
-    "'self'",
-    "'unsafe-inline'",
-    "'wasm-unsafe-eval'",
-    ...(clerkOrigin ? [clerkOrigin] : []),
-    "https://challenges.cloudflare.com",
-  ];
+  const scriptSources = ["'self'", "'unsafe-inline'", "'wasm-unsafe-eval'"];
 
   // The renderer connects directly to user-configured environments in addition to
-  // the build-configured Clerk, relay, and OTLP endpoints. Those environment
+  // the build-configured relay and OTLP endpoints. Those environment
   // origins are not known when this response policy is created, so restrict
   // connections by the network schemes the client supports instead of by host.
   const connectSources = ["'self'", "http:", "https:", "ws:", "wss:"];
@@ -93,7 +83,9 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     "style-src 'self' 'unsafe-inline'",
     `font-src 'self' ${input.scheme}: data:`,
     "worker-src 'self' blob:",
-    "frame-src 'self' https://challenges.cloudflare.com",
+    // Document viewers use local Blob URLs and signed assets from runtime environments.
+    // HTML viewers retain their own sandbox; the renderer's script policy stays unchanged.
+    "frame-src 'self' blob: http: https:",
     "form-action 'self'",
   ].join("; ");
 }
@@ -111,7 +103,7 @@ function withContentSecurityPolicy(response: Response, policy: string): Response
 /**
  * Must run synchronously during process bootstrap, before Electron emits `ready`.
  */
-export function registerDesktopSchemePrivilegesSync(): void {
+function registerDesktopSchemePrivilegesSync(): void {
   Electron.protocol.registerSchemesAsPrivileged([
     {
       scheme: DESKTOP_PRODUCTION_SCHEME,
@@ -207,6 +199,7 @@ async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<
   throw lastError;
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const registered = yield* Ref.make(false);
 

@@ -64,7 +64,7 @@ export function toGitCommonDir(gitDir: string): string {
   return gitDir.replace(marker, "");
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const locksRef = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map());

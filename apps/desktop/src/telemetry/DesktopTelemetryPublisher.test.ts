@@ -40,6 +40,7 @@ function makeElectronAppLayer(
       return metrics;
     }),
     isDefaultProtocolClient: () => Effect.succeed(false),
+    requestSingleInstanceLock: Effect.succeed(true),
     setAsDefaultProtocolClient: () => Effect.succeed(true),
     setDesktopName: () => Effect.void,
     setDockIcon: () => Effect.void,
