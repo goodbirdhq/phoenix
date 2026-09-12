@@ -12,7 +12,7 @@ export const DEV_PROXIED_PATH_PREFIXES = ["/api", "/oauth", "/.well-known", "/ws
 
 /**
  * Shared Vite-compatible proxy entries for browser development. Keeping the
- * `/ws` upgrade flag next to the path list makes request and upgrade routing
+ * `/api` and `/ws` upgrade flags next to the path list makes request and upgrade routing
  * impossible to accidentally configure differently.
  */
 export function createDevProxyEntries(target: string | undefined) {
@@ -23,7 +23,7 @@ export function createDevProxyEntries(target: string | undefined) {
       {
         target,
         changeOrigin: true,
-        ...(prefix === "/ws" ? { ws: true } : {}),
+        ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
       },
     ]),
   );

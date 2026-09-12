@@ -9,7 +9,7 @@ import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
-import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
+import { createDevProxyEntries } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
@@ -224,16 +224,7 @@ export default defineConfig(() => {
             // Vite's HMR socket is matched separately and exactly (path "/"
             // plus a vite-hmr subprotocol), so the upgrade handlers don't
             // collide.
-            proxy: Object.fromEntries(
-              DEV_PROXIED_PATH_PREFIXES.map((prefix) => [
-                prefix,
-                {
-                  target: devProxyTarget,
-                  changeOrigin: true,
-                  ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
-                },
-              ]),
-            ),
+            proxy: createDevProxyEntries(devProxyTarget),
           }
         : {}),
       // Electron's BrowserWindow needs the HMR socket pinned to an explicit
