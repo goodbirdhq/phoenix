@@ -1,6 +1,6 @@
 import { EnvironmentId, ProviderInstanceId, USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
 import { mergeUsage } from "@t3tools/shared/usageMerge";
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
@@ -74,12 +74,32 @@ vi.mock("../ui/select", () => ({
   SelectValue: "span",
 }));
 vi.mock("../ui/sidebar", () => ({ SidebarInset: "div" }));
-vi.mock("../ui/tabs", () => ({
-  Tabs: "div",
-  TabsList: "div",
-  TabsTrigger: "button",
-  TabsContent: "div",
-}));
+vi.mock("../ui/tabs", async () => {
+  const { createContext, useContext } = await import("react");
+  const TabContext = createContext({ value: "", onValueChange: (_value: string) => {} });
+  return {
+    Tabs: ({
+      value,
+      onValueChange,
+      children,
+    }: {
+      value: string;
+      onValueChange: (value: string) => void;
+      children: ReactNode;
+    }) => <TabContext.Provider value={{ value, onValueChange }}>{children}</TabContext.Provider>,
+    TabsList: "div",
+    TabsTrigger: ({ value, children }: { value: string; children: ReactNode }) => {
+      const tabs = useContext(TabContext);
+      return (
+        <button data-tab={value} onClick={() => tabs.onValueChange(value)}>
+          {children}
+        </button>
+      );
+    },
+    TabsContent: ({ value, children }: { value: string; children: ReactNode }) =>
+      useContext(TabContext).value === value ? children : null,
+  };
+});
 vi.mock("../ui/toggle-group", () => ({ Toggle: "button", ToggleGroup: "div" }));
 vi.mock("../ui/tooltip", () => ({ Tooltip: "div", TooltipPopup: "div", TooltipTrigger: "div" }));
 vi.mock("../ui/popover", () => ({ Popover: "div", PopoverPopup: "div", PopoverTrigger: "div" }));
@@ -162,6 +182,10 @@ function text(): string {
   return JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value));
 }
 
+function selectTab(value: string): void {
+  renderer.root.findByProps({ "data-tab": value }).props.onClick();
+}
+
 function clickRefresh(): void {
   renderer.root
     .findAllByProps({ "aria-label": "Refresh usage" })
@@ -173,6 +197,7 @@ it("advances the limits countdown on refresh, even when quota is unchanged", asy
   await act(() => {
     renderer = create(<UsagePage />);
   });
+  await act(() => selectTab("limits"));
   expect(text()).toContain("in 2h 0m");
   vi.mocked(Date.now).mockReturnValue(Date.parse("2026-09-11T12:30:00Z"));
   await act(async () => {
@@ -184,15 +209,18 @@ it("advances the limits countdown on refresh, even when quota is unchanged", asy
   expect(text()).not.toContain("in 2h 0m");
 });
 
-it("recomputes the limits countdown from the current time on a later refresh", async () => {
+it("recomputes the countdown when returning to Limits without refreshing", async () => {
   await act(() => {
     renderer = create(<UsagePage />);
   });
+  await act(() => selectTab("limits"));
   expect(text()).toContain("in 2h 0m");
+  await act(() => selectTab("overview"));
+  expect(text()).not.toContain("in 2h 0m");
   vi.mocked(Date.now).mockReturnValue(Date.parse("2026-09-11T13:00:00Z"));
-  await act(async () => {
-    clickRefresh();
-  });
+  await act(() => selectTab("limits"));
+  expect(state.refreshUsage).not.toHaveBeenCalled();
+  expect(state.refreshCapacity).not.toHaveBeenCalled();
   expect(text()).toContain("in 1h 0m");
   expect(text()).not.toContain("in 2h 0m");
 });
