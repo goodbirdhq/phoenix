@@ -79,7 +79,7 @@ export class NoRunningServerError extends Schema.TaggedError<NoRunningServerErro
     return [
       "No running Phoenix server found.",
       ...this.checkedStatePaths.map((statePath) => `  checked ${statePath}`),
-      "Start one with `phoenix serve`, or connect this machine with T3 Connect: `phoenix connect`.",
+      "Start one with `phoenix serve`, then run `phoenix pair` again.",
     ].join("\n");
   }
 }
