@@ -224,7 +224,7 @@ export default defineConfig(() => {
             // Vite's HMR socket is matched separately and exactly (path "/"
             // plus a vite-hmr subprotocol), so the upgrade handlers don't
             // collide.
-            proxy: createDevProxyEntries(devProxyTarget),
+            proxy: createDevProxyEntries(devProxyTarget)!,
           }
         : {}),
       // Electron's BrowserWindow needs the HMR socket pinned to an explicit
