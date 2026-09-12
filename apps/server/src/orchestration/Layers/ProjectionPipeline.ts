@@ -1361,6 +1361,31 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       if (event.type !== "thread.session-set") {
         return;
       }
+      const previous = yield* projectionThreadSessionRepository.getByThreadId({
+        threadId: event.payload.threadId,
+      });
+      // A provider can terminalize its session without a matching
+      // turn/completed notification (for example Codex thread systemError).
+      // The prior session owns the turn identity; the terminal session event
+      // supplies the authoritative error outcome.
+      if (
+        event.payload.session.status === "error" &&
+        event.payload.session.activeTurnId === null &&
+        Option.isSome(previous) &&
+        previous.value.activeTurnId !== null
+      ) {
+        const activeTurn = yield* projectionTurnRepository.getByTurnId({
+          threadId: event.payload.threadId,
+          turnId: previous.value.activeTurnId,
+        });
+        if (Option.isSome(activeTurn) && activeTurn.value.state === "running") {
+          yield* projectionTurnRepository.upsertByTurnId({
+            ...activeTurn.value,
+            state: "error",
+            completedAt: activeTurn.value.completedAt ?? event.payload.session.updatedAt,
+          });
+        }
+      }
       yield* projectionThreadSessionRepository.upsert({
         threadId: event.payload.threadId,
         status: event.payload.session.status,

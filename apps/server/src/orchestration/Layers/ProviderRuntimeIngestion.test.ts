@@ -343,6 +343,10 @@ describe("ProviderRuntimeIngestion", () => {
             limit: 20,
           }),
         ),
+      readProjectionTurn: (turnId: TurnId) =>
+        Effect.runPromise(
+          projectionTurns.getByTurnId({ threadId: asThreadId("thread-1"), turnId }),
+        ),
       emit: provider.emit,
       setProviderSession: provider.setSession,
       drain,
@@ -793,6 +797,48 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.status).toBe("ready");
     expect(thread.session?.activeTurnId).toBeNull();
     expect(thread.session?.lastError).toBeNull();
+  });
+
+  it("settles an active turn when the provider reports a session error", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-system-error");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-before-system-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: "2026-09-12T12:28:56.000Z",
+    });
+    await harness.drain();
+    expect((await harness.readModel()).threads[0]?.session).toMatchObject({
+      status: "running",
+      activeTurnId: turnId,
+    });
+
+    harness.emit({
+      type: "session.state.changed",
+      eventId: asEventId("evt-session-system-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-09-12T12:28:57.013Z",
+      payload: { state: "error", reason: "Codex reported a system error." },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads[0]!;
+    expect(thread.session).toMatchObject({
+      status: "error",
+      activeTurnId: null,
+      lastError: "Codex reported a system error.",
+    });
+    expect(thread.session?.activeTurnId).toBeNull();
+    expect(Option.getOrThrow(await harness.readProjectionTurn(turnId))).toMatchObject({
+      state: "error",
+      completedAt: "2026-09-12T12:28:57.013Z",
+    });
   });
 
   effectIt.effect(
