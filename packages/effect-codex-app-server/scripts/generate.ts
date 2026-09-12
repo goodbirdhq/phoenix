@@ -607,10 +607,17 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
     for (const [definitionName, definitionSchema] of Object.entries(parsed.definitions ?? {})) {
       const compatibleDefinitionSchema =
         Codex0150DefinitionSchemas[definitionName] ?? definitionSchema;
+      // Codex adds string error codes independently of protocol releases. Keep
+      // the documented structured variants while allowing newer string codes
+      // to be surfaced instead of rejecting a thread/resume response.
+      const forwardCompatibleDefinitionSchema =
+        file.exportName === "V2ThreadResumeResponse" && definitionName === "CodexErrorInfo"
+          ? { anyOf: [compatibleDefinitionSchema, { type: "string" }] }
+          : compatibleDefinitionSchema;
       aggregateSchemas[localDefinitionNames.get(definitionName)!] = stripNullDefaults(
         normalizeNullableTypes(
           rewriteExternalRefs(
-            compatibleDefinitionSchema,
+            forwardCompatibleDefinitionSchema,
             localDefinitionNames,
             file.namespace,
             exportNameByQualifiedName,

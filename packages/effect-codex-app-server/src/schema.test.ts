@@ -5,7 +5,7 @@ import * as CodexSchema from "./schema.ts";
 
 const isGetAccountResponse = Schema.is(CodexSchema.V2GetAccountResponse);
 
-it("accepts Codex 0.150 multi-agent values", () => {
+it("accepts Codex 0.150 multi-agent values and newer resume error codes", () => {
   const schemas = [
     CodexSchema.ServerNotification__SubAgentActivityKind,
     CodexSchema.V2ItemStartedNotification__SubAgentActivityKind,
@@ -52,6 +52,10 @@ it("accepts Codex 0.150 multi-agent values", () => {
       status: { type: "idle" },
       turns: [
         {
+          error: {
+            codexErrorInfo: "misalignmentPolicyViolation",
+            message: "The prior turn was blocked by policy.",
+          },
           id: "turn-1",
           status: "completed",
           items: [
