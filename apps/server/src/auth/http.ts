@@ -98,6 +98,7 @@ export function annotateEnvironmentRequest(endpoint: string) {
 export function failEnvironmentAuthInvalid(
   reason: EnvironmentAuthInvalidReason,
   dpopFailureReason?: DpopFailureReason,
+  credentialExpired?: boolean,
 ) {
   return currentEnvironmentTraceId.pipe(
     Effect.flatMap((traceId) =>
@@ -106,6 +107,9 @@ export function failEnvironmentAuthInvalid(
           code: "auth_invalid",
           reason,
           ...(dpopFailureReason === undefined ? {} : { dpopFailureReason }),
+          // Only sent when true so the payload stays the same for the ordinary
+          // rejected-credential case.
+          ...(credentialExpired === true ? { credentialExpired: true } : {}),
           traceId,
         }),
       ),
@@ -210,6 +214,7 @@ export const environmentAuthenticatedAuthLayer = Layer.effect(
             failEnvironmentAuthInvalid(
               EnvironmentAuth.serverAuthCredentialReason(error),
               EnvironmentAuth.serverAuthDpopFailureReason(error),
+              EnvironmentAuth.serverAuthCredentialExpired(error),
             ),
           ),
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
@@ -285,6 +290,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             failEnvironmentAuthInvalid(
               EnvironmentAuth.serverAuthCredentialReason(error),
               EnvironmentAuth.serverAuthDpopFailureReason(error),
+              EnvironmentAuth.serverAuthCredentialExpired(error),
             ),
           ),
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
@@ -325,6 +331,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                         failEnvironmentAuthInvalid(
                           "invalid_credential",
                           EnvironmentAuth.serverAuthDpopFailureReason(error),
+                          EnvironmentAuth.serverAuthCredentialExpired(error),
                         ),
                       ),
                     ),
@@ -356,6 +363,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             failEnvironmentAuthInvalid(
               EnvironmentAuth.serverAuthCredentialReason(error),
               EnvironmentAuth.serverAuthDpopFailureReason(error),
+              EnvironmentAuth.serverAuthCredentialExpired(error),
             ),
           ),
           Effect.catchIf(EnvironmentAuth.isServerAuthInvalidRequestError, (error) =>

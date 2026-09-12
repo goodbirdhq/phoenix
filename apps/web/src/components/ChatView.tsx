@@ -26,7 +26,10 @@ import {
   RuntimeMode,
   TerminalOpenInput,
 } from "@t3tools/contracts";
-import { type EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
+import {
+  connectionNeedsPairing,
+  type EnvironmentConnectionPresentation,
+} from "@t3tools/client-runtime/connection";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import { type CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import { resolveNextTurnModelSelection } from "@t3tools/client-runtime/usage/thread-migration";
@@ -193,6 +196,7 @@ import {
   CheckCircle2Icon,
   ChevronDownIcon,
   GitBranchIcon,
+  KeyRoundIcon,
   Minimize2Icon,
   PaperclipIcon,
   WifiOffIcon,
@@ -2321,26 +2325,38 @@ function ChatViewContent(props: ChatViewProps) {
           description: "Finishing an update",
         });
       } else {
+        // A rejected or expired credential cannot be retried into working, so
+        // the banner names pairing as the way out instead of offering a
+        // Reconnect that re-sends the same dead credential.
+        const needsPairing = connectionNeedsPairing(unavailableConnection);
         items.push({
           id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
           variant: unavailableConnection.phase === "error" ? "error" : "warning",
-          icon: <WifiOffIcon />,
-          title: `${activeEnvironmentUnavailableState.label} is ${environmentReconnecting ? "reconnecting" : "offline"}`,
-          description: environmentReconnecting ? "Trying again" : "Reconnect to continue",
+          icon: needsPairing ? <KeyRoundIcon /> : <WifiOffIcon />,
+          title: needsPairing
+            ? `${activeEnvironmentUnavailableState.label} needs pairing again`
+            : `${activeEnvironmentUnavailableState.label} is ${environmentReconnecting ? "reconnecting" : "offline"}`,
+          description: needsPairing
+            ? (unavailableConnection.error ?? "Pair this client again to reconnect.")
+            : environmentReconnecting
+              ? "Trying again"
+              : "Reconnect to continue",
           actions: (
             <>
-              <Button
-                size="xs"
-                variant="ghost"
-                disabled={environmentReconnecting}
-                onClick={() =>
-                  void handleReconnectActiveEnvironment(
-                    activeEnvironmentUnavailableState.environmentId,
-                  )
-                }
-              >
-                {environmentReconnecting ? "Reconnecting..." : "Reconnect"}
-              </Button>
+              {needsPairing ? null : (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={environmentReconnecting}
+                  onClick={() =>
+                    void handleReconnectActiveEnvironment(
+                      activeEnvironmentUnavailableState.environmentId,
+                    )
+                  }
+                >
+                  {environmentReconnecting ? "Reconnecting..." : "Reconnect"}
+                </Button>
+              )}
               <Button
                 size="xs"
                 variant="ghost"

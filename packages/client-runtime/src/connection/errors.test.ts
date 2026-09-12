@@ -2,7 +2,11 @@ import { EnvironmentAuthInvalidError } from "@t3tools/contracts";
 import { RelayAuthInvalidError } from "@t3tools/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 
-import { mapManagedRelayError, mapRemoteDpopEnvironmentError } from "./errors.ts";
+import {
+  mapManagedRelayError,
+  mapRemoteDpopEnvironmentError,
+  mapRemoteEnvironmentError,
+} from "./errors.ts";
 import { DPOP_RETRY_HINT, DPOP_UNKNOWN_HINT } from "../relay/errorPresentation.ts";
 import { ManagedRelayRequestFailedError } from "../relay/managedRelay.ts";
 
@@ -71,5 +75,40 @@ describe("mapRemoteDpopEnvironmentError", () => {
     );
 
     expect(mapped.message).toBe(`The environment credential is invalid. ${DPOP_RETRY_HINT}`);
+  });
+});
+
+describe("mapRemoteEnvironmentError", () => {
+  it("tells the user an expired credential needs pairing again", () => {
+    const mapped = mapRemoteEnvironmentError(
+      new EnvironmentAuthInvalidError({
+        code: "auth_invalid",
+        reason: "invalid_credential",
+        credentialExpired: true,
+        traceId: "trace-expired",
+      }),
+    );
+
+    expect(mapped).toMatchObject({
+      _tag: "ConnectionBlockedError",
+      reason: "authentication",
+      detail: "The environment credential expired.",
+      traceId: "trace-expired",
+    });
+  });
+
+  it("keeps the generic wording when the server does not report expiry", () => {
+    const mapped = mapRemoteEnvironmentError(
+      new EnvironmentAuthInvalidError({
+        code: "auth_invalid",
+        reason: "invalid_credential",
+        traceId: "trace-invalid",
+      }),
+    );
+
+    expect(mapped).toMatchObject({
+      reason: "authentication",
+      detail: "The environment credential is invalid.",
+    });
   });
 });

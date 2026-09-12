@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import { BearerConnectionProfile, type ConnectionCatalogEntry } from "./catalog.ts";
 import {
   BearerConnectionTarget,
+  ConnectionBlockedError,
   ConnectionTransientError,
   type SupervisorConnectionState,
 } from "./model.ts";
@@ -13,6 +14,7 @@ import {
   connectionPhaseMessage,
   connectionStatusText,
   connectionStatusTitle,
+  connectionNeedsPairing,
   presentEnvironmentConnection,
   presentConnectionState,
 } from "./presentation.ts";
@@ -183,5 +185,75 @@ describe("connection presentation", () => {
       error: null,
       traceId: null,
     });
+  });
+});
+
+describe("blocked connection presentation", () => {
+  it("surfaces the blocked reason so the UI can offer the right recovery", () => {
+    const presented = presentConnectionState(
+      supervisorState({
+        phase: "blocked",
+        lastFailure: new ConnectionBlockedError({
+          reason: "authentication",
+          detail: "The environment credential expired. Pair this client again to reconnect.",
+          traceId: "trace-expired",
+        }),
+      }),
+    );
+
+    expect(presented.phase).toBe("error");
+    expect(presented.blockedReason).toBe("authentication");
+  });
+
+  it("leaves the blocked reason unset while merely reconnecting", () => {
+    const presented = presentConnectionState(
+      supervisorState({
+        phase: "backoff",
+        lastFailure: new ConnectionTransientError({ reason: "network", detail: "offline" }),
+      }),
+    );
+
+    expect(presented.blockedReason).toBeUndefined();
+  });
+});
+
+describe("connectionNeedsPairing", () => {
+  it("reports that an authentication block cannot be retried away", () => {
+    const presented = presentConnectionState(
+      supervisorState({
+        phase: "blocked",
+        lastFailure: new ConnectionBlockedError({
+          reason: "authentication",
+          detail: "The environment credential expired. Pair this client again to reconnect.",
+        }),
+      }),
+    );
+
+    expect(connectionNeedsPairing(presented)).toBe(true);
+  });
+
+  it("leaves retrying available for a blocked configuration", () => {
+    const presented = presentConnectionState(
+      supervisorState({
+        phase: "blocked",
+        lastFailure: new ConnectionBlockedError({
+          reason: "configuration",
+          detail: "The environment rejected the authentication request.",
+        }),
+      }),
+    );
+
+    expect(connectionNeedsPairing(presented)).toBe(false);
+  });
+
+  it("leaves retrying available while reconnecting", () => {
+    const presented = presentConnectionState(
+      supervisorState({
+        phase: "backoff",
+        lastFailure: new ConnectionTransientError({ reason: "network", detail: "offline" }),
+      }),
+    );
+
+    expect(connectionNeedsPairing(presented)).toBe(false);
   });
 });

@@ -267,6 +267,7 @@ const authenticateRawRouteWithScope = (
         failEnvironmentAuthInvalid(
           EnvironmentAuth.serverAuthCredentialReason(error),
           EnvironmentAuth.serverAuthDpopFailureReason(error),
+          EnvironmentAuth.serverAuthCredentialExpired(error),
         ),
       ),
       Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>

@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { AuthAdministrativeScopes } from "@t3tools/contracts";
+import { AuthAdministrativeScopes, AuthSessionId } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -278,5 +279,32 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
           }),
         ),
       ),
+  );
+
+  it.effect("reports an expired session token as an expired credential", () =>
+    Effect.sync(() => {
+      const error = new EnvironmentAuth.ServerAuthInvalidCredentialError({
+        cause: new SessionStore.SessionTokenExpiredError({
+          sessionId: AuthSessionId.make("session-1"),
+          expiresAt: DateTime.makeUnsafe("2026-08-13T09:00:00.000Z"),
+          observedAt: DateTime.makeUnsafe("2026-09-12T19:00:00.000Z"),
+        }),
+      });
+
+      expect(EnvironmentAuth.serverAuthCredentialExpired(error)).toBe(true);
+    }),
+  );
+
+  it.effect("does not report a revoked credential as expired", () =>
+    Effect.sync(() => {
+      const error = new EnvironmentAuth.ServerAuthInvalidCredentialError({
+        cause: new SessionStore.SessionTokenRevokedError({
+          sessionId: AuthSessionId.make("session-1"),
+          revokedAt: DateTime.makeUnsafe("2026-09-12T19:00:00.000Z"),
+        }),
+      });
+
+      expect(EnvironmentAuth.serverAuthCredentialExpired(error)).toBe(false);
+    }),
   );
 });

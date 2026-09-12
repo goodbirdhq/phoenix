@@ -238,6 +238,19 @@ export const SessionCredentialInvalidError = Schema.Union([
 export type SessionCredentialInvalidError = typeof SessionCredentialInvalidError.Type;
 export const isSessionCredentialInvalidError = Schema.is(SessionCredentialInvalidError);
 
+/**
+ * Expiry is the routine end of a session rather than a rejected credential, and
+ * the only recovery is pairing again. Callers use this to tell a client that
+ * retrying cannot help.
+ */
+export const SessionCredentialExpiredError = Schema.Union([
+  SessionTokenExpiredError,
+  WebSocketTokenExpiredError,
+  WebSocketSessionExpiredError,
+]);
+export type SessionCredentialExpiredError = typeof SessionCredentialExpiredError.Type;
+export const isSessionCredentialExpiredError = Schema.is(SessionCredentialExpiredError);
+
 const sessionCredentialInternalErrorContext = {
   cause: Schema.Defect(),
 };
