@@ -2,7 +2,7 @@ import type { ServerConfig } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 
 import type { ConnectionCatalogEntry } from "./catalog.ts";
-import type { NetworkStatus, SupervisorConnectionState } from "./model.ts";
+import type { ConnectionBlockedReason, NetworkStatus, SupervisorConnectionState } from "./model.ts";
 
 export type EnvironmentConnectionPhase =
   | "available"
@@ -16,6 +16,11 @@ export interface EnvironmentConnectionPresentation {
   readonly phase: EnvironmentConnectionPhase;
   readonly error: string | null;
   readonly traceId: string | null;
+  /**
+   * Only set while blocked. Retrying cannot clear an authentication block, so
+   * the UI uses this to offer pairing instead of a reconnect that cannot work.
+   */
+  readonly blockedReason?: ConnectionBlockedReason;
 }
 
 export interface EnvironmentPresentation {
@@ -51,8 +56,20 @@ export function presentConnectionState(
         phase: "error",
         error: state.lastFailure?.message ?? null,
         traceId: state.lastFailure?.traceId ?? null,
+        ...(state.lastFailure?._tag === "ConnectionBlockedError"
+          ? { blockedReason: state.lastFailure.reason }
+          : {}),
       };
   }
+}
+
+/**
+ * Retrying cannot clear an authentication block: the saved credential is itself
+ * the problem, so both clients offer pairing rather than a reconnect that is
+ * guaranteed to fail.
+ */
+export function connectionNeedsPairing(connection: EnvironmentConnectionPresentation): boolean {
+  return connection.phase === "error" && connection.blockedReason === "authentication";
 }
 
 export function connectionStatusText(connection: EnvironmentConnectionPresentation): string {

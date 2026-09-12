@@ -9,6 +9,12 @@ import {
   ConnectionTransientError,
 } from "./model.ts";
 
+/**
+ * States the cause only. The remedy belongs to whichever surface renders this,
+ * so the banner title and its action do not repeat the sentence back.
+ */
+export const CREDENTIAL_EXPIRED_DETAIL = "The environment credential expired.";
+
 export function profileMissingError(connectionId: string): ConnectionBlockedError {
   return new ConnectionBlockedError({
     reason: "configuration",
@@ -118,7 +124,10 @@ export function mapRemoteEnvironmentError(
     case "EnvironmentAuthInvalidError":
       return new ConnectionBlockedError({
         reason: "authentication",
-        detail: "The environment credential is invalid.",
+        detail:
+          error.credentialExpired === true
+            ? CREDENTIAL_EXPIRED_DETAIL
+            : "The environment credential is invalid.",
         traceId: error.traceId,
       });
     case "EnvironmentScopeRequiredError":
@@ -178,7 +187,13 @@ export function mapRemoteEnvironmentError(
 export function mapRemoteDpopEnvironmentError(
   error: RemoteEnvironmentAuthError,
 ): ConnectionAttemptError {
-  if (error._tag === "EnvironmentAuthInvalidError" && error.reason === "invalid_credential") {
+  if (
+    error._tag === "EnvironmentAuthInvalidError" &&
+    error.reason === "invalid_credential" &&
+    // A proof hint would misdirect when the credential simply ran out; expiry
+    // explains the failure on its own.
+    error.credentialExpired !== true
+  ) {
     return new ConnectionBlockedError({
       reason: "authentication",
       detail: dpopFailureMessage("The environment credential is invalid.", error.dpopFailureReason),

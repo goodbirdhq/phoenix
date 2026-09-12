@@ -1,4 +1,5 @@
 import {
+  connectionNeedsPairing,
   type EnvironmentConnectionPhase,
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
@@ -8,7 +9,14 @@ import { ActivityIndicator, Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 
-function noticeTitle(phase: EnvironmentConnectionPhase, environmentLabel: string): string {
+function noticeTitle(
+  phase: EnvironmentConnectionPhase,
+  environmentLabel: string,
+  needsPairing: boolean,
+): string {
+  if (needsPairing) {
+    return `${environmentLabel} needs pairing again`;
+  }
   switch (phase) {
     case "offline":
       return "You are offline";
@@ -29,7 +37,12 @@ function noticeDetail(
   phase: EnvironmentConnectionPhase,
   resourceName: string,
   error: string | null,
+  needsPairing: boolean,
 ): string {
+  // Retrying cannot clear a credential problem, so never promise that it will.
+  if (needsPairing) {
+    return error ?? "Pair this client again to reconnect.";
+  }
   if (error) {
     return `The app will keep retrying automatically. ${error}`;
   }
@@ -56,6 +69,7 @@ export function EnvironmentConnectionNotice(props: {
 }) {
   const isRetrying =
     props.connection.phase === "connecting" || props.connection.phase === "reconnecting";
+  const needsPairing = connectionNeedsPairing(props.connection);
 
   return (
     <View className="flex-1 items-center justify-center px-8">
@@ -64,7 +78,13 @@ export function EnvironmentConnectionNotice(props: {
           <ActivityIndicator size="small" colorClassName={"accent-icon-muted"} />
         ) : (
           <SymbolView
-            name={props.connection.phase === "offline" ? "wifi.slash" : "bolt.horizontal.circle"}
+            name={
+              needsPairing
+                ? "key"
+                : props.connection.phase === "offline"
+                  ? "wifi.slash"
+                  : "bolt.horizontal.circle"
+            }
             size={24}
             tintColorClassName={"accent-icon-muted"}
             type="monochrome"
@@ -72,10 +92,15 @@ export function EnvironmentConnectionNotice(props: {
         )}
 
         <Text className="text-center text-lg font-t3-bold text-foreground">
-          {noticeTitle(props.connection.phase, props.environmentLabel)}
+          {noticeTitle(props.connection.phase, props.environmentLabel, needsPairing)}
         </Text>
         <Text className="text-center text-sm leading-normal text-foreground-muted">
-          {noticeDetail(props.connection.phase, props.resourceName, props.connection.error)}
+          {noticeDetail(
+            props.connection.phase,
+            props.resourceName,
+            props.connection.error,
+            needsPairing,
+          )}
           {props.connection.traceId ? (
             <>
               {" Trace ID: "}
@@ -95,7 +120,7 @@ export function EnvironmentConnectionNotice(props: {
           ) : null}
         </Text>
 
-        {props.connection.phase !== "offline" ? (
+        {props.connection.phase !== "offline" && !needsPairing ? (
           <Pressable
             accessibilityRole="button"
             className="mt-1 rounded-full bg-subtle px-4 py-2.5 active:opacity-70"

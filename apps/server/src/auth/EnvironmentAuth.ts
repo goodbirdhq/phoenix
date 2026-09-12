@@ -375,6 +375,15 @@ export const serverAuthDpopFailureReason = (
 ): DpopFailureReasonType | undefined =>
   error._tag === "ServerAuthInvalidCredentialError" ? error.dpopFailureReason : undefined;
 
+/**
+ * Distinguishes a session that simply reached the end of its life from a
+ * credential the server rejected. Only the former is fixed by pairing again, so
+ * clients need the difference to offer the right recovery.
+ */
+export const serverAuthCredentialExpired = (error: ServerAuthCredentialError): boolean =>
+  error._tag === "ServerAuthInvalidCredentialError" &&
+  SessionStore.isSessionCredentialExpiredError(error.cause);
+
 export class ServerAuthInvalidScopeError extends Schema.TaggedErrorClass<ServerAuthInvalidScopeError>()(
   "ServerAuthInvalidScopeError",
   {},

@@ -124,6 +124,11 @@ export class EnvironmentAuthInvalidError extends Schema.TaggedErrorClass<Environ
     reason: EnvironmentAuthInvalidReason,
     // Older servers do not send a DPoP failure category.
     dpopFailureReason: Schema.optionalKey(DpopFailureReason),
+    // An expired credential is the routine end of a session rather than a
+    // rejected one, and it needs pairing again rather than a retry. Older
+    // servers cannot tell the two apart, so this stays optional and clients
+    // fall back to the generic `reason`.
+    credentialExpired: Schema.optionalKey(Schema.Boolean),
     traceId: TrimmedNonEmptyString,
   },
   { httpApiStatus: 401 },
