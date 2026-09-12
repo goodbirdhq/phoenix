@@ -159,6 +159,31 @@ describe("usage source membership", () => {
 });
 
 describe("usage cost provenance is additive", () => {
+  it("lets the legacy cost decoder ignore additive counts without losing known cost", () => {
+    const decodeLegacyCost = Schema.decodeUnknownSync(
+      Schema.Struct({
+        costSource: Schema.Literals(["providerReported", "modelPriced", "unpriced"]),
+        costUsd: Schema.Number,
+        records: Schema.Number,
+        unpricedRecords: Schema.Number,
+      }),
+    );
+    const cell = {
+      ...summary.buckets[0],
+      costSource: "unpriced" as const,
+      costUsd: 1.25,
+      records: 2,
+      unpricedRecords: 1,
+      providerReportedRecords: 1,
+    };
+    expect(decodeLegacyCost(cell)).toEqual({
+      costSource: "unpriced",
+      costUsd: 1.25,
+      records: 2,
+      unpricedRecords: 1,
+    });
+  });
+
   it("decodes older cells that omit the per-record provider-reported count", () => {
     const decoded = decodeUsageSummary(summary);
     expect(decoded.buckets.every((bucket) => bucket.providerReportedRecords === undefined)).toBe(
