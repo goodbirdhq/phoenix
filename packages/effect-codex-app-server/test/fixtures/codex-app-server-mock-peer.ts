@@ -81,6 +81,41 @@ const handleMethod = (message: Record<string, unknown>) => {
       });
       return;
     }
+    case "thread/resume": {
+      respond(message.id as number | string, {
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        cwd: "/tmp/project",
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        sandbox: { type: "dangerFullAccess" },
+        thread: {
+          cliVersion: "0.154.0",
+          createdAt: 0,
+          cwd: "/tmp/project",
+          ephemeral: false,
+          id: "thread-1",
+          modelProvider: "openai",
+          preview: "",
+          sessionId: "session-1",
+          source: "cli",
+          status: { type: "idle" },
+          turns: [
+            {
+              error: {
+                codexErrorInfo: "misalignmentPolicyViolation",
+                message: "The prior turn was blocked by policy.",
+              },
+              id: "turn-1",
+              items: [],
+              status: "failed",
+            },
+          ],
+          updatedAt: 0,
+        },
+      });
+      return;
+    }
     case "skills/list": {
       pendingSkillsListRequestId = message.id as number | string;
       pendingUserInputRequestId = sendRequest("item/tool/requestUserInput", {
