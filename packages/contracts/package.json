@@ -14,6 +14,10 @@
     "./settings": {
       "types": "./src/settings.ts",
       "import": "./src/settings.ts"
+    },
+    "./notifications": {
+      "types": "./src/notifications.ts",
+      "import": "./src/notifications.ts"
     }
   },
   "scripts": {
