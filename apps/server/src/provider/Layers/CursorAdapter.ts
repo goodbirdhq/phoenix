@@ -1157,6 +1157,13 @@ export function makeCursorAdapter(
           Effect.tapError((error) =>
             Effect.gen(function* () {
               if (ctx.promptsInFlight !== 1 || ctx.session.activeTurnId !== turnId) return;
+              // A Cursor transport dump is not a finished assistant turn.
+              if (
+                error._tag === "ProviderAdapterRequestError" &&
+                error.detail === "Cursor reported a transport failure."
+              ) {
+                return;
+              }
               ctx.session = {
                 ...ctx.session,
                 status: "ready",
@@ -1301,6 +1308,7 @@ export function makeCursorAdapter(
         // ACP has no start-from-history entry point: the transcript is framed
         // into the first prompt of the new session.
         conversationSeeding: "framed-prompt",
+        supportsConversationRollback: false,
       },
       compaction: { type: "slash-command", command: "/compress" },
       startSession,

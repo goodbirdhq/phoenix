@@ -2537,13 +2537,17 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       assert.lengthOf(prompts, 2);
       assert.deepEqual(
         prompts[0]?.map((part) => part.type),
-        ["text", "text"],
+        ["text", "text", "text"],
       );
       assert.isTrue(prompts[0]?.[0]?.text?.startsWith("<phoenix-prior-conversation>"));
       assert.include(prompts[0]?.[0]?.text ?? "", "added it in GrokAdapter.test.ts");
       assert.equal(prompts[0]?.[1]?.text, "carry on");
-      // The seed rides on the first prompt only.
-      assert.deepEqual(prompts[1], [{ type: "text", text: "and now the docs" }]);
+      assert.include(prompts[0]?.[2]?.text ?? "", "Grok harness");
+      // The seed rides on the first prompt only. Runtime context is a trailing
+      // part on every prompt, matching "sends runtime context with the current model".
+      assert.equal(prompts[1]?.[0]?.text, "and now the docs");
+      assert.include(prompts[1]?.[1]?.text ?? "", "Grok harness");
+      assert.isFalse((prompts[1]?.[0]?.text ?? "").includes("phoenix-prior-conversation"));
 
       yield* adapter.stopSession(threadId);
     }).pipe(TestClock.withLive),

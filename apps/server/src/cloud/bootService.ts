@@ -430,7 +430,7 @@ export function formatBootServiceProblem(problem: BootServiceProblem): string {
     case "service-disabled":
       return "The service is not enabled to start automatically. Run `t3 service update` to repair it.";
     case "service-stopped":
-      return "The service is not running. Check the service log and `systemctl --user status t3code.service`, then run `t3 service update`.";
+      return "The service is not running. Check the service log and `systemctl --user status phoenix.service`, then run `t3 service update`.";
   }
 }
 

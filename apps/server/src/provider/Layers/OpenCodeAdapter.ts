@@ -550,11 +550,17 @@ function mapPermissionToRequestType(
       return "file_read_approval";
     case "edit":
       return "file_change_approval";
+    case "bash":
+    case "external_directory":
+    case "doom_loop":
+    case "todowrite":
+    case "webfetch":
+    case "custom_tool":
+      return "command_execution_approval";
     default:
-      // OpenCode permissions are extensible (glob, grep, webfetch, ...).
-      // They still use the same once/always/reject response contract, so an
-      // unfamiliar name must remain actionable instead of becoming a hidden
-      // pending request that pins the thread in the sidebar forever.
+      // OpenCode permissions are extensible (glob, grep, ...). They still use
+      // the once/always/reject contract, so an unfamiliar name must stay an
+      // actionable approval instead of a hidden pending request.
       return "dynamic_tool_call";
   }
 }
