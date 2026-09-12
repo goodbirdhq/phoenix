@@ -4,6 +4,8 @@ import * as Schema from "effect/Schema";
 import * as CodexSchema from "./schema.ts";
 
 const isGetAccountResponse = Schema.is(CodexSchema.V2GetAccountResponse);
+const isThreadResumeResponse = Schema.is(CodexSchema.V2ThreadResumeResponse);
+const decodeThreadResumeResponse = Schema.decodeUnknownSync(CodexSchema.V2ThreadResumeResponse);
 
 it("preserves Codex resume errors introduced after the generated protocol", () => {
   const schemas = [
@@ -75,7 +77,7 @@ it("preserves Codex resume errors introduced after the generated protocol", () =
     },
   };
 
-  const decoded = Schema.decodeUnknownSync(CodexSchema.V2ThreadResumeResponse)(resumeResponse);
+  const decoded = decodeThreadResumeResponse(resumeResponse);
   assert.deepEqual(decoded.thread.turns[0]?.error, {
     codexErrorInfo: "misalignmentPolicyViolation",
     message: "The prior turn was blocked by policy.",
@@ -96,7 +98,7 @@ it("preserves Codex resume errors introduced after the generated protocol", () =
       ],
     },
   };
-  assert.equal(Schema.is(CodexSchema.V2ThreadResumeResponse)(structuredErrorResponse), true);
+  assert.equal(isThreadResumeResponse(structuredErrorResponse), true);
 
   const malformedErrorResponse = {
     ...resumeResponse,
@@ -113,7 +115,7 @@ it("preserves Codex resume errors introduced after the generated protocol", () =
       ],
     },
   };
-  assert.equal(Schema.is(CodexSchema.V2ThreadResumeResponse)(malformedErrorResponse), false);
+  assert.equal(isThreadResumeResponse(malformedErrorResponse), false);
 });
 
 it("accepts Codex 0.150 account plan values", () => {
