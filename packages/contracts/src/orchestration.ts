@@ -1965,7 +1965,8 @@ const ThreadQueuedTurnConsumeCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   messageId: MessageId,
-  turnId: TurnId,
+  // Native prompt commands can complete without creating a provider turn.
+  turnId: Schema.NullOr(TurnId),
   createdAt: IsoDateTime,
 });
 
@@ -2454,7 +2455,8 @@ export const ThreadTurnStartRequeuedPayload = Schema.Struct({
 export const ThreadTurnStartConsumedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
-  turnId: TurnId,
+  // Native prompt commands can complete without creating a provider turn.
+  turnId: Schema.NullOr(TurnId),
   consumedAt: IsoDateTime,
 });
 

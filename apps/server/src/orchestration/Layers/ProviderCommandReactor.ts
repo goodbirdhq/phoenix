@@ -1442,6 +1442,70 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     const threadTitleRegenerationWorker = yield* makeDrainableWorker(
       processThreadTitleRegenerationSafely,
     );
+    // A successful native command is an accepted delivery even when it creates no turn.
+    const acknowledgeQueuedDelivery = Effect.fn("acknowledgeQueuedDelivery")(function* (
+      event: QueuedTurnStart,
+      turnId: TurnId | null,
+    ) {
+      const messageId = event.payload.queuedDeliveryMessageId;
+      if (messageId == null) return;
+      const consumedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* Effect.suspend(() =>
+        orchestrationEngine.dispatch({
+          type: "thread.turn.queue.consume",
+          commandId: CommandId.make(`queued-turn-consumed:${event.payload.threadId}:${messageId}`),
+          threadId: event.payload.threadId,
+          messageId,
+          turnId,
+          createdAt: consumedAt,
+        }),
+      ).pipe(
+        Effect.retry({
+          schedule: Schedule.exponential("250 millis").pipe(
+            Schedule.modifyDelay(({ duration }) =>
+              Effect.succeed(Duration.min(duration, Duration.seconds(5))),
+            ),
+            Schedule.jittered,
+          ),
+          while: (error) =>
+            error._tag === "PersistenceSqlError" ||
+            error._tag === "OrchestrationListenerCallbackError",
+        }),
+      );
+    });
+
+    // Serialize admission with cancellation, but release the permit before provider work.
+    // Ownership remains until completion is persisted, preventing recovery from redelivering.
+    const withNativeDelivery = <A, E, R>(
+      event: QueuedTurnStart,
+      operation: Effect.Effect<A, E, R>,
+    ) => {
+      const threadId = event.payload.threadId;
+      const messageId = event.payload.queuedDeliveryMessageId;
+      if (messageId == null) return operation.pipe(Effect.map(Option.some));
+      return Effect.acquireUseRelease(
+        delivery.withPermit(
+          threadId,
+          Effect.gen(function* () {
+            if (yield* delivery.isPending(threadId, messageId)) return false;
+            const thread = yield* resolveThread(threadId);
+            if (
+              thread?.session?.stopRequestedAt != null ||
+              !thread?.queuedTurnStarts?.some(
+                (entry) => entry.messageId === messageId && entry.releasingAt !== undefined,
+              )
+            )
+              return false;
+            yield* delivery.setPending(threadId, messageId, true);
+            return true;
+          }),
+        ),
+        (admitted) =>
+          admitted ? operation.pipe(Effect.map(Option.some)) : Effect.succeed(Option.none<A>()),
+        (admitted) => (admitted ? delivery.setPending(threadId, messageId, false) : Effect.void),
+      );
+    };
+
     const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
       receivedEvent: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
     ) {
@@ -1528,54 +1592,58 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           ),
         );
 
-      const authCommandHandled = yield* Effect.gen(function* () {
-        // Native account commands belong to the thread's existing provider session.
-        const instanceId =
-          thread.session?.providerInstanceId ??
-          event.payload.modelSelection?.instanceId ??
-          thread.modelSelection.instanceId;
-        const handled = yield* providerAuthService.tryHandlePromptCommand({
-          instanceId,
-          text: message.text,
-          hasAttachments: (message.attachments?.length ?? 0) > 0,
-        });
-        if (!handled) {
-          return false;
-        }
+      const authCommandHandled = yield* withNativeDelivery(
+        event,
+        Effect.gen(function* () {
+          // Native account commands belong to the thread's existing provider session.
+          const instanceId =
+            thread.session?.providerInstanceId ??
+            event.payload.modelSelection?.instanceId ??
+            thread.modelSelection.instanceId;
+          const handled = yield* providerAuthService.tryHandlePromptCommand({
+            instanceId,
+            text: message.text,
+            hasAttachments: (message.attachments?.length ?? 0) > 0,
+          });
+          if (!handled) {
+            return false;
+          }
 
-        const instanceInfo = yield* providerService.getInstanceInfo(instanceId);
-        yield* setThreadSession({
-          threadId: thread.id,
-          session: {
+          yield* acknowledgeQueuedDelivery(event, null);
+          const instanceInfo = yield* providerService.getInstanceInfo(instanceId);
+          yield* setThreadSession({
             threadId: thread.id,
-            status: "stopped",
-            providerName: instanceInfo.driverKind,
-            providerInstanceId: instanceId,
-            runtimeMode: thread.runtimeMode,
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: event.payload.createdAt,
-          },
-          createdAt: event.payload.createdAt,
-        });
-        yield* orchestrationEngine.dispatch({
-          type: "thread.activity.append",
-          commandId: yield* serverCommandId("provider-sign-out"),
-          threadId: thread.id,
-          activity: {
-            id: yield* serverEventId(),
-            tone: "info",
-            kind: "provider.auth.signed-out",
-            summary: "Provider signed out",
-            payload: { providerInstanceId: instanceId },
-            turnId: null,
+            session: {
+              threadId: thread.id,
+              status: "stopped",
+              providerName: instanceInfo.driverKind,
+              providerInstanceId: instanceId,
+              runtimeMode: thread.runtimeMode,
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: event.payload.createdAt,
+            },
             createdAt: event.payload.createdAt,
-          },
-          createdAt: event.payload.createdAt,
-        });
-        return true;
-      }).pipe(Effect.catchCause((cause) => recoverTurnStartFailure(cause).pipe(Effect.as(true))));
-      if (authCommandHandled) {
+          });
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* serverCommandId("provider-sign-out"),
+            threadId: thread.id,
+            activity: {
+              id: yield* serverEventId(),
+              tone: "info",
+              kind: "provider.auth.signed-out",
+              summary: "Provider signed out",
+              payload: { providerInstanceId: instanceId },
+              turnId: null,
+              createdAt: event.payload.createdAt,
+            },
+            createdAt: event.payload.createdAt,
+          });
+          return true;
+        }).pipe(Effect.catchCause((cause) => recoverTurnStartFailure(cause).pipe(Effect.as(true)))),
+      );
+      if (Option.isNone(authCommandHandled) || authCommandHandled.value) {
         return;
       }
 
@@ -1676,25 +1744,31 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         const clearCompacting = Effect.sync(
           () => void compactingThreadIds.delete(event.payload.threadId),
         );
-        yield* Effect.gen(function* () {
-          yield* ensureSessionForThread(
-            event.payload.threadId,
-            event.payload.createdAt,
-            event.payload.modelSelection !== undefined
-              ? { modelSelection: event.payload.modelSelection, pendingTurnStart: true }
-              : { pendingTurnStart: true },
-          );
-          compactionSessionEnsured = true;
-          if (event.payload.modelSelection !== undefined) {
-            threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
-          }
-          yield* providerService.compactThread(
-            event.payload.threadId,
-            event.payload.modelSelection,
-            event.payload.messageId,
-          );
-        }).pipe(
-          Effect.andThen(restoreCompaction(event.payload.threadId, true)),
+        yield* withNativeDelivery(
+          event,
+          Effect.gen(function* () {
+            yield* ensureSessionForThread(
+              event.payload.threadId,
+              event.payload.createdAt,
+              event.payload.modelSelection !== undefined
+                ? { modelSelection: event.payload.modelSelection, pendingTurnStart: true }
+                : { pendingTurnStart: true },
+            );
+            compactionSessionEnsured = true;
+            if (event.payload.modelSelection !== undefined) {
+              threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+            }
+            yield* providerService.compactThread(
+              event.payload.threadId,
+              event.payload.modelSelection,
+              event.payload.messageId,
+            );
+            yield* acknowledgeQueuedDelivery(event, null);
+          }),
+        ).pipe(
+          Effect.flatMap((admitted) =>
+            Option.isSome(admitted) ? restoreCompaction(event.payload.threadId, true) : Effect.void,
+          ),
           Effect.andThen(clearCompacting),
           Effect.andThen(resumeTurnsAfterCompaction(event.payload.threadId)),
           Effect.catchCause((cause) =>
@@ -1722,18 +1796,6 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         turnsAfterCompaction.set(event.payload.threadId, queued);
         return;
       }
-      if (event.payload.queuedDeliveryMessageId != null) {
-        const current = yield* resolveThread(event.payload.threadId);
-        if (
-          !current?.queuedTurnStarts?.some(
-            (entry) =>
-              entry.messageId === event.payload.queuedDeliveryMessageId &&
-              entry.releasingAt !== undefined,
-          )
-        )
-          return;
-      }
-
       const sendTurnRequest = yield* buildSendTurnRequestForThread({
         threadId: event.payload.threadId,
         messageText: projectComposerContextForProvider({
@@ -1785,31 +1847,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             ),
           );
           if (Option.isNone(accepted) || messageId == null) return;
-          const consumedAt = DateTime.formatIso(yield* DateTime.now);
-          yield* Effect.suspend(() =>
-            orchestrationEngine.dispatch({
-              type: "thread.turn.queue.consume",
-              commandId: CommandId.make(
-                `queued-turn-consumed:${event.payload.threadId}:${messageId}`,
-              ),
-              threadId: event.payload.threadId,
-              messageId,
-              turnId: accepted.value.turnId,
-              createdAt: consumedAt,
-            }),
-          ).pipe(
-            Effect.retry({
-              schedule: Schedule.exponential("250 millis").pipe(
-                Schedule.modifyDelay(({ duration }) =>
-                  Effect.succeed(Duration.min(duration, Duration.seconds(5))),
-                ),
-                Schedule.jittered,
-              ),
-              while: (error) =>
-                error._tag === "PersistenceSqlError" ||
-                error._tag === "OrchestrationListenerCallbackError",
-            }),
-          );
+          yield* acknowledgeQueuedDelivery(event, accepted.value.turnId);
         }).pipe(
           Effect.ensuring(
             Effect.all([

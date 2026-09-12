@@ -1726,33 +1726,40 @@ describe("queued delivery lifecycle", () => {
       },
     }) as never;
 
-  it("tracks a message from queued through releasing to consumed", () => {
-    const queued = applyThreadDetailEvent(
-      baseThread,
-      queuedEvent("m-1", "thread.turn-start-queued"),
-    );
-    if (queued.kind !== "updated") throw new Error("expected update");
-    expect(queued.thread.queuedTurnStarts).toEqual([
-      { messageId: MessageId.make("m-1"), mode: "queue", requestedAt: "2026-04-01T01:00:00.000Z" },
-    ]);
+  it.each([TurnId.make("turn-1"), null])(
+    "tracks a message from queued through releasing to consumed (%s)",
+    (turnId) => {
+      const queued = applyThreadDetailEvent(
+        baseThread,
+        queuedEvent("m-1", "thread.turn-start-queued"),
+      );
+      if (queued.kind !== "updated") throw new Error("expected update");
+      expect(queued.thread.queuedTurnStarts).toEqual([
+        {
+          messageId: MessageId.make("m-1"),
+          mode: "queue",
+          requestedAt: "2026-04-01T01:00:00.000Z",
+        },
+      ]);
 
-    const releasing = applyThreadDetailEvent(
-      queued.thread,
-      queuedEvent("m-1", "thread.turn-start-requested", { queuedDelivery: true }),
-    );
-    if (releasing.kind !== "updated") throw new Error("expected update");
-    expect(releasing.thread.queuedTurnStarts?.[0]?.releasingAt).toBe("2026-04-01T01:00:00.000Z");
+      const releasing = applyThreadDetailEvent(
+        queued.thread,
+        queuedEvent("m-1", "thread.turn-start-requested", { queuedDelivery: true }),
+      );
+      if (releasing.kind !== "updated") throw new Error("expected update");
+      expect(releasing.thread.queuedTurnStarts?.[0]?.releasingAt).toBe("2026-04-01T01:00:00.000Z");
 
-    const consumed = applyThreadDetailEvent(
-      releasing.thread,
-      queuedEvent("m-1", "thread.turn-start-consumed", {
-        turnId: TurnId.make("turn-1"),
-        consumedAt: "2026-04-01T01:00:01.000Z",
-      }),
-    );
-    if (consumed.kind !== "updated") throw new Error("expected update");
-    expect(consumed.thread.queuedTurnStarts).toEqual([]);
-  });
+      const consumed = applyThreadDetailEvent(
+        releasing.thread,
+        queuedEvent("m-1", "thread.turn-start-consumed", {
+          turnId,
+          consumedAt: "2026-04-01T01:00:01.000Z",
+        }),
+      );
+      if (consumed.kind !== "updated") throw new Error("expected update");
+      expect(consumed.thread.queuedTurnStarts).toEqual([]);
+    },
+  );
 
   it("re-queues a stale release and clears the entry on cancellation", () => {
     const queued = applyThreadDetailEvent(

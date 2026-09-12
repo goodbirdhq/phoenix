@@ -72,6 +72,8 @@ import {
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
 } from "./ProviderCommandReactor.ts";
+import { SessionSpawnReactorLive } from "./SessionSpawnReactor.ts";
+import { SessionSpawnReactor } from "../Services/SessionSpawnReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { LimitFailoverReactor } from "../Services/LimitFailoverReactor.ts";
 import { LimitFailoverReactorLive } from "./LimitFailoverReactor.ts";
@@ -133,6 +135,7 @@ describe("ProviderCommandReactor", () => {
     | QueuedDelivery.QueuedDelivery
     | ProjectionSnapshotQuery
     | LimitFailoverReactor
+    | SessionSpawnReactor
     | SqlClient.SqlClient,
     unknown
   > | null = null;
@@ -190,6 +193,7 @@ describe("ProviderCommandReactor", () => {
     readonly titleRegenerationBeforeStart?: "one" | "two";
     readonly serverActivation?: Effect.Effect<void>;
     readonly testClock?: boolean;
+    readonly queueReactor?: boolean;
     readonly settingsOverrides?: Parameters<(typeof ServerSettingsService)["layerTest"]>[0];
     readonly beforeReadySessionDispatch?: () => Effect.Effect<void>;
     readonly beforeTurnStartDispatch?: () => Effect.Effect<void>;
@@ -280,7 +284,7 @@ describe("ProviderCommandReactor", () => {
         ),
       );
     });
-    const sendTurn = vi.fn((_: unknown) =>
+    const sendTurn = vi.fn((_: Parameters<ProviderServiceShape["sendTurn"]>[0]) =>
       Effect.succeed({
         threadId: ThreadId.make("thread-1"),
         turnId: asTurnId("turn-1"),
@@ -466,8 +470,9 @@ describe("ProviderCommandReactor", () => {
               }
             }
             const isReplay =
-              command.type === "thread.turn.start" &&
-              command.commandId.startsWith("server:after-compaction:");
+              command.type === "thread.turn.start.queued" ||
+              (command.type === "thread.turn.start" &&
+                command.commandId.startsWith("server:after-compaction:"));
             const before =
               command.type === "thread.session.set" && command.session.status === "ready"
                 ? input?.beforeReadySessionDispatch
@@ -494,6 +499,7 @@ describe("ProviderCommandReactor", () => {
     const layer = Layer.mergeAll(
       makeProviderCommandReactorLive({ interruptTimeoutSeconds: 1 }),
       LimitFailoverReactorLive,
+      SessionSpawnReactorLive,
     ).pipe(
       Layer.provideMerge(QueuedDelivery.layer),
       Layer.provideMerge(reactorOrchestrationLayer),
@@ -625,10 +631,30 @@ describe("ProviderCommandReactor", () => {
         Effect.provideService(ServerActivation, input?.serverActivation),
       ),
     );
+    const queueReactor = await runtime.runPromise(Effect.service(SessionSpawnReactor));
+    const startQueueReactor = () =>
+      runtime!.runPromise(queueReactor.start().pipe(Scope.provide(scope!)));
+    if (input?.queueReactor) await startQueueReactor();
     const drain = () => Effect.runPromise(reactor.drain);
 
     return {
       engine,
+      startQueueReactor,
+      drainQueue: () => runtime!.runPromise(queueReactor.drain),
+      readDeliveryReceipts: () =>
+        runtime!.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            return yield* sql<{
+              state: string;
+              messageId: string;
+              consumedByTurnId: string | null;
+            }>`
+          SELECT state, pending_message_id AS "messageId", consumed_by_turn_id AS "consumedByTurnId"
+          FROM projection_turns WHERE state IN ('queued', 'interrupting', 'releasing', 'consumed', 'cancelled')
+        `;
+          }),
+        ),
       delivery: await runtime.runPromise(QueuedDelivery.QueuedDelivery),
       snapshotQuery,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
@@ -667,7 +693,11 @@ describe("ProviderCommandReactor", () => {
     };
   }
 
-  async function queuedDeliveryHarness(status: "ready" | "running", deliveryReceiptFailures = 0) {
+  async function queuedDeliveryHarness(
+    status: "ready" | "running",
+    deliveryReceiptFailures = 0,
+    text = "authorize unit A",
+  ) {
     const activation = await Effect.runPromise(Deferred.make<void>());
     const harness = await createHarness({
       serverActivation: Deferred.await(activation),
@@ -697,6 +727,16 @@ describe("ProviderCommandReactor", () => {
     });
     const dispatch = (command: Parameters<typeof harness.engine.dispatch>[0]) =>
       Effect.runPromise(harness.engine.dispatch(command));
+    if (text === "/compact") {
+      await runtime!.runPromise(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO projection_thread_messages
+          (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('prior-context', ${threadId}, 'user', 'Existing conversation', 0, ${now}, ${now})`;
+        }),
+      );
+    }
     await dispatch({
       type: "thread.session.set",
       commandId: CommandId.make("queue-busy"),
@@ -708,7 +748,7 @@ describe("ProviderCommandReactor", () => {
       type: "thread.turn.start",
       commandId: CommandId.make("queue-input"),
       threadId,
-      message: { messageId, role: "user", text: "authorize unit A", attachments: [] },
+      message: { messageId, role: "user", text, attachments: [] },
       runtimeMode: "full-access",
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       createdAt: now,
@@ -852,6 +892,139 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession).not.toHaveBeenCalled();
   });
 
+  it.each(["/compact", "/logout"])("does not admit cancelled native command %s", async (text) => {
+    const harness = await queuedDeliveryHarness("ready", 0, text);
+    harness.tryHandlePromptCommand.mockImplementation(({ text }) =>
+      Effect.succeed(text === "/logout"),
+    );
+    await harness.dispatch({
+      type: "thread.turn.queue.cancel",
+      commandId: CommandId.make("cancel-native"),
+      threadId: harness.threadId,
+      messageId: harness.messageId,
+      reason: "session_terminal",
+      createdAt: harness.now,
+    });
+    // A later stop's resulting event proves the provider lane has processed the cancelled request.
+    const events = await harness.runEffect(
+      harness.engine.subscribeDomainEvents.pipe(Scope.provide(scope!)),
+    );
+    const stopped = harness.runEffect(
+      events.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "thread.session-set" && event.payload.session.status === "stopped",
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+      ),
+    );
+    await harness.runEffect(Deferred.succeed(harness.activation, undefined));
+    await harness.dispatch({
+      type: "thread.session.stop",
+      commandId: CommandId.make("native-processing-barrier"),
+      threadId: harness.threadId,
+      createdAt: harness.now,
+    });
+    await stopped;
+    expect(harness.tryHandlePromptCommand).not.toHaveBeenCalled();
+    expect(harness.compactThread).not.toHaveBeenCalled();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it.each(["/compact", "/logout"])(
+    "persists completion without a turn for queued %s before startup recovery",
+    async (text) => {
+      const harness = await queuedDeliveryHarness("ready", 1, text);
+      harness.tryHandlePromptCommand.mockImplementation(({ text }) =>
+        Effect.succeed(text === "/logout"),
+      );
+      const events = await harness.runEffect(
+        harness.engine.subscribeDomainEvents.pipe(Scope.provide(scope!)),
+      );
+      const completed = harness.runEffect(
+        events.pipe(
+          Stream.filter((event) => event.type === "thread.turn-start-consumed"),
+          Stream.take(1),
+          Stream.runCollect,
+        ),
+      );
+      await harness.runEffect(Deferred.succeed(harness.activation, undefined));
+      expect((await completed)[0]?.payload).toMatchObject({
+        messageId: harness.messageId,
+        turnId: null,
+      });
+      expect(await harness.readDeliveryReceipts()).toEqual([
+        { messageId: harness.messageId, state: "consumed", consumedByTurnId: null },
+      ]);
+      // This queue reactor has never run: its startup recovery reads only durable rows.
+      await harness.startQueueReactor();
+      await harness.drainQueue();
+      await harness.drain();
+      expect(harness.compactThread).toHaveBeenCalledTimes(text === "/compact" ? 1 : 0);
+      expect(harness.tryHandlePromptCommand).toHaveBeenCalledTimes(1);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(await harness.readDeliveryReceipts()).toEqual([
+        { messageId: harness.messageId, state: "consumed", consumedByTurnId: null },
+      ]);
+    },
+  );
+
+  it.each(["/compact", "/logout"])(
+    "keeps queued %s owned during native work and acknowledges late success",
+    async (text) => {
+      const harness = await queuedDeliveryHarness("ready", 0, text);
+      const entered = await harness.runEffect(Deferred.make<void>());
+      const finish = await harness.runEffect(Deferred.make<void>());
+      const nativeWork = Effect.gen(function* () {
+        yield* Deferred.succeed(entered, undefined);
+        // Admission must not hold the cancellation/recovery permit while native work runs.
+        yield* harness.delivery.withPermit(harness.threadId, Effect.void);
+        yield* Deferred.await(finish);
+      });
+      if (text === "/compact") harness.compactThread.mockImplementation(() => nativeWork);
+      else
+        harness.tryHandlePromptCommand.mockImplementation(() => nativeWork.pipe(Effect.as(true)));
+      const events = await harness.runEffect(
+        harness.engine.subscribeDomainEvents.pipe(Scope.provide(scope!)),
+      );
+      const completed = harness.runEffect(
+        events.pipe(
+          Stream.filter((event) => event.type === "thread.turn-start-consumed"),
+          Stream.take(1),
+          Stream.runCollect,
+        ),
+      );
+      await harness.runEffect(Deferred.succeed(harness.activation, undefined));
+      await harness.runEffect(Deferred.await(entered));
+      expect(
+        await harness.runEffect(harness.delivery.isPending(harness.threadId, harness.messageId)),
+      ).toBe(true);
+      await harness.runEffect(
+        harness.delivery.withPermit(
+          harness.threadId,
+          harness.engine.dispatch({
+            type: "thread.turn.queue.cancel",
+            commandId: CommandId.make("cancel-native-in-flight"),
+            threadId: harness.threadId,
+            messageId: harness.messageId,
+            reason: "session_terminal",
+            createdAt: harness.now,
+          }),
+        ),
+      );
+      await harness.runEffect(Deferred.succeed(finish, undefined));
+      expect((await completed)[0]?.payload).toMatchObject({
+        messageId: harness.messageId,
+        turnId: null,
+      });
+      expect(await harness.readDeliveryReceipts()).toEqual([
+        { messageId: harness.messageId, state: "consumed", consumedByTurnId: null },
+      ]);
+    },
+  );
+
   async function completeProviderTurn(
     harness: Awaited<ReturnType<typeof createHarness>>,
     createdAt: string,
@@ -865,7 +1038,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
-        commandId: CommandId.make("cmd-complete-turn-before-follow-up"),
+        commandId: CommandId.make(`cmd-complete-turn-before-follow-up:${createdAt}`),
         threadId: thread.id,
         session: {
           ...thread.session,
@@ -1283,198 +1456,121 @@ describe("ProviderCommandReactor", () => {
     "queues messages until compaction restores the session (%s)",
     (scenario) =>
       Effect.gen(function* () {
-        const stopBeforeResume = scenario === "stop before resume";
-        const readyDispatchStarted = yield* Deferred.make<void>();
-        const releaseReadyDispatch = yield* Deferred.make<void>();
+        const restoring = yield* Deferred.make<void>();
+        const restore = yield* Deferred.make<void>();
+        const releasing = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const sent = yield* Deferred.make<void>();
+        const accept = yield* Deferred.make<void>();
         const firstSent = yield* Deferred.make<void>();
-        const queuedSent = yield* Deferred.make<void>();
-        const resumeStarted = yield* Deferred.make<void>();
-        const releaseResume = yield* Deferred.make<void>();
-        const resumeDispatched = yield* Deferred.make<void>();
-        const queuedSendStarted = yield* Deferred.make<void>();
-        const releaseQueuedSend = yield* Deferred.make<void>();
-        let blockReadyDispatch = false;
+        let blockRestore = false;
         const harness = yield* Effect.promise(() =>
           createHarness({
-            beforeTurnStartDispatch: () =>
-              stopBeforeResume
-                ? Deferred.succeed(resumeStarted, undefined).pipe(
-                    Effect.andThen(Deferred.await(releaseResume)),
+            queueReactor: true,
+            beforeReadySessionDispatch: () =>
+              blockRestore
+                ? Deferred.succeed(restoring, undefined).pipe(
+                    Effect.andThen(Deferred.await(restore)),
                   )
                 : Effect.void,
-            afterTurnStartDispatch: () => Deferred.succeed(resumeDispatched, undefined),
-            beforeReadySessionDispatch: () =>
-              blockReadyDispatch
-                ? Deferred.succeed(readyDispatchStarted, undefined).pipe(
-                    Effect.andThen(Deferred.await(releaseReadyDispatch)),
+            beforeTurnStartDispatch: () =>
+              scenario === "stop before resume"
+                ? Deferred.succeed(releasing, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
                   )
                 : Effect.void,
           }),
         );
         const threadId = ThreadId.make("thread-1");
-        let sentCount = 0;
-        harness.sendTurn.mockImplementation(() =>
-          Effect.succeed({ threadId, turnId: asTurnId("turn-1") }).pipe(
-            Effect.tap(() => {
-              sentCount++;
-              return sentCount === 1
-                ? Deferred.succeed(firstSent, undefined)
-                : sentCount === 2 && scenario === "stop after send"
-                  ? Deferred.succeed(queuedSendStarted, undefined).pipe(
-                      Effect.andThen(Deferred.await(releaseQueuedSend)),
-                    )
-                  : sentCount === 3
-                    ? Deferred.succeed(queuedSent, undefined)
-                    : Effect.void;
-            }),
-          ),
-        );
         const now = "2026-01-01T00:00:00.000Z";
-        const dispatchTurn = (id: string, text: string, createdAt: string) =>
+        const firstId = asMessageId("during-compact-1");
+        const secondId = asMessageId("during-compact-2");
+        harness.sendTurn.mockImplementation((request) =>
+          Effect.gen(function* () {
+            if (request.input === "hello") yield* Deferred.succeed(firstSent, undefined);
+            if (request.input === "first queued") {
+              yield* Deferred.succeed(sent, undefined);
+              if (scenario === "stop after send") yield* Deferred.await(accept);
+            }
+            return { threadId, turnId: asTurnId(request.input === "hello" ? "turn-1" : "turn-2") };
+          }),
+        );
+        const dispatchTurn = (messageId: MessageId, text: string) =>
           harness.engine.dispatch({
             type: "thread.turn.start",
-            commandId: CommandId.make(`cmd-${id}`),
+            commandId: CommandId.make(`cmd-${messageId}`),
             threadId,
-            message: {
-              messageId: asMessageId(`user-message-${id}`),
-              role: "user",
-              text,
-              attachments: [],
-            },
+            message: { messageId, role: "user", text, attachments: [] },
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
             runtimeMode: "approval-required",
-            createdAt,
+            createdAt: now,
           });
-
-        yield* dispatchTurn("before-blocked-compact", "hello", now);
+        const consumed = yield* harness.engine.streamDomainEvents.pipe(
+          Stream.filter((event) => event.type === "thread.turn-start-consumed"),
+          Stream.toPull,
+          Scope.provide(scope!),
+        );
+        yield* dispatchTurn(asMessageId("before-compact"), "hello");
         yield* Deferred.await(firstSent);
-        yield* harness.engine.dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.make("cmd-session-ready-before-blocked-compact"),
-          threadId,
-          session: {
-            threadId,
-            status: "ready",
-            providerName: "codex",
-            providerInstanceId: ProviderInstanceId.make("codex"),
-            runtimeMode: "approval-required",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: now,
-          },
-          createdAt: now,
-        });
-
-        blockReadyDispatch = true;
-        yield* dispatchTurn("blocked-compact", "/compact", "2026-01-01T00:00:01.000Z");
-        yield* Deferred.await(readyDispatchStarted);
-
-        yield* harness.engine.dispatch({
-          type: "thread.interaction-mode.set",
-          commandId: CommandId.make("cmd-queued-mode-plan"),
-          threadId,
-          interactionMode: "plan",
-          createdAt: now,
-        });
-        yield* dispatchTurn("during-compact-recovery", "first queued", "2026-01-01T00:00:02.000Z");
-        yield* harness.engine.dispatch({
-          type: "thread.interaction-mode.set",
-          commandId: CommandId.make("cmd-queued-mode-default"),
-          threadId,
-          interactionMode: "default",
-          createdAt: now,
-        });
-        yield* dispatchTurn(
-          "during-compact-recovery-2",
-          "second queued",
-          "2026-01-01T00:00:03.000Z",
-        );
         yield* Effect.promise(() => harness.drain());
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
+        blockRestore = true;
+        yield* dispatchTurn(asMessageId("compact"), "/compact");
+        yield* Deferred.await(restoring);
+        yield* dispatchTurn(firstId, "first queued");
+        yield* dispatchTurn(secondId, "second queued");
+        yield* Effect.promise(() => harness.drainQueue());
+        expect(
+          (yield* Effect.promise(() => harness.readDeliveryReceipts())).map((row) => row.state),
+        ).toEqual(["queued", "queued"]);
         expect(harness.sendTurn).toHaveBeenCalledTimes(1);
-        const beforeRestore = (yield* Effect.promise(() => harness.readModel())).threads.find(
-          (entry) => entry.id === threadId,
-        );
-        expect(
-          beforeRestore?.activities.filter(
-            (activity) => activity.kind === "provider.turn.start.failed",
-          ),
-        ).toEqual([]);
-        expect(yield* Effect.promise(() => harness.readPendingTurnStarts())).toEqual([
-          { threadId: "thread-1" },
-        ]);
-
-        yield* Deferred.succeed(releaseReadyDispatch, undefined);
-        if (scenario === "stop after send") {
-          yield* Deferred.await(queuedSendStarted);
+        yield* Deferred.succeed(restore, undefined);
+        if (scenario === "stop before resume") {
+          yield* Deferred.await(releasing);
+        } else {
+          yield* Deferred.await(sent);
+        }
+        if (scenario !== "resume") {
+          const stopped = yield* harness.engine.streamDomainEvents.pipe(
+            Stream.filter(
+              (event) =>
+                event.type === "thread.session-set" && event.payload.session.status === "stopped",
+            ),
+            Stream.toPull,
+            Scope.provide(scope!),
+          );
           yield* harness.engine.dispatch({
             type: "thread.session.stop",
-            commandId: CommandId.make("cmd-stop-after-queued-send"),
+            commandId: CommandId.make("stop-during-queue"),
             threadId,
-            createdAt: "2026-01-01T00:00:04.000Z",
+            createdAt: now,
           });
-          yield* Effect.promise(() => harness.drain());
-          const stoppedThread = (yield* Effect.promise(() => harness.readModel())).threads.find(
-            (entry) => entry.id === threadId,
+          yield* stopped;
+          yield* Deferred.succeed(release, undefined);
+          yield* Effect.promise(() => harness.drainQueue());
+          if (scenario === "stop after send") {
+            yield* Deferred.succeed(accept, undefined);
+            yield* consumed;
+          }
+          const rows = yield* Effect.promise(() => harness.readDeliveryReceipts());
+          expect(rows.find((row) => row.messageId === secondId)?.state).toBe("cancelled");
+          expect(rows.find((row) => row.messageId === firstId)?.state).toBe(
+            scenario === "stop after send" ? "consumed" : "cancelled",
           );
-          expect(stoppedThread?.session?.status).toBe("stopped");
-          expect(
-            stoppedThread?.activities.filter(
-              (activity) => activity.summary === "Queued message was not sent",
-            ),
-          ).toEqual([
-            expect.objectContaining({
-              payload: {
-                requestId: "user-message-during-compact-recovery-2",
-                detail: expect.any(String),
-              },
-            }),
+          expect(harness.sendTurn).toHaveBeenCalledTimes(scenario === "stop after send" ? 2 : 1);
+        } else {
+          yield* consumed;
+          yield* Effect.promise(() => completeProviderTurn(harness, "2026-01-01T00:00:01.000Z"));
+          yield* consumed;
+          expect(harness.sendTurn.mock.calls.slice(1).map(([request]) => request.input)).toEqual([
+            "first queued",
+            "second queued",
           ]);
-          expect(harness.sendTurn).toHaveBeenCalledTimes(2);
-          yield* Deferred.succeed(releaseQueuedSend, undefined);
-          return;
-        }
-        if (stopBeforeResume) {
-          yield* Deferred.await(resumeStarted);
-          yield* dispatchTurn("compact-during-resume", "/compact", "2026-01-01T00:00:04.000Z");
-          yield* Effect.promise(() => harness.drain());
-          expect(harness.compactThread).toHaveBeenCalledTimes(1);
-          yield* harness.engine.dispatch({
-            type: "thread.session.stop",
-            commandId: CommandId.make("cmd-stop-before-queued-resume"),
-            threadId,
-            createdAt: "2026-01-01T00:00:04.000Z",
-          });
-          yield* Effect.promise(() => harness.drain());
-          yield* Deferred.succeed(releaseResume, undefined);
-          yield* Deferred.await(resumeDispatched);
-          yield* Effect.promise(() => harness.drain());
-          expect(harness.sendTurn).toHaveBeenCalledTimes(1);
-          const stoppedThread = (yield* Effect.promise(() => harness.readModel())).threads.find(
-            (entry) => entry.id === threadId,
-          );
-          expect(stoppedThread?.session?.status).toBe("stopped");
-          expect(yield* Effect.promise(() => harness.readPendingTurnStarts())).toEqual([]);
           expect(
-            stoppedThread?.activities.filter(
-              (activity) => activity.summary === "Queued message was not sent",
-            ),
-          ).toHaveLength(2);
-          return;
+            (yield* Effect.promise(() => harness.readDeliveryReceipts())).map((row) => row.state),
+          ).toEqual(["consumed", "consumed"]);
         }
-        yield* Deferred.await(queuedSent);
-        expect(harness.sendTurn.mock.calls.slice(1).map(([request]) => request)).toEqual([
-          expect.objectContaining({ input: "first queued", interactionMode: "plan" }),
-          expect.objectContaining({ input: "second queued", interactionMode: "default" }),
-        ]);
-        const afterRestore = (yield* Effect.promise(() => harness.readModel())).threads.find(
-          (entry) => entry.id === threadId,
-        );
-        expect(
-          afterRestore?.messages.filter((message) => message.text === "first queued"),
-        ).toHaveLength(1);
-        expect(
-          afterRestore?.messages.filter((message) => message.text === "second queued"),
-        ).toHaveLength(1);
+        expect(harness.compactThread).toHaveBeenCalledTimes(1);
       }),
   );
 

@@ -6,6 +6,7 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  TurnId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
@@ -104,6 +105,30 @@ layer("OrchestrationEventStore", (it) => {
       assert.equal(replayed[0]?.type, "project.created");
       assert.equal(replayed[0]?.metadata.adapterKey, "codex");
       assert.deepEqual(replayed[0]?.metadata.origin, { surface: "cli" });
+    }),
+  );
+
+  it.effect("replays historical turn receipts and native command receipts without a turn", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const threadId = ThreadId.make("receipt-thread");
+      for (const turnId of [TurnId.make("provider-turn"), null]) {
+        const base = messageEvent(threadId, `receipt-${turnId ?? "native"}`);
+        const appended = yield* eventStore.append({
+          ...base,
+          type: "thread.turn-start-consumed",
+          payload: {
+            threadId,
+            messageId: MessageId.make(`message-${turnId ?? "native"}`),
+            turnId,
+            consumedAt: base.occurredAt,
+          },
+        });
+        const replayed = yield* Stream.runCollect(
+          eventStore.readFromSequence(appended.sequence - 1, 1),
+        );
+        assert.deepEqual(replayed[0], appended);
+      }
     }),
   );
 
