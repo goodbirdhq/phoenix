@@ -18,7 +18,7 @@ import {
 import {
   ConnectionCatalogDocument,
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
-  clearUnsupportedManagedConnections,
+  clearUnsupportedManagedCredentials,
   registerConnectionInCatalog,
   removeConnectionFromCatalog,
 } from "./storageDocument.ts";
@@ -60,7 +60,7 @@ const REMOTE_TOKEN = {
 const decodeCatalog = Schema.decodeUnknownSync(ConnectionCatalogDocument);
 
 describe("ConnectionCatalogDocument", () => {
-  it("decodes and clears legacy managed state without losing direct pairing", () => {
+  it("preserves managed connection metadata while discarding retired credentials", () => {
     const direct = registerConnectionInCatalog(
       EMPTY_CONNECTION_CATALOG_DOCUMENT,
       new BearerConnectionRegistration({
@@ -77,8 +77,13 @@ describe("ConnectionCatalogDocument", () => {
       ],
       remoteDpopTokens: [REMOTE_TOKEN],
     });
-    const cleaned = clearUnsupportedManagedConnections(decoded);
-    expect(cleaned.targets).toEqual(direct.targets);
+    const cleaned = clearUnsupportedManagedCredentials(decoded);
+    expect(cleaned.targets).toEqual(decoded.targets);
+    expect(cleaned.targets[1]).toMatchObject({
+      _tag: "RelayConnectionTarget",
+      environmentId: "old-managed",
+      label: "Old managed",
+    });
     expect(cleaned.profiles).toEqual(direct.profiles);
     expect(cleaned.credentials).toEqual(direct.credentials);
     expect(cleaned.remoteDpopTokens).toEqual([]);

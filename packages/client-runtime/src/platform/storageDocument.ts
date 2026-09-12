@@ -132,13 +132,12 @@ export function removeConnectionFromCatalog(
   return removeConnectionMetadata(document, target);
 }
 
-/** Retire managed entries after decoding older catalogs; never turn them into direct endpoints. */
-export function clearUnsupportedManagedConnections(
+/** Discard retired credentials while retaining saved connections for explicit unsupported presentation. */
+export function clearUnsupportedManagedCredentials(
   document: ConnectionCatalogDocument,
 ): ConnectionCatalogDocument {
   return {
     ...document,
-    targets: document.targets.filter((target) => target._tag !== "RelayConnectionTarget"),
     remoteDpopTokens: [],
   };
 }
