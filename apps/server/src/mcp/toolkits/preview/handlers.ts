@@ -31,6 +31,9 @@ import * as ServerConfig from "../../../config.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
+import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as Option from "effect/Option";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
 /**
@@ -55,8 +58,22 @@ export function normalizePreviewOpenInput(
 export const requirePreviewCapability = Effect.fn("mcp.requirePreviewCapability")(function* () {
   const scope = yield* McpInvocationContext.requireMcpCapability("preview");
   const serverSettings = yield* ServerSettings.ServerSettingsService;
-  const enabled = yield* serverSettings.getSettings.pipe(
-    Effect.map((settings) => settings.enableAgentBrowserAccess),
+  const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const enabled = yield* Effect.gen(function* () {
+    const settings = yield* serverSettings.getSettings;
+    const browserOverridden = Object.values(settings.projectSettingsOverrides).some(
+      (entry) => entry.enableAgentBrowserAccess !== undefined,
+    );
+    if (!browserOverridden) return settings.enableAgentBrowserAccess;
+    // Match credential issuance: once browser access has a project override,
+    // resolve the calling thread's project and deny if it cannot be recovered.
+    // Otherwise an environment-level value could override a project's explicit
+    // on/off choice for an already-running MCP credential.
+    const thread = yield* snapshotQuery.getThreadShellById(scope.threadId);
+    if (Option.isNone(thread)) return false;
+    return resolveProjectSettings(settings, thread.value.projectId).settings
+      .enableAgentBrowserAccess;
+  }).pipe(
     Effect.catch((cause) =>
       Effect.logWarning("Could not read server settings; denying agent browser access.", {
         cause,
@@ -86,6 +103,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   | McpInvocationContext.McpInvocationContext
   | PreviewAutomationBroker.PreviewAutomationBroker
   | ServerSettings.ServerSettingsService
+  | ProjectionSnapshotQuery.ProjectionSnapshotQuery
 > {
   const scope = yield* requirePreviewCapability();
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;

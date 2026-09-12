@@ -342,6 +342,11 @@ const serveSimPermissions = (
 const adb = (run: Runner, serial: string, args: ReadonlyArray<string>, operation: string) =>
   run("adb", ["-s", serial, ...args]).pipe(Effect.flatMap(ok(operation)));
 
+// `adb shell` joins trailing argv into an Android shell command. Keep host
+// process spawning argv-based, but quote data that becomes part of that remote
+// command so URLs and package ids remain one shell operand.
+const quoteAndroidShellOperand = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
+
 const runAndroid = Effect.fn("DeviceActions.runAndroid")(function* (
   run: Runner,
   input: DeviceActionInput,
@@ -349,6 +354,18 @@ const runAndroid = Effect.fn("DeviceActions.runAndroid")(function* (
   const serial = input.deviceId;
   const shell = (args: ReadonlyArray<string>, operation: string) =>
     adb(run, serial, ["shell", ...args], operation);
+  const shellWithOperand = (
+    before: ReadonlyArray<string>,
+    operand: string,
+    after: ReadonlyArray<string>,
+    operation: string,
+  ) =>
+    adb(
+      run,
+      serial,
+      ["shell", [...before, quoteAndroidShellOperand(operand), ...after].join(" ")],
+      operation,
+    );
   switch (input.type) {
     case "setAppearance":
       yield* shell(["cmd", "uimode", "night", input.value === "dark" ? "yes" : "no"], "appearance");
@@ -428,24 +445,30 @@ const runAndroid = Effect.fn("DeviceActions.runAndroid")(function* (
       const verb = input.decision === "grant" ? "grant" : "revoke";
       for (const permission of permissions) {
         // Not every app declares every permission in a group; ignore those.
-        yield* shell(["pm", verb, input.appId, permission], "permission").pipe(Effect.ignore);
+        yield* shellWithOperand(["pm", verb], input.appId, [permission], "permission").pipe(
+          Effect.ignore,
+        );
       }
       return;
     }
     case "openUrl":
-      yield* shell(
-        ["am", "start", "-a", "android.intent.action.VIEW", "-d", input.url],
+      yield* shellWithOperand(
+        ["am", "start", "-a", "android.intent.action.VIEW", "-d"],
+        input.url,
+        [],
         "open url",
       );
       return;
     case "launchApp":
-      yield* shell(
-        ["monkey", "-p", input.appId, "-c", "android.intent.category.LAUNCHER", "1"],
+      yield* shellWithOperand(
+        ["monkey", "-p"],
+        input.appId,
+        ["-c", "android.intent.category.LAUNCHER", "1"],
         "launch",
       );
       return;
     case "terminateApp":
-      yield* shell(["am", "force-stop", input.appId], "terminate");
+      yield* shellWithOperand(["am", "force-stop"], input.appId, [], "terminate");
       return;
     case "setLiquidGlass":
     case "setColorFilter":

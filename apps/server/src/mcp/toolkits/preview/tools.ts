@@ -27,11 +27,13 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as ServerConfig from "../../../config.ts";
+import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
   PreviewAutomationBroker.PreviewAutomationBroker,
   ServerSettings.ServerSettingsService,
+  ProjectionSnapshotQuery.ProjectionSnapshotQuery,
 ];
 
 const presentationFields = { toolIcon: Schema.optional(ToolActivityIcon) };

@@ -1,13 +1,15 @@
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
+import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   createPendingAttachmentId,
   parseThreadSegmentFromAttachmentId,
@@ -69,7 +71,49 @@ describe("requirePreviewCapability", () => {
     }).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
       Effect.provide(ServerSettings.layerTest({ enableAgentBrowserAccess: true })),
+      Effect.provide(
+        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+          getThreadShellById: () => Effect.succeed(Option.none()),
+        }),
+      ),
     );
+  });
+
+  it.effect("honors a project browser override at tool time", () => {
+    const projectId = ProjectId.make("project-preview-test");
+    const invocation: McpInvocationContext.McpInvocationScope = {
+      environmentId: EnvironmentId.make("environment-preview-test"),
+      threadId: ThreadId.make("thread-preview-test"),
+      providerSessionId: "provider-session-preview-test",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview"]),
+      issuedAt: 1,
+    };
+    const thread = { projectId };
+    const snapshots = Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+      getThreadShellById: () => Effect.succeed(Option.some(thread)),
+    });
+    const run = (settings: Parameters<typeof ServerSettings.layerTest>[0]) =>
+      requirePreviewCapability().pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provide(ServerSettings.layerTest(settings)),
+        Effect.provide(snapshots),
+        Effect.result,
+      );
+
+    return Effect.gen(function* () {
+      const projectSettingsOverrides = { [projectId]: { enableAgentBrowserAccess: false } };
+      expect((yield* run({ enableAgentBrowserAccess: true, projectSettingsOverrides }))._tag).toBe(
+        "Failure",
+      );
+
+      expect(
+        (yield* run({
+          enableAgentBrowserAccess: false,
+          projectSettingsOverrides: { [projectId]: { enableAgentBrowserAccess: true } },
+        }))._tag,
+      ).toBe("Success");
+    });
   });
 });
 

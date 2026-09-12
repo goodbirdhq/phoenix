@@ -94,6 +94,38 @@ describe("runDeviceAction", () => {
     }),
   );
 
+  it.effect("passes Android URL and package operands as one quoted device-shell argument", () =>
+    Effect.gen(function* () {
+      const { ready, calls } = makeReady();
+      const url = "https://example.test/a path?q=one&note='still data';$(id)";
+      yield* runDeviceAction(ready, "android", {
+        type: "openUrl",
+        deviceId: "emulator-5554",
+        url,
+      });
+      yield* runDeviceAction(ready, "android", {
+        type: "terminateApp",
+        deviceId: "emulator-5554",
+        appId: "com.example.app; echo nope",
+      });
+      expect(calls).toEqual([
+        {
+          command: "adb",
+          args: [
+            "-s",
+            "emulator-5554",
+            "shell",
+            "am start -a android.intent.action.VIEW -d 'https://example.test/a path?q=one&note='\"'\"'still data'\"'\"';$(id)'",
+          ],
+        },
+        {
+          command: "adb",
+          args: ["-s", "emulator-5554", "shell", "am force-stop 'com.example.app; echo nope'"],
+        },
+      ]);
+    }),
+  );
+
   it.effect(
     "rotates emulators through the accelerometer and physical devices through the lock",
     () =>
