@@ -648,6 +648,109 @@ describe("CodexSessionRuntime collab integration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.live("clears a root system-error turn before starting the next turn", () =>
+    Effect.gen(function* () {
+      const activeTurnId = "root-turn-before-system-error";
+      const nextTurnId = "root-turn-after-system-error";
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        turnIds: [activeTurnId, nextTurnId],
+        notifications: [
+          {
+            method: "thread/status/changed",
+            params: { threadId: ROOT, status: { type: "systemError" } },
+          },
+        ],
+      };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(scriptPath, { force: true })),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-root-system-error"),
+        binaryPath: peerPath,
+        cwd: "/tmp",
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const systemError = yield* runtime.events.pipe(
+        Stream.filter((event) => event.method === "thread/status/changed"),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
+
+      yield* runtime.start();
+      const first = yield* runtime.sendTurn({ input: "first turn" });
+      assert.equal(first.turnId, activeTurnId);
+      yield* Fiber.join(systemError);
+      assert.deepInclude(yield* runtime.getSession, {
+        status: "error",
+        activeTurnId: undefined,
+      });
+
+      const next = yield* runtime.sendTurn({ input: "next turn" });
+      assert.equal(next.turnId, nextTurnId);
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("does not let a child system error terminalize the root turn", () =>
+    Effect.gen(function* () {
+      const activeTurnId = "root-turn-with-child-system-error";
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        turnIds: [activeTurnId],
+        notifications: [
+          {
+            method: "thread/status/changed",
+            params: { threadId: CHILD_A, status: { type: "systemError" } },
+          },
+          {
+            method: "thread/status/changed",
+            params: { threadId: ROOT, status: { type: "active", activeFlags: [] } },
+          },
+        ],
+      };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(scriptPath, { force: true })),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-child-system-error"),
+        binaryPath: peerPath,
+        cwd: "/tmp",
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const childSystemError = yield* runtime.events.pipe(
+        Stream.filter(
+          (event) =>
+            event.method === "thread/status/changed" &&
+            (event.payload as { threadId?: string }).threadId === ROOT,
+        ),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "root continues" });
+      yield* Fiber.join(childSystemError);
+      assert.deepInclude(yield* runtime.getSession, {
+        status: "running",
+        activeTurnId,
+      });
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   const elicitationCases = [
     {
       decision: "accept",
