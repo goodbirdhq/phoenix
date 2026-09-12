@@ -40,6 +40,7 @@ export function PromptFontPreview() {
     <div className="mt-1 mb-2 rounded-lg border border-border bg-background px-3 py-2">
       <ComposerPromptEditor
         editorRef={editorRef}
+        historyKey="settings-font-preview"
         value={prompt}
         cursor={cursor}
         contextRecords={EMPTY_COMPOSER_CONTEXT_RECORDS}

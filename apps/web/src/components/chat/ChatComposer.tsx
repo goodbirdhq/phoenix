@@ -119,8 +119,9 @@ import {
 } from "./ComposerTasksBadge";
 import { ComposerActivityRow } from "./ComposerActivityStatus";
 import {
+  commitImportedAttachment,
+  composerContextRecoveryForTarget,
   reconcileAttachmentContextReferences,
-  type RetainedAttachmentContextPayloads,
 } from "./composerContextUndo";
 import type { ThreadSyncPhase } from "../../threadSync";
 import { ComposerBanner } from "./ComposerBanner";
@@ -199,7 +200,7 @@ import {
 import {
   asKnownContextRecord,
   composerContextImportLookupIds,
-  isSameComposerContextPayload,
+  identicalComposerContextImportId,
   uploadedAttachmentContextRecord,
   fileContextReference,
   imageContextReference,
@@ -1515,10 +1516,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Store subscriptions (prompt / images / terminal contexts)
   // ------------------------------------------------------------------
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
+  const composerDraftTargetKey = composerTargetKey(composerDraftTarget);
   // Live target key, for async flows that must notice a thread switch that
   // happened while they awaited.
   const composerDraftTargetKeyRef = useRef("");
-  composerDraftTargetKeyRef.current = composerTargetKey(composerDraftTarget);
+  composerDraftTargetKeyRef.current = composerDraftTargetKey;
   const questionAttachmentTarget =
     pendingUserInputs[0] && activePendingProgress?.activeQuestion
       ? questionAttachmentDraftId(
@@ -2706,7 +2708,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       record: Extract<ComposerContextRecord, { kind: "image" | "file" }>,
       localId: string,
       sourceEnvironmentId: EnvironmentId,
-      importTargetKey: string,
+      importTarget: typeof attachmentDraftTarget,
     ) => {
       const fail = (reason: string) => {
         toastManager.add({
@@ -2742,37 +2744,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       const file = new File([blob], record.name, { type: record.mimeType || blob.type });
-      // The draft these bytes belong to may have been sent or switched away from while they
-      // downloaded. Dropping them here keeps them out of whatever draft is open now.
-      if (attachmentTargetKeyRef.current !== importTargetKey) return;
-      if (record.kind === "image") {
-        const accepted = addComposerImage({
-          type: "image",
-          id: localId,
-          name: record.name,
-          mimeType: file.type,
-          sizeBytes: file.size,
-          previewUrl: URL.createObjectURL(file),
-          file,
-        });
-        if (!accepted.includes(localId))
-          fail("The draft rejected this attachment (duplicate or attachment limit reached).");
-      } else {
-        const accepted = addComposerFilesToDraft([
-          {
-            type: "file",
-            id: localId,
-            name: record.name,
-            mimeType: file.type,
-            sizeBytes: file.size,
-            file,
-          },
-        ]);
-        if (!accepted.includes(localId))
-          fail("The draft rejected this attachment (duplicate or attachment limit reached).");
-      }
+      const status = commitImportedAttachment({
+        record,
+        localId,
+        file,
+        target: importTarget,
+        getDraft: getComposerDraft,
+        addImages: addComposerDraftImages,
+        addFiles: addComposerDraftFiles,
+      });
+      // Removing the chip while the transfer is in flight is a deliberate cancellation.
+      if (status === "rejected")
+        fail("The draft rejected this attachment (duplicate or attachment limit reached).");
     },
-    [addComposerFilesToDraft, addComposerImage, attachmentTargetKey, createAssetUrl],
+    [addComposerDraftFiles, addComposerDraftImages, createAssetUrl, getComposerDraft],
   );
   const importAttachmentRecord = useCallback(
     async (
@@ -2783,15 +2768,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       // The chip lands in the draft immediately while these bytes are still downloading. Count
       // the transfer against its own draft so a send cannot snapshot a message whose chip has no
       // attachment behind it, and so bytes for an abandoned draft never enter the next one.
-      const importTargetKey = attachmentTargetKey;
+      const importTarget = attachmentDraftTarget;
+      const importTargetKey = composerTargetKey(importTarget);
       pendingDraftWork.begin(importTargetKey);
       try {
-        await runAttachmentImport(record, localId, sourceEnvironmentId, importTargetKey);
+        await runAttachmentImport(record, localId, sourceEnvironmentId, importTarget);
       } finally {
         pendingDraftWork.end(importTargetKey);
       }
     },
-    [attachmentTargetKey, runAttachmentImport],
+    [attachmentDraftTarget, runAttachmentImport],
   );
   /**
    * Brings records into this draft (paste, stash restore). Binaries are transferred only
@@ -2820,27 +2806,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         // re-minted under a fresh id so both survive the paste.
         const record = asKnownContextRecord(candidate);
         if (!record) continue;
-        const existing = composerContextImportLookupIds(record).flatMap((contextId) => {
-          const found = composerContextRecords.get(contextId);
-          return found ? [found] : [];
-        })[0];
-        const existingRecord =
-          existing?.kind === "terminal"
-            ? terminalContextRecord(existing.record)
-            : existing?.kind === "review-comment"
-              ? reviewCommentContextRecord(existing.record)
-              : existing?.kind === "preview-annotation"
-                ? previewAnnotationContextRecord(existing.record)
-                : existing
-                  ? (uploadedContextRecordFromDraft(existing) ?? undefined)
-                  : undefined;
-        if (existingRecord && isSameComposerContextPayload(existingRecord, record)) {
+        const existingContextId = identicalComposerContextImportId(
+          record,
+          composerContextRecords,
+          (existing) =>
+            existing.kind === "terminal"
+              ? terminalContextRecord(existing.record)
+              : existing.kind === "review-comment"
+                ? reviewCommentContextRecord(existing.record)
+                : existing.kind === "preview-annotation"
+                  ? previewAnnotationContextRecord(existing.record, {
+                      screenshotContextId: composerImages.some(
+                        (image) => image.id === existing.record.id,
+                      )
+                        ? existing.record.id
+                        : undefined,
+                    })
+                  : (uploadedContextRecordFromDraft(existing) ?? undefined),
+        );
+        if (existingContextId) {
+          rewritten.set(record.contextId, existingContextId);
           if (record.kind === "preview-annotation" && record.screenshotContextId) {
             skippedDependentAttachmentIds.add(record.screenshotContextId);
           }
           continue;
         }
-        const conflicts = existing !== undefined;
+        const conflicts = composerContextImportLookupIds(record).some((contextId) =>
+          composerContextRecords.has(contextId),
+        );
         switch (record.kind) {
           case "terminal": {
             const threadId = activeThread?.id ?? activeThreadId;
@@ -2904,6 +2897,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       addComposerDraftReviewComment,
       addComposerDraftTerminalContexts,
       composerContextRecords,
+      composerImages,
       composerDraftTarget,
       importAttachmentRecord,
     ],
@@ -3198,14 +3192,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    * reference text but knows nothing about the draft records behind it, so a delete keeps its
    * payload here and an undo puts it back rather than leaving a dangling chip.
    */
-  const removedContextPayloadsRef = useRef<{
-    terminals: Map<string, TerminalContextDraft>;
-    reviewComments: Map<string, ReviewCommentContext>;
-  }>({ terminals: new Map(), reviewComments: new Map() });
-  const removedAttachmentContextPayloadsRef = useRef<RetainedAttachmentContextPayloads>({
-    files: new Map(),
-    previewAnnotations: new Map(),
-  });
+  const contextRecovery = useMemo(
+    () => composerContextRecoveryForTarget(undefined, composerDraftTargetKey),
+    [composerDraftTargetKey],
+  );
 
   const onPromptChange = useCallback(
     (
@@ -3240,7 +3230,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         promptHistoryPositionRef.current = null;
       }
       const referenced = new Set(contextIds);
-      const retained = removedContextPayloadsRef.current;
+      const retained = contextRecovery.contexts;
 
       // An undone delete brings the reference back; restore the payload it points at.
       const liveTerminalIds = new Set<string>(
@@ -3291,7 +3281,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         files: composerFiles,
         images: composerImages,
         previewAnnotations: composerPreviewAnnotations,
-        retained: removedAttachmentContextPayloadsRef.current,
+        retained: contextRecovery.attachments,
       });
       for (const annotationId of attachmentChanges.annotationIdsToRemove) {
         // Keep the upload queue entry alive: undo restores the image that owns it.
@@ -3323,6 +3313,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       promptRef,
       setPrompt,
       composerDraftTarget,
+      contextRecovery,
       composerTerminalContexts,
       setComposerDraftTerminalContexts,
       composerReviewComments,
@@ -3783,10 +3774,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // The composer persists across threads. A recall from thread A must not
   // be treated as active in thread B, where the text-match fallback could
   // otherwise turn B's own draft into a browsing position.
-  const promptHistoryTargetKey = composerTargetKey(composerDraftTarget);
   useEffect(() => {
     promptHistoryPositionRef.current = null;
-  }, [promptHistoryTargetKey]);
+  }, [composerDraftTargetKey]);
 
   const replacePromptFromHistory = useCallback(
     (nextPrompt: string) => {
@@ -6422,6 +6412,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 <ComposerContextActionsContext value={composerContextActions}>
                   <ComposerPromptEditor
                     editorRef={composerEditorRef}
+                    historyKey={composerDraftTargetKey}
                     value={
                       isComposerApprovalState
                         ? ""

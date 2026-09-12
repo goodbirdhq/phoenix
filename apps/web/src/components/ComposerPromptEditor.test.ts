@@ -1,6 +1,12 @@
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
 import { elementContextToPreviewAnnotation } from "../lib/elementContext";
-import { previewAnnotationContextRecord } from "../lib/composerContextRecords";
+import {
+  asKnownContextRecord,
+  identicalComposerContextImportId,
+  previewAnnotationContextRecord,
+  terminalContextDraftFromRecord,
+  terminalContextRecord,
+} from "../lib/composerContextRecords";
 import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -498,6 +504,38 @@ describe("registerComposerInlineTokenPaste", () => {
 });
 
 describe("context reference paste", () => {
+  it("rewrites a deduplicated legacy context chip to the draft's canonical id", () => {
+    const copied = upgradeLegacyContextMessage(
+      "Inspect this\n\n<terminal_context>\n- Terminal 1 line 1:\n  1 | output\n</terminal_context>",
+    );
+    const imported = asKnownContextRecord(copied.records[0]);
+    if (!imported || imported.kind !== "terminal") throw new Error("Expected terminal context");
+    const canonical = terminalContextRecord(
+      terminalContextDraftFromRecord(imported, ThreadId.make("thread-destination")),
+    );
+    const event = new TestClipboardEvent(copied.text, {
+      "web application/x-t3-context-fragment+json": JSON.stringify({
+        version: 1,
+        source: { environmentId: "env-1" },
+        records: [imported],
+      }),
+    });
+
+    const text = importPastedComposerText(event.clipboardData, (fragment) => {
+      const record = asKnownContextRecord(fragment.records[0]);
+      if (!record) return new Map();
+      const canonicalId = identicalComposerContextImportId(
+        record,
+        new Map([[canonical.contextId, canonical]]),
+        (existing) => existing,
+      );
+      return canonicalId ? new Map([[record.contextId, canonicalId]]) : new Map();
+    });
+
+    expect(text).toContain(`t3-context://v1/terminal/${canonical.contextId}`);
+    expect(text).not.toContain(`t3-context://v1/terminal/${imported.contextId}`);
+  });
+
   it.each(["focused", "blurred"])("imports structured paste when %s", (focus) => {
     vi.stubGlobal("ClipboardEvent", TestClipboardEvent);
     const editor = createEditor({ nodes: [ComposerCitationNode] });

@@ -340,6 +340,21 @@ export function composerContextImportLookupIds(
     : [destinationId, record.contextId];
 }
 
+/** Finds an identical draft record and returns the id actually used by that draft. */
+export function identicalComposerContextImportId<T>(
+  record: KnownComposerContextRecord,
+  records: ReadonlyMap<string, T>,
+  toRecord: (value: T) => KnownComposerContextRecord | undefined,
+): ComposerContextId | undefined {
+  for (const contextId of composerContextImportLookupIds(record)) {
+    const existing = records.get(contextId);
+    if (existing === undefined) continue;
+    const existingRecord = toRecord(existing);
+    if (existingRecord && isSameComposerContextPayload(existingRecord, record)) return contextId;
+  }
+  return undefined;
+}
+
 export interface ResolvedUserMessageContext {
   text: string;
   records: ReadonlyArray<ComposerContextRecord>;

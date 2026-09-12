@@ -855,6 +855,8 @@ export interface ComposerPromptEditorHandle {
 }
 
 interface ComposerPromptEditorProps {
+  /** Stable identity for the draft whose undo history this editor owns. */
+  historyKey: string;
   value: string;
   cursor: number;
   /** Draft records behind the prompt's context references, keyed by context id. */
@@ -1616,6 +1618,8 @@ function ComposerSurroundSelectionPlugin(props: { skills: ReadonlyArray<ServerPr
   return null;
 }
 
+type ComposerPromptEditorForTargetProps = Omit<ComposerPromptEditorProps, "historyKey">;
+
 function ComposerPromptEditorInner({
   value,
   cursor,
@@ -1637,7 +1641,7 @@ function ComposerPromptEditorInner({
   onCitationSubmitAndSend,
   onPaste,
   editorRef,
-}: ComposerPromptEditorProps) {
+}: ComposerPromptEditorForTargetProps) {
   const [editor] = useLexicalComposerContext();
   const onChangeRef = useRef(onChange);
   const onVisibleSelectionChangeRef = useRef(onVisibleSelectionChange);
@@ -2057,7 +2061,7 @@ function ComposerPromptEditorInner({
   );
 }
 
-export function ComposerPromptEditor({
+function ComposerPromptEditorForTarget({
   value,
   cursor,
   contextRecords,
@@ -2078,7 +2082,7 @@ export function ComposerPromptEditor({
   onCitationSubmitAndSend,
   onPaste,
   editorRef,
-}: ComposerPromptEditorProps) {
+}: ComposerPromptEditorForTargetProps) {
   const initialValueRef = useRef(value);
   const initialSkillMetadataRef = useRef(skillMetadataByName(skills));
   const initialConfig = useMemo<InitialConfigType>(
@@ -2128,5 +2132,11 @@ export function ComposerPromptEditor({
         />
       </LexicalComposer>
     </ComposerSkillsContext>
+  );
+}
+
+export function ComposerPromptEditor({ historyKey, ...props }: ComposerPromptEditorProps) {
+  return (
+    <ComposerPromptEditorForTarget key={`${COMPOSER_EDITOR_HMR_KEY}:${historyKey}`} {...props} />
   );
 }

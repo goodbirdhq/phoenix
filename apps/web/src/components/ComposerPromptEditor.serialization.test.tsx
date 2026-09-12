@@ -1,5 +1,15 @@
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { $copyNode, $getRoot, $isElementNode, PASTE_COMMAND, type LexicalEditor } from "lexical";
+import {
+  $copyNode,
+  $createParagraphNode,
+  $createTextNode,
+  $getRoot,
+  $isElementNode,
+  HISTORY_PUSH_TAG,
+  PASTE_COMMAND,
+  UNDO_COMMAND,
+  type LexicalEditor,
+} from "lexical";
 import { act, createRef } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -29,9 +39,10 @@ vi.mock("@lexical/react/LexicalPlainTextPlugin", () => ({
 let renderer: ReactTestRenderer | undefined;
 const editorRef = createRef<ComposerPromptEditorHandle>();
 
-function composer(value: string) {
+function composer(value: string, historyKey = "thread-a") {
   return (
     <ComposerPromptEditor
+      historyKey={historyKey}
       value={value}
       cursor={collapseExpandedComposerCursor(value, value.length)}
       contextRecords={new Map()}
@@ -45,10 +56,24 @@ function composer(value: string) {
   );
 }
 
-async function renderPrompt(value: string) {
+async function renderPrompt(value: string, historyKey?: string) {
   await act(() => {
-    if (renderer) renderer.update(composer(value));
-    else renderer = create(composer(value));
+    if (renderer) renderer.update(composer(value, historyKey));
+    else renderer = create(composer(value, historyKey));
+  });
+}
+
+async function replaceEditorText(value: string) {
+  await act(() => {
+    lexicalEditor.update(
+      () => {
+        const paragraph = $createParagraphNode();
+        if (value) paragraph.append($createTextNode(value));
+        $getRoot().clear().append(paragraph);
+        paragraph.selectEnd();
+      },
+      { discrete: true, tag: HISTORY_PUSH_TAG },
+    );
   });
 }
 
@@ -84,6 +109,28 @@ afterEach(async () => {
 });
 
 describe("composer mention serialization", () => {
+  it("keeps undo within one target and starts fresh history after a target change", async () => {
+    await renderPrompt("A", "thread-a");
+    const threadAEditor = lexicalEditor;
+    await replaceEditorText("A one");
+    await replaceEditorText("A two");
+    await act(() => {
+      lexicalEditor.dispatchCommand(UNDO_COMMAND, undefined);
+    });
+    expect(editorRef.current?.readSnapshot().value).toBe("A one");
+
+    await renderPrompt("B draft", "thread-b");
+    expect(lexicalEditor).not.toBe(threadAEditor);
+    await act(() => {
+      lexicalEditor.dispatchCommand(UNDO_COMMAND, undefined);
+    });
+    expect(editorRef.current?.readSnapshot().value).toBe("B draft");
+
+    const threadBEditor = lexicalEditor;
+    await renderPrompt("B updated", "thread-b");
+    expect(lexicalEditor).toBe(threadBEditor);
+  });
+
   it.each([
     "@README.md control",
     "@terminal-1:3 Explain this output\n\n<terminal_context>\n- Terminal 1 line 3:\n  3 | output\n</terminal_context>",

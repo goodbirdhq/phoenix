@@ -20,6 +20,7 @@ import {
   attachmentContextRecord,
   buildMessageContext,
   composerContextImportLookupIds,
+  identicalComposerContextImportId,
   isPullRequestSummaryContext,
   isSameComposerContextPayload,
   pullRequestContextDisplayState,
@@ -501,8 +502,18 @@ describe("composerContextRecords", () => {
     // An import carries the id it was sent with; the draft rebuilds the folded
     // canonical form. Same payload either way, so no duplicate entry may form.
     const imported = { ...canonical, contextId: "legacy_terminal_1" as ComposerContextId };
+    const reconstructed = terminalContextRecord(
+      terminalContextDraftFromRecord(imported, ThreadId.make("t")),
+    );
 
     expect(isSameComposerContextPayload(canonical, imported)).toBe(true);
+    expect(
+      identicalComposerContextImportId(
+        imported,
+        new Map([[reconstructed.contextId, reconstructed]]),
+        (record) => record,
+      ),
+    ).toBe(reconstructed.contextId);
     expect(isSameComposerContextPayload(canonical, { ...canonical, text: "B" })).toBe(false);
   });
 

@@ -1,13 +1,24 @@
-import type { PreviewAnnotationPayload } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import {
+  ComposerContextId,
+  EnvironmentId,
+  ThreadId,
+  type PreviewAnnotationPayload,
+} from "@t3tools/contracts";
+import { describe, expect, it, vi } from "vite-plus/test";
 
-import type { ComposerFileAttachment, ComposerImageAttachment } from "../../composerDraftStore";
+import type {
+  ComposerFileAttachment,
+  ComposerImageAttachment,
+  ComposerThreadDraftState,
+} from "../../composerDraftStore";
 import {
   buildMessageContext,
   fileContextReference,
   previewAnnotationContextId,
 } from "../../lib/composerContextRecords";
 import {
+  commitImportedAttachment,
+  composerContextRecoveryForTarget,
   reconcileAttachmentContextReferences,
   type RetainedAttachmentContextPayloads,
 } from "./composerContextUndo";
@@ -51,6 +62,135 @@ const annotation = {
 function retention(): RetainedAttachmentContextPayloads {
   return { files: new Map(), previewAnnotations: new Map() };
 }
+
+function draft(
+  prompt: string,
+  previewAnnotations: PreviewAnnotationPayload[] = [],
+): ComposerThreadDraftState {
+  return {
+    prompt,
+    images: [],
+    files: [],
+    nonPersistedImageIds: [],
+    persistedAttachments: [],
+    terminalContexts: [],
+    previewAnnotations,
+    reviewComments: [],
+    modelSelectionByProvider: {},
+    activeProvider: null,
+    runtimeMode: null,
+    interactionMode: null,
+  };
+}
+
+describe("composerContextRecoveryForTarget", () => {
+  it("preserves same-target undo payloads and discards them at a target boundary", () => {
+    const threadA = composerContextRecoveryForTarget(undefined, "remote-a:thread-a");
+    threadA.contexts.terminals.set("terminal-a", {
+      id: "a",
+      threadId: ThreadId.make("thread-a"),
+      terminalId: "default",
+      terminalLabel: "Terminal",
+      lineStart: 1,
+      lineEnd: 1,
+      text: "secret a",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    threadA.attachments.files.set("file-a", file);
+
+    expect(composerContextRecoveryForTarget(threadA, "remote-a:thread-a")).toBe(threadA);
+    const threadB = composerContextRecoveryForTarget(threadA, "remote-b:thread-b");
+    expect(threadB).not.toBe(threadA);
+    expect(threadB.contexts.terminals.size).toBe(0);
+    expect(threadB.attachments.files.size).toBe(0);
+  });
+});
+
+describe("commitImportedAttachment", () => {
+  const originalTarget = {
+    environmentId: EnvironmentId.make("remote-a"),
+    threadId: ThreadId.make("thread-a"),
+  };
+  const importedFile = new File(["notes"], "notes.txt", { type: "text/plain" });
+  const fileRecord = {
+    version: 1,
+    kind: "file",
+    contextId: ComposerContextId.make("file_source"),
+    label: "notes.txt",
+    attachmentId: "attachment-source",
+    name: "notes.txt",
+    mimeType: "text/plain",
+    sizeBytes: 5,
+  } as const;
+
+  it("finishes on the original remote target after the visible composer switches", () => {
+    const addFiles = vi.fn(() => ["local-file"]);
+    const getDraft = vi.fn((target) => {
+      expect(target).toBe(originalTarget);
+      return draft("[notes](t3-context://v1/file/file_local-file)");
+    });
+
+    expect(
+      commitImportedAttachment({
+        record: fileRecord,
+        localId: "local-file",
+        file: importedFile,
+        target: originalTarget,
+        getDraft,
+        addImages: vi.fn(() => []),
+        addFiles,
+      }),
+    ).toBe("accepted");
+    expect(addFiles).toHaveBeenCalledWith(
+      originalTarget,
+      [expect.objectContaining({ id: "local-file", file: importedFile })],
+      { appendReference: false },
+    );
+  });
+
+  it("does not resurrect bytes after the original target deleted the chip", () => {
+    const addFiles = vi.fn(() => ["local-file"]);
+    expect(
+      commitImportedAttachment({
+        record: fileRecord,
+        localId: "local-file",
+        file: importedFile,
+        target: originalTarget,
+        getDraft: () => draft("chip removed"),
+        addImages: vi.fn(() => []),
+        addFiles,
+      }),
+    ).toBe("reference-removed");
+    expect(addFiles).not.toHaveBeenCalled();
+  });
+
+  it("keeps an imported screenshot while its annotation reference still exists", () => {
+    const addImages = vi.fn(() => [annotation.id]);
+    expect(
+      commitImportedAttachment({
+        record: {
+          ...fileRecord,
+          kind: "image",
+          contextId: ComposerContextId.make("image_source"),
+        },
+        localId: annotation.id,
+        file: binary,
+        target: originalTarget,
+        getDraft: () =>
+          draft(
+            `[Fix this](t3-context://v1/preview-annotation/${previewAnnotationContextId(annotation.id)})`,
+            [annotation],
+          ),
+        addImages,
+        addFiles: vi.fn(() => []),
+        createPreviewUrl: () => "blob:imported-annotation",
+      }),
+    ).toBe("accepted");
+    expect(addImages).toHaveBeenCalledWith(originalTarget, [
+      expect.objectContaining({ id: annotation.id, previewUrl: "blob:imported-annotation" }),
+    ]);
+  });
+});
 
 describe("reconcileAttachmentContextReferences", () => {
   it("restores file bytes after deleting and undoing its chip", () => {
