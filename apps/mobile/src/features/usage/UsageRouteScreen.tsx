@@ -84,11 +84,12 @@ function UsageCoverageNotice(props: {
   const unavailable = props.environments.filter((environment) => environment.error !== null);
   const pending = props.environments.filter((environment) => environment.isPending);
   if (!props.isPartial && unavailable.length === 0 && pending.length === 0) return null;
-  const label = unavailable.length > 0
-    ? `Usage is incomplete: ${unavailable.map((environment) => environment.label).join(", ")} could not be read.`
-    : pending.length > 0
-      ? "Refreshing usage from connected environments…"
-      : "Usage is incomplete for one or more environments.";
+  const label =
+    unavailable.length > 0
+      ? `Usage is incomplete: ${unavailable.map((environment) => environment.label).join(", ")} could not be read.`
+      : pending.length > 0
+        ? "Refreshing usage from connected environments…"
+        : "Usage is incomplete for one or more environments.";
   return <Text className="text-xs text-foreground-muted">{label}</Text>;
 }
 
@@ -517,162 +518,163 @@ export function UsageRouteScreen() {
             />
 
             {selectedAccount && tab === "overview" && (
-          <SubscriptionLimitsSection
-            limits={subscriptionLimits}
-            isPending={isProviderAvailabilityPending}
-            hasError={hasProviderAvailabilityError}
-            nowMs={resetClockMs}
-          />
-        )}
+              <SubscriptionLimitsSection
+                limits={subscriptionLimits}
+                isPending={isProviderAvailabilityPending}
+                hasError={hasProviderAvailabilityError}
+                nowMs={resetClockMs}
+              />
+            )}
 
-        {isPending || (Boolean(accountKey) && !selectedAccount && isProviderAvailabilityPending) ? (
-          <Text className="py-16 text-center text-base text-foreground-muted">
-            Scanning provider transcripts…
-          </Text>
-        ) : environments.length === 0 ? (
-          <Text className="py-16 text-center text-base text-foreground-muted">
-            Connect an environment to see usage.
-          </Text>
-        ) : !hasMappedHistory && tab !== "environments" ? (
-          <Text className="py-8 text-sm text-foreground-muted">
-            No history can currently be assigned to this account in the selected environments.
-            Shared or unmapped history is available in All accounts.
-          </Text>
-        ) : (
-          <>
-            {tab === "environments" && selectedAccount ? (
-              selectedAccount.memberships
-                .filter(
-                  (member) => environmentId === null || member.environmentId === environmentId,
-                )
-                .map((member) => (
-                  <View
-                    key={usageAccountMemberKey(member)}
-                    className="gap-1 border-b border-border pb-3"
-                  >
-                    <Text className="font-t3-medium text-foreground">
-                      {member.environmentLabel}
-                    </Text>
-                    <Text className="text-sm text-foreground-muted">
-                      {member.provider.version ?? "Version not reported"}
-                      {member.provider.versionAdvisory?.status === "behind_latest"
-                        ? " · Update available"
-                        : ""}
-                    </Text>
-                    <Text className="text-xs text-foreground-muted">
-                      {member.isConnected === false
-                        ? "Offline"
-                        : !member.provider.enabled
-                          ? "Disabled"
-                          : !member.provider.installed
-                            ? "Not installed"
-                            : member.provider.auth.status === "authenticated"
-                              ? "Signed in"
-                              : member.provider.auth.status === "unauthenticated"
-                                ? "Signed out"
-                                : "Unknown"}{" "}
-                      · {formatDateTimeShort(member.provider.checkedAt, window.timeZone)}
-                    </Text>
-                  </View>
-                ))
+            {isPending ||
+            (Boolean(accountKey) && !selectedAccount && isProviderAvailabilityPending) ? (
+              <Text className="py-16 text-center text-base text-foreground-muted">
+                Scanning provider transcripts…
+              </Text>
+            ) : environments.length === 0 ? (
+              <Text className="py-16 text-center text-base text-foreground-muted">
+                Connect an environment to see usage.
+              </Text>
+            ) : !hasMappedHistory && tab !== "environments" ? (
+              <Text className="py-8 text-sm text-foreground-muted">
+                No history can currently be assigned to this account in the selected environments.
+                Shared or unmapped history is available in All accounts.
+              </Text>
             ) : (
               <>
-                <View className="gap-1">
-                  <Text className="text-3xl font-t3-medium tabular-nums text-foreground">
-                    {metric === "cost"
-                      ? formatUsd(merged.costUsd)
-                      : formatTokens(merged.totalTokens)}
-                  </Text>
-                  <Text className="text-sm text-foreground-muted">
-                    {metric === "cost" ? "Estimated API cost" : "Processed tokens"} · selected
-                    period
-                  </Text>
-                </View>
-                <SegmentedControl
-                  options={[
-                    { value: "cost", label: "API cost" },
-                    { value: "tokens", label: "Tokens" },
-                  ]}
-                  selected={metric}
-                  onSelect={setMetric}
-                />
-                {tab === "overview" && (
-                  <SegmentedControl
-                    options={[
-                      { value: "provider", label: "Provider" },
-                      { value: "account", label: "Account" },
-                      { value: "environment", label: "Environment" },
-                    ]}
-                    selected={grouping}
-                    onSelect={setGrouping}
-                  />
-                )}
-                {tab === "threads" && (
+                {tab === "environments" && selectedAccount ? (
+                  selectedAccount.memberships
+                    .filter(
+                      (member) => environmentId === null || member.environmentId === environmentId,
+                    )
+                    .map((member) => (
+                      <View
+                        key={usageAccountMemberKey(member)}
+                        className="gap-1 border-b border-border pb-3"
+                      >
+                        <Text className="font-t3-medium text-foreground">
+                          {member.environmentLabel}
+                        </Text>
+                        <Text className="text-sm text-foreground-muted">
+                          {member.provider.version ?? "Version not reported"}
+                          {member.provider.versionAdvisory?.status === "behind_latest"
+                            ? " · Update available"
+                            : ""}
+                        </Text>
+                        <Text className="text-xs text-foreground-muted">
+                          {member.isConnected === false
+                            ? "Offline"
+                            : !member.provider.enabled
+                              ? "Disabled"
+                              : !member.provider.installed
+                                ? "Not installed"
+                                : member.provider.auth.status === "authenticated"
+                                  ? "Signed in"
+                                  : member.provider.auth.status === "unauthenticated"
+                                    ? "Signed out"
+                                    : "Unknown"}{" "}
+                          · {formatDateTimeShort(member.provider.checkedAt, window.timeZone)}
+                        </Text>
+                      </View>
+                    ))
+                ) : (
                   <>
-                    <Text className="text-base font-t3-medium text-foreground">
-                      Sessions created
-                    </Text>
-                    {!selectedAccount && (
+                    <View className="gap-1">
+                      <Text className="text-3xl font-t3-medium tabular-nums text-foreground">
+                        {metric === "cost"
+                          ? formatUsd(merged.costUsd)
+                          : formatTokens(merged.totalTokens)}
+                      </Text>
+                      <Text className="text-sm text-foreground-muted">
+                        {metric === "cost" ? "Estimated API cost" : "Processed tokens"} · selected
+                        period
+                      </Text>
+                    </View>
+                    <SegmentedControl
+                      options={[
+                        { value: "cost", label: "API cost" },
+                        { value: "tokens", label: "Tokens" },
+                      ]}
+                      selected={metric}
+                      onSelect={setMetric}
+                    />
+                    {tab === "overview" && (
                       <SegmentedControl
                         options={[
-                          { value: "total", label: "Total" },
-                          { value: "provider", label: "By provider" },
+                          { value: "provider", label: "Provider" },
+                          { value: "account", label: "Account" },
+                          { value: "environment", label: "Environment" },
                         ]}
-                        selected={threadByProvider ? "provider" : "total"}
-                        onSelect={(value) => setThreadByProvider(value === "provider")}
+                        selected={grouping}
+                        onSelect={setGrouping}
                       />
+                    )}
+                    {tab === "threads" && (
+                      <>
+                        <Text className="text-base font-t3-medium text-foreground">
+                          Sessions created
+                        </Text>
+                        {!selectedAccount && (
+                          <SegmentedControl
+                            options={[
+                              { value: "total", label: "Total" },
+                              { value: "provider", label: "By provider" },
+                            ]}
+                            selected={threadByProvider ? "provider" : "total"}
+                            onSelect={(value) => setThreadByProvider(value === "provider")}
+                          />
+                        )}
+                      </>
+                    )}
+                    <LineAreaChart
+                      periods={chartDays}
+                      label={
+                        tab === "threads"
+                          ? "Sessions created"
+                          : metric === "cost"
+                            ? "API cost"
+                            : "Tokens"
+                      }
+                      height={CHART_HEIGHT}
+                      series={chartRows}
+                    />
+                    <View className="flex-row justify-between">
+                      <Text className="text-xs text-foreground-muted">
+                        {chartDays[0]?.slice(0, 16).replace("T", " ")}
+                      </Text>
+                      <Text className="text-xs text-foreground-muted">
+                        {chartDays.at(-1)?.slice(0, 16).replace("T", " ")}
+                      </Text>
+                    </View>
+                    {tab === "threads" && (
+                      <Text className="text-xs text-foreground-muted">
+                        Phoenix threads created, including those without token usage.
+                        {merged.threadCreationReporting === 0
+                          ? " Creation history is not available from these environments."
+                          : ""}
+                      </Text>
+                    )}
+                    <View className="flex-row flex-wrap gap-3">
+                      {chartRows.map((row) => (
+                        <Text key={row.id} className="text-xs text-foreground-muted">
+                          {row.label}
+                        </Text>
+                      ))}
+                    </View>
+                    {tab === "overview" && (
+                      <>
+                        <ProviderSection merged={merged} metric={metric} />
+                        <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
+                      </>
+                    )}
+                    {tab === "models" && <ModelsSection merged={merged} />}
+                    {(tab === "projects" || tab === "threads") && (
+                      <UsageReport key={tab} mode={tab} merged={merged} />
                     )}
                   </>
                 )}
-                <LineAreaChart
-                  periods={chartDays}
-                  label={
-                    tab === "threads"
-                      ? "Sessions created"
-                      : metric === "cost"
-                        ? "API cost"
-                        : "Tokens"
-                  }
-                  height={CHART_HEIGHT}
-                  series={chartRows}
-                />
-                <View className="flex-row justify-between">
-                  <Text className="text-xs text-foreground-muted">
-                    {chartDays[0]?.slice(0, 16).replace("T", " ")}
-                  </Text>
-                  <Text className="text-xs text-foreground-muted">
-                    {chartDays.at(-1)?.slice(0, 16).replace("T", " ")}
-                  </Text>
-                </View>
-                {tab === "threads" && (
-                  <Text className="text-xs text-foreground-muted">
-                    Phoenix threads created, including those without token usage.
-                    {merged.threadCreationReporting === 0
-                      ? " Creation history is not available from these environments."
-                      : ""}
-                  </Text>
-                )}
-                <View className="flex-row flex-wrap gap-3">
-                  {chartRows.map((row) => (
-                    <Text key={row.id} className="text-xs text-foreground-muted">
-                      {row.label}
-                    </Text>
-                  ))}
-                </View>
-                {tab === "overview" && (
-                  <>
-                    <ProviderSection merged={merged} metric={metric} />
-                    <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
-                  </>
-                )}
-                {tab === "models" && <ModelsSection merged={merged} />}
-                {(tab === "projects" || tab === "threads") && (
-                  <UsageReport key={tab} mode={tab} merged={merged} />
-                )}
               </>
             )}
-          </>
-        )}
           </>
         )}
       </ScrollView>

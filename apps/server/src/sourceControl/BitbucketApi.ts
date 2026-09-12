@@ -39,9 +39,10 @@ const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 
 const preferredEnv = (phoenixName: string, upstreamName: string) =>
-  Config.all([Config.string(phoenixName).pipe(Config.option), Config.string(upstreamName).pipe(Config.option)]).pipe(
-    Config.map(([phoenix, upstream]) => Option.orElse(phoenix, () => upstream)),
-  );
+  Config.all([
+    Config.string(phoenixName).pipe(Config.option),
+    Config.string(upstreamName).pipe(Config.option),
+  ]).pipe(Config.map(([phoenix, upstream]) => Option.orElse(phoenix, () => upstream)));
 
 // Phoenix names lead. T3 Code names remain only as a compatible deployment
 // alias, so an environment that carries both cannot silently use the old one.

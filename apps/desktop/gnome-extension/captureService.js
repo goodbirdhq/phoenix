@@ -1,8 +1,5 @@
 // This policy is independent of Shell so lifecycle and authorization can be tested without a desktop.
-export const CLIENT_NAMES = [
-  "phoenix.SnapShot",
-  "phoenix-dev.SnapShot",
-];
+export const CLIENT_NAMES = ["phoenix.SnapShot", "phoenix-dev.SnapShot"];
 
 export function isWaylandSession(meta) {
   // GNOME 50 removed the X11 compositor and this API. GNOME 45–49 still need the check.

@@ -269,68 +269,68 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           defaultOpen
           style={sidebarProviderStyle}
         >
-        <ProjectProjectionRetention />
-        <Sidebar
-          side="left"
-          collapsible="offcanvas"
-          data-app-sidebar=""
-          className={cn(
-            "border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
-            (isOnUsage || isOnEnvironments || isOnSchedules) && "usage-surface usage-sidebar",
-            (isOnEnvironments || isOnSchedules) && "environment-surface",
-          )}
-          resizable={{
-            maxWidth: sidebarMaximumWidth,
-            minWidth: THREAD_SIDEBAR_MIN_WIDTH,
-            shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
-              nextWidth <= currentWidth ||
-              wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-            storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-            onResize: setSidebarWidth,
-          }}
-        >
-          {isOnSettings ? (
-            <>
-              <SidebarChromeHeader isElectron={isElectron} />
-              <Suspense fallback={null}>
-                <SettingsSidebarNav pathname={pathname} />
-              </Suspense>
-            </>
-          ) : isOnEnvironments ? (
-            <>
-              <SidebarChromeHeader isElectron={isElectron} plain compact />
-              <Suspense fallback={null}>
-                <EnvironmentsSidebar />
-              </Suspense>
-            </>
-          ) : isOnSchedules ? (
-            <>
-              <SidebarChromeHeader isElectron={isElectron} plain compact />
-              <Suspense fallback={null}>
-                <SchedulesSidebar />
-              </Suspense>
-            </>
-          ) : isOnUsage ? (
-            <>
-              <SidebarChromeHeader isElectron={isElectron} plain />
-              <Suspense fallback={null}>
-                <UsageSidebarNav />
-              </Suspense>
-            </>
-          ) : isOnPullRequests ? (
-            <div ref={setPullRequestSidebar} className="flex min-h-0 flex-1 flex-col" />
-          ) : legacySidebarEnabled ? (
-            <LegacyThreadSidebar />
-          ) : (
-            <ThreadSidebar />
-          )}
-          <SidebarRail onDoubleClick={resetSidebarWidth} />
-        </Sidebar>
-        {children}
-        <SidebarControl
-          plain={isOnUsage || isOnEnvironments || isOnSchedules}
-          compact={isOnEnvironments || isOnSchedules}
-        />
+          <ProjectProjectionRetention />
+          <Sidebar
+            side="left"
+            collapsible="offcanvas"
+            data-app-sidebar=""
+            className={cn(
+              "border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
+              (isOnUsage || isOnEnvironments || isOnSchedules) && "usage-surface usage-sidebar",
+              (isOnEnvironments || isOnSchedules) && "environment-surface",
+            )}
+            resizable={{
+              maxWidth: sidebarMaximumWidth,
+              minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+              shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
+                nextWidth <= currentWidth ||
+                wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+              storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+              onResize: setSidebarWidth,
+            }}
+          >
+            {isOnSettings ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} />
+                <Suspense fallback={null}>
+                  <SettingsSidebarNav pathname={pathname} />
+                </Suspense>
+              </>
+            ) : isOnEnvironments ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} plain compact />
+                <Suspense fallback={null}>
+                  <EnvironmentsSidebar />
+                </Suspense>
+              </>
+            ) : isOnSchedules ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} plain compact />
+                <Suspense fallback={null}>
+                  <SchedulesSidebar />
+                </Suspense>
+              </>
+            ) : isOnUsage ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} plain />
+                <Suspense fallback={null}>
+                  <UsageSidebarNav />
+                </Suspense>
+              </>
+            ) : isOnPullRequests ? (
+              <div ref={setPullRequestSidebar} className="flex min-h-0 flex-1 flex-col" />
+            ) : legacySidebarEnabled ? (
+              <LegacyThreadSidebar />
+            ) : (
+              <ThreadSidebar />
+            )}
+            <SidebarRail onDoubleClick={resetSidebarWidth} />
+          </Sidebar>
+          {children}
+          <SidebarControl
+            plain={isOnUsage || isOnEnvironments || isOnSchedules}
+            compact={isOnEnvironments || isOnSchedules}
+          />
         </SidebarProvider>
       </PanelAnimationSuppressionProvider>
     </PullRequestSidebarSlot>

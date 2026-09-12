@@ -490,9 +490,7 @@ it("keeps distinct Codex allowance windows separate when merging sparse updates"
       usedPercent: 80,
     }),
   );
-  expect(
-    merged.windows.find((window) => window.kind === "session")?.usedPercent,
-  ).toBe(40);
+  expect(merged.windows.find((window) => window.kind === "session")?.usedPercent).toBe(40);
 });
 
 it("retains Grok billing for its driver and marks failed refreshes stale", () => {

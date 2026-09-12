@@ -2119,14 +2119,20 @@ const makeWsRpcLayer = (
                         input.refresh === true &&
                         canRefreshProviderAvailability(provider) &&
                         providerService.refreshAvailability !== undefined
-                          ? providerService.refreshAvailability(provider.instanceId, provider.driver)
+                          ? providerService.refreshAvailability(
+                              provider.instanceId,
+                              provider.driver,
+                            )
                           : providerAvailabilityFor(provider.instanceId, provider.driver),
                     ).pipe(
                       Effect.map((availability) => ({
                         instanceId: provider.instanceId,
                         driver: provider.driver,
                         ...(provider.displayName ? { displayName: provider.displayName } : {}),
-                        availability: narrowProviderAvailability(availability, input.contractVersion),
+                        availability: narrowProviderAvailability(
+                          availability,
+                          input.contractVersion,
+                        ),
                       })),
                     ),
                   { concurrency: ProviderService.PROVIDER_AVAILABILITY_FANOUT_CONCURRENCY },

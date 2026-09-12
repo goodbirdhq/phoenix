@@ -8935,7 +8935,9 @@ export default function ChatView(props: ChatViewProps) {
                 isPreparingWorktree={!paintOnlyDisplayedTimeline && isPreparingWorktree}
                 isCompacting={!paintOnlyDisplayedTimeline && isCompacting}
                 activeTurnStartedAt={paintOnlyDisplayedTimeline ? null : activeWorkStartedAt}
-                activeTurnInProgress={!paintOnlyDisplayedTimeline && (isWorking || !latestTurnSettled)}
+                activeTurnInProgress={
+                  !paintOnlyDisplayedTimeline && (isWorking || !latestTurnSettled)
+                }
                 listRef={legendListRef}
                 timelineEntries={displayedTimeline.entries}
                 latestTurn={paintOnlyDisplayedTimeline ? null : activeLatestTurn}
@@ -8991,7 +8993,9 @@ export default function ChatView(props: ChatViewProps) {
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
                 loadEarlier={paintOnlyDisplayedTimeline ? null : loadEarlierTurns}
-                queuedTurnStarts={paintOnlyDisplayedTimeline ? null : (activeThread.queuedTurnStarts ?? null)}
+                queuedTurnStarts={
+                  paintOnlyDisplayedTimeline ? null : (activeThread.queuedTurnStarts ?? null)
+                }
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}

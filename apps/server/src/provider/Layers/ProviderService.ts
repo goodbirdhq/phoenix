@@ -2373,7 +2373,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }),
         (turnMetadata) =>
           Effect.gen(function* () {
-            const acceptance = yield* Deferred.make<ProviderTurnStartResult, ProviderAdapterError>();
+            const acceptance = yield* Deferred.make<
+              ProviderTurnStartResult,
+              ProviderAdapterError
+            >();
             yield* routed.adapter
               .sendTurn(providerInput, (result) =>
                 Deferred.succeed(acceptance, result).pipe(Effect.asVoid),

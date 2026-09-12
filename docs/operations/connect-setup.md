@@ -208,7 +208,7 @@ by the app's publishable key, add each supported package to **Native application
 mobile SSO redirect**:
 
 | Variant     | Callback                                        |
-| ----------- | ------------------------------------------------ |
+| ----------- | ----------------------------------------------- |
 | Development | `clerk://com.goodbird.phoenix.dev.callback`     |
 | Preview     | `clerk://com.goodbird.phoenix.preview.callback` |
 | Production  | `clerk://com.goodbird.phoenix.callback`         |

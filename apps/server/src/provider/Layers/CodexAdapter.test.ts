@@ -94,19 +94,18 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     Promise.resolve(undefined),
   );
 
-  public readonly seedConversationImpl = vi.fn(
-    (_seed: ProviderConversationSeed): Promise<void> => Promise.resolve(undefined),
+  public readonly seedConversationImpl = vi.fn((_seed: ProviderConversationSeed): Promise<void> =>
+    Promise.resolve(undefined),
   );
 
   /** Set to make native seeding fail, as an older app-server would. */
   public seedConversationError: CodexSessionRuntimeError | undefined = undefined;
 
-  public readonly readThreadImpl = vi.fn(
-    (): Promise<CodexThreadSnapshot> =>
-      Promise.resolve({
-        threadId: "provider-thread-1",
-        turns: [],
-      }),
+  public readonly readThreadImpl = vi.fn((): Promise<CodexThreadSnapshot> =>
+    Promise.resolve({
+      threadId: "provider-thread-1",
+      turns: [],
+    }),
   );
 
   public readonly rollbackThreadImpl = vi.fn((_numTurns: number): Promise<CodexThreadSnapshot> =>

@@ -4351,8 +4351,10 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
         turnInProgress: activity.activeTurnInProgress,
       })
     : null;
-  const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning" && retryState === null;
-  const showFailedIndicator = retryState === null && workEntryDisplayIndicatesToolFailure(workEntry);
+  const showWarningIndicator =
+    workEntry.sourceActivityKind === "runtime.warning" && retryState === null;
+  const showFailedIndicator =
+    retryState === null && workEntryDisplayIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle =
     showFailedIndicator &&
     (workEntrySignalsSevereFailure(workEntry) || !workLogEntryIsToolLike(workEntry));

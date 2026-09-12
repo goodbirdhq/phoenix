@@ -51,7 +51,11 @@ export function UsageSidebarNav() {
     () =>
       new Map<
         string,
-        { readonly costUsd: number; readonly records: number; readonly unpricedRecords: number } | null
+        {
+          readonly costUsd: number;
+          readonly records: number;
+          readonly unpricedRecords: number;
+        } | null
       >(),
     [history],
   );

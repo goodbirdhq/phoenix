@@ -36,7 +36,10 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { ProviderInstanceIcon } from "../../components/ProviderIcon";
-import { resolveThreadProviderInstance, type ThreadRowProviderInstance } from "./thread-provider-instance";
+import {
+  resolveThreadProviderInstance,
+  type ThreadRowProviderInstance,
+} from "./thread-provider-instance";
 import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -346,8 +349,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
                 }
               : ({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })
           }
-        >
-        </Pressable>
+        ></Pressable>
       </ControlPillMenu>
     </>
   );
@@ -1240,8 +1242,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
           returnFocusRef={rowFocusRef}
           onClose={() => setSheet(null)}
           onSelect={onSelectThread}
-          />
-        ) : sheet ? (
+        />
+      ) : sheet ? (
         <ThreadActionSheet
           returnFocusRef={rowFocusRef}
           thread={thread}
@@ -1264,8 +1266,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
                     ? snoozableCardMenuActions
                     : cardMenuActions
           }
-          />
-        ) : null}
+        />
+      ) : null}
       {prPickerOpen && pr ? (
         <ThreadPullRequestPicker
           thread={thread}
@@ -1360,7 +1362,11 @@ function NestedThreadRow({
       parentProjectId={parentProps.thread.projectId}
       project={project}
       projectTitle={project?.title}
-      providerInstance={config ? resolveThreadProviderInstance(new Map([[thread.environmentId, config]]), thread) : null}
+      providerInstance={
+        config
+          ? resolveThreadProviderInstance(new Map([[thread.environmentId, config]]), thread)
+          : null
+      }
       selected={parentProps.selectedThreadKey === scopedThreadKey(thread.environmentId, thread.id)}
       pinned={thread.pinnedAt != null}
       snoozed={false}

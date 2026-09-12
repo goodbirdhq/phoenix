@@ -588,14 +588,20 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       authMethod: capabilities.tokenSource,
     }) ?? apiProviderAuthMetadata(capabilities.apiProvider);
   const usageLimits = !capabilities.usage
-    ? { ...makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" }), planKind: claudePlanKind(capabilities.subscriptionType) }
+    ? {
+        ...makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" }),
+        planKind: claudePlanKind(capabilities.subscriptionType),
+      }
     : scopedLimitNames
       ? yield* recordClaudeUsageResponse(scopedLimitNames, {
           response: capabilities.usage,
           checkedAt,
         })
       : claudeUsageResponseToLimits({ response: capabilities.usage, checkedAt }).limits;
-  const usageLimitsWithPlanKind = { ...usageLimits, planKind: claudePlanKind(capabilities.subscriptionType) };
+  const usageLimitsWithPlanKind = {
+    ...usageLimits,
+    planKind: claudePlanKind(capabilities.subscriptionType),
+  };
   return buildServerProvider({
     presentation: CLAUDE_PRESENTATION,
     enabled: claudeSettings.enabled,

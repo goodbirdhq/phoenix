@@ -2597,9 +2597,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("sidebar-attention-first")}
-          title={
-            settings.sidebarAttentionFirstEnabled ? "Attention first" : "Manual ordering"
-          }
+          title={settings.sidebarAttentionFirstEnabled ? "Attention first" : "Manual ordering"}
           description={
             settings.legacySidebarEnabled
               ? "Turn off Legacy sidebar to use attention ordering."

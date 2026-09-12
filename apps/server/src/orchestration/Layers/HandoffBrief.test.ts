@@ -257,7 +257,9 @@ const makeTestLayer = (providerLayer: Layer.Layer<ProviderService>) => {
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(Layer.mock(CheckpointStore)({})),
-    Layer.provideMerge(Layer.mock(ProviderAuthService)({ tryHandlePromptCommand: () => Effect.succeed(false) })),
+    Layer.provideMerge(
+      Layer.mock(ProviderAuthService)({ tryHandlePromptCommand: () => Effect.succeed(false) }),
+    ),
   );
 };
 

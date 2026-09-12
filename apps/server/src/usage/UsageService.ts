@@ -280,7 +280,6 @@ export const make = Effect.gen(function* () {
   const resolveUsageStores = Effect.fn("UsageService.resolveUsageStores")(function* (
     settings: ServerSettingsValue,
   ) {
-
     const stores: UsageStore[] = [];
     const storesByPath = new Map<string, UsageStore>();
     const addDir = (

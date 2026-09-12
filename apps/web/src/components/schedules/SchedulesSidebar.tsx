@@ -424,10 +424,7 @@ function ScheduleSidebarRow({
             )}
           >
             {project ? (
-              <ProjectFavicon
-                project={project}
-                className="size-4"
-              />
+              <ProjectFavicon project={project} className="size-4" />
             ) : (
               <CalendarClockIcon className="size-[18px]" />
             )}

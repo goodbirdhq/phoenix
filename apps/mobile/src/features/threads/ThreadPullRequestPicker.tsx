@@ -1,5 +1,8 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { resolveThreadPullRequestChains, threadPullRequestKeyOf } from "@t3tools/shared/threadPullRequests";
+import {
+  resolveThreadPullRequestChains,
+  threadPullRequestKeyOf,
+} from "@t3tools/shared/threadPullRequests";
 import type { RefObject } from "react";
 import { Alert, Pressable, View } from "react-native";
 
@@ -61,11 +64,18 @@ export function ThreadPullRequestPicker(props: {
                   borderColor: colors.border,
                 })}
               >
-                <AppText style={{ color: colors.foreground, fontSize: 15, fontFamily: "DMSans-Medium" }}>
+                <AppText
+                  style={{ color: colors.foreground, fontSize: 15, fontFamily: "DMSans-Medium" }}
+                >
                   #{link.number} {link.snapshot?.title ?? "Pull request"}
                 </AppText>
                 <AppText style={{ color: colors.muted, fontSize: 13 }}>
-                  {link.repository} · {link.snapshot === null ? "Status pending" : link.snapshot.isDraft && link.snapshot.state === "open" ? "Draft" : link.snapshot.state}
+                  {link.repository} ·{" "}
+                  {link.snapshot === null
+                    ? "Status pending"
+                    : link.snapshot.isDraft && link.snapshot.state === "open"
+                      ? "Draft"
+                      : link.snapshot.state}
                 </AppText>
               </Pressable>
             ))}

@@ -512,7 +512,8 @@ export function HomeScreen(props: HomeScreenProps) {
   const handleSettleThread = props.onSettleThread;
   const handleMovePinnedThread = props.onMovePinnedThread;
   const handleSnoozeThread = useCallback(
-    (thread: EnvironmentThreadShell, snoozedUntil: string) => props.onSnoozeThread(thread, snoozedUntil),
+    (thread: EnvironmentThreadShell, snoozedUntil: string) =>
+      props.onSnoozeThread(thread, snoozedUntil),
     [props.onSnoozeThread],
   );
   const handleUnsnoozeThread = useCallback(

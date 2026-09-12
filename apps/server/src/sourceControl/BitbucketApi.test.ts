@@ -185,7 +185,10 @@ it.effect("prefers PHOENIX_BITBUCKET settings over compatible T3 Code aliases", 
       request?.url,
       "https://phoenix.test.local/2.0/repositories/pingdotgg/t3code/pullrequests/42",
     );
-    assert.strictEqual(request?.headers.authorization, "Basic cGhvZW5peEBleGFtcGxlLmNvbTpwaG9lbml4LXRva2Vu");
+    assert.strictEqual(
+      request?.headers.authorization,
+      "Basic cGhvZW5peEBleGFtcGxlLmNvbTpwaG9lbml4LXRva2Vu",
+    );
   }).pipe(Effect.provide(layer));
 });
 

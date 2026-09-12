@@ -2241,9 +2241,23 @@ export function PullRequestDetailPanel({
                     <Tooltip>
                       <TooltipTrigger
                         render={
-                          <h1 className={cn("min-w-0 flex-1 break-words font-semibold", context === "page" ? "text-[28px] leading-[34px]" : "text-base leading-snug")}>
-                            <GitPullRequestIcon aria-hidden className={cn("mr-2 inline shrink-0 text-muted-foreground", context === "page" ? "size-7" : "size-[18px]")} />
-                            {detail.title}</h1>
+                          <h1
+                            className={cn(
+                              "min-w-0 flex-1 break-words font-semibold",
+                              context === "page"
+                                ? "text-[28px] leading-[34px]"
+                                : "text-base leading-snug",
+                            )}
+                          >
+                            <GitPullRequestIcon
+                              aria-hidden
+                              className={cn(
+                                "mr-2 inline shrink-0 text-muted-foreground",
+                                context === "page" ? "size-7" : "size-[18px]",
+                              )}
+                            />
+                            {detail.title}
+                          </h1>
                         }
                       />
                       <TooltipPopup side="top">{detail.title}</TooltipPopup>
@@ -2284,8 +2298,22 @@ export function PullRequestDetailPanel({
                       }}
                     />
                     <div className="flex justify-end gap-2">
-                      <Button size="xs" variant="ghost" disabled={titleSaving} onClick={() => setTitleScope(null)}>Cancel</Button>
-                      <Button size="xs" variant="outline" disabled={titleSaving || titleDraft.trim().length === 0} onClick={() => void saveTitle(titleDraft)}>{titleSaving ? "Saving..." : "Save"}</Button>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        disabled={titleSaving}
+                        onClick={() => setTitleScope(null)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={titleSaving || titleDraft.trim().length === 0}
+                        onClick={() => void saveTitle(titleDraft)}
+                      >
+                        {titleSaving ? "Saving..." : "Save"}
+                      </Button>
                     </div>
                   </div>
                 )}

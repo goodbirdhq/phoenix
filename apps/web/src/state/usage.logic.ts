@@ -114,11 +114,7 @@ export function capacityRefreshTargets(
 ): readonly CapacityRefreshTarget[] {
   const targets: CapacityRefreshTarget[] = [];
   for (const environment of environments) {
-    if (
-      environment.isConnected === false ||
-      environment.isPending ||
-      !environment.serverProviders
-    )
+    if (environment.isConnected === false || environment.isPending || !environment.serverProviders)
       continue;
     const availabilityByInstance = new Map(
       (environment.providers ?? []).map((entry) => [entry.instanceId, entry.availability]),

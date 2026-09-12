@@ -1945,7 +1945,9 @@ export function ConnectionsSettings({ hostOnly = false }: { hostOnly?: boolean }
   );
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
   const connectPairing = useAtomCommand(connectPairingCommand, { reportFailure: false });
-  const connectSshEnvironment = useAtomCommand(connectSshEnvironmentCommand, { reportFailure: false });
+  const connectSshEnvironment = useAtomCommand(connectSshEnvironmentCommand, {
+    reportFailure: false,
+  });
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   const primarySessionState = usePrimarySessionState();
   const currentSessionScopes = desktopBridge
@@ -3739,7 +3741,8 @@ export function ConnectionsSettings({ hostOnly = false }: { hostOnly?: boolean }
                           ? renderConnectionModeCard({
                               mode: "ssh",
                               title: "SSH",
-                              description: "Use local SSH config, agent, and tunnels for the backend.",
+                              description:
+                                "Use local SSH config, agent, and tunnels for the backend.",
                               icon: <TerminalIcon aria-hidden className="size-4" />,
                             })
                           : null}

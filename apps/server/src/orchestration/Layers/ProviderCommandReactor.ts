@@ -567,7 +567,10 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       });
     });
 
-    const restoreCompaction = Effect.fnUntraced(function* (threadId: ThreadId, fromRunning = false) {
+    const restoreCompaction = Effect.fnUntraced(function* (
+      threadId: ThreadId,
+      fromRunning = false,
+    ) {
       if (stoppingThreadIds.has(threadId)) {
         compactingThreadIds.delete(threadId);
         return;
@@ -1183,7 +1186,11 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         const targetBranch = buildGeneratedWorktreeBranchName(generated.branch);
         if (targetBranch === oldBranch) return;
 
-        const renamed = yield* gitWorkflow.renameBranch({ cwd, oldBranch, newBranch: targetBranch });
+        const renamed = yield* gitWorkflow.renameBranch({
+          cwd,
+          oldBranch,
+          newBranch: targetBranch,
+        });
         yield* orchestrationEngine.dispatch({
           type: "thread.meta.update",
           commandId: yield* serverCommandId("worktree-branch-rename"),
@@ -1194,12 +1201,15 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         yield* vcsStatusBroadcaster.refreshStatus(cwd).pipe(Effect.ignoreCause({ log: true }));
       }).pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("provider command reactor failed to generate or rename worktree branch", {
-            threadId: input.threadId,
-            cwd,
-            oldBranch,
-            cause: Cause.pretty(cause),
-          }),
+          Effect.logWarning(
+            "provider command reactor failed to generate or rename worktree branch",
+            {
+              threadId: input.threadId,
+              cwd,
+              oldBranch,
+              cause: Cause.pretty(cause),
+            },
+          ),
         ),
       );
     });
@@ -1436,7 +1446,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       receivedEvent: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
     ) {
       const resumed =
-        receivedEvent.commandId !== null ? resumedTurnStarts.get(receivedEvent.commandId) : undefined;
+        receivedEvent.commandId !== null
+          ? resumedTurnStarts.get(receivedEvent.commandId)
+          : undefined;
       const event = resumed ? { ...receivedEvent, payload: resumed.event.payload } : receivedEvent;
       const key = turnStartKeyForEvent(event);
       if (yield* hasHandledTurnStartRecently(key)) {
@@ -1965,7 +1977,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           );
       }
     });
-const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(
+    const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(
       function* (
         event: Extract<ProviderIntentEvent, { type: "thread.approval-response-requested" }>,
       ) {
@@ -2013,7 +2025,7 @@ const processApprovalResponseRequested = Effect.fn("processApprovalResponseReque
           );
       },
     );
-const processUserInputResponseRequested = Effect.fn("processUserInputResponseRequested")(
+    const processUserInputResponseRequested = Effect.fn("processUserInputResponseRequested")(
       function* (
         event: Extract<ProviderIntentEvent, { type: "thread.user-input-response-requested" }>,
       ) {
@@ -2139,7 +2151,7 @@ const processUserInputResponseRequested = Effect.fn("processUserInputResponseReq
       }
     });
 
-const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
+    const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
       event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
     ) {
       const thread = yield* resolveThreadWithActivities(event.payload.threadId);
@@ -2302,7 +2314,7 @@ const processSessionStopRequested = Effect.fn("processSessionStopRequested")(fun
         });
       }).pipe(Effect.ensuring(clearStopping));
     });
-const processDomainEvent = Effect.fn("processDomainEvent")(function* (
+    const processDomainEvent = Effect.fn("processDomainEvent")(function* (
       event: ProviderIntentEvent,
     ) {
       yield* Effect.annotateCurrentSpan({
@@ -2436,7 +2448,6 @@ const processDomainEvent = Effect.fn("processDomainEvent")(function* (
         }
       }
     });
-
 
     const processDomainEventSafely = (event: ProviderIntentEvent) =>
       processDomainEvent(event).pipe(

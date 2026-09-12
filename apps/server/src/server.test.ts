@@ -1218,7 +1218,8 @@ const buildAppUnderTest = (options?: {
             ...grants,
             streamChanges: Stream.unwrap(
               Effect.gen(function* () {
-                const changes = yield* Queue.unbounded<PairingGrantStore.BootstrapCredentialChange>();
+                const changes =
+                  yield* Queue.unbounded<PairingGrantStore.BootstrapCredentialChange>();
                 yield* grants.streamChanges.pipe(
                   Stream.runForEach((change) => Queue.offer(changes, change)),
                   Effect.forkScoped({ startImmediately: true }),

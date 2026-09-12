@@ -16,7 +16,7 @@ session or catalog state.
 [`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with six entries:
 
 | Driver kind   | Driver source                                 |
-| ------------- | ---------------------------------------------- |
+| ------------- | --------------------------------------------- |
 | `codex`       | [`Drivers/CodexDriver.ts`][codex]             |
 | `claudeAgent` | [`Drivers/ClaudeDriver.ts`][claude]           |
 | `cursor`      | [`Drivers/CursorDriver.ts`][cursor]           |

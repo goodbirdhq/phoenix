@@ -467,7 +467,11 @@ export function UsageProviderDialog({
                         ...config,
                         customModels: [
                           ...customModels,
-                          { slug: customModel.trim(), name: customModel.trim(), capabilities: null },
+                          {
+                            slug: customModel.trim(),
+                            name: customModel.trim(),
+                            capabilities: null,
+                          },
                         ],
                       },
                     });

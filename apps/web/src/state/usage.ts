@@ -280,7 +280,9 @@ export function useUsage(
   const selectedEnvironments = useMemo(
     () =>
       historicalEnvironmentId instanceof Set
-        ? allEnvironments.filter((environment) => historicalEnvironmentId.has(environment.environmentId))
+        ? allEnvironments.filter((environment) =>
+            historicalEnvironmentId.has(environment.environmentId),
+          )
         : selectHistoricalUsageEnvironments(
             allEnvironments,
             historicalEnvironmentId as EnvironmentId | null,

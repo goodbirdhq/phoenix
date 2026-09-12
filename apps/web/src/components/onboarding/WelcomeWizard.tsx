@@ -191,7 +191,9 @@ export function WelcomeWizard({
           title="Set up T3 Code"
           identity={
             <div className="flex items-baseline gap-1.5" role="img" aria-label="T3 Code">
-              <span className="shrink-0 text-sm font-semibold" aria-hidden>Phoenix</span>
+              <span className="shrink-0 text-sm font-semibold" aria-hidden>
+                Phoenix
+              </span>
               <span className="text-[1.4rem] font-medium tracking-tight text-muted-foreground">
                 Code
               </span>

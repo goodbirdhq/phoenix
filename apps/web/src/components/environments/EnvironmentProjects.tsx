@@ -78,10 +78,7 @@ export function EnvironmentProjects({
                 <TableRow key={p.id}>
                   <TableCell>
                     <div className="flex items-center gap-3">
-                      <ProjectFavicon
-                        project={p}
-                        className="size-5"
-                      />
+                      <ProjectFavicon project={p} className="size-5" />
                       <div className="min-w-0">
                         <p className="text-[13px] leading-[18px] font-medium">{p.title}</p>
                         <Tooltip>

@@ -225,15 +225,15 @@ export const makeCliproxyApi = Effect.gen(function* () {
           ...base,
           usageLimits: {
             ...claudeUsageResponseToLimits({
-            checkedAt,
-            response: {
-              rate_limits_available: true,
-              rate_limits: {
-                five_hour: usage.five_hour ?? null,
-                seven_day: usage.seven_day ?? null,
-                model_scoped,
+              checkedAt,
+              response: {
+                rate_limits_available: true,
+                rate_limits: {
+                  five_hour: usage.five_hour ?? null,
+                  seven_day: usage.seven_day ?? null,
+                  model_scoped,
+                },
               },
-            },
             }).limits,
             planKind: "unknown" as const,
           },

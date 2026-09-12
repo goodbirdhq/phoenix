@@ -99,10 +99,9 @@ function retainThreadActivities(
     }
     if (!isSessionReportReadActivity(activity)) otherActivities.push(activity);
   }
-  return [
-    ...unreadReportActivities,
-    ...retainPendingQuestionActivities(otherActivities),
-  ].toSorted(compareThreadActivities);
+  return [...unreadReportActivities, ...retainPendingQuestionActivities(otherActivities)].toSorted(
+    compareThreadActivities,
+  );
 }
 
 // Async questions can stay open while the agent produces more activity.

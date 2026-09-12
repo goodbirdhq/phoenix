@@ -7,7 +7,15 @@ import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state
 import type { EnvironmentMachineKind } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import { SymbolView } from "../../components/AppSymbol";
-import { memo, useCallback, useMemo, useRef, useState, type ComponentProps, type RefObject } from "react";
+import {
+  memo,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type RefObject,
+} from "react";
 import { Platform, Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -829,39 +837,39 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   return (
     <>
       <ThreadSwipeable
-      threadKey={`${thread.environmentId}:${thread.id}`}
-      backgroundColor={backgroundColor}
-      containerStyle={
-        compact && !materialYouStyleLayoutActive
-          ? undefined
-          : { borderRadius: SIDEBAR_ROW_RADIUS, overflow: "hidden" }
-      }
-      enableTrackpadSwipe
-      fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
-      onDelete={handleDelete}
-      onSwipeableClose={props.onSwipeableClose}
-      onSwipeableWillOpen={props.onSwipeableWillOpen}
-      primaryAction={primaryAction}
-      resetKey={`${thread.environmentId}:${thread.id}`}
-      simultaneousWithExternalGesture={props.simultaneousSwipeGesture}
-      threadTitle={thread.title}
+        threadKey={`${thread.environmentId}:${thread.id}`}
+        backgroundColor={backgroundColor}
+        containerStyle={
+          compact && !materialYouStyleLayoutActive
+            ? undefined
+            : { borderRadius: SIDEBAR_ROW_RADIUS, overflow: "hidden" }
+        }
+        enableTrackpadSwipe
+        fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
+        onDelete={handleDelete}
+        onSwipeableClose={props.onSwipeableClose}
+        onSwipeableWillOpen={props.onSwipeableWillOpen}
+        primaryAction={primaryAction}
+        resetKey={`${thread.environmentId}:${thread.id}`}
+        simultaneousWithExternalGesture={props.simultaneousSwipeGesture}
+        threadTitle={thread.title}
       >
         {(close) => (
-        // Messages-style row actions on long-press. iOS: a real
-        // UIContextMenuInteraction with the row as the zoom preview (needs the
-        // patched @react-native-menu, see
-        // patches/@react-native-menu__menu@2.0.0.patch — in long-press mode the
-        // interaction is hosted by the component view and the underlying
-        // UIButton passes touches through, so row taps keep working). Android:
-        // ControlPillMenu injects onLongPress into the row and anchors the
-        // token-styled dropdown to it; taps and swipes are untouched.
-        <ControlPillMenu
-          actions={menuActions}
-          onPressAction={handleMenuAction}
-          shouldOpenOnLongPress
-        >
-          {rowContent(close)}
-        </ControlPillMenu>
+          // Messages-style row actions on long-press. iOS: a real
+          // UIContextMenuInteraction with the row as the zoom preview (needs the
+          // patched @react-native-menu, see
+          // patches/@react-native-menu__menu@2.0.0.patch — in long-press mode the
+          // interaction is hosted by the component view and the underlying
+          // UIButton passes touches through, so row taps keep working). Android:
+          // ControlPillMenu injects onLongPress into the row and anchors the
+          // token-styled dropdown to it; taps and swipes are untouched.
+          <ControlPillMenu
+            actions={menuActions}
+            onPressAction={handleMenuAction}
+            shouldOpenOnLongPress
+          >
+            {rowContent(close)}
+          </ControlPillMenu>
         )}
       </ThreadSwipeable>
       {prPickerOpen && pr ? (

@@ -320,7 +320,10 @@ export function AddProviderInstanceDialog({
                   const definition = DRIVER_OPTION_BY_VALUE[provider.driver];
                   const Mark = definition?.icon;
                   return (
-                    <div key={provider.instanceId} className="flex items-center gap-3 border-b py-2">
+                    <div
+                      key={provider.instanceId}
+                      className="flex items-center gap-3 border-b py-2"
+                    >
                       {Mark && <Mark className="size-4 shrink-0" />}
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm">
