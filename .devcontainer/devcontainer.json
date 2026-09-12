@@ -3,7 +3,8 @@
 // Contributor doc: docs/internals/devcontainer.md
 {
   "name": "Phoenix Dev",
-  "image": "debian:bookworm",
+  // This image supplies the declared `vscode` user and passwordless sudo.
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
   "features": {
     // nodeGypDependencies (default true) brings python3/make/g++, which Linux
     // needs for node-pty's node-gyp fallback (its prebuilds are mac/win only).
@@ -49,6 +50,11 @@
       "label": "phoenix server",
       "onAutoForward": "silent"
     }
+  },
+  // The dev runner selects stable per-worktree ports and moves again when a
+  // preferred port is occupied. Let VS Code surface those non-default ports.
+  "otherPortsAttributes": {
+    "onAutoForward": "notify"
   },
   "customizations": {
     "codespaces": {

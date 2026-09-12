@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
-# One-time container setup, baked into prebuilds. Content-dependent work
-# (dependency install, Chromium) lives in update-content.sh.
+# One-time container setup, baked into prebuilds. Content-dependent dependency
+# installation and cache warming live in update-content.sh.
 set -euo pipefail
+
+# Match the native Linux prerequisites exercised by CI and required by the
+# browser-secret helper and Linux desktop artifact builder. The Rust feature
+# supplies cargo/rustc; keep the remaining system dependencies explicit here.
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+  build-essential \
+  imagemagick \
+  libsecret-1-dev \
+  pkg-config
+sudo rm -rf /var/lib/apt/lists/*
 
 # The Vite+ CLI is the repo task runner (vp i, vp run dev, vp test run).
 # Download to a file first: a curl failure inside $( ) would yield an empty
