@@ -26,6 +26,7 @@ import { Alert, Platform, Pressable, useWindowDimensions, View } from "react-nat
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import { ThreadSessionDetails } from "./ThreadSessionDetails";
+import { ThreadAgentGroup } from "./ThreadAgentGroup";
 import { ThreadPullRequestPicker } from "./ThreadPullRequestPicker";
 import { SymbolView } from "../../components/AppSymbol";
 import { ThreadActionSheet } from "./ThreadActionSheet";
@@ -982,6 +983,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
               {pr.kind === "stack" || pr.others > 0 ? pr.label : `#${pr.label}`}
             </Text>
           </Pressable>
+        ) : null}
+        {props.agentThreads?.length ? (
+          <ThreadAgentGroup
+            threads={props.agentThreads}
+            expanded={groupExpanded}
+            canExpand={canExpandAgents}
+            onToggle={toggleAgents}
+            onDetails={() => setSheet("details")}
+            parentProjectId={thread.projectId}
+          />
         ) : null}
         {props.providerInstance ? (
           <ProviderInstanceIcon

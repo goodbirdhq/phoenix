@@ -4,6 +4,7 @@ import { ThreadAvatar } from "../../components/ThreadAvatar";
 import { AppText } from "../../components/AppText";
 import { useNavigationColors } from "../../components/useNavigationColors";
 import { useProjects, useServerConfigs } from "../../state/entities";
+import { resolveThreadAgentGroupPress } from "./thread-agent-group-disclosure";
 
 export function ThreadAgentGroup({
   threads,
@@ -37,7 +38,8 @@ export function ThreadAgentGroup({
       accessibilityLabel={`${threads.length} ${threads.length === 1 ? "agent" : "agents"}. ${canExpand ? `${expanded ? "Collapse" : "Expand"} agent group` : "Session details"}`}
       onPress={(event) => {
         event.stopPropagation();
-        onToggle();
+        if (resolveThreadAgentGroupPress(canExpand) === "toggle") onToggle();
+        else onDetails();
       }}
       onLongPress={(event) => {
         event.stopPropagation();

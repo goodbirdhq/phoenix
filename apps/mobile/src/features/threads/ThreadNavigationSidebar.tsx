@@ -975,6 +975,7 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
         onProjectChange={setSelectedProjectKey}
         onProjectSortOrderChange={setProjectSortOrder}
         onThreadSortOrderChange={setThreadSortOrder}
+        onOpenEnvironmentSettings={props.onOpenEnvironmentSettings}
         onStartNewTask={props.onStartNewTask}
       />
       <SwipeableScrollGateProvider enabled={swipeEnabled}>
