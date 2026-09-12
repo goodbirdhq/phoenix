@@ -6,13 +6,11 @@ import {
   ConnectionTargetStore,
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
   EnvironmentCacheStore,
-  putRemoteDpopTokenInCatalog,
   registerConnectionInCatalog,
   removeCatalogValue,
   removeConnectionFromCatalog,
   replaceCatalogValue,
 } from "@t3tools/client-runtime/platform";
-import { TokenStore } from "@t3tools/client-runtime/authorization";
 import {
   ConnectionTransientError,
   CredentialStore,
@@ -476,26 +474,6 @@ export const connectionStorageLayer = Layer.effectContext(
           ),
         })),
     });
-    const remoteTokenStore = TokenStore.make({
-      get: (environmentId) =>
-        catalog.read.pipe(
-          Effect.map((document) =>
-            Option.fromUndefinedOr(
-              document.remoteDpopTokens.find((token) => token.environmentId === environmentId),
-            ),
-          ),
-        ),
-      put: (token) => catalog.update((document) => putRemoteDpopTokenInCatalog(document, token)),
-      remove: (environmentId) =>
-        catalog.update((document) => ({
-          ...document,
-          remoteDpopTokens: removeCatalogValue(
-            document.remoteDpopTokens,
-            (value) => value.environmentId,
-            environmentId,
-          ),
-        })),
-    });
     const cacheStore = EnvironmentCacheStore.of({
       loadShell: (environmentId) =>
         readDatabaseValue(database, SHELL_STORE_NAME, environmentId).pipe(
@@ -789,7 +767,6 @@ export const connectionStorageLayer = Layer.effectContext(
       Context.add(ConnectionRegistrationStore, registrationStore),
       Context.add(ProfileStore.ConnectionProfileStore, profileStore),
       Context.add(CredentialStore.ConnectionCredentialStore, credentialStore),
-      Context.add(TokenStore.RemoteDpopAccessTokenStore, remoteTokenStore),
       Context.add(EnvironmentCacheStore, cacheStore),
     );
   }),

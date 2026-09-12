@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import { migrateLegacyConnectionCatalog } from "./migration";
 
 describe("migrateLegacyConnectionCatalog", () => {
-  it.effect("migrates bearer and relay-managed connections into the new catalog", () =>
+  it.effect("preserves legacy relay targets without converting them to direct bearer", () =>
     Effect.gen(function* () {
       const bearerEnvironmentId = EnvironmentId.make("bearer-environment");
       const relayEnvironmentId = EnvironmentId.make("relay-environment");
