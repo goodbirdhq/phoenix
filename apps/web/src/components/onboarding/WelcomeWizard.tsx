@@ -188,14 +188,11 @@ export function WelcomeWizard({
         initialFocus={() => document.getElementById("onboarding-pairing-url") ?? true}
       >
         <WizardHeader
-          title="Set up T3 Code"
+          title="Set up Phoenix"
           identity={
-            <div className="flex items-baseline gap-1.5" role="img" aria-label="T3 Code">
+            <div className="flex items-baseline gap-1.5" role="img" aria-label="Phoenix">
               <span className="shrink-0 text-sm font-semibold" aria-hidden>
                 Phoenix
-              </span>
-              <span className="text-[1.4rem] font-medium tracking-tight text-muted-foreground">
-                Code
               </span>
             </div>
           }
@@ -476,9 +473,9 @@ function ConnectAccountOption({
           <p className="text-sm text-muted-foreground">
             Run this on each computer you want to connect.
           </p>
-          <CommandBlock command="npx t3 connect" className="mt-3" />
+          <CommandBlock command="npx @goodbirdhq/phoenix connect" className="mt-3" />
           <p className="mt-3 text-xs text-muted-foreground">
-            Keep T3 Code running. Select the computers you want to set up above.
+            Keep Phoenix running. Select the computers you want to set up above.
           </p>
         </div>
       </CollapsiblePanel>
@@ -593,9 +590,10 @@ function PairingForm({
             <p className="text-sm text-muted-foreground">
               Run this on the computer with your code.
             </p>
-            <CommandBlock command="npx t3 pair" className="mt-2" />
+            <CommandBlock command="npx @goodbirdhq/phoenix pair" className="mt-2" />
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Start T3 Code first, or run <code className="font-mono">npx t3 serve</code>. Add{" "}
+              Start Phoenix first, or run{" "}
+              <code className="font-mono">npx @goodbirdhq/phoenix serve</code>. Add{" "}
               <code className="font-mono">--tailscale</code> to use your tailnet.
             </p>
           </CollapsiblePanel>
