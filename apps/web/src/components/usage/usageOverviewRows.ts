@@ -24,13 +24,18 @@ export function usageOverviewRows(
         unpricedRecords: row.unpricedRecords,
         costUnknown: isModelCostUnknown(row),
       }))
-    : usageChartSeries(merged.buckets, accounts, periods, grouping, "cost").map((row) => ({
-        ...row,
-        costUsd: row.values.reduce((a, b) => a + b, 0),
-        totalTokens: 0,
-        unpricedRecords: 0,
-        costUnknown: false,
-      }));
+    : usageChartSeries(merged.buckets, accounts, periods, grouping, "cost").map((seriesRow) => {
+        const unpricedRecords = seriesRow.unpricedRecords;
+        return {
+          id: seriesRow.id,
+          label: seriesRow.label,
+          provider: seriesRow.provider,
+          costUsd: seriesRow.values.reduce((a, b) => a + b, 0),
+          totalTokens: 0,
+          unpricedRecords,
+          costUnknown: seriesRow.records > 0 && unpricedRecords >= seriesRow.records,
+        };
+      });
   const tokens = models
     ? new Map<string, number>()
     : new Map(

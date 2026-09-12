@@ -540,7 +540,14 @@ export function mergeUsage(
       reasoningTokens += bucket.totals.reasoningTokens;
       records += bucket.records;
       unpricedRecords += bucket.unpricedRecords;
-      if (bucket.costSource === "providerReported") providerReportedRecords += bucket.records;
+      // Provider-reported records are counted per record, not per cell: a cell
+      // labeled "providerReported" is fully provider-reported, while a "mixed"
+      // cell carries its exact count in `providerReportedRecords`. Servers built
+      // before per-record provenance omit the field, so fall back to the cell's
+      // label for those.
+      providerReportedRecords +=
+        bucket.providerReportedRecords ??
+        (bucket.costSource === "providerReported" ? bucket.records : 0);
 
       const provider = providerAccumulator.get(bucket.provider) ?? {
         costUsd: 0,

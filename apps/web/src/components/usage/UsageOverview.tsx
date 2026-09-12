@@ -292,7 +292,19 @@ export function UsageOverview({
                       )}
                       <td className="text-right tabular-nums">{formatTokens(row.totalTokens)}</td>
                       <td className="text-right font-medium tabular-nums">
-                        {row.costUnknown ? "Unpriced" : formatUsd(cost)}
+                        {row.costUnknown ? (
+                          "Unpriced"
+                        ) : (
+                          <>
+                            {formatUsd(cost)}
+                            {row.unpricedRecords > 0 && (
+                              <span className="text-xs font-normal text-muted-foreground">
+                                {" "}
+                                · some unpriced
+                              </span>
+                            )}
+                          </>
+                        )}
                       </td>
                       <td className="text-right text-muted-foreground">
                         <span

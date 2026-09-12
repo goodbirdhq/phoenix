@@ -287,6 +287,7 @@ export class UsageAggregator {
         costSource: resolveCostSource(bucket),
         records: bucket.records,
         unpricedRecords: bucket.unpricedRecords,
+        providerReportedRecords: bucket.providerReportedRecords,
         sessions: bucket.sessions.size,
       });
     }
@@ -331,12 +332,17 @@ export class UsageAggregator {
 }
 
 /**
- * A bucket mixes records from one model, but their cost provenance can differ
- * when only some records carried a reported cost. The weakest provenance in the
- * bucket wins so the UI never overstates confidence.
+ * A cell mixes records from one model, but their cost provenance can differ
+ * when only some records carried a reported cost. A cell that is not uniformly
+ * one provenance reports `mixed`; the exact per-record breakdown travels on
+ * `unpricedRecords` and `providerReportedRecords` so the client never has to
+ * infer it from the coarse label.
  */
 function resolveCostSource(bucket: MutableBucket): UsageBucket["costSource"] {
   if (bucket.unpricedRecords === bucket.records) return "unpriced";
   if (bucket.providerReportedRecords === bucket.records) return "providerReported";
-  return "modelPriced";
+  const modelPricedRecords =
+    bucket.records - bucket.providerReportedRecords - bucket.unpricedRecords;
+  if (modelPricedRecords === bucket.records) return "modelPriced";
+  return "mixed";
 }

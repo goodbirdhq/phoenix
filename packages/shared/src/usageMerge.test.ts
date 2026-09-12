@@ -357,6 +357,37 @@ describe("mergeUsage", () => {
     ]);
   });
 
+  it("counts provider-reported records per record, not per cell, so model-priced share is not overstated", () => {
+    // One fully provider-reported cell (no per-record field: the fallback path)
+    // and one mixed cell carrying its exact provider-reported count alongside
+    // some unpriced records. The mixed cell must not be counted as model-priced.
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({ costSource: "providerReported", records: 3, unpricedRecords: 0 }),
+              bucket({
+                costSource: "mixed",
+                records: 5,
+                unpricedRecords: 2,
+                providerReportedRecords: 2,
+              }),
+            ],
+            [{ provider: "claude", hostId: "mac", homePath: "/a/.claude" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    // records 8 = 5 provider-reported + 2 unpriced + 1 model-priced
+    expect(merged.costQuality.providerReportedShare).toBeCloseTo(5 / 8, 5);
+    expect(merged.costQuality.unpricedShare).toBeCloseTo(2 / 8, 5);
+    expect(merged.costQuality.modelPricedShare).toBeCloseTo(1 / 8, 5);
+  });
+
   it("keeps two machines apart when hostname and home path collide", () => {
     // Every Mac resolves /Users/theo/.claude, so a hostname clash used to make
     // one machine's usage vanish. Filesystem identity separates them.

@@ -172,6 +172,27 @@ describe("UsageAggregator", () => {
     expect(result.buckets[0]?.costSource).toBe("providerReported");
   });
 
+  it("emits the provider-reported record count alongside the cell label", () => {
+    const result = aggregate([record({ reportedCostUsd: 1.25 })]);
+
+    expect(result.buckets[0]?.providerReportedRecords).toBe(1);
+    expect(result.buckets[0]?.unpricedRecords).toBe(0);
+  });
+
+  it("labels a cell mixing provider-reported and unpriced records as mixed, not model-priced", () => {
+    const result = aggregate([
+      record({ model: "mystery-model", reportedCostUsd: 1.25 }),
+      record({ model: "mystery-model" }),
+    ]);
+
+    expect(result.buckets).toHaveLength(1);
+    expect(result.buckets[0]?.costSource).toBe("mixed");
+    expect(result.buckets[0]?.records).toBe(2);
+    expect(result.buckets[0]?.providerReportedRecords).toBe(1);
+    expect(result.buckets[0]?.unpricedRecords).toBe(1);
+    expect(result.buckets[0]?.costUsd).toBe(1.25);
+  });
+
   it("drops records outside the window", () => {
     const result = aggregate([record({ timestampMs: Date.parse("2026-07-01T12:00:00Z") })]);
 
