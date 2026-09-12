@@ -10,6 +10,7 @@ import {
 import { UsageReportChart } from "./UsageReportChart";
 import { UsageReport } from "./UsageReport";
 import { UsageToolbar } from "./UsageToolbar";
+import { UsagePriceOverrides } from "./UsagePriceOverrides";
 import { findUsageAccount } from "@t3tools/client-runtime/usage/accounts";
 import { scopeAccountHistory } from "@t3tools/client-runtime/usage/account-history";
 import { useSearch } from "@tanstack/react-router";
@@ -68,6 +69,7 @@ export function UsagePage() {
   const [historicalEnvironmentId, setHistoricalEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
+  const [pricesOpen, setPricesOpen] = useState(false);
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
   useEffect(() => {
     if (pageTab === "limits") setLimitsNow(Date.now());
@@ -210,6 +212,7 @@ export function UsagePage() {
         )
       }
       onRefresh={refreshWindow}
+      onOpenModelPrices={() => setPricesOpen(true)}
     />
   );
   const topbarContent = (
@@ -430,6 +433,13 @@ export function UsagePage() {
             </Tabs>
           </WorkspacePageContainer>
         </ScrollArea>
+        {pricesOpen ? (
+          <UsagePriceOverrides
+            usage={allEnvironments}
+            initialSelectedEnvironmentIds={limitsEnvironmentIds}
+            onOpenChange={(open) => setPricesOpen(open)}
+          />
+        ) : null}
       </div>
     </SidebarInset>
   );

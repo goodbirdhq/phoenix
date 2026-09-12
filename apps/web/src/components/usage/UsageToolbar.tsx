@@ -1,5 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
+import { CoinsIcon } from "lucide-react";
 import { UsageRefreshButton } from "./UsageRefreshButton";
+import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 
 const PERIODS = [
@@ -19,6 +21,7 @@ export function UsageToolbar({
   refreshing,
   confirmed,
   onRefresh,
+  onOpenModelPrices,
 }: {
   readonly environments: readonly { environmentId: EnvironmentId; label: string }[];
   readonly environmentId: EnvironmentId | null;
@@ -28,6 +31,7 @@ export function UsageToolbar({
   readonly refreshing: boolean;
   readonly confirmed?: boolean;
   readonly onRefresh: () => void;
+  readonly onOpenModelPrices?: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -79,6 +83,12 @@ export function UsageToolbar({
         refreshing={refreshing}
         onRefresh={onRefresh}
       />
+      {onOpenModelPrices ? (
+        <Button size="sm" variant="outline" aria-label="Model prices" onClick={onOpenModelPrices}>
+          <CoinsIcon className="size-3.5" />
+          <span>Model prices</span>
+        </Button>
+      ) : null}
     </div>
   );
 }
