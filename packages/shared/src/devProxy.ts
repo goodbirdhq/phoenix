@@ -8,7 +8,7 @@
  * prefix only Vite knows gets answered with index.html; a prefix only the
  * server knows redirect-loops through the proxy.
  */
-export const DEV_PROXIED_PATH_PREFIXES = ["/api", "/oauth", "/.well-known", "/ws"] as const;
+const DEV_PROXIED_PATH_PREFIXES = ["/api", "/oauth", "/.well-known", "/ws"] as const;
 
 /**
  * Shared Vite-compatible proxy entries for browser development. Keeping the
