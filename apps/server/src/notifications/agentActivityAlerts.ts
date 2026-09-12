@@ -11,8 +11,10 @@ export interface AgentActivityAlert {
   readonly body: string;
 }
 
+/** @public */
 export const TERMINAL_NOTIFICATION_FRESHNESS_MS = 2 * 60 * 1_000;
 
+/** @public */
 export function isFreshTerminalNotification(updatedAt: string, nowMs: number): boolean {
   const timestamp = Option.getOrNull(DateTime.make(updatedAt));
   return (
@@ -34,6 +36,7 @@ function isAttentionPhase(phase: string): boolean {
   return phase === "waiting_for_approval" || phase === "waiting_for_input";
 }
 
+/** @public */
 export function alertAllowedForPhase(
   preferences: AgentAwarenessPreferences | null,
   phase: string,
@@ -69,6 +72,7 @@ export function attentionTransitionRows(input: TransitionInput) {
 
 // Reconciliation uses only observed transitions. Event-driven delivery can
 // include fresh completions whose running update never reached the device.
+/** @public */
 export function newlyTerminalRows(
   previousAggregate: AgentActivityAggregateState | null,
   nextAggregate: AgentActivityAggregateState,
@@ -104,6 +108,7 @@ export function terminalTransitionRows(
   });
 }
 
+/** @public */
 export function alertForActivityRows(
   rows: ReadonlyArray<AgentActivityAggregateRow>,
 ): AgentActivityAlert | null {
@@ -118,16 +123,19 @@ export function alertForActivityRows(
   };
 }
 
+/** @public */
 export function alertForAttentionTransition(input: TransitionInput): AgentActivityAlert | null {
   return alertForActivityRows(attentionTransitionRows(input));
 }
 
+/** @public */
 export function alertForNewlyTerminal(
   input: TransitionInput & { readonly nowMs: number; readonly includeUnobserved?: boolean },
 ): AgentActivityAlert | null {
   return alertForActivityRows(terminalTransitionRows(input));
 }
 
+/** @public */
 export function alertForTerminalAggregate(input: {
   readonly aggregate: AgentActivityAggregateState | null;
   readonly preferences: AgentAwarenessPreferences | null;

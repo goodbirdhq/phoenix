@@ -34,6 +34,7 @@ export class FcmAssertionSigner extends Context.Service<
   }
 >()("t3/notifications/FcmAssertionSigner") {}
 
+/** @public */
 export const make = Effect.gen(function* () {
   const { subtle } = yield* WebCrypto.WebCrypto;
   return FcmAssertionSigner.of({

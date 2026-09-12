@@ -20,7 +20,7 @@ const DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS = 6_000;
  * gzip-compressible by the transport and keeps the (potentially large) list off
  * the socket.
  */
-export const fetchEnvironmentShellSnapshot = Effect.fn(
+const fetchEnvironmentShellSnapshot = Effect.fn(
   "clientRuntime.state.fetchEnvironmentShellSnapshot",
 )(function* (input: { readonly prepared: PreparedConnection; readonly timeoutMs?: number }) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({

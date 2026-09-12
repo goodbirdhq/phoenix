@@ -74,7 +74,7 @@ export class HostMetricsPlatform extends Context.Service<
   }
 >()("t3/hostMetrics/HostMetrics/HostMetricsPlatform") {}
 
-export function sumCpuTimes(cpus: ReadonlyArray<NodeOS.CpuInfo>): CpuTimes {
+function sumCpuTimes(cpus: ReadonlyArray<NodeOS.CpuInfo>): CpuTimes {
   let idle = 0;
   let total = 0;
   for (const cpu of cpus) {
@@ -227,7 +227,7 @@ const makePlatform = Effect.fn("hostMetrics.hostMetricsPlatform.make")(function*
   return HostMetricsPlatform.of({ read });
 });
 
-export const platformLayer = Layer.effect(HostMetricsPlatform, makePlatform());
+const platformLayer = Layer.effect(HostMetricsPlatform, makePlatform());
 
 function phoenixFootprint(
   telemetry: ResourceTelemetrySnapshot,

@@ -65,7 +65,7 @@ export const parseCapacityRefreshKey = (key: string): readonly CapacityRefreshTa
   }
 };
 
-export const replaceAvailabilityEntries = (
+const replaceAvailabilityEntries = (
   cached: readonly ProviderAvailabilityEntry[],
   refreshed: readonly ProviderAvailabilityEntry[],
 ): readonly ProviderAvailabilityEntry[] => {

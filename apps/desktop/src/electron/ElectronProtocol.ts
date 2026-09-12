@@ -8,7 +8,7 @@ import * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
 
-export const DESKTOP_HOST = "app";
+const DESKTOP_HOST = "app";
 // Phoenix registers its own scheme so it can be installed alongside upstream
 // T3 Code; two apps claiming "t3code://" would leave the OS to pick a winner.
 const DESKTOP_PRODUCTION_SCHEME = "phoenix";

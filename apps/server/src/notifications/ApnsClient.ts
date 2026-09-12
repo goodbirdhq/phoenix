@@ -223,6 +223,7 @@ export class ApnsClient extends Context.Service<
   }
 >()("t3/notifications/ApnsClient") {}
 
+/** @public */
 export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const providerTokens = yield* ApnsProviderTokens.ApnsProviderTokens;

@@ -11,6 +11,7 @@ import {
   sanitizeAgentActivityAggregateState,
 } from "./agentActivityPayloads.ts";
 
+/** @public */
 export function statusForPhase(phase: AgentActivityState["phase"]): string {
   switch (phase) {
     case "waiting_for_approval":

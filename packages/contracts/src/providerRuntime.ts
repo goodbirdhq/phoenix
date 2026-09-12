@@ -108,7 +108,7 @@ export type RuntimeErrorClass = typeof RuntimeErrorClass.Type;
 // RuntimeErrorClass: the class says which subsystem failed, while the kind is
 // a machine-readable reason clients can act on.
 
-export const TOOL_LIFECYCLE_ITEM_TYPES = [
+const TOOL_LIFECYCLE_ITEM_TYPES = [
   "command_execution",
   "file_change",
   "mcp_tool_call",

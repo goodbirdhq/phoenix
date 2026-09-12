@@ -62,7 +62,7 @@ export const LIST_SESSIONS_MAX_ENTRIES = 50;
 export const SESSION_REPORT_INLINE_MAX_CHARS = 1024;
 // When a large report carries no author abstract, the envelope falls back to
 // this many leading characters of the summary.
-export const SESSION_REPORT_ABSTRACT_FALLBACK_CHARS = 500;
+const SESSION_REPORT_ABSTRACT_FALLBACK_CHARS = 500;
 // Upper bound on one read_report page.
 export const READ_REPORT_MAX_CHARS = 16_384;
 

@@ -376,7 +376,7 @@ export function applyProviderAvailabilityStreamEvent(
   return { providers: next };
 }
 
-export function projectProviderAvailabilityStream(
+function projectProviderAvailabilityStream(
   current: ProviderAvailabilityResult | null,
   event: ProviderAvailabilityStreamEvent,
 ): readonly [ProviderAvailabilityResult, ReadonlyArray<ProviderAvailabilityResult>] {

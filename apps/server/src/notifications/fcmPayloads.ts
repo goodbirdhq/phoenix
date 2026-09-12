@@ -5,6 +5,7 @@ import {
 } from "./agentActivityAggregate.ts";
 import { agentActivityExpiresAt } from "./agentActivityPayloads.ts";
 
+/** @public */
 export function androidActivityHero(aggregate: AgentActivityAggregateState) {
   return [...aggregate.activities].sort(
     (a, b) => activityPhasePriority(a.phase) - activityPhasePriority(b.phase),

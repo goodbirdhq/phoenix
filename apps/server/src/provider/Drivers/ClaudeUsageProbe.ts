@@ -247,7 +247,7 @@ const USAGE_ROW = /^\s*([^:]{1,80}):\s*(\d{1,3}(?:[.,]\d{1,4})?)\s*%\s+used\b(.*
  * panel plausibly renders, and it keeps a client from printing a float artefact
  * such as `12.299999999999999% used`.
  */
-export const parseUsedPercent = (value: string): number | undefined => {
+const parseUsedPercent = (value: string): number | undefined => {
   const parsed = Number(value.trim().replace(",", "."));
   if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return undefined;
   return Math.round(parsed * 10) / 10;

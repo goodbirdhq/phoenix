@@ -61,6 +61,7 @@ export class FcmClient extends Context.Service<
   }
 >()("t3/notifications/FcmClient") {}
 
+/** @public */
 export const make = Effect.gen(function* () {
   const config = yield* FcmConfiguration.FcmConfiguration;
   const signer = yield* FcmAssertionSigner.FcmAssertionSigner;

@@ -613,19 +613,19 @@ const WsServerGetResourceTelemetryHistoryRpc = Rpc.make(
   },
 );
 
-export const WsServerGetHostMetricsRpc = Rpc.make(WS_METHODS.serverGetHostMetrics, {
+const WsServerGetHostMetricsRpc = Rpc.make(WS_METHODS.serverGetHostMetrics, {
   payload: Schema.Struct({}),
   success: HostMetricsSnapshot,
   error: EnvironmentAuthorizationError,
 });
 
-export const WsServerGetHostMetricsHistoryRpc = Rpc.make(WS_METHODS.serverGetHostMetricsHistory, {
+const WsServerGetHostMetricsHistoryRpc = Rpc.make(WS_METHODS.serverGetHostMetricsHistory, {
   payload: HostMetricsHistoryInput,
   success: HostMetricsHistory,
   error: EnvironmentAuthorizationError,
 });
 
-export const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourceTelemetry, {
+const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourceTelemetry, {
   payload: Schema.Struct({}),
   success: ResourceTelemetryRetryResult,
   error: EnvironmentAuthorizationError,
@@ -637,24 +637,18 @@ const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
   error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
 });
 
-export const WsServerGetProviderAvailabilityRpc = Rpc.make(
-  WS_METHODS.serverGetProviderAvailability,
-  {
-    payload: ProviderAvailabilityInput,
-    success: ProviderAvailabilityResult,
-    error: EnvironmentAuthorizationError,
-  },
-);
+const WsServerGetProviderAvailabilityRpc = Rpc.make(WS_METHODS.serverGetProviderAvailability, {
+  payload: ProviderAvailabilityInput,
+  success: ProviderAvailabilityResult,
+  error: EnvironmentAuthorizationError,
+});
 
-export const WsSubscribeProviderAvailabilityRpc = Rpc.make(
-  WS_METHODS.subscribeProviderAvailability,
-  {
-    payload: ProviderAvailabilitySubscriptionInput,
-    success: ProviderAvailabilityStreamEvent,
-    error: EnvironmentAuthorizationError,
-    stream: true,
-  },
-);
+const WsSubscribeProviderAvailabilityRpc = Rpc.make(WS_METHODS.subscribeProviderAvailability, {
+  payload: ProviderAvailabilitySubscriptionInput,
+  success: ProviderAvailabilityStreamEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
 
 /**
  * Refetches the model rate table ahead of its daily TTL, so a model released
@@ -1315,38 +1309,38 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
-export const WsSubscribeHostMetricsRpc = Rpc.make(WS_METHODS.subscribeHostMetrics, {
+const WsSubscribeHostMetricsRpc = Rpc.make(WS_METHODS.subscribeHostMetrics, {
   payload: HostMetricsSubscriptionInput,
   success: HostMetricsSnapshot,
   error: EnvironmentAuthorizationError,
   stream: true,
 });
 
-export const WsScheduleDispatchCommandRpc = Rpc.make(SCHEDULE_WS_METHODS.dispatchCommand, {
+const WsScheduleDispatchCommandRpc = Rpc.make(SCHEDULE_WS_METHODS.dispatchCommand, {
   payload: ScheduleCommand,
   success: ScheduleDispatchResult,
   error: Schema.Union([ScheduleOperationError, EnvironmentAuthorizationError]),
 });
 
-export const WsScheduleGetSnapshotRpc = Rpc.make(SCHEDULE_WS_METHODS.getSnapshot, {
+const WsScheduleGetSnapshotRpc = Rpc.make(SCHEDULE_WS_METHODS.getSnapshot, {
   payload: Schema.Struct({}),
   success: ScheduleListSnapshot,
   error: Schema.Union([ScheduleOperationError, EnvironmentAuthorizationError]),
 });
 
-export const WsScheduleGetDetailRpc = Rpc.make(SCHEDULE_WS_METHODS.getDetail, {
+const WsScheduleGetDetailRpc = Rpc.make(SCHEDULE_WS_METHODS.getDetail, {
   payload: ScheduleGetDetailInput,
   success: ScheduleDetail,
   error: Schema.Union([ScheduleOperationError, EnvironmentAuthorizationError]),
 });
 
-export const WsScheduleGetHistoryRpc = Rpc.make(SCHEDULE_WS_METHODS.getHistory, {
+const WsScheduleGetHistoryRpc = Rpc.make(SCHEDULE_WS_METHODS.getHistory, {
   payload: ScheduleGetHistoryInput,
   success: ScheduleHistoryPage,
   error: Schema.Union([ScheduleOperationError, EnvironmentAuthorizationError]),
 });
 
-export const WsScheduleSubscribeRpc = Rpc.make(SCHEDULE_WS_METHODS.subscribe, {
+const WsScheduleSubscribeRpc = Rpc.make(SCHEDULE_WS_METHODS.subscribe, {
   payload: Schema.Struct({}),
   success: ScheduleListStreamEvent,
   error: Schema.Union([ScheduleOperationError, EnvironmentAuthorizationError]),

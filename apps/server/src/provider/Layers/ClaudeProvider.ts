@@ -107,7 +107,7 @@ function claudeSubscriptionLabel(subscriptionType: string | undefined): string |
   }
 }
 
-export function claudePlanKind(subscriptionType: string | undefined): ProviderPlanKind {
+function claudePlanKind(subscriptionType: string | undefined): ProviderPlanKind {
   const normalized = subscriptionType?.toLowerCase().replace(/[\s_-]+/g, "");
   if (!normalized) return "unknown";
   if (normalized.includes("enterprise")) return "enterprise";

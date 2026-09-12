@@ -15,7 +15,7 @@ import type * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 
-export const bootServiceLayer = (config: ServerConfig.ServerConfig["Service"]) =>
+const bootServiceLayer = (config: ServerConfig.ServerConfig["Service"]) =>
   BootService.layer({
     baseDir: config.baseDir,
     logsDir: config.logsDir,

@@ -33,7 +33,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const dependencies = [McpInvocationContext.McpInvocationContext];
 
-export const ListSessionProvidersTool = Tool.make("list_session_providers", {
+const ListSessionProvidersTool = Tool.make("list_session_providers", {
   description:
     "List enabled provider instances and their models in this Phoenix environment. Disabled instances are omitted. The available flag indicates whether an instance is ready to start a session; set onlyAvailable=true to omit enabled instances that are not ready. Each instance includes an honest subscription-availability snapshot when its native provider runtime has supplied one. Set refreshAvailability=true to explicitly refresh supported native sources; it runs the provider's own read-only quota command for signed-in instances only, never creates a session or turn, and is rate-limited per instance, so do not poll it. Instances are separate accounts; never add their quotas together. Call before spawn_session to offer real choices instead of guessing.",
   parameters: ListSessionProvidersInput,
@@ -46,7 +46,7 @@ export const ListSessionProvidersTool = Tool.make("list_session_providers", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
-export const ListSessionsTool = Tool.make("list_sessions", {
+const ListSessionsTool = Tool.make("list_sessions", {
   description:
     'List this session\'s spawned children: threadId, title, session status, settled/archived state, whether a report has been posted, worktreePath, provider/model, and creation time. state defaults to "active" — exactly the children counted by the spawn limit: unsettled, or settled with a provider process that has not actually stopped yet (e.g. a settle whose stop timed out). "settled" is the complement: settled AND confirmed stopped, the pool of children safe to reclaim or discard at leisure. "all" is both. A settled child with a non-null worktreePath can be resumed with send_to_session; one with worktreePath: null cannot (resuming after worktree cleanup does not currently work) and archive_session is the only way to permanently discard it — worktreePath is checked on disk with a best-effort existence check, not just read from the cached record. Archived children are omitted unless includeArchived: true. "settled"/"all" queries are always most-recently-created first and return at most 50 entries; hasMore: true means more exist.',
   parameters: ListSessionsInput,
@@ -71,7 +71,7 @@ export const SpawnSessionTool = Tool.make("spawn_session", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false);
 
-export const SendToSessionTool = Tool.make("send_to_session", {
+const SendToSessionTool = Tool.make("send_to_session", {
   description:
     "Send a follow-up user message to a session this session spawned. mode defaults to queue: idle sessions receive it immediately, while busy sessions receive it after the current turn. interrupt ends the current turn before continuing the same FIFO queue; it does not supersede older messages. Providers use their native interruption; Claude confirms process exit when a restart is needed. Use ping_session for liveness checks instead of sending reminders. The result reports immediate, queued, or unknown when the send committed but acknowledgement readback was unavailable.",
   parameters: SendToSessionInput,
@@ -84,7 +84,7 @@ export const SendToSessionTool = Tool.make("send_to_session", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false);
 
-export const SendToParentTool = Tool.make("send_to_parent", {
+const SendToParentTool = Tool.make("send_to_parent", {
   description:
     'Send a message to the session that spawned this one. This is the ONLY live channel to your parent: text written in this thread reaches no one, and post_report is a completion artifact, not chat. Delivery works like any session message: an idle parent wakes on it, a busy parent receives it after its current turn ("queued"). Set awaitingReply: true when you cannot proceed without an answer — the parent then sees this session as blocked (awaitingParentReplySince in ping_session/list_sessions) until a human or your parent starts a reply turn here; this flag is not proof of provider acceptance. Finish your turn after asking a blocking question so queued replies can arrive. Use for questions, blockers, and important mid-work updates; keep routine progress out of it, since every message costs the parent a turn. Fails with not_a_spawned_session when nothing spawned this session, and with parent_not_available when the parent thread is archived or deleted (post_report still works then — reports are durable).',
   parameters: SendToParentInput,
@@ -97,7 +97,7 @@ export const SendToParentTool = Tool.make("send_to_parent", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false);
 
-export const ReadSessionTool = Tool.make("read_session", {
+const ReadSessionTool = Tool.make("read_session", {
   description:
     "Read the status of a session this session spawned: live/settled state, its latest completion report as a compact envelope (title, status, origin, abstract, size, structured counts), and optionally its trailing messages. Use read_report to fetch a report's full body and full findings/validation. Reports create a durable notification rather than starting your model; use this for on-demand progress checks when you choose to act. messageLimit accepts 0-20 (default 5); each returned message is truncated to 16,384 characters.",
   parameters: ReadSessionInput,
@@ -110,7 +110,7 @@ export const ReadSessionTool = Tool.make("read_session", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
-export const PingSessionTool = Tool.make("ping_session", {
+const PingSessionTool = Tool.make("ping_session", {
   description:
     "Get a lightweight progress snapshot of a session this session spawned, WITHOUT starting a model turn or interrupting it: session status, whether it has settled, when Phoenix last observed provider activity (best effort; not a heartbeat), its current background activity (working/monitoring, from native subagent/workflow/watch-loop work), plan progress if it's mid-plan, whether it has posted a report, a snippet of its last assistant message, and a best-effort usage snapshot for budgeting: lastTurnInputTokens/lastTurnOutputTokens (the most recent turn only, NOT a session total, and not comparable across providers since cache-token accounting differs), totalTokens (a provider's own cumulative counter, omitted rather than estimated when not reported), turnCount, elapsedMs since spawn, and lastTurnDurationMs. No cost estimate is included; price tables go stale. Liveness diagnostics: pendingQueuedCount and the most recent delivery receipt, plus stalledDeliveryCount (released deliveries whose provider acceptance is unconfirmed; this is not proof of a dead or wedged session—compare releasingAt, recent output and current activity) and oldestUndeliveredMessageAt (when the oldest queued or releasing message was requested; time spent queued is normal during a busy turn). awaitingParentReplySince is set while the child has declared itself blocked on your answer via send_to_parent. After the session ends, exitReason gives one typed cause (usage_limit/provider_crashed/stopped_by_user/…) with lastError/stoppedBy/stopReason as the raw detail. Cheap enough to poll; prefer this over read_session for a quick liveness check, and read_session when you want the full report or message history.",
   parameters: PingSessionInput,
@@ -123,7 +123,7 @@ export const PingSessionTool = Tool.make("ping_session", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
-export const StopSessionTool = Tool.make("stop_session", {
+const StopSessionTool = Tool.make("stop_session", {
   description:
     "Stop the live agent session of a thread this session spawned. Set gracePeriodMs to deliver a stop notice first, allowing the child to finish its current tool call and optionally post a partial report before Phoenix hard-stops it at the deadline. The thread and its history remain (and still count toward the spawn limit).",
   parameters: StopSessionInput,
@@ -136,7 +136,7 @@ export const StopSessionTool = Tool.make("stop_session", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true);
 
-export const SettleSessionTool = Tool.make("settle_session", {
+const SettleSessionTool = Tool.make("settle_session", {
   description:
     "Mark a session this session spawned as finished, so it stops showing up as live work AND frees its spawn slot (the spawn limit only counts active/unsettled children). This STOPS the child's agent process if it is still alive — settling is declaring the child done, so the process goes with it. A child that is mid-turn (starting or running) is refused instead: call stop_session yourself if you really mean to interrupt live work. The child and its worktree stay around, resumable with send_to_session, unless you also pass cleanupWorktree: true to PERMANENTLY DELETE the child's git worktree directory and its temporary Phoenix branch (after which it can no longer be resumed); this cannot be undone, and is refused (with the specific dirty files and unpushed commit count) when the worktree still holds work that is not committed and pushed, unless you also pass force: true. Add cleanupBranch: true to also delete a branch you named yourself, which happens only when Phoenix can prove it was merged (local head == remote head == the head commit of a merged pull request) and is otherwise refused with the SHAs that disagree. Cleanups on one repository run one at a time, so parallel settles queue instead of fighting over git's lock. Use list_sessions with state: \"settled\" to see settled children. The result always lists exactly what was removed, what was kept, and the proof used; a warning field appears when the child's process outlived its stop.",
   parameters: SettleSessionInput,
@@ -149,7 +149,7 @@ export const SettleSessionTool = Tool.make("settle_session", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true);
 
-export const ArchiveSessionTool = Tool.make("archive_session", {
+const ArchiveSessionTool = Tool.make("archive_session", {
   description:
     "Permanently discard a session this session spawned: removes it from view and, by default, reclaims its git worktree/branch. Settled children already stop counting toward the spawn limit and can be resumed with send_to_session — archive this only once you are done with a child for good (it can never be resumed after). Archiving SUBSUMES settling: if the child is not yet settled, this first runs the same stop-then-settle cascade as settle_session, refusing a starting/running child instead (call stop_session or wait, then retry). Unlike settle_session, cleanupWorktree defaults to true here, because an archived thread has no later handle to clean up its worktree; pass cleanupWorktree: false to keep it. Deletion is refused (with the specific dirty files and unpushed commit count) when the worktree still holds work that is not committed and pushed, unless force: true. Add cleanupBranch: true to also delete a branch you named yourself, once Phoenix can prove it was merged (local head == remote head == the head commit of a merged pull request); otherwise refused with the SHAs that disagree. Cleanups on one repository run one at a time, so parallel archives queue instead of fighting over git's lock. An already-settled child is archived directly, still reclaiming its worktree by default. Idempotent: calling this again on a child that is already archived is a no-op success, not an error. The result reports the full cascade: whether a session was stopped, whether a settle ran, what happened to the worktree/branch and the proof used, and that the thread is archived; a warning field appears when the child's process outlived its stop.",
   parameters: ArchiveSessionInput,
@@ -162,7 +162,7 @@ export const ArchiveSessionTool = Tool.make("archive_session", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true);
 
-export const ReadReportTool = Tool.make("read_report", {
+const ReadReportTool = Tool.make("read_report", {
   description:
     "Read the full body of a completion report posted by a session this session spawned, or by a sibling session (one spawned by the same parent). Pass the reportId from a report envelope, or a threadId to get that thread's latest report. Large reports paginate via offset/maxChars; the result also carries the report's origin (agent vs Phoenix-synthesized) and full findings/validation/recommendation. A parent can still read a direct child's durable report after that child is archived; archived siblings remain outside this read scope. Reading a direct child's report by reportId also consumes that one child-report inbox update on this parent; the durable report and read activity remain available. Sibling reads and threadId-only reads never consume an update. A report that has been amended comes back with supersededByReportId and a supersededNotice: read that newer report instead, it is the session's current account.",
   parameters: ReadReportInput,
@@ -175,7 +175,7 @@ export const ReadReportTool = Tool.make("read_report", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
-export const PostReportTool = Tool.make("post_report", {
+const PostReportTool = Tool.make("post_report", {
   description:
     'Post a completion report for THIS session\'s work: status, a concise markdown summary, and any artifacts (files, branches, PR URLs). If another session spawned this one, the report is delivered to its thread the way a user message is — waking it if idle, arriving after its current turn if busy — unless it spawned you with reportDelivery "notify-only", in which case the report waits as a durable notification. Either way the parent reads current details with read_report or read_session. The user also sees the report as a card in this thread. Call once when your assigned work is finished (or clearly failed). If an instruction reaches you AFTER you already reported, do the work and post an AMENDING report: call post_report again with supersedesReportId set to your earlier reportId (it must be a report you posted on this thread, and one that has not itself been superseded — amendments form a single linear chain, so always amend the newest report). The amendment becomes the current report; the superseded report stays readable and is flagged as superseded. Never describe work in a report as done when it was not done at the time that report was written. Optionally include machine-readable fields: findings (array of {title, severity: info|low|medium|high|critical, detail?}), validation ({performed: string[], gaps: string[]}), recommendation (short string), and completionPercent (0-100). The result also carries a best-effort usage snapshot (tokens, turn count, elapsed time since spawn) captured automatically at post time — this is not something you supply.',
   parameters: PostReportInput,

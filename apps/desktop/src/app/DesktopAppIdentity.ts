@@ -37,7 +37,7 @@ const normalizeCommitHash = (value: string): Option.Option<string> => {
 // migrates its own pre-rename directory here, but Phoenix is a separate app that
 // is expected to run alongside T3 Code — adopting T3 Code's userData would make
 // two live applications write the same directory.
-export const resolveUserDataPath = Effect.gen(function* () {
+const resolveUserDataPath = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   return environment.path.join(environment.appDataDirectory, environment.userDataDirName);
 }).pipe(Effect.withSpan("desktop.appIdentity.resolveUserDataPath"));

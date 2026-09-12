@@ -416,7 +416,7 @@ export function decideBranchCleanup(
 // A lock file younger than this is assumed to belong to a git process that is
 // still working. Generous: our own git commands time out at 15s, so anything
 // older than a minute outlived every command Phoenix could have started.
-export const GIT_LOCK_STALE_AFTER_MS = 60_000;
+const GIT_LOCK_STALE_AFTER_MS = 60_000;
 
 /**
  * Pull the lock file path out of a git failure.
@@ -455,7 +455,7 @@ const isGitCommandError = Schema.is(GitCommandError);
  * delete time, so a worktree created after the guard ran still ends up here,
  * and the caller should get the same structured answer either way.
  */
-export function parseCheckedOutWorktreePath(message: string): string | null {
+function parseCheckedOutWorktreePath(message: string): string | null {
   const match = /used by worktree at '([^']+)'/.exec(message);
   return match?.[1] ?? null;
 }
@@ -472,7 +472,7 @@ export function parseCheckedOutWorktreePath(message: string): string | null {
  * By the time this runs the child's own worktree has already been removed, so
  * any hit is a genuine conflict rather than our own directory.
  */
-export function findConflictingWorktree(
+function findConflictingWorktree(
   worktrees: ReadonlyArray<{ readonly path: string; readonly branch: string }>,
   branch: string,
 ): string | null {
@@ -487,7 +487,7 @@ export function findConflictingWorktree(
  * the lock path. Falling back to the message keeps non-driver failures (and
  * plain `Error`s) working.
  */
-export function gitFailureDiagnosticText(cause: unknown): string {
+function gitFailureDiagnosticText(cause: unknown): string {
   if (isGitCommandError(cause)) {
     return cause.stderrExcerpt ?? cause.detail;
   }

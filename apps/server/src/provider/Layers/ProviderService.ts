@@ -553,7 +553,7 @@ type AvailabilityRefreshClaim = {
  * rows the same way, so a provider that names its pools keeps them distinct
  * everywhere rather than in one layer only.
  */
-export const windowIdentityKey = (window: ProviderAvailability["windows"][number]): string =>
+const windowIdentityKey = (window: ProviderAvailability["windows"][number]): string =>
   `${window.kind}:${window.scope ?? ""}`;
 
 /**

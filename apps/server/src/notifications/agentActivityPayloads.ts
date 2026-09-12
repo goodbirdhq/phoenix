@@ -67,6 +67,7 @@ function sanitizeDeepLink(value: string): string {
   return truncateText(trimmed, MAX_DEEP_LINK_LENGTH);
 }
 
+/** @public */
 export function sanitizeAgentActivityAggregateRow(
   row: AgentActivityAggregateRow,
 ): AgentActivityAggregateRow {
@@ -93,6 +94,7 @@ export function sanitizeAgentActivityAggregateState(
   };
 }
 
+/** @public */
 export function sanitizeApnsNotificationPayload(
   notification: ApnsNotificationPayload,
 ): ApnsNotificationPayload {
@@ -104,6 +106,7 @@ export function sanitizeApnsNotificationPayload(
   };
 }
 
+/** @public */
 export function notificationForActivity(row: AgentActivityAggregateRow): ApnsNotificationPayload {
   const activity = sanitizeAgentActivityAggregateRow(row);
   return sanitizeApnsNotificationPayload({
