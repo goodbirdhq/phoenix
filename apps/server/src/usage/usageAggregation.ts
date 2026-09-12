@@ -333,16 +333,16 @@ export class UsageAggregator {
 
 /**
  * A cell mixes records from one model, but their cost provenance can differ
- * when only some records carried a reported cost. A cell that is not uniformly
- * one provenance reports `mixed`; the exact per-record breakdown travels on
- * `unpricedRecords` and `providerReportedRecords` so the client never has to
- * infer it from the coarse label.
+ * when only some records carried a reported cost. The weakest provenance present
+ * wins so the value never overstates confidence: any unpriced record reports
+ * the cell unpriced, otherwise an entirely provider-reported cell reports
+ * providerReported, and everything else reports modelPriced. The exact
+ * per-record breakdown still travels on `unpricedRecords` and
+ * `providerReportedRecords` for clients that want it, so the coarse label never
+ * has to stand in for precise counts.
  */
 function resolveCostSource(bucket: MutableBucket): UsageBucket["costSource"] {
-  if (bucket.unpricedRecords === bucket.records) return "unpriced";
+  if (bucket.unpricedRecords > 0) return "unpriced";
   if (bucket.providerReportedRecords === bucket.records) return "providerReported";
-  const modelPricedRecords =
-    bucket.records - bucket.providerReportedRecords - bucket.unpricedRecords;
-  if (modelPricedRecords === bucket.records) return "modelPriced";
-  return "mixed";
+  return "modelPriced";
 }

@@ -359,8 +359,9 @@ describe("mergeUsage", () => {
 
   it("counts provider-reported records per record, not per cell, so model-priced share is not overstated", () => {
     // One fully provider-reported cell (no per-record field: the fallback path)
-    // and one mixed cell carrying its exact provider-reported count alongside
-    // some unpriced records. The mixed cell must not be counted as model-priced.
+    // and one partial cell whose weakest label is "unpriced" but which carries
+    // its exact provider-reported count. The partial cell's provider-reported
+    // records must not be folded into the model-priced share.
     const merged = mergeUsage(
       [
         environment(
@@ -369,7 +370,7 @@ describe("mergeUsage", () => {
             [
               bucket({ costSource: "providerReported", records: 3, unpricedRecords: 0 }),
               bucket({
-                costSource: "mixed",
+                costSource: "unpriced",
                 records: 5,
                 unpricedRecords: 2,
                 providerReportedRecords: 2,
@@ -386,6 +387,31 @@ describe("mergeUsage", () => {
     expect(merged.costQuality.providerReportedShare).toBeCloseTo(5 / 8, 5);
     expect(merged.costQuality.unpricedShare).toBeCloseTo(2 / 8, 5);
     expect(merged.costQuality.modelPricedShare).toBeCloseTo(1 / 8, 5);
+  });
+
+  it("falls back to the cell label when a server omits the per-record provider count", () => {
+    // A server built before per-record provenance emits no providerReportedRecords
+    // field; only a fully provider-reported cell contributes to that share.
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({ costSource: "providerReported", records: 3, unpricedRecords: 0 }),
+              bucket({ costSource: "unpriced", records: 2, unpricedRecords: 2 }),
+            ],
+            [{ provider: "claude", hostId: "mac", homePath: "/a/.claude" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    // records 5 = 3 provider-reported + 2 unpriced, and no model-priced records.
+    expect(merged.costQuality.providerReportedShare).toBeCloseTo(3 / 5, 5);
+    expect(merged.costQuality.unpricedShare).toBeCloseTo(2 / 5, 5);
+    expect(merged.costQuality.modelPricedShare).toBeCloseTo(0, 5);
   });
 
   it("keeps two machines apart when hostname and home path collide", () => {

@@ -541,10 +541,11 @@ export function mergeUsage(
       records += bucket.records;
       unpricedRecords += bucket.unpricedRecords;
       // Provider-reported records are counted per record, not per cell: a cell
-      // labeled "providerReported" is fully provider-reported, while a "mixed"
-      // cell carries its exact count in `providerReportedRecords`. Servers built
-      // before per-record provenance omit the field, so fall back to the cell's
-      // label for those.
+      // labeled "providerReported" is fully provider-reported, while a cell whose
+      // weakest provenance is "unpriced" or "modelPriced" may still mix provider
+      // records and carries its exact count in `providerReportedRecords`. Servers
+      // built before per-record provenance omit the field, so fall back to the
+      // cell's label for those.
       providerReportedRecords +=
         bucket.providerReportedRecords ??
         (bucket.costSource === "providerReported" ? bucket.records : 0);

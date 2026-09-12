@@ -58,16 +58,8 @@ export type UsageResolution = typeof UsageResolution.Type;
  * - `modelPriced` - we used a custom price override or the LiteLLM rate table.
  * - `unpriced` - tokens are known, rates are not. Counted in totals, excluded
  *   from cost.
- * - `mixed` - the cell held records priced more than one way (provider cost,
- *   model rate, or unknown), so `costUsd` covers only the priced portion while
- *   `providerReportedRecords` and `unpricedRecords` carry the exact breakdown.
  */
-export const UsageCostSource = Schema.Literals([
-  "providerReported",
-  "modelPriced",
-  "unpriced",
-  "mixed",
-]);
+export const UsageCostSource = Schema.Literals(["providerReported", "modelPriced", "unpriced"]);
 export type UsageCostSource = typeof UsageCostSource.Type;
 
 /**

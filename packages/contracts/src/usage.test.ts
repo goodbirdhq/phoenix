@@ -157,3 +157,34 @@ describe("usage source membership", () => {
     expect(() => decodeV4UsageSummary(narrowUsageSummary(decoded, 4))).not.toThrow();
   });
 });
+
+describe("usage cost provenance is additive", () => {
+  it("decodes older cells that omit the per-record provider-reported count", () => {
+    const decoded = decodeUsageSummary(summary);
+    expect(decoded.buckets.every((bucket) => bucket.providerReportedRecords === undefined)).toBe(
+      true,
+    );
+  });
+
+  it("round-trips the new per-record provider-reported count", () => {
+    const decoded = decodeUsageSummary({
+      ...summary,
+      buckets: summary.buckets.map((bucket) => ({
+        ...bucket,
+        providerReportedRecords: bucket.costSource === "providerReported" ? 1 : 0,
+      })),
+    });
+    // Bucket 0 is "unpriced", bucket 1 is "providerReported".
+    expect(decoded.buckets[0]?.providerReportedRecords).toBe(0);
+    expect(decoded.buckets[1]?.providerReportedRecords).toBe(1);
+  });
+
+  it("rejects a provenance value the closed three-value union does not define", () => {
+    expect(() =>
+      decodeUsageSummary({
+        ...summary,
+        buckets: summary.buckets.map((bucket) => ({ ...bucket, costSource: "mixed" })),
+      }),
+    ).toThrow();
+  });
+});
