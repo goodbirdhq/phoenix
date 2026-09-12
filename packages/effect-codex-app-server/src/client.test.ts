@@ -80,6 +80,14 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
           planType: "plus",
         });
 
+        const resumed = yield* client.request("thread/resume", {
+          threadId: "thread-1",
+        });
+        assert.deepEqual(resumed.thread.turns[0]?.error, {
+          codexErrorInfo: "misalignmentPolicyViolation",
+          message: "The prior turn was blocked by policy.",
+        });
+
         const path = yield* Path.Path;
         const peerCwd = path.join(import.meta.dirname, "..");
         const skills = yield* client.request("skills/list", { cwds: [peerCwd] });

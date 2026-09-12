@@ -1994,6 +1994,24 @@ export const makeCodexSessionRuntime = (
       ),
     );
 
+    yield* client.handleServerNotification("thread/status/changed", (payload) =>
+      currentSessionProviderThreadId.pipe(
+        Effect.flatMap((providerThreadId) => {
+          if (providerThreadId && payload.threadId !== providerThreadId) {
+            return Effect.void;
+          }
+          if (payload.status.type !== "systemError") {
+            return Effect.void;
+          }
+          return updateSession(sessionRef, {
+            status: "error",
+            activeTurnId: undefined,
+            lastError: "Codex reported a system error.",
+          });
+        }),
+      ),
+    );
+
     yield* client.handleServerNotification("error", (payload) =>
       currentSessionProviderThreadId.pipe(
         Effect.flatMap((providerThreadId) => {

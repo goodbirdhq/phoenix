@@ -993,6 +993,19 @@ function mapToRuntimeEvents(
       event.method === "thread/status/changed"
         ? readPayload(EffectCodexSchema.V2ThreadStatusChangedNotification, event.payload)
         : undefined;
+    if (payload?.status.type === "systemError") {
+      return [
+        {
+          type: "session.state.changed",
+          ...runtimeEventBase(event, canonicalThreadId),
+          payload: {
+            state: "error",
+            reason: "Codex reported a system error.",
+            ...(event.payload !== undefined ? { detail: event.payload } : {}),
+          },
+        },
+      ];
+    }
     return [
       {
         type: "thread.state.changed",

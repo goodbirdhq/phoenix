@@ -28,6 +28,13 @@ Log in with Codex normally:
 codex login
 ```
 
+## Recover from a provider error
+
+If Codex reports a system error, Phoenix ends the running turn and displays the error.
+Your conversation history remains available. Send another message to try again once the
+underlying problem is resolved. Errors recorded in earlier turns remain in the history
+when the session resumes.
+
 ## Send feedback to OpenAI
 
 In an existing Codex thread, send `/feedback` or `/feedback` followed by a description of the

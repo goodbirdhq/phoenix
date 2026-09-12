@@ -17213,92 +17213,96 @@ export type V2ThreadResumeResponse__CodexErrorInfo =
       readonly activeTurnNotSteerable: {
         readonly turnKind: V2ThreadResumeResponse__NonSteerableTurnKind;
       };
-    };
-export const V2ThreadResumeResponse__CodexErrorInfo = Schema.Union(
-  [
-    Schema.Literals([
-      "contextWindowExceeded",
-      "sessionBudgetExceeded",
-      "usageLimitExceeded",
-      "serverOverloaded",
-      "cyberPolicy",
-      "internalServerError",
-      "unauthorized",
-      "badRequest",
-      "threadRollbackFailed",
-      "sandboxError",
-      "other",
-    ]),
-    Schema.Struct({
-      httpConnectionFailed: Schema.Struct({
-        httpStatusCode: Schema.optionalKey(
-          Schema.Union([
-            Schema.Number.annotate({ format: "uint16" })
-              .check(Schema.isInt())
-              .check(Schema.isGreaterThanOrEqualTo(0)),
-            Schema.Null,
-          ]),
-        ),
+    }
+  | string;
+export const V2ThreadResumeResponse__CodexErrorInfo = Schema.Union([
+  Schema.Union(
+    [
+      Schema.Literals([
+        "contextWindowExceeded",
+        "sessionBudgetExceeded",
+        "usageLimitExceeded",
+        "serverOverloaded",
+        "cyberPolicy",
+        "internalServerError",
+        "unauthorized",
+        "badRequest",
+        "threadRollbackFailed",
+        "sandboxError",
+        "other",
+      ]),
+      Schema.Struct({
+        httpConnectionFailed: Schema.Struct({
+          httpStatusCode: Schema.optionalKey(
+            Schema.Union([
+              Schema.Number.annotate({ format: "uint16" })
+                .check(Schema.isInt())
+                .check(Schema.isGreaterThanOrEqualTo(0)),
+              Schema.Null,
+            ]),
+          ),
+        }),
+      }).annotate({ title: "HttpConnectionFailedCodexErrorInfo" }),
+      Schema.Struct({
+        responseStreamConnectionFailed: Schema.Struct({
+          httpStatusCode: Schema.optionalKey(
+            Schema.Union([
+              Schema.Number.annotate({ format: "uint16" })
+                .check(Schema.isInt())
+                .check(Schema.isGreaterThanOrEqualTo(0)),
+              Schema.Null,
+            ]),
+          ),
+        }),
+      }).annotate({
+        title: "ResponseStreamConnectionFailedCodexErrorInfo",
+        description: "Failed to connect to the response SSE stream.",
       }),
-    }).annotate({ title: "HttpConnectionFailedCodexErrorInfo" }),
-    Schema.Struct({
-      responseStreamConnectionFailed: Schema.Struct({
-        httpStatusCode: Schema.optionalKey(
-          Schema.Union([
-            Schema.Number.annotate({ format: "uint16" })
-              .check(Schema.isInt())
-              .check(Schema.isGreaterThanOrEqualTo(0)),
-            Schema.Null,
-          ]),
-        ),
+      Schema.Struct({
+        responseStreamDisconnected: Schema.Struct({
+          httpStatusCode: Schema.optionalKey(
+            Schema.Union([
+              Schema.Number.annotate({ format: "uint16" })
+                .check(Schema.isInt())
+                .check(Schema.isGreaterThanOrEqualTo(0)),
+              Schema.Null,
+            ]),
+          ),
+        }),
+      }).annotate({
+        title: "ResponseStreamDisconnectedCodexErrorInfo",
+        description:
+          "The response SSE stream disconnected in the middle of a turn before completion.",
       }),
-    }).annotate({
-      title: "ResponseStreamConnectionFailedCodexErrorInfo",
-      description: "Failed to connect to the response SSE stream.",
-    }),
-    Schema.Struct({
-      responseStreamDisconnected: Schema.Struct({
-        httpStatusCode: Schema.optionalKey(
-          Schema.Union([
-            Schema.Number.annotate({ format: "uint16" })
-              .check(Schema.isInt())
-              .check(Schema.isGreaterThanOrEqualTo(0)),
-            Schema.Null,
-          ]),
-        ),
+      Schema.Struct({
+        responseTooManyFailedAttempts: Schema.Struct({
+          httpStatusCode: Schema.optionalKey(
+            Schema.Union([
+              Schema.Number.annotate({ format: "uint16" })
+                .check(Schema.isInt())
+                .check(Schema.isGreaterThanOrEqualTo(0)),
+              Schema.Null,
+            ]),
+          ),
+        }),
+      }).annotate({
+        title: "ResponseTooManyFailedAttemptsCodexErrorInfo",
+        description: "Reached the retry limit for responses.",
       }),
-    }).annotate({
-      title: "ResponseStreamDisconnectedCodexErrorInfo",
-      description:
-        "The response SSE stream disconnected in the middle of a turn before completion.",
-    }),
-    Schema.Struct({
-      responseTooManyFailedAttempts: Schema.Struct({
-        httpStatusCode: Schema.optionalKey(
-          Schema.Union([
-            Schema.Number.annotate({ format: "uint16" })
-              .check(Schema.isInt())
-              .check(Schema.isGreaterThanOrEqualTo(0)),
-            Schema.Null,
-          ]),
-        ),
+      Schema.Struct({
+        activeTurnNotSteerable: Schema.Struct({
+          turnKind: V2ThreadResumeResponse__NonSteerableTurnKind,
+        }),
+      }).annotate({
+        title: "ActiveTurnNotSteerableCodexErrorInfo",
+        description:
+          "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
       }),
-    }).annotate({
-      title: "ResponseTooManyFailedAttemptsCodexErrorInfo",
-      description: "Reached the retry limit for responses.",
-    }),
-    Schema.Struct({
-      activeTurnNotSteerable: Schema.Struct({
-        turnKind: V2ThreadResumeResponse__NonSteerableTurnKind,
-      }),
-    }).annotate({
-      title: "ActiveTurnNotSteerableCodexErrorInfo",
-      description:
-        "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
-    }),
-  ],
-  { mode: "oneOf" },
-).annotate({
+    ],
+    { mode: "oneOf" },
+  ),
+  Schema.String,
+]).annotate({
   description:
     "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
 });

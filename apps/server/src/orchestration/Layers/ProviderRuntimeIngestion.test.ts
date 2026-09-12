@@ -343,6 +343,10 @@ describe("ProviderRuntimeIngestion", () => {
             limit: 20,
           }),
         ),
+      readProjectionTurn: (turnId: TurnId) =>
+        Effect.runPromise(
+          projectionTurns.getByTurnId({ threadId: asThreadId("thread-1"), turnId }),
+        ),
       emit: provider.emit,
       setProviderSession: provider.setSession,
       drain,
@@ -793,6 +797,92 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.status).toBe("ready");
     expect(thread.session?.activeTurnId).toBeNull();
     expect(thread.session?.lastError).toBeNull();
+  });
+
+  it("settles an active turn at the error time after a mid-turn checkpoint", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-system-error");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-before-system-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: "2026-09-12T12:28:56.000Z",
+    });
+    await harness.drain();
+    expect((await harness.readModel()).threads[0]?.session).toMatchObject({
+      status: "running",
+      activeTurnId: turnId,
+    });
+
+    harness.emit({
+      type: "turn.diff.updated",
+      eventId: asEventId("evt-checkpoint-before-system-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: "2026-09-12T12:28:56.500Z",
+      payload: { unifiedDiff: "diff --git a/file.txt b/file.txt\n+hello\n" },
+    });
+    await harness.drain();
+    expect(Option.getOrThrow(await harness.readProjectionTurn(turnId))).toMatchObject({
+      state: "running",
+      completedAt: "2026-09-12T12:28:56.500Z",
+    });
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-text-before-system-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      itemId: asItemId("item-before-system-error"),
+      createdAt: "2026-09-12T12:28:56.600Z",
+      payload: { streamKind: "assistant_text", delta: "Partial answer" },
+    });
+    harness.emit({
+      type: "turn.proposed.delta",
+      eventId: asEventId("evt-plan-before-system-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: "2026-09-12T12:28:56.700Z",
+      payload: { delta: "## Partial plan" },
+    });
+    await harness.drain();
+
+    harness.emit({
+      type: "session.state.changed",
+      eventId: asEventId("evt-session-system-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-09-12T12:28:57.013Z",
+      payload: { state: "error", reason: "Codex reported a system error." },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads[0]!;
+    expect(thread.session).toMatchObject({
+      status: "error",
+      activeTurnId: null,
+      lastError: "Codex reported a system error.",
+    });
+    expect(thread.session?.activeTurnId).toBeNull();
+    expect(Option.getOrThrow(await harness.readProjectionTurn(turnId))).toMatchObject({
+      state: "error",
+      completedAt: "2026-09-12T12:28:57.013Z",
+    });
+    expect(thread.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: "Partial answer", streaming: false }),
+      ]),
+    );
+    expect(thread.proposedPlans).toEqual(
+      expect.arrayContaining([expect.objectContaining({ planMarkdown: "## Partial plan" })]),
+    );
   });
 
   effectIt.effect(

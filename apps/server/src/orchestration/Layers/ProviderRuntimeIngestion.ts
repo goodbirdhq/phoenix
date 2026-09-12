@@ -1901,40 +1901,46 @@ const make = Effect.gen(function* () {
         });
       }
 
-      if (event.type === "turn.completed") {
+      const finalizedTurnId =
+        event.type === "turn.completed"
+          ? toTurnId(event.turnId)
+          : event.type === "session.state.changed" &&
+              event.payload.state === "error" &&
+              shouldApplyThreadLifecycle
+            ? activeTurnId
+            : undefined;
+      if (finalizedTurnId) {
         const detailedThread = yield* getLoadedThreadDetail();
         const messages = detailedThread?.messages ?? [];
         const proposedPlans = detailedThread?.proposedPlans ?? [];
-        const turnId = toTurnId(event.turnId);
-        if (turnId) {
-          const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
-          yield* Effect.forEach(
-            assistantMessageIds,
-            (assistantMessageId) =>
-              finalizeAssistantMessage({
-                event,
-                threadId: thread.id,
-                messageId: assistantMessageId,
-                turnId,
-                createdAt: now,
-                commandTag: "assistant-complete-finalize",
-                finalDeltaCommandTag: "assistant-delta-finalize-fallback",
-                hasProjectedMessage: findMessageById(messages, assistantMessageId) !== undefined,
-              }),
-            { concurrency: 1 },
-          ).pipe(Effect.asVoid);
-          yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
-          yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
+        const turnId = finalizedTurnId;
+        const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
+        yield* Effect.forEach(
+          assistantMessageIds,
+          (assistantMessageId) =>
+            finalizeAssistantMessage({
+              event,
+              threadId: thread.id,
+              messageId: assistantMessageId,
+              turnId,
+              createdAt: now,
+              commandTag: "assistant-complete-finalize",
+              finalDeltaCommandTag: "assistant-delta-finalize-fallback",
+              hasProjectedMessage: findMessageById(messages, assistantMessageId) !== undefined,
+            }),
+          { concurrency: 1 },
+        ).pipe(Effect.asVoid);
+        yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
+        yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
 
-          yield* finalizeBufferedProposedPlan({
-            event,
-            threadId: thread.id,
-            threadProposedPlans: proposedPlans,
-            planId: proposedPlanIdForTurn(thread.id, turnId),
-            turnId,
-            updatedAt: now,
-          });
-        }
+        yield* finalizeBufferedProposedPlan({
+          event,
+          threadId: thread.id,
+          threadProposedPlans: proposedPlans,
+          planId: proposedPlanIdForTurn(thread.id, turnId),
+          turnId,
+          updatedAt: now,
+        });
       }
 
       if (event.type === "session.exited") {
