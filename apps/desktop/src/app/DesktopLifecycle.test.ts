@@ -44,6 +44,7 @@ function makeElectronAppLayer(
     setAppUserModelId: () => Effect.void,
     getAppMetrics: Effect.succeed([]),
     isDefaultProtocolClient: () => Effect.succeed(false),
+    requestSingleInstanceLock: Effect.succeed(true),
     setAsDefaultProtocolClient: () => Effect.succeed(true),
     setDesktopName: () => Effect.void,
     setDockIcon: () => Effect.void,

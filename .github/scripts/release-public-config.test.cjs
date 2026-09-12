@@ -3,9 +3,6 @@ const { test } = require("node:test");
 const { resolvePublicConfig } = require("./release-public-config.cjs");
 
 const connect = {
-  CLERK_PUBLISHABLE_KEY: "pk_test_example",
-  CLERK_JWT_TEMPLATE: "phoenix",
-  CLERK_CLI_OAUTH_CLIENT_ID: "client_example",
   T3CODE_RELAY_URL: "https://relay.phoenix.example/",
 };
 const web = {
@@ -14,20 +11,11 @@ const web = {
   T3CODE_WEB_LATEST_DOMAIN: "latest.phoenix.example",
   T3CODE_WEB_NIGHTLY_DOMAIN: "nightly.phoenix.example",
 };
-test("unconfigured releases have no inherited Connect or hosted destinations", () => {
+test("unconfigured releases have no inherited relay or hosted destinations", () => {
   assert.ok(Object.values(resolvePublicConfig({})).every((value) => value === ""));
 });
-test("complete Connect configuration normalizes the relay origin", () => {
+test("a configured relay normalizes to its origin", () => {
   assert.equal(resolvePublicConfig(connect).relay_url, "https://relay.phoenix.example");
-});
-test("every partial Connect tuple fails, including a lone field", () => {
-  const entries = Object.entries(connect);
-  for (let mask = 1; mask < 15; mask++) {
-    assert.throws(
-      () => resolvePublicConfig(Object.fromEntries(entries.filter((_, i) => mask & (1 << i)))),
-      /requires all/,
-    );
-  }
 });
 test("invalid relay URLs and workflow-output injection fail", () => {
   for (const url of [
@@ -37,10 +25,10 @@ test("invalid relay URLs and workflow-output injection fail", () => {
     "https://relay.example?key=x",
     "https://relay.example#x",
   ]) {
-    assert.throws(() => resolvePublicConfig({ ...connect, T3CODE_RELAY_URL: url }), /HTTPS origin/);
+    assert.throws(() => resolvePublicConfig({ T3CODE_RELAY_URL: url }), /HTTPS origin/);
   }
   assert.throws(
-    () => resolvePublicConfig({ ...connect, CLERK_JWT_TEMPLATE: "x\ninjected=true" }),
+    () => resolvePublicConfig({ T3CODE_RELAY_URL: "https://relay.example\ninjected=true\n" }),
     /single line/,
   );
 });

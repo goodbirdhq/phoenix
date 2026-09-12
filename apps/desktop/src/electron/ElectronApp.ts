@@ -53,6 +53,12 @@ export class ElectronApp extends Context.Service<
     readonly whenReady: Effect.Effect<void, ElectronAppWhenReadyError>;
     readonly quit: Effect.Effect<void>;
     readonly exit: (code: number) => Effect.Effect<void>;
+    /**
+     * Electron's single-instance lock, scoped to the userData directory. The lock
+     * both lives in and creates that directory, so the real userData path must be
+     * set before this is acquired.
+     */
+    readonly requestSingleInstanceLock: Effect.Effect<boolean>;
     readonly relaunch: (options: Electron.RelaunchOptions) => Effect.Effect<void>;
     readonly setPath: (
       name: Parameters<Electron.App["setPath"]>[0],
@@ -141,6 +147,7 @@ export const make = ElectronApp.of({
   quit: Effect.sync(() => {
     Electron.app.quit();
   }),
+  requestSingleInstanceLock: Effect.sync(() => Electron.app.requestSingleInstanceLock()),
   exit: (code) =>
     Effect.sync(() => {
       Electron.app.exit(code);

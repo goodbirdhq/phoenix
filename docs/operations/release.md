@@ -36,25 +36,20 @@ Signing/notarization remains conditional on configured platform credentials.
 Phoenix Build was removed: it duplicated desktop publication on each main push.
 Label-driven desktop previews remain separate from production releases.
 
-## Public T3 Connect configuration
+## Public client configuration
 
-T3 Connect remains in the app. Its infrastructure is deployed separately; client
-release jobs do not deploy relay infrastructure, read production state, or fetch
-tracing credentials. The inherited `deploy-relay.yml` workflow was removed, not
-the runtime or infrastructure product code.
+Client release jobs do not deploy relay infrastructure, read production state, or fetch
+tracing credentials. The inherited `deploy-relay.yml` workflow was removed, not the runtime or
+infrastructure product code.
 
-Provide this complete tuple of **repository Actions variables**, or leave all four
-unset for clients without baked-in Connect configuration:
+Optional **repository Actions variable**:
 
-- `CLERK_PUBLISHABLE_KEY`
-- `CLERK_JWT_TEMPLATE`
-- `CLERK_CLI_OAUTH_CLIENT_ID`
-- `T3CODE_RELAY_URL`: explicit HTTPS origin for the separately deployed relay
+- `T3CODE_RELAY_URL`: explicit HTTPS origin of a separately deployed relay, baked into clients
+  that should offer one. Leave unset for clients with no baked-in relay.
 
-Partial tuples fail validation before publication. No relay URL is derived from a
-DNS zone, and no Cloudflare, PlanetScale, Axiom or relay tracing token is required
-by the release workflow. The tuple is public client configuration, not infrastructure
-credentials. Configure the same intended relay for stable and nightly clients.
+No relay URL is derived from a DNS zone, and no Cloudflare, PlanetScale, Axiom or relay tracing
+token is required by the release workflow. This is public client configuration, not
+infrastructure credentials. Configure the same intended relay for stable and nightly clients.
 
 ## Optional hosted web publication
 
@@ -181,44 +176,34 @@ Required secrets used by the workflow:
 - `APPLE_API_KEY`
 - `APPLE_API_KEY_ID`
 - `APPLE_API_ISSUER`
-- `MACOS_PROVISIONING_PROFILE` (base64-encoded provisioning profile with Associated Domains)
 
 Required repository variables:
 
 - `APPLE_TEAM_ID`
 
-Optional repository variables:
-
-- `CLERK_PASSKEY_RP_DOMAINS`: comma-separated RP-domain override. By default, the build derives the
-  domain from the production Clerk publishable key.
-
 Checklist:
 
 1. Apple Developer account access:
    - Team has rights to create Developer ID certificates.
-2. Create an explicit App ID for `com.goodbird.phoenix` and enable Associated Domains.
-3. Create a `Developer ID Application` certificate and a compatible provisioning profile for that
-   App ID with Associated Domains enabled.
+2. Create an explicit App ID for `com.goodbird.phoenix`.
+3. Create a `Developer ID Application` certificate.
 4. Export the certificate + private key as `.p12` from Keychain.
 5. Base64-encode the `.p12` and store as `CSC_LINK`.
-6. Base64-encode the provisioning profile and store it as `MACOS_PROVISIONING_PROFILE`.
-7. Store the `.p12` export password as `CSC_KEY_PASSWORD`, and set `APPLE_TEAM_ID` to the
+6. Store the `.p12` export password as `CSC_KEY_PASSWORD`, and set `APPLE_TEAM_ID` to the
    10-character Apple Developer Team ID.
-8. In App Store Connect, create an API key (Team key).
-9. Add API key values:
+7. In App Store Connect, create an API key (Team key).
+8. Add API key values:
    - `APPLE_API_KEY`: contents of the downloaded `.p8`
    - `APPLE_API_KEY_ID`: Key ID
    - `APPLE_API_ISSUER`: Issuer ID
-10. Complete the Clerk Native API and AASA setup in [T3 Connect setup](./connect-setup.md#desktop-passkeys).
-11. Dispatch a release and confirm macOS artifacts are signed/notarized and contain the expected
-    `com.apple.developer.associated-domains` entitlement.
+9. Dispatch a release and confirm macOS artifacts are signed and notarized. Signed builds carry
+   only hardened-runtime entitlements (JIT, unsigned executable memory, library-validation
+   disabled for bundled native modules); no provisioning profile is required.
 
 Notes:
 
 - `APPLE_API_KEY` is stored as raw key text in secrets.
 - The workflow writes it to a temporary `AuthKey_<id>.p8` file at runtime.
-- The workflow decodes `MACOS_PROVISIONING_PROFILE`, validates it with `security cms`, and passes it
-  to the desktop packager.
 
 ## 3) Azure Trusted Signing setup (Windows)
 

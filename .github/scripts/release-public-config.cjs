@@ -43,25 +43,18 @@ function phoenixHost(raw, name) {
 }
 
 function resolvePublicConfig(env) {
-  const tuple = {
-    clerk_publishable_key: value(env, "CLERK_PUBLISHABLE_KEY"),
-    clerk_jwt_template: value(env, "CLERK_JWT_TEMPLATE"),
-    clerk_cli_oauth_client_id: value(env, "CLERK_CLI_OAUTH_CLIENT_ID"),
-    relay_url: value(env, "T3CODE_RELAY_URL"),
+  const relayUrl = value(env, "T3CODE_RELAY_URL");
+  const result = {
+    relay_url: relayUrl ? httpsOrigin(relayUrl, "T3CODE_RELAY_URL") : "",
+    web_router_url: "",
+    web_latest_domain: "",
+    web_nightly_domain: "",
   };
-  const fields = Object.values(tuple);
-  if (fields.some(Boolean) && !fields.every(Boolean)) {
-    throw new Error(
-      "Connect configuration requires all of CLERK_PUBLISHABLE_KEY, CLERK_JWT_TEMPLATE, CLERK_CLI_OAUTH_CLIENT_ID and T3CODE_RELAY_URL, or none of them",
-    );
-  }
-  if (tuple.relay_url) tuple.relay_url = httpsOrigin(tuple.relay_url, "T3CODE_RELAY_URL");
   if (env.PUBLISH_NPM === "true" && env.NPM_TRUSTED_PUBLISHING !== "true") {
     throw new Error(
       "Requested npm publication requires NPM_TRUSTED_PUBLISHING=true and the npm trusted publisher setup",
     );
   }
-  const result = { ...tuple, web_router_url: "", web_latest_domain: "", web_nightly_domain: "" };
   if (env.PUBLISH_WEB === "true") {
     const router = httpsOrigin(value(env, "T3CODE_WEB_ROUTER_URL"), "T3CODE_WEB_ROUTER_URL");
     phoenixHost(new URL(router).host, "T3CODE_WEB_ROUTER_URL");
