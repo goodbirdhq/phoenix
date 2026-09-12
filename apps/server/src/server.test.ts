@@ -815,6 +815,7 @@ const buildAppUnderTest = (options?: {
               ...options?.layers?.providerRegistry,
             }),
             Layer.mock(ProviderService.ProviderService)({
+              subscribeAvailability: Effect.succeed({ latest: [], changes: Stream.empty }),
               uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),
               ...options?.layers?.providerService,
             }),
@@ -1239,8 +1240,11 @@ const buildAppUnderTest = (options?: {
         Layer.provide(VcsProcess.layer),
         Layer.provide(layerConfig),
         // ThreadTurnBootstrap mints command ids through Crypto; tests outside
-        // the it.layer(NodeServices.layer) block need it supplied here.
-        Layer.provide(NodeServices.layer),
+        // the it.layer(NodeServices.layer) block need it supplied here. Preserve
+        // the caller filesystem so race and descriptor-lifetime tests reach the routes.
+        Layer.provide(
+          Layer.merge(NodeServices.layer, Layer.succeed(FileSystem.FileSystem, fileSystem)),
+        ),
       );
 
     yield* Layer.build(appLayer);
