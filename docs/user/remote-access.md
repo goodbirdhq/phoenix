@@ -33,6 +33,9 @@ in the receiving app. Connection settings are under **Settings → Connections**
 on web and desktop and **Settings → Environments** on mobile. A loopback address
 such as `127.0.0.1` reaches only the device opening the link.
 
+Pairing links open the server directly by default. A separately hosted web client is
+used only when this Phoenix installation explicitly configures one.
+
 Pairing authorizes that device for future connections. Use a fresh one-time link
 for each new device; you do not need the original token to reconnect. Links
 created in Settings can only be copied from the client that created them while

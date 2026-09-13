@@ -14,11 +14,18 @@ describe("settings pairing URL helpers", () => {
     );
   });
 
+  it("keeps HTTPS pairing direct when no hosted client is configured", () => {
+    vi.stubEnv("VITE_HOSTED_APP_URL", "");
+    const endpoint = "https://host.tailnet.example.ts.net";
+    expect(resolveHostedPairingUrl(endpoint, "PAIRCODE")).toBeNull();
+    expect(resolveDesktopPairingUrl(endpoint, "PAIRCODE")).toBe(`${endpoint}/pair#token=PAIRCODE`);
+  });
+
   it("uses hosted pairing URLs for HTTPS endpoints", () => {
-    vi.stubEnv("VITE_HOSTED_APP_URL", "https://preview.t3.codes");
+    vi.stubEnv("VITE_HOSTED_APP_URL", "https://preview.phoenix.example");
 
     expect(resolveHostedPairingUrl("https://host.tailnet.example.ts.net:3773", "PAIRCODE")).toBe(
-      "https://preview.t3.codes/pair?host=https%3A%2F%2Fhost.tailnet.example.ts.net%3A3773#token=PAIRCODE",
+      "https://preview.phoenix.example/pair?host=https%3A%2F%2Fhost.tailnet.example.ts.net%3A3773#token=PAIRCODE",
     );
   });
 });

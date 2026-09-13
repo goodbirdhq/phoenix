@@ -246,3 +246,10 @@ Checklist:
 - Build fails with signing error:
   - Retry with secrets removed to confirm unsigned path still works.
   - Re-check certificate/profile names and tenant/client credentials.
+
+### Optional hosted-client links
+
+Set `VITE_HOSTED_APP_URL` at client build time to enable pairing links and channel
+switching through your own hosted web client. With it unset or invalid, clients
+generate direct server pairing links and omit hosted channel switching. There is
+no default third-party hosted origin.

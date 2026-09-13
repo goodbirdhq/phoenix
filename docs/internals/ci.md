@@ -40,8 +40,5 @@ still be disabled in GitHub; source presence alone does not mean they run. Check
 `gh workflow list --all --repo goodbirdhq/phoenix` before relying on an optional lane.
 No cleanup here changes GitHub workflow settings.
 
-Issue Labels manages issue-template labels. PR Size classifies PRs without executing
-PR code in its privileged job; use its manual dispatch to synchronize label definitions.
-The PR-only classification job is skipped on that dispatch, and label synchronization
-keeps its existing issues-write permission. PR Vouch and Thread Transfer Report remain
+Issue Labels manages issue-template labels. PR Vouch and Thread Transfer Report remain
 optional; the latter reads trusted default-branch code and treats PR artifacts as data.
