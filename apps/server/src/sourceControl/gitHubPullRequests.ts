@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { PositiveInt, TrimmedNonEmptyString } from "@t3tools/contracts";
-import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
+import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 export interface NormalizedGitHubPullRequestRecord {
   readonly number: number;
@@ -14,6 +14,9 @@ export interface NormalizedGitHubPullRequestRecord {
   readonly baseRefName: string;
   readonly headRefName: string;
   readonly state: "open" | "closed" | "merged";
+  readonly isDraft?: boolean;
+  readonly closedAt?: string | null;
+  readonly mergedAt?: string | null;
   readonly updatedAt: Option.Option<DateTime.Utc>;
   readonly headRefOid?: string | null;
   readonly isCrossRepository?: boolean;
@@ -28,6 +31,8 @@ const GitHubPullRequestSchema = Schema.Struct({
   baseRefName: TrimmedNonEmptyString,
   headRefName: TrimmedNonEmptyString,
   state: Schema.optional(Schema.NullOr(Schema.String)),
+  isDraft: Schema.optional(Schema.Boolean),
+  closedAt: Schema.optional(Schema.NullOr(Schema.String)),
   mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
   // Only requested by callers that need to compare a local branch head
   // against what was merged; optional so every other listing still decodes.
@@ -97,6 +102,9 @@ function normalizeGitHubPullRequestRecord(
     baseRefName: raw.baseRefName,
     headRefName: raw.headRefName,
     state: normalizeGitHubPullRequestState(raw),
+    ...(raw.isDraft === true ? { isDraft: true } : {}),
+    closedAt: raw.closedAt ?? null,
+    mergedAt: raw.mergedAt ?? null,
     updatedAt: raw.updatedAt ?? Option.none(),
     ...(trimOptionalString(raw.headRefOid)
       ? { headRefOid: trimOptionalString(raw.headRefOid) }
@@ -112,8 +120,6 @@ function normalizeGitHubPullRequestRecord(
 const decodeGitHubPullRequestList = decodeJsonResult(Schema.Array(Schema.Unknown));
 const decodeGitHubPullRequest = decodeJsonResult(GitHubPullRequestSchema);
 const decodeGitHubPullRequestEntry = Schema.decodeUnknownExit(GitHubPullRequestSchema);
-
-export const formatGitHubJsonDecodeError = formatSchemaError;
 
 export function decodeGitHubPullRequestListJson(
   raw: string,

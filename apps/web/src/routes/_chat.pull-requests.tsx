@@ -5,7 +5,9 @@ import { SidebarChromeHeader, SidebarChromeFooter } from "../components/sidebar/
 import { ENVIRONMENT_ICONS } from "../components/environments/EnvironmentIcon";
 import { useClientSettings } from "../hooks/useSettings";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { pullRequestHostOf, ThreadId } from "@t3tools/contracts";
+import { pullRequestHostOf, ThreadId, resolveEnvironmentMachineKind } from "@t3tools/contracts";
+import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { Spinner } from "~/components/ui/spinner";
 import type {
   EnvironmentId,
   ProjectId,
@@ -17,6 +19,7 @@ import type {
   PullRequestListState,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   ArrowDownUpIcon,
@@ -29,15 +32,17 @@ import {
   GitPullRequestClosedIcon,
   GitPullRequestIcon,
   LayersIcon,
+  ListChecksIcon,
   PenLineIcon,
-  LoaderIcon,
   Maximize2Icon,
   Minimize2Icon,
   RefreshCwIcon,
+  SearchIcon,
 } from "lucide-react";
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -60,6 +65,7 @@ import {
   pullRequestEntryKey,
   pullRequestEntryViewer,
   rankPullRequestMatches,
+  sortPullRequestGroups,
   pullRequestEnvironmentSetKey,
   readPullRequestListSnapshot,
   resolveProjectScope,
@@ -79,7 +85,16 @@ import {
   type PullRequestStatsScope,
   type PullRequestPartitionsSnapshot,
 } from "../components/pullRequest/pullRequestList.logic";
+import {
+  pullRequestListPreferences,
+  type PullRequestListPreferencePatch,
+  type PullRequestListPreferences,
+  type PullRequestListSort,
+  writePullRequestListPreferences,
+} from "../components/pullRequest/pullRequestListPreferences";
 import { assignProjectsToEnvironments } from "../components/pullRequest/pullRequestProjectAssignment.logic";
+import { pullRequestFilterProjects } from "../components/pullRequest/pullRequestProjectFilter.logic";
+import { environmentMachineIcon } from "../components/EnvironmentMachineIcon";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import {
   PullRequestFiltersMenu,
@@ -92,24 +107,39 @@ import {
 } from "../components/pullRequest/PullRequestListFilters";
 import { PullRequestListEmptyState } from "../components/pullRequest/PullRequestListEmptyState";
 import { PullRequestListGhost } from "../components/pullRequest/PullRequestGhosts";
-import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
+import {
+  PullRequestRow,
+  type PullRequestRowTarget,
+} from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
-import { RightPanelTabs, type PullRequestTabStatus } from "../components/RightPanelTabs";
-import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../components/WorkspaceBreadcrumb";
+import { RightPanelTabs, type PullRequestTabStatusSeed } from "../components/RightPanelTabs";
+import {
+  WorkspaceBreadcrumb,
+  WorkspaceBreadcrumbItem,
+  WorkspaceBreadcrumbSeparator,
+} from "../components/WorkspaceBreadcrumb";
+import { WorkspacePageContainer } from "../components/WorkspacePageContainer";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
+import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
+import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import { isTerminalFocused } from "../lib/terminalFocus";
 import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
-import { toSortableTimestamp } from "../lib/threadSort";
+import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
+import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { toastManager } from "../components/ui/toast";
+import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import {
+  PULL_REQUESTS_PANEL_REF,
+  pullRequestSurfaceId,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
-  updatePullRequestTabStatus,
   useRightPanelStore,
   type PullRequestSurface,
 } from "../rightPanelStore";
@@ -120,15 +150,15 @@ import {
   pullRequestEnvironment,
   usePullRequestList,
   usePullRequestListStats,
+  usePullRequestTurnRefreshes,
   type EnvironmentQueryTarget,
 } from "../state/pullRequests";
 import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
+import { primaryServerKeybindingsAtom } from "~/state/server";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 
-export interface PullRequestsSearch {
-  readonly involvement: PullRequestInvolvement;
-  readonly state: PullRequestListState;
+export interface PullRequestsSearch extends PullRequestListPreferences {
   /**
    * Narrows the list to one server. Absent means every connected one, which is the default the
    * page has now — so a link written before servers could be chosen still opens the whole list.
@@ -144,26 +174,15 @@ export interface PullRequestsSearch {
   readonly repository?: string;
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
+  /** Host of the open review; changing tabs must not narrow the list host filter. */
+  readonly selectedHost?: string;
   /**
    * Which server the selected pull request was read from. A project id only names a project on
    * its own server, so this is what tells two servers holding one project apart. Optional: a
    * link without it still opens, resolved by project id alone where that is unambiguous.
    */
   readonly selectedEnvironmentId?: EnvironmentId;
-  readonly q?: string;
-  /**
-   * The narrowings beyond state and involvement, each absent when that group is unfiltered. Flat
-   * in the URL because a link is read and edited by hand; folded into one record for the listing.
-   */
-  readonly draft?: "only" | "hide";
-  readonly review?: NonNullable<PullRequestListFilters["review"]>;
-  readonly checks?: NonNullable<PullRequestListFilters["checks"]>;
-  readonly author?: string;
-  readonly labels?: ReadonlyArray<string>;
-  readonly sort?: PullRequestListSort;
 }
-
-type PullRequestListSort = "updated" | "newest" | "oldest" | "largest" | "smallest";
 
 // The state filters wear the same glyphs the rows do, so the two read as one vocabulary.
 const INVOLVEMENT_TABS = [
@@ -180,6 +199,7 @@ const STATE_TABS = [
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
 
 const SORT_OPTIONS = [
+  { value: "ready", label: "Merge readiness", Icon: ListChecksIcon },
   { value: "updated", label: "Recently updated", Icon: ClockIcon },
   { value: "newest", label: "Newest shown", Icon: CalendarArrowDownIcon },
   { value: "oldest", label: "Oldest shown", Icon: CalendarArrowUpIcon },
@@ -201,15 +221,6 @@ const PAGE_SIZE = 99;
 const MAX_PAGE_SIZE = 500;
 /** Stable empty map so the memos below do not see a new object on every render. */
 const EMPTY_VIEWERS: PullRequestListResult["viewers"] = {};
-/** The list owns one environment-scoped right panel rather than borrowing a real thread's. */
-const PULL_REQUESTS_PANEL_ID = ThreadId.make("pull-requests-panel");
-/**
- * A fixed sentinel, not a real server: the panel is one workspace-level surface list (each
- * surface already carries the server it was read from), so its store key must not move when a
- * capable server disconnects or reconnects. Real environment ids are server-generated UUIDs, so
- * this string can never collide with one.
- */
-const PULL_REQUESTS_PANEL_ENVIRONMENT_ID = "pull-requests-panel" as EnvironmentId;
 /** Stable so a read that is not wanted right now does not re-key on every render. */
 const NO_LIST_TARGETS: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>> = [];
 const EMPTY_PREVIEW_SESSIONS = {};
@@ -217,6 +228,9 @@ const EMPTY_PREVIEW_DESKTOP_STATE = {};
 const EMPTY_TERMINAL_LABELS = new Map<string, string>();
 const EMPTY_PENDING_SURFACES = new Set<string>();
 const MAX_SEARCH_LABEL_CANDIDATES = 100;
+
+const pullRequestListEntryId = (target: Parameters<typeof pullRequestSurfaceId>[0]) =>
+  pullRequestSurfaceId({ ...target, repository: target.repository.toLowerCase() });
 
 function pullRequestSearchLabels(raw: unknown): Partial<Pick<PullRequestsSearch, "labels">> {
   const values = (Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : []).slice(
@@ -262,6 +276,9 @@ export const Route = createFileRoute("/_chat/pull-requests")({
     ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
       ? { selectedProjectId: raw.selectedProjectId as ProjectId }
       : {}),
+    ...(typeof raw.selectedHost === "string" && raw.selectedHost
+      ? { selectedHost: raw.selectedHost.slice(0, 200) }
+      : {}),
     ...(typeof raw.selectedEnvironmentId === "string" && raw.selectedEnvironmentId
       ? { selectedEnvironmentId: raw.selectedEnvironmentId as EnvironmentId }
       : {}),
@@ -286,10 +303,11 @@ function PullRequestsRouteView() {
   const search = Route.useSearch();
   const sidebarSlot = usePullRequestSidebarSlot();
   const environmentIcons = useClientSettings((settings) => settings.environmentAppearance);
-  const sort = search.sort ?? "updated";
+  const sort = search.sort ?? "ready";
   const statsPolicy: PullRequestStatsPolicy =
-    sort === "largest" || sort === "smallest" ? "eager" : "visible";
+    sort === "ready" || sort === "largest" || sort === "smallest" ? "eager" : "visible";
   const navigate = useNavigate({ from: Route.fullPath });
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { environments } = useEnvironments();
   // Every connected environment that has said it can list pull requests. Sorted, so the query
   // keys, the scope key and the stored snapshot all read the same whichever order the
@@ -361,25 +379,6 @@ function PullRequestsRouteView() {
       ),
     [environments],
   );
-  const scopedProjects = useMemo(() => {
-    // Two machines can hold the same repository, so a title the workspace carries twice is told
-    // apart by the environment it lives on rather than left as two identical rows.
-    const titleCounts = new Map<string, number>();
-    for (const project of projects) {
-      titleCounts.set(project.title, (titleCounts.get(project.title) ?? 0) + 1);
-    }
-    return projects
-      .map((project) => ({
-        id: project.id,
-        environmentId: project.environmentId,
-        title:
-          (titleCounts.get(project.title) ?? 0) > 1
-            ? `${project.title} · ${environmentLabels.get(project.environmentId) ?? project.environmentId}`
-            : project.title,
-        workspaceRoot: project.workspaceRoot,
-      }))
-      .toSorted((left, right) => left.title.localeCompare(right.title));
-  }, [environmentLabels, projects]);
   // The scope the URL asks for, once the environments have had their say about whether it exists.
   const scopedProjectId = useMemo(
     () => resolveProjectScope(search.projectId, projects, projectsKnown),
@@ -388,6 +387,10 @@ function PullRequestsRouteView() {
   const scopedProject = useMemo(
     () => findScopedProject(projects, scopedEnvironmentId, scopedProjectId),
     [projects, scopedEnvironmentId, scopedProjectId],
+  );
+  const scopedProjects = useMemo(
+    () => pullRequestFilterProjects(projects, environmentLabels, scopedProject),
+    [environmentLabels, projects, scopedProject],
   );
 
   // A selected PR can belong to a different environment from the list filter. Resolve its
@@ -411,6 +414,7 @@ function PullRequestsRouteView() {
 
   // A link from a thread or the sidebar only knows the repository, so the owning project is
   // resolved here; an explicit `projectId` in the URL still wins.
+  const selectedHost = search.selectedHost ?? search.host;
   const projectIdForRepository = useMemo(() => {
     const repository = search.repository?.toLowerCase();
     if (repository === undefined) return undefined;
@@ -422,14 +426,14 @@ function PullRequestsRouteView() {
           repository &&
         // The same `owner/name` can exist on two hosts. Without this the first match wins, and
         // a link that named its host opens the pull request from the other one.
-        (search.host === undefined ||
+        (selectedHost === undefined ||
           pullRequestHostOf(
             project.repositoryIdentity,
             project.repositoryIdentity.provider as SourceControlProviderKind,
-          ) === search.host.toLowerCase()),
+          ) === selectedHost.toLowerCase()),
     );
     return identity?.id;
-  }, [selectionProjects, search.host, search.repository]);
+  }, [projects, selectedHost, search.repository]);
 
   // The selection is resolved the same way the scope is: an id no connected environment has can
   // never be read here, and one that arrived before the projects did is not yet wrong.
@@ -457,13 +461,8 @@ function PullRequestsRouteView() {
   // read from, so tabs from two of them sit side by side instead of replacing each other. Its ref
   // uses a fixed sentinel environment, not whichever server happens to sort first, so the tab
   // strip survives a capable server disconnecting or losing the pull-requests capability.
-  const rightPanelRef = useMemo(
-    () =>
-      capableEnvironments.length === 0
-        ? null
-        : scopeThreadRef(PULL_REQUESTS_PANEL_ENVIRONMENT_ID, PULL_REQUESTS_PANEL_ID),
-    [capableEnvironments.length],
-  );
+  const rightPanelRef = capableEnvironments.length === 0 ? null : PULL_REQUESTS_PANEL_REF;
+  const openPanelPullRequestUrl = useOpenPanelPullRequestUrl(rightPanelRef);
   const rightPanelState = useRightPanelStore((state) =>
     selectThreadRightPanelState(state.byThreadKey, rightPanelRef),
   );
@@ -473,28 +472,31 @@ function PullRequestsRouteView() {
   const selectedPullRequestSurface =
     selectedRightPanelSurface?.kind === "pull-request" ? selectedRightPanelSurface : null;
   const activePullRequestSurface = rightPanelState.isOpen ? selectedPullRequestSurface : null;
+  const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
+    usePanelAnimationSettings();
+  const rightPanelPresenceValue = useMemo(
+    () => ({
+      activeSurface: selectedPullRequestSurface,
+      surfaces: rightPanelState.surfaces,
+    }),
+    [rightPanelState.surfaces, selectedPullRequestSurface],
+  );
+  const rightPanelPresence = usePanelPresence(
+    rightPanelState.isOpen && selectedPullRequestSurface !== null,
+    rightPanelPresenceValue,
+    panelAnimationsActive,
+    rightPanelRef?.threadId ?? null,
+    panelAnimationDurationMs,
+  );
+  const rightPanelPresent = rightPanelPresence.present;
+  const renderedPullRequestSurface = rightPanelPresence.value?.activeSurface ?? null;
+  const renderedRightPanelSurfaces = rightPanelPresence.value?.surfaces ?? [];
   // The open tab names its own server; a link that arrived before any tab was opened names it
   // through the project it selected.
   const panelEnvironmentId =
-    (activePullRequestSurface?.environmentId as EnvironmentId | undefined) ??
+    (renderedPullRequestSurface?.environmentId as EnvironmentId | undefined) ??
     selectedProject?.environmentId ??
     null;
-  const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
-    Record<string, PullRequestTabStatus>
-  >({});
-  // Keyed by the surface the panel is showing rather than by a key rebuilt from the status: a
-  // surface opened from this page carries the environment its row was listed under, and a key
-  // assembled from the pull request alone would never name that surface back.
-  const activePullRequestSurfaceId = activePullRequestSurface?.id;
-  const handlePullRequestTabStatusChange = useCallback(
-    (status: PullRequestTabStatus) => {
-      const id = activePullRequestSurfaceId;
-      if (id === undefined) return;
-      setPullRequestTabStatuses((current) => updatePullRequestTabStatus(current, id, status));
-    },
-    [activePullRequestSurfaceId],
-  );
-
   const updateSearch = useCallback(
     (patch: {
       [Key in keyof PullRequestsSearch]?: PullRequestsSearch[Key] | undefined;
@@ -507,12 +509,13 @@ function PullRequestsRouteView() {
           return {
             involvement: next.involvement ?? previous.involvement,
             state: next.state ?? previous.state,
-            ...(next.sort && next.sort !== "updated" ? { sort: next.sort } : {}),
+            ...(next.sort && next.sort !== "ready" ? { sort: next.sort } : {}),
             ...(next.repository ? { repository: next.repository } : {}),
             ...(next.number ? { number: next.number } : {}),
             ...(next.projectId ? { projectId: next.projectId } : {}),
             ...(next.environmentId ? { environmentId: next.environmentId } : {}),
             ...(next.host ? { host: next.host } : {}),
+            ...(next.selectedHost ? { selectedHost: next.selectedHost } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
             ...(next.selectedEnvironmentId
               ? { selectedEnvironmentId: next.selectedEnvironmentId }
@@ -530,28 +533,26 @@ function PullRequestsRouteView() {
     [navigate],
   );
 
-  // Selection is cleared only when the detail is closed, independently of list filters.
   const clearedSelection = {
     repository: undefined,
     number: undefined,
     selectedProjectId: undefined,
     selectedEnvironmentId: undefined,
+    selectedHost: undefined,
   };
-  const updateListScope = (patch: {
-    [Key in keyof PullRequestsSearch]?: PullRequestsSearch[Key] | undefined;
-  }) => {
-    // Pin legacy links to the selected environment before changing the list's scope.
-    updateSearch({
+  // List controls change the rows behind the detail, not the independent selected surface. The
+  // reader can keep working in that panel while narrowing, sorting, or switching projects.
+  const updateListScope = (patch: PullRequestListPreferencePatch) => {
+    const currentPreferences = pullRequestListPreferences({
+      ...search,
       ...patch,
-      ...(activePullRequestSurface && panelEnvironmentId
-        ? {
-            repository: activePullRequestSurface.repository,
-            number: activePullRequestSurface.number,
-            selectedProjectId: activePullRequestSurface.projectId as ProjectId,
-            selectedEnvironmentId: panelEnvironmentId,
-          }
-        : {}),
+      involvement: patch.involvement ?? search.involvement,
+      state: patch.state ?? search.state,
     });
+    // Opening a selected-only link does not save its default all/open list. Once a list control
+    // changes, the entire visible scope is intentional and becomes the next sidebar destination.
+    writePullRequestListPreferences(currentPreferences);
+    updateSearch(patch);
   };
 
   // Searching asks the hosts, which takes a round trip, so the text is held for a moment before
@@ -650,6 +651,12 @@ function PullRequestsRouteView() {
         .join("|"),
     [environmentQueries],
   );
+  const turnRefreshes = usePullRequestTurnRefreshes(
+    environmentQueries.map(({ environmentId }) => environmentId),
+  );
+  const turnRefreshToken = turnRefreshes
+    .map(([environmentId, revision]) => `${environmentId}:${revision}`)
+    .join("|");
   // Page size is view state, not a URL concern: a shared link should open the first page.
   const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
@@ -837,6 +844,30 @@ function PullRequestsRouteView() {
   // from the first moment rather than the second: a button that stays live through the slow half
   // of its own work is a button that gets pressed again, and buys the whole cascade twice.
   const [invalidating, setInvalidating] = useState(false);
+  const refreshListAndStats = (
+    requestedStatsScope = statsScopeRef.current,
+    actedEnvironmentId?: EnvironmentId,
+  ) => {
+    refreshList(true, actedEnvironmentId);
+    const visible = visibleStatsKeys.current;
+    const batches = pullRequestStatsRefreshBatches({
+      requestedScope: requestedStatsScope,
+      currentScope: statsScopeRef.current,
+      entriesByKey: entriesByStatsKey.current,
+      candidateKeys: visible.key === requestedStatsScope.key ? visible.values : new Set(),
+      statsByRow: statsByRowRef.current,
+    });
+    if (batches !== null) {
+      setStatsTargetState({ key: requestedStatsScope.key, batches });
+      statsQuery.refresh(
+        batches
+          .filter(({ environmentId }) =>
+            actedEnvironmentId === undefined ? true : environmentId === actedEnvironmentId,
+          )
+          .map(({ environmentId, input }) => ({ environmentId, input })),
+      );
+    }
+  };
   const refreshFromHost = async () => {
     const requestedStatsScope = statsScopeRef.current;
     setInvalidating(true);
@@ -849,23 +880,7 @@ function PullRequestsRouteView() {
     } finally {
       setInvalidating(false);
     }
-    refreshList();
-    baselineQuery.refresh();
-    facetQuery.refresh();
-    authoredQuery.refresh();
-    reviewingQuery.refresh();
-    const visible = visibleStatsKeys.current;
-    const batches = pullRequestStatsRefreshBatches({
-      requestedScope: requestedStatsScope,
-      currentScope: statsScopeRef.current,
-      entriesByKey: entriesByStatsKey.current,
-      candidateKeys: visible.key === requestedStatsScope.key ? visible.values : new Set(),
-      statsByRow: statsByRowRef.current,
-    });
-    if (batches !== null) {
-      setStatsTargetState({ key: requestedStatsScope.key, batches });
-      statsQuery.refresh(batches.map(({ environmentId, input }) => ({ environmentId, input })));
-    }
+    refreshListAndStats(requestedStatsScope);
     setDetailRefreshToken((token) => token + 1);
   };
   const refreshing = invalidating || listQuery.isPending;
@@ -966,7 +981,7 @@ function PullRequestsRouteView() {
         environmentKey,
         scope: scopeKey,
         query: sentQuery,
-        data,
+        data: { ...data, entries: ordered?.key === filterKey ? ordered.entries : data.entries },
         ...(partitions === undefined ? {} : { partitions }),
       };
     });
@@ -1028,7 +1043,7 @@ function PullRequestsRouteView() {
   // `ordered` is declared above, ahead of the snapshot write, but grown here from this round's
   // own answer.
   useEffect(() => {
-    if (!answered) return;
+    if (!answered || listQuery.isPending || (listQuery.error && listQuery.data === null)) return;
     setOrdered((previous) => {
       if (previous === null || previous.key !== filterKey) {
         return {
@@ -1056,7 +1071,15 @@ function PullRequestsRouteView() {
       // reads, so its order stands; a row that moved was updated, and moving is the news.
       return { key: filterKey, entries: rankPullRequestMatches(answered.entries, sentParsed.text) };
     });
-  }, [answered, filterKey, sentCursors, sentParsed.text]);
+  }, [
+    answered,
+    filterKey,
+    sentCursors,
+    sentParsed.text,
+    listQuery.isPending,
+    listQuery.error,
+    listQuery.data,
+  ]);
 
   // Carrying on where the last answer stopped, and only raising the page size for the hosts that
   // could not say where that was.
@@ -1092,11 +1115,31 @@ function PullRequestsRouteView() {
   // re-reads only its own slice, so the rows loaded before it would never see a merge, a close,
   // or a retitle. Going back to a single page long enough to cover everything on screen lets the
   // merge above bring every row up to date in place.
-  const refreshList = () => {
+  const refreshList = (includeRelated = false, actedEnvironmentId?: EnvironmentId) => {
+    const related = (
+      includeRelated
+        ? [
+            ...baselineTargets,
+            ...facetTargets,
+            ...partitionTargets.authored,
+            ...partitionTargets.reviewing,
+          ]
+        : []
+    ).filter(
+      ({ environmentId }) =>
+        actedEnvironmentId === undefined || environmentId === actedEnvironmentId,
+    );
     if (sentCursors === null) {
-      listQuery.refresh();
+      listQuery.refresh([
+        ...listTargets.filter(
+          ({ environmentId }) =>
+            actedEnvironmentId === undefined || environmentId === actedEnvironmentId,
+        ),
+        ...related,
+      ]);
       return;
     }
+    if (related.length > 0) listQuery.refresh(related);
     const loadedCount = ordered?.key === filterKey ? ordered.entries.length : pageSize;
     setPage({
       key: filterKey,
@@ -1109,6 +1152,18 @@ function PullRequestsRouteView() {
     });
   };
 
+  const appliedTurnRefreshToken = useRef("");
+  const refreshAfterTurn = useEffectEvent(() => {
+    if (sentCursors !== null) refreshList();
+  });
+  useEffect(() => {
+    if (turnRefreshToken.length === 0 || appliedTurnRefreshToken.current === turnRefreshToken) {
+      return;
+    }
+    appliedTurnRefreshToken.current = turnRefreshToken;
+    refreshAfterTurn();
+  }, [turnRefreshToken]);
+
   // The list goes stale the same way the detail does: somebody opens a pull request, a check
   // finishes, a branch is merged. So it reads again on the way back to the window, and once a
   // minute while somebody is reading it. Those reads go through the server's cache and stop
@@ -1116,9 +1171,7 @@ function PullRequestsRouteView() {
   // host's rate limit.
   useLiveRefresh(
     () => {
-      refreshList();
-      authoredQuery.refresh();
-      reviewingQuery.refresh();
+      refreshList(true);
     },
     { enabled: pullRequestsSupported },
   );
@@ -1191,6 +1244,21 @@ function PullRequestsRouteView() {
     typedParsed.text,
     viewers,
   ]);
+
+  // Seed the first tab paint from list rows while each tab's cached detail read lands.
+  const listedPullRequestTabStatuses = useMemo<Record<string, PullRequestTabStatusSeed>>(
+    () =>
+      Object.fromEntries(
+        entries.map((entry) => [
+          pullRequestSurfaceId(entry),
+          {
+            state: entry.state,
+            isDraft: entry.isDraft,
+          },
+        ]),
+      ),
+    [entries],
+  );
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -1292,8 +1360,8 @@ function PullRequestsRouteView() {
     viewers,
   ]);
 
-  // Date sorts keep optional line-count reads near the viewport. Size sorts need every loaded
-  // count before their order is final. Received counts stay cached across both policies.
+  // Date sorts keep optional line-count reads near the viewport. Size and readiness sorts need
+  // every loaded count before their order is final. Counts stay cached across both policies.
   const entriesByStatsKey = useRef<ReadonlyMap<string, EnvironmentPullRequestEntry>>(new Map());
   entriesByStatsKey.current = new Map(
     groups.flatMap((group) =>
@@ -1432,35 +1500,26 @@ function PullRequestsRouteView() {
       ...group,
       entries: group.entries.map((entry) => withDiffStat(entry, statsByRow)),
     }));
-    if (sort === "updated") return enriched;
-    const entries = enriched.flatMap((group) => group.entries);
-    const hasSize = (entry: (typeof entries)[number]) =>
-      entry.additions + entry.deletions > 0 || statsByRow.has(pullRequestDiffStatKey(entry));
-    const timestamp = (entry: (typeof entries)[number]) =>
-      toSortableTimestamp(entry.updatedAt) ?? toSortableTimestamp(entry.createdAt) ?? 0;
-    return [
-      {
-        key: "others" as const,
-        label: "",
-        entries: entries.toSorted((left, right) => {
-          if (sort === "newest" || sort === "oldest") {
-            const leftCreated = toSortableTimestamp(left.createdAt);
-            const rightCreated = toSortableTimestamp(right.createdAt);
-            const measured = Number(rightCreated !== null) - Number(leftCreated !== null);
-            const dated = (leftCreated ?? 0) - (rightCreated ?? 0);
-            return (
-              measured || (sort === "newest" ? -dated : dated) || timestamp(right) - timestamp(left)
-            );
-          }
-          const measured = Number(hasSize(right)) - Number(hasSize(left));
-          const sized = left.additions + left.deletions - (right.additions + right.deletions);
-          return (
-            measured || (sort === "largest" ? -sized : sized) || timestamp(right) - timestamp(left)
-          );
-        }),
-      },
-    ];
-  }, [groups, sort, statsByRow]);
+    // Searching keeps its relevance order and priority groups unless the reader explicitly asks
+    // for another sort. The readiness queue is the default browse order, not a way to bury a
+    // closer text match.
+    return sortPullRequestGroups(
+      enriched,
+      sort,
+      typedParsed.text,
+      (entry) =>
+        entry.additions + entry.deletions > 0 || statsByRow.has(pullRequestDiffStatKey(entry)),
+    );
+  }, [groups, sort, statsByRow, typedParsed.text]);
+  const listedPullRequestsBySurface = useMemo(
+    () =>
+      new Map(
+        displayGroups.flatMap((group) =>
+          group.entries.map((entry) => [pullRequestListEntryId(entry), entry] as const),
+        ),
+      ),
+    [displayGroups],
+  );
 
   const linkedSelection = useMemo(
     () =>
@@ -1470,9 +1529,10 @@ function PullRequestsRouteView() {
             repository: search.repository,
             number: search.number,
             projectId: selectedProject.id,
+            ...(selectedHost ? { host: selectedHost } : {}),
           }
         : null,
-    [search.number, search.repository, selectedProject],
+    [search.number, search.repository, selectedProject, selectedHost],
   );
   const rightPanelAvailable = selectedPullRequestSurface !== null;
   useEffect(() => {
@@ -1487,6 +1547,14 @@ function PullRequestsRouteView() {
           repository: activePullRequestSurface.repository,
           number: activePullRequestSurface.number,
           projectId: activePullRequestSurface.projectId as ProjectId,
+          host:
+            activePullRequestSurface.host ??
+            (selectedProject?.repositoryIdentity
+              ? pullRequestHostOf(
+                  selectedProject.repositoryIdentity,
+                  selectedProject.repositoryIdentity.provider as SourceControlProviderKind,
+                )
+              : undefined),
         }
       : null;
 
@@ -1498,6 +1566,7 @@ function PullRequestsRouteView() {
             repository: surface.repository,
             number: surface.number,
             selectedProjectId: surface.projectId as ProjectId,
+            selectedHost: surface.host,
             ...(surface.environmentId === undefined
               ? {}
               : { selectedEnvironmentId: surface.environmentId as EnvironmentId }),
@@ -1561,7 +1630,7 @@ function PullRequestsRouteView() {
 
   // Stable so the memoized rows can skip re-rendering when the list around them changes.
   const selectEntry = useCallback(
-    (entry: EnvironmentPullRequestEntry) => {
+    (entry: PullRequestRowTarget) => {
       // The surface carries the row's own server, which is what its detail reads and acts on.
       if (rightPanelRef === null) return;
       useRightPanelStore.getState().openPullRequest(rightPanelRef, entry);
@@ -1570,6 +1639,7 @@ function PullRequestsRouteView() {
         number: entry.number,
         selectedProjectId: entry.projectId,
         selectedEnvironmentId: entry.environmentId,
+        selectedHost: entry.host,
       });
     },
     [rightPanelRef, updateSearch],
@@ -1579,7 +1649,7 @@ function PullRequestsRouteView() {
     <PullRequestSearchInput
       value={search.q ?? ""}
       busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
-      onChange={(query) => updateSearch({ q: query || undefined })}
+      onChange={(query) => updateListScope({ q: query || undefined })}
     />
   );
   const panelToggleControls = (
@@ -1590,7 +1660,7 @@ function PullRequestsRouteView() {
       terminalShortcutLabel={null}
       rightPanelAvailable={rightPanelAvailable}
       rightPanelOpen={rightPanelState.isOpen}
-      rightPanelShortcutLabel={null}
+      rightPanelShortcutLabel={shortcutLabelForCommand(keybindings, "rightPanel.toggle")}
       rightPanelUnavailableLabel="Select a pull request first"
       liveAgentCount={0}
       onToggleTerminal={() => undefined}
@@ -1627,8 +1697,12 @@ function PullRequestsRouteView() {
         />
       ) : firstLoad ? (
         <PullRequestListGhost rows={7} />
-      ) : listQuery.error && listData === null ? (
-        <PullRequestsUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
+      ) : listQuery.error && entries.length === 0 ? (
+        <PullRequestsUnavailableState
+          error={listQuery.error}
+          refreshing={listQuery.isPending}
+          onRetry={() => listQuery.refresh()}
+        />
       ) : carriedToNothing ? (
         <PullRequestListGhost rows={7} />
       ) : entries.length === 0 ? (
@@ -1647,7 +1721,7 @@ function PullRequestsRouteView() {
           searching={typedQuery.length > 0 && (!querySettled || showingCarried)}
           canLoadMore={listData?.truncated === true && (canContinue || pageSize < MAX_PAGE_SIZE)}
           loadingMore={loadingMore}
-          onClearQuery={() => updateSearch({ q: undefined })}
+          onClearQuery={() => updateListScope({ q: undefined })}
           onLoadMore={loadMore}
         />
       ) : (
@@ -1690,6 +1764,7 @@ function PullRequestsRouteView() {
                     selected={
                       selected?.environmentId === entry.environmentId &&
                       selected.repository === entry.repository &&
+                      selected.host?.toLowerCase() === entry.host.toLowerCase() &&
                       selected.number === entry.number
                     }
                     onSelect={selectEntry}
@@ -1701,22 +1776,33 @@ function PullRequestsRouteView() {
         </div>
       )}
 
-      {listQuery.error && listData !== null ? (
+      {listQuery.error && entries.length > 0 ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
-          <span>The latest request failed. Showing the last pull requests loaded.</span>
+          <span>{listQuery.error} Showing the last pull requests loaded.</span>
           <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
             Retry
           </Button>
         </div>
       ) : null}
       {listData?.truncated && entries.length > 0 ? (
-        <div ref={sentinelRef} className="flex justify-center py-2 text-xs text-muted-foreground">
+        <div className="flex justify-center py-3 text-xs text-muted-foreground">
           {loadingMore ? (
             <span className="flex items-center gap-2">
-              <LoaderIcon aria-hidden className="size-3.5 animate-spin" />
-              Loading more
+              <Spinner aria-hidden className="size-3.5" />
+              {sentCursors === null ? "Updating pull requests" : "Loading more"}
             </span>
-          ) : null}
+          ) : canContinue || pageSize < MAX_PAGE_SIZE ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={loadMore}
+              disabled={listQuery.isPending || showingCarried}
+            >
+              Load more pull requests
+            </Button>
+          ) : (
+            <span>Narrow your search to find more pull requests.</span>
+          )}
         </div>
       ) : null}
     </>
@@ -1757,7 +1843,7 @@ function PullRequestsRouteView() {
       triggerLabel={SORT_OPTIONS.find((option) => option.value === sort)?.label ?? "Sort"}
       value={sort}
       options={SORT_OPTIONS}
-      onChange={(next) => updateSearch({ sort: next })}
+      onChange={(next) => updateListScope({ sort: next })}
     />
   );
   const filtersMenu = (
@@ -1836,6 +1922,53 @@ function PullRequestsRouteView() {
     selectSurfaceInUrl(null);
   };
 
+  // This page has no ChatView, so it handles the shared panel shortcuts itself.
+  const copyPullRequestFromShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (!openPanelPullRequestUrl) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) return;
+    const url = openPanelPullRequestUrl;
+    void writeTextToClipboard(url, "pull request link").then(
+      (didCopy) => {
+        if (didCopy)
+          toastManager.add({ type: "success", title: "PR link copied", description: url });
+      },
+      (error) => {
+        toastManager.add({
+          type: "error",
+          title: "Failed to copy PR link",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      },
+    );
+  });
+  const closeActiveSurfaceFromShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (activePullRequestSurface === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) closeSurface(activePullRequestSurface);
+  });
+  const toggleRightPanelFromShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (!rightPanelAvailable) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) toggleRightPanel();
+  });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || isCommandPaletteOpen()) return;
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: { terminalFocus: isTerminalFocused() },
+      });
+      if (command === "rightPanel.close") closeActiveSurfaceFromShortcut(event);
+      if (command === "rightPanel.toggle") toggleRightPanelFromShortcut(event);
+      if (command === "thread.copyReference") copyPullRequestFromShortcut(event);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [keybindings]);
+
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="relative flex min-h-0 flex-1">
@@ -1884,12 +2017,18 @@ function PullRequestsRouteView() {
           </div>
         ) : null}
 
-        {rightPanelState.isOpen && activePullRequestSurface && panelEnvironmentId !== null ? (
+        {rightPanelPresent && renderedPullRequestSurface && panelEnvironmentId !== null ? (
           <RightPanelTabs
             mode="inline"
-            maximized
-            surfaces={rightPanelState.surfaces}
-            activeSurfaceId={activePullRequestSurface.id}
+            open={rightPanelState.isOpen}
+            widthStorageKey="t3code:pull-request-panel-width"
+            // Default to roughly half the viewport: the PR list needs more
+            // room than a chat, so the 540px chat-preview default squashes
+            // it. SSR has no window, so fall back to a reasonable width.
+            defaultWidth={typeof window === "undefined" ? 640 : Math.floor(window.innerWidth / 2)}
+            surfaces={renderedRightPanelSurfaces}
+            environmentId={panelEnvironmentId}
+            activeSurfaceId={renderedPullRequestSurface.id}
             pendingSurfaceIds={EMPTY_PENDING_SURFACES}
             previewSessions={EMPTY_PREVIEW_SESSIONS}
             desktopByTabId={EMPTY_PREVIEW_DESKTOP_STATE}
@@ -1909,41 +2048,68 @@ function PullRequestsRouteView() {
             onCloseAllSurfaces={closeAllSurfaces}
             onCopyFilePath={() => undefined}
             onAddBrowser={() => undefined}
+            onAddBrowserInProfile={() => undefined}
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
+            onAddPullRequests={() => undefined}
             onAddAgents={() => undefined}
             onAddSessions={() => undefined}
+            onAddDevice={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
+            pullRequestsAvailable={false}
             agentsAvailable={false}
             sessionsAvailable={false}
             liveAgentCount={0}
             liveSessionCount={0}
-            pullRequestStatuses={pullRequestTabStatuses}
+            deviceAvailable={false}
+            pullRequestStatusSeeds={listedPullRequestTabStatuses}
           >
             <PullRequestDetailPanel
-              key={activePullRequestSurface.id}
+              key={renderedPullRequestSurface.id}
               environmentId={panelEnvironmentId}
+              onSelectPullRequest={(reference) => {
+                if (rightPanelRef === null) return;
+                useRightPanelStore.getState().openPullRequest(rightPanelRef, {
+                  projectId: reference.projectId,
+                  repository: reference.repository,
+                  number: reference.number,
+                  ...(reference.host ? { host: reference.host } : {}),
+                  environmentId: panelEnvironmentId,
+                });
+                updateSearch({
+                  repository: reference.repository,
+                  number: reference.number,
+                  selectedHost: reference.host,
+                  selectedProjectId: reference.projectId,
+                  selectedEnvironmentId: panelEnvironmentId,
+                });
+              }}
               reference={{
-                projectId: activePullRequestSurface.projectId as ProjectId,
-                repository: activePullRequestSurface.repository,
-                number: activePullRequestSurface.number,
+                projectId: renderedPullRequestSurface.projectId as ProjectId,
+                repository: renderedPullRequestSurface.repository,
+                number: renderedPullRequestSurface.number,
+                ...(renderedPullRequestSurface.host
+                  ? { host: renderedPullRequestSurface.host }
+                  : {}),
               }}
+              listEntry={
+                listedPullRequestsBySurface.get(
+                  pullRequestListEntryId(renderedPullRequestSurface),
+                ) ?? null
+              }
               refreshToken={detailRefreshToken}
-              // Merging, closing or reopening changes the row this panel was opened from, so
-              // the list behind it is out of date the moment the host takes the action.
+              // Host actions can change both readiness and diff size, so refresh the counts
+              // alongside the list. The panel already refreshes itself after each action.
               onActed={() => {
-                refreshList();
-                baselineQuery.refresh();
-                authoredQuery.refresh();
-                reviewingQuery.refresh();
+                // Mutations already invalidate the host's affected caches.
+                refreshListAndStats(undefined, panelEnvironmentId);
               }}
-              onStateChange={handlePullRequestTabStatusChange}
             />
           </RightPanelTabs>
         ) : null}
@@ -2120,7 +2286,7 @@ function PullRequestRefreshControl({
       onClick={onRefresh}
       disabled={refreshing}
     >
-      <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
+      <RefreshIcon className="size-4" refreshing={refreshing} />
     </Button>
   );
 }

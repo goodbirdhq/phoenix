@@ -72,7 +72,7 @@ export function filterScheduleRows(
   );
 }
 
-export function scheduleHasFailure(
+function scheduleHasFailure(
   schedule: Pick<ScheduleSummary, "latestHistory" | "state" | "unacknowledgedFailure">,
 ): boolean {
   return (

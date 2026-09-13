@@ -33,6 +33,8 @@ dist-electron/
 .electron-runtime/
 .showcase/
 apps/mobile/.showcase/
+apps/mobile/.generated/
+/.generated/
 artifacts/app-store/screenshots/
 .github/pr-assets/
 native/**/target/
@@ -44,3 +46,6 @@ node_modules/
 
 # OMC agent tooling state (session history, project memory)
 .omc/
+
+# pnpm content-addressable store; never belongs in the repo.
+.pnpm-store/

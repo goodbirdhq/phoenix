@@ -75,7 +75,7 @@ export interface SessionPanelModel {
   readonly settledCount: number;
 }
 
-export const EMPTY_SESSION_PANEL_MODEL: SessionPanelModel = {
+const EMPTY_SESSION_PANEL_MODEL: SessionPanelModel = {
   active: [],
   settled: [],
   total: 0,

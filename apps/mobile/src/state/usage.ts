@@ -21,6 +21,7 @@ import {
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
+import { refreshUsage } from "@t3tools/client-runtime/state/usage";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import { subscriptionAvailabilityPresentationState } from "@t3tools/client-runtime/usage/subscription-availability";
 import * as Option from "effect/Option";
@@ -35,6 +36,7 @@ export interface EnvironmentUsageStatus {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly isPending: boolean;
+  readonly isConnected: boolean;
   readonly error: string | null;
   readonly summary: UsageSummary | null;
 }
@@ -110,6 +112,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         environmentId,
         label: presentation.entry.target.label,
         isPending: result.waiting,
+        isConnected: presentation.connection.phase === "connected",
         error: result._tag === "Failure" ? "This environment could not report usage." : null,
         summary: Option.getOrNull(AsyncResult.value(result)),
       });
@@ -123,16 +126,17 @@ export interface UsageView {
   readonly accounts: readonly UsageAccount[];
   readonly merged: MergedUsage;
   readonly environments: readonly EnvironmentUsageStatus[];
+  readonly selectedEnvironments: readonly EnvironmentUsageStatus[];
   /** True until at least one environment has answered. */
   readonly isPending: boolean;
   /**
    * True while environments that have not failed are still answering. Failed
-   * environments are reported through their own error rows: totals will not
+   * environments are reported in the environment menu: totals will not
    * improve by waiting on them, so they must not read as "still reporting".
    */
   readonly isPartial: boolean;
   /** Refreshes the supplied range, or the currently rendered range when omitted. */
-  readonly refresh: (input?: UsageSummaryInput) => void;
+  readonly refresh: (input?: UsageSummaryInput) => Promise<void>;
   readonly providerAvailability: readonly EnvironmentProviderAvailabilityStatus[];
   readonly isProviderAvailabilityPending: boolean;
   readonly hasProviderAvailabilityError: boolean;
@@ -140,7 +144,7 @@ export interface UsageView {
 
 export function useUsage(
   input: UsageSummaryInput,
-  environmentId: string | null = null,
+  selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
   accountKey: string | null = null,
 ): UsageView {
   const windowKey = useMemo(
@@ -166,12 +170,12 @@ export function useUsage(
   );
   const atom = usageByWindowAtom(windowKey);
   const allEnvironments = useAtomValue(atom);
-  const environments = useMemo(
+  const selectedEnvironments = useMemo(
     () =>
-      environmentId === null
+      selectedEnvironmentIds === null
         ? allEnvironments
-        : allEnvironments.filter((entry) => entry.environmentId === environmentId),
-    [allEnvironments, environmentId],
+        : allEnvironments.filter(({ environmentId }) => selectedEnvironmentIds.has(environmentId)),
+    [allEnvironments, selectedEnvironmentIds],
   );
   const [refreshingAvailability, setRefreshingAvailability] = useState(false);
   const providerAvailability = useAtomValue(providerAvailabilityAtom(refreshingAvailability));
@@ -194,28 +198,18 @@ export function useUsage(
     }
   }, [providerAvailability, refreshingAvailability]);
 
-  // Refreshing only the derived atom would re-read the per-environment SWR
-  // queries within their stale window and change nothing. Refresh each
-  // environment's query so pull-to-refresh always rescans.
   const refresh = useCallback(
-    (refreshInput: UsageSummaryInput = input) => {
-      for (const environment of environments) {
-        appAtomRegistry.refresh(
-          serverEnvironment.usageSummary({
-            environmentId: environment.environmentId,
-            input: refreshInput,
-          }),
-        );
-        appAtomRegistry.refresh(
-          serverEnvironment.providerAvailability({
-            environmentId: environment.environmentId,
-            input: { refresh: true },
-          }),
-        );
-      }
+    async (nextInput?: UsageSummaryInput) => {
+      await refreshUsage({
+        registry: appAtomRegistry,
+        server: serverEnvironment,
+        presentations: environmentPresentations,
+        environmentIds: selectedEnvironments.map(({ environmentId }) => environmentId),
+        input: nextInput ?? (JSON.parse(windowKey) as UsageSummaryInput),
+      });
       setRefreshingAvailability(true);
     },
-    [environments, input],
+    [selectedEnvironments, windowKey],
   );
 
   const accounts = useMemo(
@@ -225,7 +219,7 @@ export function useUsage(
 
   const account = findUsageAccount(accounts, accountKey);
   const merged = useMemo(() => {
-    const answered: EnvironmentUsage[] = environments.flatMap((environment) =>
+    const answered: EnvironmentUsage[] = selectedEnvironments.flatMap((environment) =>
       environment.summary === null
         ? []
         : [
@@ -248,10 +242,12 @@ export function useUsage(
           ],
     );
     return mergeUsage(answered, USAGE_CONTRACT_VERSION);
-  }, [environments, account, accountKey]);
+  }, [selectedEnvironments, account, accountKey]);
 
-  const answeredCount = environments.filter((environment) => environment.summary !== null).length;
-  const stillReporting = environments.filter(
+  const answeredCount = selectedEnvironments.filter(
+    (environment) => environment.summary !== null,
+  ).length;
+  const stillReporting = selectedEnvironments.filter(
     (environment) => environment.summary === null && environment.error === null,
   ).length;
 
@@ -259,7 +255,8 @@ export function useUsage(
     allEnvironments,
     accounts,
     merged,
-    environments,
+    environments: allEnvironments,
+    selectedEnvironments,
     isPending: answeredCount === 0 && stillReporting > 0,
     isPartial: answeredCount > 0 && stillReporting > 0,
     refresh,

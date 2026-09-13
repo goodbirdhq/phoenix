@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
 vi.mock("@expo/ui/swift-ui", () => ({
   HStack: "HStack",
@@ -32,8 +33,8 @@ import {
 
 function makeRow(overrides: Partial<AgentActivityRowProps>): AgentActivityRowProps {
   return {
-    environmentId: "env-1",
-    threadId: "thread-1",
+    environmentId: EnvironmentId.make("env-1"),
+    threadId: ThreadId.make("thread-1"),
     projectTitle: "Project",
     threadTitle: "Thread",
     modelTitle: "gpt-5.4",
@@ -71,7 +72,11 @@ describe("AgentActivity widget layout", () => {
         activeCount: 2,
         activities: [
           makeRow({}),
-          makeRow({ threadId: "thread-2", phase: "waiting_for_approval", status: "Approval" }),
+          makeRow({
+            threadId: ThreadId.make("thread-2"),
+            phase: "waiting_for_approval",
+            status: "Approval",
+          }),
         ],
       },
       environment as never,
@@ -90,7 +95,11 @@ describe("AgentActivity widget layout", () => {
         activeCount: 2,
         activities: [
           makeRow({}),
-          makeRow({ threadId: "thread-2", phase: "waiting_for_approval", status: "Approval" }),
+          makeRow({
+            threadId: ThreadId.make("thread-2"),
+            phase: "waiting_for_approval",
+            status: "Approval",
+          }),
         ],
       },
       lightEnvironment as never,
@@ -110,7 +119,7 @@ describe("AgentActivity widget layout", () => {
         activities: [
           makeRow({ threadTitle: "Working thread" }),
           makeRow({
-            threadId: "thread-2",
+            threadId: ThreadId.make("thread-2"),
             threadTitle: "Blocked thread",
             phase: "waiting_for_approval",
             status: "Approval",
@@ -131,7 +140,11 @@ describe("AgentActivity widget layout", () => {
         activeCount: 3,
         activities: [
           makeRow({}),
-          makeRow({ threadId: "thread-2", phase: "waiting_for_input", status: "Input" }),
+          makeRow({
+            threadId: ThreadId.make("thread-2"),
+            phase: "waiting_for_input",
+            status: "Input",
+          }),
         ],
       },
       environment as never,
@@ -148,7 +161,11 @@ describe("AgentActivity widget layout", () => {
         activeCount: 2,
         activities: [
           makeRow({}),
-          makeRow({ threadId: "thread-2", phase: "waiting_for_input", status: "Input" }),
+          makeRow({
+            threadId: ThreadId.make("thread-2"),
+            phase: "waiting_for_input",
+            status: "Input",
+          }),
         ],
       },
       environment as never,
@@ -166,7 +183,7 @@ describe("AgentActivity widget layout", () => {
         activities: [
           makeRow({}),
           makeRow({
-            threadId: "thread-2",
+            threadId: ThreadId.make("thread-2"),
             phase: "waiting_for_approval",
             status: "Approval",
             deepLink: "/threads/env-1/thread-2",
@@ -249,7 +266,11 @@ describe("AgentActivity widget layout", () => {
         activeCount: 0,
         activities: [
           makeRow({ phase: "completed", status: "Done" }),
-          makeRow({ threadId: "thread-2", phase: "failed", status: "Failed" }),
+          makeRow({
+            threadId: ThreadId.make("thread-2"),
+            phase: "failed",
+            status: "Failed",
+          }),
         ],
       },
       environment as never,
@@ -269,7 +290,7 @@ describe("AgentActivity widget layout", () => {
         ...props,
         activeCount: 6,
         activities: [1, 2, 3, 4, 5, 6].map((n) =>
-          makeRow({ threadId: `t${n}`, threadTitle: `Thread ${n}` }),
+          makeRow({ threadId: ThreadId.make(`t${n}`), threadTitle: `Thread ${n}` }),
         ),
       },
       environment as never,

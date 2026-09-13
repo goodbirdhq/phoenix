@@ -12,7 +12,8 @@ import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeInge
 import { SessionSpawnReactor } from "../Services/SessionSpawnReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
-import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
+import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
+import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
 
 export const makeOrchestrationReactor = Effect.gen(function* () {
   const providerRuntimeIngestion = yield* ProviderRuntimeIngestionService;
@@ -22,7 +23,8 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const sessionSpawnReactor = yield* SessionSpawnReactor;
   const threadSettlementReactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
-  const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+  const pullRequestSyncReactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
+  const threadPullRequestReactor = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
 
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
     yield* providerRuntimeIngestion.start();
@@ -31,8 +33,9 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* checkpointReactor.start();
     yield* threadDeletionReactor.start();
     yield* sessionSpawnReactor.start();
+    yield* threadPullRequestReactor.start();
     yield* threadSettlementReactor.start();
-    yield* agentAwarenessRelay.start();
+    yield* pullRequestSyncReactor.start();
   });
 
   return {

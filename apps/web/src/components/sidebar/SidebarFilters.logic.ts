@@ -1,6 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { parseTimestampDate } from "../../timestampFormat";
-import type { ThreadChangeRequestSnapshot } from "../ThreadStatusIndicators";
 import { hasUnseenCompletion, resolveSidebarThreadStatus } from "../Sidebar.logic";
 
 export const SIDEBAR_FILTER_STATUSES = [
@@ -125,18 +124,4 @@ export function hasUnseenSidebarWake(wokeAt: string | null, lastVisitedAt: strin
   const wake = wokeAt === null ? null : parseTimestampDate(wokeAt);
   const visit = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   return wake !== null && (visit === null || visit < wake);
-}
-
-export function resolveSidebarSnapshotPr(
-  thread: EnvironmentThreadShell,
-  snapshot: ThreadChangeRequestSnapshot | undefined,
-) {
-  return snapshot != null &&
-    (thread.linkedPullRequest == null
-      ? thread.worktreePath === null || snapshot.branch === thread.branch
-      : snapshot.linkedPullRequest?.projectId === thread.linkedPullRequest.projectId &&
-        snapshot.linkedPullRequest.repository === thread.linkedPullRequest.repository &&
-        snapshot.linkedPullRequest.number === thread.linkedPullRequest.number)
-    ? snapshot.pr
-    : null;
 }

@@ -190,7 +190,7 @@ describe("verifyDpopProof", () => {
       iat: 100,
       privateKey,
       publicJwk,
-      accessToken: "clerk-access-token",
+      accessToken: "proof-bound-access-token",
     });
 
     assert.equal(
@@ -200,7 +200,7 @@ describe("verifyDpopProof", () => {
         url: "https://example.com/v1/environments/env/connect",
         nowEpochSeconds: 101,
         expectedThumbprint: thumbprint,
-        expectedAccessToken: "clerk-access-token",
+        expectedAccessToken: "proof-bound-access-token",
       }).ok,
       true,
     );
@@ -211,7 +211,7 @@ describe("verifyDpopProof", () => {
       url: "https://example.com/oauth/token",
       nowEpochSeconds: 101,
       expectedThumbprint: thumbprint,
-      expectedAccessToken: "clerk-access-token",
+      expectedAccessToken: "proof-bound-access-token",
     });
     if (missingHash.ok) {
       assert.fail("Expected DPoP proof without an access token hash to fail.");

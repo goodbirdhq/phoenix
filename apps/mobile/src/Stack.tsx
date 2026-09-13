@@ -22,8 +22,7 @@ import { AppText as Text } from "./components/AppText";
 import { getCompactBrandHeaderOptions } from "./components/CompactBrandTitle";
 import { ArchivedThreadsRouteScreen } from "./features/archive/ArchivedThreadsRouteScreen";
 import { useAgentNotificationNavigation } from "./features/agent-awareness/notificationNavigation";
-import { ConnectOnboardingRouteScreen } from "./features/cloud/ConnectOnboardingRouteScreen";
-import { useConnectOnboardingNavigation } from "./features/cloud/connectOnboardingNavigation";
+import { AttachmentFileScreen } from "./features/files/AttachmentFileScreen";
 import { ThreadFilesTreeScreen, ThreadFileScreen } from "./features/files/ThreadFilesRouteScreen";
 import {
   AdaptiveWorkspaceLayout,
@@ -59,10 +58,14 @@ import { NewTaskFlowProvider } from "./features/threads/new-task-flow-provider";
 import { NewTaskRouteScreen } from "./features/threads/NewTaskRouteScreen";
 import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppearanceRouteScreen";
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
-import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
+import {
+  SettingsOpenSourceLicenseRouteScreen,
+  SettingsOpenSourceLicensesRouteScreen,
+} from "./features/settings/SettingsOpenSourceLicensesRouteScreen";
 import { SettingsProjectGroupingRouteScreen } from "./features/settings/SettingsProjectGroupingRouteScreen";
+import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import {
   EnvironmentMetricsDetailRouteScreen,
@@ -241,6 +244,24 @@ const SettingsContentStack = createNativeStackNavigator({
       linking: "pull-requests",
       options: { title: "Pull Requests" },
     }),
+    SettingsUsageAccount: createNativeStackScreen({
+      screen: UsageLimitAccountScreen,
+      options: { title: "Account" },
+    }),
+    SettingsOpenSourceLicenses: createNativeStackScreen({
+      screen: SettingsOpenSourceLicensesRouteScreen,
+      linking: "open-source-licenses",
+      options: {
+        title: "Open source licenses",
+      },
+    }),
+    SettingsOpenSourceLicense: createNativeStackScreen({
+      screen: SettingsOpenSourceLicenseRouteScreen,
+      linking: "open-source-licenses/:entryKey",
+      options: {
+        title: "License notice",
+      },
+    }),
     SettingsUsage: createNativeStackScreen({
       screen: UsageRouteScreen,
       linking: "usage",
@@ -291,7 +312,7 @@ const SettingsContentStack = createNativeStackNavigator({
 });
 
 // The outer stack never owns visible chrome. Settings routes render inside a
-// nested stack whose native header remains mounted, while Clerk owns auth chrome.
+// nested stack whose native header remains mounted.
 // Keeping bar visibility invariant avoids iOS 26's headerless-to-headered jump.
 const SettingsSheetStack = createNativeStackNavigator({
   initialRouteName: "SettingsContent",
@@ -302,15 +323,6 @@ const SettingsSheetStack = createNativeStackNavigator({
     SettingsContent: createNativeStackScreen({
       screen: SettingsContentStack,
       linking: "",
-    }),
-    SettingsAuth: createNativeStackScreen({
-      screen: SettingsAuthRouteScreen,
-      linking: "auth",
-    }),
-    SettingsWaitlist: createNativeStackScreen({
-      // Keep the old deep link working after the Connect GA launch.
-      screen: SettingsAuthRouteScreen,
-      linking: "waitlist",
     }),
   },
 });
@@ -369,6 +381,18 @@ const NewTaskSheetStack = createNativeStackNavigator({
         title: "Branch",
       },
     }),
+    // The same file view the thread composer pushes. A draft has no thread, so it names its
+    // own workspace through route params instead of resolving one from a selected thread.
+    NewTaskFile: createNativeStackScreen({
+      screen: ThreadFileScreen,
+      linking: "draft/files/:path*",
+      options: SOLID_HEADER_OPTIONS,
+    }),
+    NewTaskAttachment: createNativeStackScreen({
+      screen: AttachmentFileScreen,
+      linking: "draft/attachments/:attachmentId",
+      options: SOLID_HEADER_OPTIONS,
+    }),
     ThreadSettings: createNativeStackScreen({
       screen: NewTaskThreadSettingsRouteScreen,
       linking: "draft/settings",
@@ -410,7 +434,6 @@ const NewTaskSheetStack = createNativeStackNavigator({
 // influence the adaptive workspace layout: opening Settings over Home should
 // not flip the sidebar in or change the active thread.
 const WORKSPACE_OVERLAY_ROUTES = new Set([
-  "ConnectOnboarding",
   "Connections",
   "ConnectionsNew",
   "GitBranches",
@@ -456,8 +479,6 @@ function RootStackLayout(props: {
   const { pendingShare } = useIncomingShare();
   const sharePresentationRef = useRef(EMPTY_INCOMING_SHARE_PRESENTATION_STATE);
   useAgentNotificationNavigation();
-  // Presents the T3 Connect onboarding sheet after an in-session sign-in.
-  useConnectOnboardingNavigation();
   // Launcher app shortcuts: routes shortcut taps and tracks opened threads.
   useAppShortcuts(props.state);
   useEffect(() => {
@@ -591,6 +612,11 @@ export const RootStack = createNativeStackNavigator({
       linking: `${THREAD_LINKING_PREFIX}/files/:path*`,
       options: SOLID_HEADER_OPTIONS,
     }),
+    ThreadAttachment: createNativeStackScreen({
+      screen: AttachmentFileScreen,
+      linking: `${THREAD_LINKING_PREFIX}/attachments/:attachmentId`,
+      options: SOLID_HEADER_OPTIONS,
+    }),
     ThreadSettingsSheet: createNativeStackScreen({
       screen: ExistingThreadSettingsRouteScreen,
       options: {
@@ -664,20 +690,6 @@ export const RootStack = createNativeStackNavigator({
       options: {
         ...LEGAL_DOCUMENT_HEADER_OPTIONS,
         title: "Legal",
-      },
-    }),
-    ConnectOnboarding: createNativeStackScreen({
-      screen: ConnectOnboardingRouteScreen,
-      linking: "connect-onboarding",
-      options: {
-        // A root-level Android formSheet does not host the native stack bar;
-        // the route renders an embedded AndroidSheetHeader instead.
-        ...(Platform.OS === "android" ? { headerShown: false } : SHEET_SOLID_HEADER_OPTIONS),
-        title: "Set up T3 Connect",
-        gestureEnabled: true,
-        ...FORM_SHEET_PRESENTATION_OPTIONS,
-        sheetAllowedDetents: [0.6, 0.95],
-        sheetGrabberVisible: true,
       },
     }),
     Connections: createNativeStackScreen({

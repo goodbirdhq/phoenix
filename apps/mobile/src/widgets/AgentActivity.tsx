@@ -1,4 +1,9 @@
 import { HStack, Image, Spacer, Text, VStack, ZStack } from "@expo/ui/swift-ui";
+import type {
+  AgentActivityAggregateRow,
+  AgentActivityAggregateState,
+  AgentAwarenessPhase,
+} from "@t3tools/contracts/notifications";
 import type { ComponentProps } from "react";
 import {
   font,
@@ -18,34 +23,9 @@ import {
 
 type LiveActivityEnvironment = Parameters<LiveActivityComponent<AgentActivityProps>>[1];
 
-export type AgentActivityPhase =
-  | "starting"
-  | "running"
-  | "waiting_for_approval"
-  | "waiting_for_input"
-  | "completed"
-  | "failed"
-  | "stale";
-
-export interface AgentActivityRowProps {
-  readonly environmentId: string;
-  readonly threadId: string;
-  readonly projectTitle: string;
-  readonly threadTitle: string;
-  readonly modelTitle: string;
-  readonly phase: AgentActivityPhase;
-  readonly status: string;
-  readonly updatedAt: string;
-  readonly deepLink: string;
-}
-
-export interface AgentActivityProps {
-  readonly title: string;
-  readonly subtitle: string;
-  readonly activeCount: number;
-  readonly updatedAt: string;
-  readonly activities: ReadonlyArray<AgentActivityRowProps>;
-}
+export type AgentActivityPhase = AgentAwarenessPhase;
+export type AgentActivityRowProps = AgentActivityAggregateRow;
+export type AgentActivityProps = AgentActivityAggregateState;
 
 // This function is serialized into the widget extension's JS bundle, so it
 // must stay self-contained: no references to module-scope helpers, only the

@@ -10,7 +10,7 @@ export type BuildCommit =
   | { readonly kind: "source" }
   | { readonly kind: "unknown" };
 
-export const resolveBuildCommit = (): BuildCommit => {
+const resolveBuildCommit = (): BuildCommit => {
   if (typeof __T3CODE_BUILD_COMMIT__ === "undefined") return { kind: "source" };
   const value = __T3CODE_BUILD_COMMIT__.trim();
   return value === "" ? { kind: "unknown" } : { kind: "commit", value };

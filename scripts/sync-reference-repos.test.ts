@@ -17,7 +17,15 @@ import {
 
 const encoder = new TextEncoder();
 const effectSmol = referenceRepos[0]!;
-const alchemyEffect = referenceRepos[1]!;
+const alchemyEffect = {
+  id: "alchemy-effect",
+  prefix: ".repos/alchemy-effect",
+  repository: "https://github.com/alchemy-run/alchemy-effect.git",
+  latestRef: "main",
+  versionSourcePath: "infra/relay/package.json",
+  packageVersionPath: ["dependencies", "alchemy"],
+  versionTagPrefix: "v",
+};
 
 function mockHandle(
   options: {
@@ -251,7 +259,7 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
         assert.fail(`Unexpected error: ${error._tag}`);
       }
       assert.equal(error.repoId, "missing");
-      assert.deepStrictEqual(error.expectedRepoIds, ["effect-smol", "alchemy-effect"]);
+      assert.deepStrictEqual(error.expectedRepoIds, ["effect-smol"]);
       assert.ok(!("cause" in error));
     }),
   );

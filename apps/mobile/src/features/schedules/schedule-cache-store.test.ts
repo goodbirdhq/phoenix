@@ -50,6 +50,7 @@ function makeDatabase() {
     service: MobileDatabase.of({
       loadCache: (_environmentId, kind, cacheKey) =>
         Effect.succeed(Option.fromNullishOr(values.get(key(kind, cacheKey)))),
+      listCache: () => Effect.succeed([]),
       saveCache: (_environmentId, kind, cacheKey, _schemaVersion, payload) =>
         Effect.sync(() => void values.set(key(kind, cacheKey), payload)),
       removeCache: (_environmentId, kind, cacheKey) =>

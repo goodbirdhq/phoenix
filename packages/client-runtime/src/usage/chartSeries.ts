@@ -9,6 +9,10 @@ export interface UsageChartSeries {
   readonly label: string;
   readonly provider: UsageProviderKind;
   readonly values: readonly number[];
+  /** Records in this series whose tokens are counted but contributed no cost. */
+  readonly unpricedRecords: number;
+  /** Total records in this series over the whole window. */
+  readonly records: number;
 }
 
 /** All views consume the same owned buckets, so changing grouping cannot change totals. */
@@ -30,7 +34,14 @@ export function usageChartSeries(
   );
   const series = new Map<
     string,
-    { id: string; label: string; provider: UsageProviderKind; values: number[] }
+    {
+      id: string;
+      label: string;
+      provider: UsageProviderKind;
+      values: number[];
+      unpricedRecords: number;
+      records: number;
+    }
   >();
   for (const entry of buckets) {
     const { bucket } = entry;
@@ -63,7 +74,14 @@ export function usageChartSeries(
             : (account?.key ?? `${bucket.provider}:unassigned`);
     let row = series.get(identity);
     if (!row) {
-      row = { id: identity, label, provider: bucket.provider, values: periods.map(() => 0) };
+      row = {
+        id: identity,
+        label,
+        provider: bucket.provider,
+        values: periods.map(() => 0),
+        unpricedRecords: 0,
+        records: 0,
+      };
       series.set(identity, row);
     }
     const totals = bucket.totals;
@@ -74,6 +92,8 @@ export function usageChartSeries(
           totals.cachedInputTokens +
           totals.cacheCreationTokens +
           totals.outputTokens;
+    row.unpricedRecords += bucket.unpricedRecords;
+    row.records += bucket.records;
   }
   const ordered = [...series.values()].sort(
     (a, b) =>
@@ -89,6 +109,8 @@ export function usageChartSeries(
       label: `Other ${row.provider} models`,
       provider: row.provider,
       values: row.values.map((value, index) => value + (previous?.values[index] ?? 0)),
+      unpricedRecords: (previous?.unpricedRecords ?? 0) + row.unpricedRecords,
+      records: (previous?.records ?? 0) + row.records,
     });
   }
   return [...ordered.slice(0, 5), ...remainder.values()];

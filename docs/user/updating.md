@@ -26,14 +26,18 @@ upstream T3 Code, not Phoenix.
 Updating or restarting interrupts active agent work and terminal commands. Saved threads, settings,
 and project files remain on the server machine.
 
-Updating restarts the server, so the connection will disappear briefly. **Settings** → **General**
-has a **Continue threads after server updates** preference. It is off by default. When enabled, the
-update buttons automatically resume supported provider threads after the replacement server is
-ready. Providers with native promptless continuation use it; other providers receive a short
-instruction to continue where they left off. Terminal commands and other running work may still be
-interrupted during the update.
+## Before you update
 
-The update does not remove saved threads, settings, or project files.
+**Settings → General → Continue threads after restarts** is off by default.
+Enable it to resume supported active threads after an update, crash, or machine
+restart. Changes are saved to connected environments that support this setting;
+update older servers first. If a supported environment was offline or has a
+different value, use **Apply to all** in Settings after it connects.
+Phoenix must start again on that machine;
+the setting does not enable automatic startup. Terminal commands may still be
+interrupted, and threads without saved provider resume state need a new message.
+If you previously enabled continuation for updates, enable this setting once
+to allow recovery without a connected client.
 
 ## Choose the Action You See
 
@@ -72,35 +76,20 @@ the warning always works.
 See [Running Phoenix in the Background](./background-service.md) for install, status, and removal
 commands.
 
-## Nightly desktop release notes
+## If an update fails
 
-The desktop app shows a compact release-notes preview when a nightly update is available. Changes
-appear newest first within each release. Each release links to its exact page on GitHub, even when
-all changes fit in the preview.
-
-The preview shows up to eight changes from each of six releases. When it leaves out changes or older
-releases, it shows the exact number and links to the rest. Contributor credits do not count as
-changes.
-
-## After the Update
-
-Keep the web or desktop app open while the server restarts. The update completes only after the
-service launcher reports that exact update committed and the replacement server is ready to accept
-commands. A rollback is reported immediately instead of waiting for a generic reconnect timeout.
-
-If a step fails:
+Keep the client open until it reconnects or reports a failure. A failed service
+update can roll back to the previous version. If the update still fails:
 
 1. Retry the offered action once.
 2. Make sure you updated the machine named in the warning, not only the device you are using.
 3. For a command-line server, relaunch it with `npx @goodbirdhq/phoenix@<client-version>`, replacing
    `<client-version>` with the client version shown in the warning.
 
-## The Mobile App
+## Mobile updates
 
-The mobile app keeps itself current on its own. When it finds a new version, it downloads it in the
-background and installs it automatically the next time you leave the app. Unsent drafts and queued
-messages are saved before the restart. Only if the app stays open long enough that the update never
-gets that chance does it ask whether to install right away; choosing **Later** is safe and keeps the
-automatic install armed.
-
-For remote connection setup and access troubleshooting, see [Remote Access](./remote-access.md).
+Install App Store or Google Play releases as usual. The mobile app can also
+download updates in the background and apply them when you next leave the app.
+It saves drafts and queued messages before restarting. If you keep the app open
+for a long time, it may ask to install immediately; choosing **Later** leaves the
+update queued for the next suitable moment.

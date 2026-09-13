@@ -17,7 +17,7 @@ import {
 } from "react";
 import { useWebEnvironmentSchedules } from "../../state/schedules";
 import { useProjects } from "../../state/entities";
-import { useBranches } from "../../state/queries";
+import { usePaginatedBranches } from "../../state/queries";
 import { cn } from "../../lib/utils";
 import { Select, SelectTrigger, SelectPopup, SelectItem } from "../ui/select";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
@@ -124,7 +124,7 @@ export function ScheduleEditor(props: {
     [props.draft.environmentId, props.projects],
   );
   const selectedProject = availableProjects.find((project) => project.id === props.draft.projectId);
-  const vcsRefs = useBranches({
+  const vcsRefs = usePaginatedBranches({
     environmentId: environment?.environment.environmentId ?? null,
     cwd: selectedProject?.workspaceRoot ?? null,
   });

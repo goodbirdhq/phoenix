@@ -352,17 +352,6 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
                     <Button
                       data-environment-control
                       size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setSharing(link);
-                        setCopyStatus("");
-                      }}
-                    >
-                      Show QR & link
-                    </Button>
-                    <Button
-                      data-environment-control
-                      size="sm"
                       variant="ghost"
                       disabled={!canManage || busy}
                       onClick={() => setConfirm({ kind: "revokeLink", id: link.id })}

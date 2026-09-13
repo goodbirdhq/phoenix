@@ -28,10 +28,12 @@
   "include": [
     "src",
     "dev",
+    "vite",
     "vite.config.ts",
     "vercel.ts",
     "test",
     "scripts/warm-dep-cache.ts",
-    "../../scripts/lib/public-config.ts"
+    "../../scripts/lib/public-config.ts",
+    "../../scripts/lib/third-party-licenses.ts"
   ]
 }

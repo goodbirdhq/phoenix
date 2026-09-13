@@ -1,9 +1,9 @@
 import { ProjectFavicon } from "../ProjectFavicon";
 import { EnvironmentIcon } from "../environments/EnvironmentIcon";
-import { SearchIcon, FolderGit2Icon, ArrowUpRightIcon, MoreHorizontalIcon } from "lucide-react";
+import { SearchIcon, FolderGit2Icon } from "lucide-react";
+import { PullRequestStackPopover } from "./PullRequestStackPopover";
 import { memo, type RefCallback } from "react";
 
-import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -16,26 +16,59 @@ import {
   PullRequestActorLabel,
   PullRequestDiffStat,
   PullRequestMetaLine,
+  PullRequestApprovalGlyph,
   PullRequestStateGlyph,
   resolvePullRequestState,
 } from "./pullRequestPresentation";
 
+/**
+ * Each slot past the first only appears once the meta line is wide enough to hold it, so a
+ * narrow row shows one label and a "+N" while a wide one spreads out up to three. The "+N"
+ * rides on whichever pill is the last visible one, and is hidden as soon as the next slot shows.
+ */
+const LABEL_SLOTS = [
+  { pill: "", overflow: "@xl/pr-row-meta:hidden" },
+  { pill: "hidden @xl/pr-row-meta:inline-flex", overflow: "@3xl/pr-row-meta:hidden" },
+  { pill: "hidden @3xl/pr-row-meta:inline-flex", overflow: "" },
+] as const;
+
 function PullRequestRowLabels({ labels }: { labels: EnvironmentPullRequestEntry["labels"] }) {
-  const label = labels[0];
-  if (!label) return null;
-  const dot = pullRequestLabelColor(label.color);
+  if (labels.length === 0) return null;
   return (
-    <span className="inline-flex max-w-40 min-w-0 items-center gap-1 rounded-full border border-border/70 bg-muted/40 py-0 pl-1 pr-1.5 text-[10px] leading-3.5 text-muted-foreground">
-      <span
-        aria-hidden
-        className="size-2 shrink-0 rounded-full bg-muted-foreground"
-        {...(dot ? { style: { backgroundColor: dot } } : {})}
-      />
-      <span className="truncate">{label.name}</span>
-      {labels.length > 1 ? <span className="shrink-0">+{labels.length - 1}</span> : null}
+    <span className="flex min-w-0 items-center gap-1">
+      {LABEL_SLOTS.map((slot, index) => {
+        const label = labels[index];
+        if (!label) return null;
+        const dot = pullRequestLabelColor(label.color);
+        const remaining = labels.length - index - 1;
+        return (
+          <span
+            key={label.name}
+            className={cn(
+              "inline-flex max-w-40 min-w-0 items-center gap-1 rounded-full border border-border/70 bg-muted/40 py-0 pl-1 pr-1.5 text-[10px] leading-3.5 text-muted-foreground",
+              slot.pill,
+            )}
+          >
+            <span
+              aria-hidden
+              className="size-2 shrink-0 rounded-full bg-muted-foreground"
+              {...(dot ? { style: { backgroundColor: dot } } : {})}
+            />
+            <span className="truncate">{label.name}</span>
+            {remaining > 0 ? (
+              <span className={cn("shrink-0", slot.overflow)}>+{remaining}</span>
+            ) : null}
+          </span>
+        );
+      })}
     </span>
   );
 }
+
+export type PullRequestRowTarget = Pick<
+  EnvironmentPullRequestEntry,
+  "environmentId" | "projectId" | "host" | "repository" | "number"
+>;
 
 function PullRequestRowImpl({
   entry,
@@ -65,19 +98,19 @@ function PullRequestRowImpl({
   projectIcon?: { workspaceRoot: string; faviconPath: string | null };
   statsKey?: string;
   statsRef?: RefCallback<HTMLButtonElement>;
-  onSelect: (entry: EnvironmentPullRequestEntry) => void;
+  onSelect: (entry: PullRequestRowTarget) => void;
 }) {
   const state = resolvePullRequestState(entry);
   const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
   return (
     <div
       className={cn(
-        "group/pr-row relative grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2.5 rounded-lg px-2.5 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "group/pr-row @container/pr-row relative grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         // Offscreen rows are skipped for style, layout and paint: a long list costs what the
         // viewport shows, not what the pages have loaded. The intrinsic size keeps the
         // scrollbar honest while a row is skipped.
-        "[contain-intrinsic-block-size:82px] [content-visibility:auto]",
-        selected ? "bg-white dark:bg-zinc-800" : "hover:bg-white dark:hover:bg-zinc-800",
+        "[contain-intrinsic-block-size:66px] [content-visibility:auto]",
+        selected ? "bg-accent" : "hover:bg-accent/60",
       )}
     >
       <button
@@ -92,9 +125,13 @@ function PullRequestRowImpl({
       <span className="pointer-events-none relative flex size-[30px] shrink-0 items-center justify-center rounded-full border border-border bg-background">
         {projectIcon?.faviconPath ? (
           <ProjectFavicon
-            environmentId={entry.environmentId}
-            cwd={projectIcon.workspaceRoot}
-            faviconPath={projectIcon.faviconPath}
+            project={{
+              environmentId: entry.environmentId,
+              workspaceRoot: projectIcon.workspaceRoot,
+              title: entry.repository,
+              faviconPath: projectIcon.faviconPath,
+              projectIcon: null,
+            }}
             className="size-[18px]"
             fallbackIcon={FolderGit2Icon}
           />
@@ -111,53 +148,51 @@ function PullRequestRowImpl({
           />
         </span>
       </span>
-      <span className="pointer-events-none relative grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1">
+      <span className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5">
         <span className="col-start-1 row-start-1 block truncate text-sm font-medium text-foreground">
           {entry.title}
         </span>
-        <span className="relative col-start-2 row-start-1 flex w-12 justify-end text-[11px] text-muted-foreground tabular-nums">
-          <span className="group-hover/pr-row:invisible group-focus-within/pr-row:invisible">
-            {formatRelativeTimeLabel(entry.updatedAt)}
-          </span>
-          <span className="pointer-events-auto absolute inset-0 flex justify-end gap-1 opacity-0 group-hover/pr-row:opacity-100 group-focus-within/pr-row:opacity-100">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label={openOnHostLabel(entry.provider)}
-                    onClick={() => void readLocalApi()?.shell.openExternal(entry.url)}
-                    className="flex size-5 items-center justify-center rounded hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <ArrowUpRightIcon className="size-3.5" />
-                  </button>
-                }
-              />
-              <TooltipPopup>{openOnHostLabel(entry.provider)}</TooltipPopup>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label={`Actions for #${entry.number}`}
-                    onClick={(event) => {
-                      const bounds = event.currentTarget.getBoundingClientRect();
-                      void showPullRequestLinkContextMenu({
-                        url: entry.url,
-                        openLabel: openOnHostLabel(entry.provider),
-                        position: { x: bounds.left, y: bounds.bottom },
-                      });
-                    }}
-                    className="flex size-5 items-center justify-center rounded hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <MoreHorizontalIcon className="size-3.5" />
-                  </button>
-                }
-              />
-              <TooltipPopup>Pull request actions</TooltipPopup>
-            </Tooltip>
-          </span>
+        <span className="col-start-2 row-start-1 flex items-center justify-self-end gap-2 text-xs">
+          {entry.stack ? (
+            <PullRequestStackPopover
+              environmentId={entry.environmentId}
+              reference={{
+                projectId: entry.projectId,
+                host: entry.host,
+                repository: entry.repository,
+                number: entry.number,
+              }}
+              membership={entry.stack}
+              onSelect={(target) =>
+                onSelect({ ...target, host: entry.host, environmentId: entry.environmentId })
+              }
+            />
+          ) : null}
+          {/* Only a verdict somebody has actually given: "review required" is the absence of
+              one, and saying so on every unreviewed row would say nothing. */}
+          {entry.reviewDecision === "approved" ? (
+            <PullRequestApprovalGlyph />
+          ) : entry.reviewDecision === "changes-requested" ? (
+            <span className="min-w-0 truncate text-amber-600/90 dark:text-amber-400/80">
+              Changes requested
+            </span>
+          ) : null}
+          {entry.checksState === undefined ? null : (
+            <PullRequestChecksPopover
+              checksState={entry.checksState}
+              environmentId={entry.environmentId}
+              reference={{
+                projectId: entry.projectId,
+                repository: entry.repository,
+                number: entry.number,
+              }}
+            />
+          )}
+          <PullRequestDiffStat
+            additions={entry.additions}
+            deletions={entry.deletions}
+            className="shrink-0 whitespace-nowrap text-[11px]"
+          />
         </span>
         <PullRequestMetaLine className="@container/pr-row-meta col-span-2 col-start-1 row-start-2 overflow-hidden text-xs text-muted-foreground">
           {matchedElsewhere ? (
@@ -218,50 +253,11 @@ function PullRequestRowImpl({
           />
           {entry.labels.length > 0 ? <PullRequestRowLabels labels={entry.labels} /> : null}
         </PullRequestMetaLine>
-        <span className="col-start-1 row-start-3 flex min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-muted-foreground">
-          <span className={cn("shrink-0", state.toneClassName)}>{state.label}</span>
-          {/* Only a verdict somebody has actually given: "review required" is the absence of
-              one, and saying so on every unreviewed row would say nothing. */}
-          {entry.reviewDecision === "approved" || entry.reviewDecision === "changes-requested" ? (
-            <span
-              className={cn(
-                "min-w-0 truncate",
-                entry.reviewDecision === "approved"
-                  ? "text-emerald-600/90 dark:text-emerald-400/80"
-                  : "text-amber-600/90 dark:text-amber-400/80",
-              )}
-            >
-              {entry.reviewDecision === "approved" ? "Approved" : "Changes requested"}
-            </span>
-          ) : null}
-          {entry.checksState === undefined ? null : (
-            <PullRequestChecksPopover
-              showLabel
-              className="pointer-events-auto"
-              checksState={entry.checksState}
-              environmentId={entry.environmentId}
-              reference={{
-                projectId: entry.projectId,
-                repository: entry.repository,
-                number: entry.number,
-              }}
-            />
-          )}
-        </span>
-        {entry.additions === 0 && entry.deletions === 0 ? (
-          <span
-            aria-label="Line counts unavailable"
-            className="col-start-2 row-start-3 text-right text-[11px] text-muted-foreground"
-          >
-            —
+        <span className="col-start-2 row-start-2 flex items-center justify-self-end gap-3 whitespace-nowrap text-[11px] text-muted-foreground/70 tabular-nums">
+          <span className="hidden @sm/pr-row:inline">
+            {formatRelativeTimeLabel(entry.updatedAt)}
           </span>
-        ) : (
-          <PullRequestDiffStat
-            additions={entry.additions}
-            deletions={entry.deletions}
-            className="col-start-2 row-start-3 justify-self-end text-[11px]"
-          />
-        )}
+        </span>
       </span>
     </div>
   );

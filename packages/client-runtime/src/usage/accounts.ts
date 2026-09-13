@@ -56,7 +56,7 @@ export function buildUsageAccounts(
   >();
   for (const environment of environments) {
     const availabilityByInstance = new Map(
-      environment.providers.map((entry) => [entry.instanceId, entry]),
+      (environment.providers ?? []).map((entry) => [entry.instanceId, entry]),
     );
     const summary = historyByEnvironment.get(environment.environmentId);
     for (const provider of environment.serverProviders ?? []) {

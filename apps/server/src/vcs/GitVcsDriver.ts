@@ -30,7 +30,11 @@ import {
   type VcsStatusInput,
   type VcsStatusResult,
 } from "@t3tools/contracts";
-import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
+import {
+  makeGitVcsDriverCore,
+  PATCH_RENDER_PREFIX_ARGS,
+  splitNullSeparatedGitStdoutPaths,
+} from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
@@ -463,6 +467,7 @@ const gitCommand = (
     readonly allowNonZeroExit?: boolean;
     readonly timeoutMs?: number;
     readonly maxOutputBytes?: number;
+    readonly outputMode?: VcsProcess.VcsProcessInput["outputMode"];
     readonly appendTruncationMarker?: boolean;
   },
 ) =>
@@ -479,6 +484,7 @@ const gitCommand = (
       : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     ...(options?.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
+    ...(options?.outputMode !== undefined ? { outputMode: options.outputMode } : {}),
     ...(options?.appendTruncationMarker !== undefined
       ? { appendTruncationMarker: options.appendTruncationMarker }
       : {}),
@@ -517,6 +523,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       ...(input.allowNonZeroExit !== undefined ? { allowNonZeroExit: input.allowNonZeroExit } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
       ...(input.maxOutputBytes !== undefined ? { maxOutputBytes: input.maxOutputBytes } : {}),
+      ...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
       ...(input.appendTruncationMarker !== undefined
         ? { appendTruncationMarker: input.appendTruncationMarker }
         : {}),
@@ -840,16 +847,56 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         return false;
       }
 
-      yield* execute({
+      const tracked = yield* execute({
         operation,
         cwd: input.cwd,
-        args: ["restore", "--source", commitOid, "--worktree", "--staged", "--", "."],
+        args: ["ls-files", "--cached", `--with-tree=${commitOid}`, "-z", "--", "."],
       });
-      yield* execute({
+      // An empty index and checkpoint have nothing for git restore's pathspec to match.
+      if (tracked.stdout.length > 0) {
+        yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["restore", "--source", commitOid, "--worktree", "--staged", "--", "."],
+        });
+      }
+      // Restoring away the last tracked file can remove a nested workspace directory.
+      yield* fileSystem.makeDirectory(input.cwd, { recursive: true }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new VcsProcessExitError({
+              operation,
+              command: "git restore",
+              cwd: input.cwd,
+              exitCode: 0,
+              detail: `Could not recreate the checkpoint workspace: ${cause.message}`,
+            }),
+        ),
+      );
+      const cleaned = yield* execute({
         operation,
         cwd: input.cwd,
         args: ["clean", "-fd", "--", "."],
+        allowNonZeroExit: true,
       });
+      if (cleaned.exitCode !== 0) {
+        // Git can remove every child, then fail trying to remove './' itself.
+        const emptiedWorkspace =
+          cleaned.exitCode === 1 &&
+          /^warning: failed to remove \.\/: [^\n]+$/.test(cleaned.stderr.trim()) &&
+          (yield* fileSystem.readDirectory(input.cwd).pipe(
+            Effect.map((entries) => entries.length === 0),
+            Effect.catch(() => Effect.succeed(false)),
+          ));
+        if (!emptiedWorkspace)
+          return yield* new VcsProcessExitError({
+            operation,
+            command: "git clean",
+            cwd: input.cwd,
+            exitCode: cleaned.exitCode,
+            detail: cleaned.stderr.trim() || "Could not clean the checkpoint workspace.",
+          });
+      }
 
       const headExists = yield* hasHeadCommit(input.cwd);
       if (headExists) {
@@ -870,6 +917,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         "checkpoint.from_ref": input.fromCheckpointRef,
         "checkpoint.to_ref": input.toCheckpointRef,
         "checkpoint.ignore_whitespace": input.ignoreWhitespace,
+        "checkpoint.format": input.format ?? "patch",
         "checkpoint.fallback_from_to_head": input.fallbackFromToHead,
       });
 
@@ -901,16 +949,18 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         cwd: input.cwd,
         args: [
           "diff",
-          "--patch",
+          ...(input.format === "numstat" ? ["--numstat", "-z"] : ["--patch"]),
           "--no-color",
           "--no-ext-diff",
           "--no-textconv",
+          ...PATCH_RENDER_PREFIX_ARGS,
           ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
           `${fromRevision}^{commit}`,
           `${input.toCheckpointRef}^{commit}`,
         ],
         allowNonZeroExit: true,
         maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+        outputMode: input.format === "numstat" ? "error" : "truncate",
       });
 
       if (result.exitCode !== 0) {

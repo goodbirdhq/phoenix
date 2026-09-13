@@ -21,7 +21,6 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as ClientCapabilities from "../platform/capabilities.ts";
-import * as TokenStore from "../authorization/tokenStore.ts";
 import {
   BearerConnectionCredential,
   BearerConnectionProfile,
@@ -161,7 +160,7 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
     new Map([
       [
         SSH_CONNECTION.environmentId,
-        new TokenStore.RemoteDpopAccessToken({
+        {
           environmentId: SSH_CONNECTION.environmentId,
           label: SSH_CONNECTION.label,
           endpoint: {
@@ -172,7 +171,7 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
           accessToken: "cached-token",
           expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
           dpopThumbprint: "thumbprint",
-        }),
+        },
       ],
     ]),
   );
@@ -317,24 +316,6 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
         return next;
       }),
   });
-  const tokenStore = TokenStore.RemoteDpopAccessTokenStore.of({
-    get: (environmentId) =>
-      Ref.get(storedRemoteTokens).pipe(
-        Effect.map((current) => Option.fromUndefinedOr(current.get(environmentId))),
-      ),
-    put: (token) =>
-      Ref.update(storedRemoteTokens, (current) => {
-        const next = new Map(current);
-        next.set(token.environmentId, token);
-        return next;
-      }),
-    remove: (environmentId) =>
-      Ref.update(storedRemoteTokens, (current) => {
-        const next = new Map(current);
-        next.delete(environmentId);
-        return next;
-      }),
-  });
   const sshGateway = ClientCapabilities.SshEnvironmentGateway.of({
     provision: () => Effect.die(new Error("SSH provisioning is not used.")),
     prepare: () => Effect.die(new Error("SSH preparation is not used.")),
@@ -381,7 +362,6 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
         Layer.succeed(Persistence.ConnectionRegistrationStore, registrationStore),
         Layer.succeed(ConnectionProfileStore.ConnectionProfileStore, profileStore),
         Layer.succeed(ConnectionCredentialStore.ConnectionCredentialStore, credentialStore),
-        Layer.succeed(TokenStore.RemoteDpopAccessTokenStore, tokenStore),
         Layer.succeed(ClientCapabilities.SshEnvironmentGateway, sshGateway),
         Layer.succeed(Connectivity.Connectivity, connectivity),
         Layer.succeed(

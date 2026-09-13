@@ -20,6 +20,11 @@ import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings"
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
+import {
+  PanelAnimationSuppressionProvider,
+  usePanelAnimationSettings,
+  usePanelNavigationSuppression,
+} from "../panelAnimations";
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
@@ -47,7 +52,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "90px";
 
-// The settings nav (and the Clerk profile surfaces behind it) only renders on
+// The settings navigation only renders on
 // settings routes; lazy-loading it keeps that subtree out of the startup chunk.
 const EnvironmentsSidebar = lazy(() =>
   import("./environments/EnvironmentsSidebar").then((module) => ({
@@ -176,6 +181,8 @@ function ProjectProjectionRetention() {
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const legacySidebarEnabled = useLegacySidebarEnabled();
+  const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
+    usePanelAnimationSettings();
   // Settings routes show the settings nav in place of whichever thread
   // sidebar is active.
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -184,6 +191,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const [pullRequestSidebar, setPullRequestSidebar] = useState<HTMLDivElement | null>(null);
   const isOnUsage = pathname === "/usage";
   const isOnEnvironments = pathname === "/environments";
+  const panelAnimationsSuppressed = usePanelNavigationSuppression(pathname);
+  const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
@@ -208,6 +217,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   });
   const sidebarProviderStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
+    "--panel-animation-duration": `${panelAnimationDurationMs}ms`,
     ...(isMacosDesktop && !isWindowFullscreen
       ? { "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET }
       : {}),
@@ -252,70 +262,77 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
 
   return (
     <PullRequestSidebarSlot value={pullRequestSidebar}>
-      <SidebarProvider className="h-dvh! min-h-0!" defaultOpen style={sidebarProviderStyle}>
-        <ProjectProjectionRetention />
-        <Sidebar
-          side="left"
-          collapsible="offcanvas"
-          data-app-sidebar=""
-          className={cn(
-            "border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
-            (isOnUsage || isOnEnvironments || isOnSchedules) && "usage-surface usage-sidebar",
-            (isOnEnvironments || isOnSchedules) && "environment-surface",
-          )}
-          resizable={{
-            maxWidth: sidebarMaximumWidth,
-            minWidth: THREAD_SIDEBAR_MIN_WIDTH,
-            shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
-              nextWidth <= currentWidth ||
-              wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-            storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-            onResize: setSidebarWidth,
-          }}
+      <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
+        <SidebarProvider
+          className="h-dvh! min-h-0!"
+          data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
+          defaultOpen
+          style={sidebarProviderStyle}
         >
-          {isOnSettings ? (
-            <>
-              <SidebarChromeHeader isElectron={isElectron} />
-              <Suspense fallback={null}>
-                <SettingsSidebarNav pathname={pathname} />
-              </Suspense>
-            </>
-          ) : isOnEnvironments ? (
-            <>
-              <SidebarChromeHeader isElectron={isElectron} plain compact />
-              <Suspense fallback={null}>
-                <EnvironmentsSidebar />
-              </Suspense>
-            </>
-          ) : isOnSchedules ? (
-            <>
-              <SidebarChromeHeader isElectron={isElectron} plain compact />
-              <Suspense fallback={null}>
-                <SchedulesSidebar />
-              </Suspense>
-            </>
-          ) : isOnUsage ? (
-            <>
-              <SidebarChromeHeader isElectron={isElectron} plain />
-              <Suspense fallback={null}>
-                <UsageSidebarNav />
-              </Suspense>
-            </>
-          ) : isOnPullRequests ? (
-            <div ref={setPullRequestSidebar} className="flex min-h-0 flex-1 flex-col" />
-          ) : legacySidebarEnabled ? (
-            <LegacyThreadSidebar />
-          ) : (
-            <ThreadSidebar />
-          )}
-          <SidebarRail onDoubleClick={resetSidebarWidth} />
-        </Sidebar>
-        {children}
-        <SidebarControl
-          plain={isOnUsage || isOnEnvironments || isOnSchedules}
-          compact={isOnEnvironments || isOnSchedules}
-        />
-      </SidebarProvider>
+          <ProjectProjectionRetention />
+          <Sidebar
+            side="left"
+            collapsible="offcanvas"
+            data-app-sidebar=""
+            className={cn(
+              "border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
+              (isOnUsage || isOnEnvironments || isOnSchedules) && "usage-surface usage-sidebar",
+              (isOnEnvironments || isOnSchedules) && "environment-surface",
+            )}
+            resizable={{
+              maxWidth: sidebarMaximumWidth,
+              minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+              shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
+                nextWidth <= currentWidth ||
+                wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+              storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+              onResize: setSidebarWidth,
+            }}
+          >
+            {isOnSettings ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} />
+                <Suspense fallback={null}>
+                  <SettingsSidebarNav pathname={pathname} />
+                </Suspense>
+              </>
+            ) : isOnEnvironments ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} plain compact />
+                <Suspense fallback={null}>
+                  <EnvironmentsSidebar />
+                </Suspense>
+              </>
+            ) : isOnSchedules ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} plain compact />
+                <Suspense fallback={null}>
+                  <SchedulesSidebar />
+                </Suspense>
+              </>
+            ) : isOnUsage ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} plain />
+                <Suspense fallback={null}>
+                  <UsageSidebarNav />
+                </Suspense>
+              </>
+            ) : isOnPullRequests ? (
+              <div ref={setPullRequestSidebar} className="flex min-h-0 flex-1 flex-col" />
+            ) : legacySidebarEnabled ? (
+              <LegacyThreadSidebar />
+            ) : (
+              <ThreadSidebar />
+            )}
+            <SidebarRail onDoubleClick={resetSidebarWidth} />
+          </Sidebar>
+          {children}
+          <SidebarControl
+            plain={isOnUsage || isOnEnvironments || isOnSchedules}
+            compact={isOnEnvironments || isOnSchedules}
+          />
+        </SidebarProvider>
+      </PanelAnimationSuppressionProvider>
     </PullRequestSidebarSlot>
   );
 }

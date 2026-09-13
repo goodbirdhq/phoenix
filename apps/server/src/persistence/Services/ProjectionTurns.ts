@@ -122,7 +122,7 @@ export const MarkProjectionQueuedTurnReleasingInput = Schema.Struct({
 export const ConsumeProjectionQueuedTurnInput = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
-  turnId: TurnId,
+  turnId: Schema.NullOr(TurnId),
   consumedAt: IsoDateTime,
 });
 

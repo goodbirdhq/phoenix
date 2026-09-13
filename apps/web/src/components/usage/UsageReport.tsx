@@ -124,9 +124,13 @@ export function UsageReport({
                     <div className="flex items-center gap-3">
                       {row.project ? (
                         <ProjectFavicon
-                          environmentId={row.environmentId}
-                          cwd={row.project.projectWorkspaceRoot}
-                          faviconPath={row.project.projectFaviconPath}
+                          project={{
+                            environmentId: row.environmentId,
+                            workspaceRoot: row.project.projectWorkspaceRoot,
+                            title: row.project.projectTitle,
+                            faviconPath: row.project.projectFaviconPath,
+                            projectIcon: null,
+                          }}
                           className="size-5 shrink-0"
                         />
                       ) : mode === "projects" ? (
