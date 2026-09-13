@@ -76,11 +76,13 @@ describe("requirePreviewCapability", () => {
       expect(denied._tag).toBe("Failure");
     }).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-      Effect.provide(ServerSettings.layerTest({ enableAgentBrowserAccess: true })),
       Effect.provide(
-        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getThreadShellById: () => Effect.succeed(Option.none()),
-        }),
+        Layer.mergeAll(
+          ServerSettings.layerTest({ enableAgentBrowserAccess: true }),
+          Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+            getThreadShellById: () => Effect.succeed(Option.none()),
+          }),
+        ),
       ),
     );
   });
@@ -123,8 +125,7 @@ describe("requirePreviewCapability", () => {
     const run = (settings: Parameters<typeof ServerSettings.layerTest>[0]) =>
       requirePreviewCapability().pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-        Effect.provide(ServerSettings.layerTest(settings)),
-        Effect.provide(snapshots),
+        Effect.provide(Layer.mergeAll(ServerSettings.layerTest(settings), snapshots)),
         Effect.result,
       );
 

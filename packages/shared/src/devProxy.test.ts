@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { createDevProxyEntries, isDevProxiedPath } from "./devProxy";
+import { createDevProxyEntries, isDevProxiedPath } from "./devProxy.ts";
 
 describe("single-origin development proxy", () => {
   it("forwards HTTP and both application and device WebSocket paths to the backend", () => {
