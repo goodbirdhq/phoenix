@@ -414,7 +414,9 @@ describe("ProviderRuntimeIngestion", () => {
           }),
         ),
       readProjectionTurn: (turnId: TurnId) =>
-        testRuntime.runPromise(projectionTurns.getByTurnId({ threadId: asThreadId("thread-1"), turnId })),
+        testRuntime.runPromise(
+          projectionTurns.getByTurnId({ threadId: asThreadId("thread-1"), turnId }),
+        ),
       emit: provider.emit,
       emitAndDrain,
       sqlCount: sqlCounter.count,
