@@ -1,5 +1,9 @@
-import { ConnectionTransientError } from "@t3tools/client-runtime/connection";
+import {
+  ConnectionTransientError,
+  RelayConnectionTarget,
+} from "@t3tools/client-runtime/connection";
 import { ConnectionCatalogDocument } from "@t3tools/client-runtime/platform";
+import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -15,6 +19,7 @@ const emptyCatalog = {
   remoteDpopTokens: [],
 } as const;
 const decodeCatalog = Schema.decodeUnknownSync(Schema.fromJsonString(ConnectionCatalogDocument));
+const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -22,6 +27,74 @@ afterEach(() => {
 });
 
 describe("makeCatalogStore", () => {
+  it.effect("retires managed credentials without removing saved connection metadata", () =>
+    Effect.gen(function* () {
+      const environmentId = EnvironmentId.make("legacy-managed-environment");
+      const raw = encodeUnknownJson({
+        schemaVersion: 1,
+        targets: [
+          {
+            _tag: "BearerConnectionTarget",
+            environmentId: "direct-environment",
+            label: "Direct environment",
+            connectionId: "bearer:direct-environment",
+          },
+          {
+            _tag: "RelayConnectionTarget",
+            environmentId,
+            label: "Legacy managed environment",
+          },
+        ],
+        profiles: [
+          {
+            _tag: "BearerConnectionProfile",
+            environmentId: "direct-environment",
+            label: "Direct environment",
+            connectionId: "bearer:direct-environment",
+            httpBaseUrl: "https://direct.example.test",
+            wsBaseUrl: "wss://direct.example.test",
+          },
+        ],
+        credentials: [
+          {
+            connectionId: "bearer:direct-environment",
+            credential: { _tag: "BearerConnectionCredential", token: "direct-token" },
+          },
+        ],
+        remoteDpopTokens: [
+          {
+            environmentId,
+            label: "Legacy managed environment",
+            endpoint: {
+              httpBaseUrl: "https://relay.example.test",
+              wsBaseUrl: "wss://relay.example.test",
+              providerKind: "cloudflare_tunnel",
+            },
+            accessToken: "retired-token",
+            expiresAtEpochMs: 1,
+            dpopThumbprint: "legacy-thumbprint",
+          },
+        ],
+      });
+      const writes: string[] = [];
+      const store = yield* makeCatalogStore({
+        read: Effect.succeed(raw),
+        write: (value) => Effect.sync(() => writes.push(value)),
+      });
+
+      const loaded = yield* store.read;
+      expect(loaded.targets).toHaveLength(2);
+      expect(loaded.targets[1]).toEqual(
+        new RelayConnectionTarget({ environmentId, label: "Legacy managed environment" }),
+      );
+      expect(loaded.profiles).toHaveLength(1);
+      expect(loaded.credentials).toHaveLength(1);
+      expect(loaded.remoteDpopTokens).toEqual([]);
+      expect(writes).toHaveLength(1);
+      expect(decodeCatalog(writes[0]!)).toEqual(loaded);
+    }),
+  );
+
   it.effect("quarantines malformed catalogs and starts from an empty document", () =>
     Effect.gen(function* () {
       const writes: string[] = [];

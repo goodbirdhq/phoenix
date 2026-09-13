@@ -645,6 +645,7 @@ const baseShell = {
   modelSelection: { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude" },
   runtimeMode: "full-access",
   interactionMode: "default",
+  pullRequests: [],
   branch: null,
   worktreePath: null,
   latestTurn: null,

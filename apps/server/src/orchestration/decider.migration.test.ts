@@ -36,6 +36,7 @@ function makeReadModel(overrides: Partial<OrchestrationThread> = {}): Orchestrat
         },
         runtimeMode: "full-access",
         interactionMode: "default",
+        pullRequests: [],
         branch: null,
         worktreePath: null,
         latestTurn: null,

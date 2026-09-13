@@ -61,23 +61,20 @@ export function useMobileScheduleOverview(): {
   const configs = useServerConfigs();
   const environments = useMemo(
     () =>
-      overview.map(
-        ({ environmentId, label, online, state }): MobileScheduleEnvironment => ({
-          environmentId,
-          label,
-          online,
-          supportsSchedules:
-            configs.get(environmentId)?.environment.capabilities.schedules === true,
-          source: scheduleStateSource(state),
-          schedules: Option.match(state.snapshot, {
-            onNone: () => [],
-            onSome: (snapshot) => snapshot.schedules,
-          }),
-          projects: projects.filter((project) => project.environmentId === environmentId),
-          synchronizing: state.status === "synchronizing",
-          error: Option.getOrNull(state.error),
+      overview.map(({ environmentId, label, online, state }): MobileScheduleEnvironment => ({
+        environmentId,
+        label,
+        online,
+        supportsSchedules: configs.get(environmentId)?.environment.capabilities.schedules === true,
+        source: scheduleStateSource(state),
+        schedules: Option.match(state.snapshot, {
+          onNone: () => [],
+          onSome: (snapshot) => snapshot.schedules,
         }),
-      ),
+        projects: projects.filter((project) => project.environmentId === environmentId),
+        synchronizing: state.status === "synchronizing",
+        error: Option.getOrNull(state.error),
+      })),
     [configs, overview, projects],
   );
   const refresh = useCallback(() => {

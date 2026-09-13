@@ -80,6 +80,7 @@ export interface AggregateOptions {
   readonly untilDay: string;
   readonly rates: RateTable;
   readonly includeSessions?: boolean;
+  readonly priceOverrides?: RateTable;
   readonly resolution?: UsageResolution;
   readonly sinceTimeMs?: number;
   readonly untilTimeMs?: number;
@@ -208,6 +209,7 @@ export class UsageAggregator {
       record.model,
       record.totals,
       record.reportedCostUsd,
+      this.#options.priceOverrides,
     );
 
     if (this.#options.includeSessions && sourceId && record.sessionId) {
@@ -256,7 +258,12 @@ export class UsageAggregator {
 
     bucket.totals = addTotals(bucket.totals, record.totals);
     bucket.costUsd += priced.costUsd;
-    bucket.cacheSavingsUsd += cacheSavingsUsd(this.#options.rates, record.model, record.totals);
+    bucket.cacheSavingsUsd += cacheSavingsUsd(
+      this.#options.rates,
+      record.model,
+      record.totals,
+      this.#options.priceOverrides,
+    );
     bucket.records += 1;
     if (priced.costSource === "unpriced") bucket.unpricedRecords += 1;
     if (priced.costSource === "providerReported") bucket.providerReportedRecords += 1;
@@ -280,6 +287,7 @@ export class UsageAggregator {
         costSource: resolveCostSource(bucket),
         records: bucket.records,
         unpricedRecords: bucket.unpricedRecords,
+        providerReportedRecords: bucket.providerReportedRecords,
         sessions: bucket.sessions.size,
       });
     }
@@ -324,12 +332,17 @@ export class UsageAggregator {
 }
 
 /**
- * A bucket mixes records from one model, but their cost provenance can differ
- * when only some records carried a reported cost. The weakest provenance in the
- * bucket wins so the UI never overstates confidence.
+ * A cell mixes records from one model, but their cost provenance can differ
+ * when only some records carried a reported cost. The weakest provenance present
+ * wins so the value never overstates confidence: any unpriced record reports
+ * the cell unpriced, otherwise an entirely provider-reported cell reports
+ * providerReported, and everything else reports modelPriced. The exact
+ * per-record breakdown still travels on `unpricedRecords` and
+ * `providerReportedRecords` for clients that want it, so the coarse label never
+ * has to stand in for precise counts.
  */
 function resolveCostSource(bucket: MutableBucket): UsageBucket["costSource"] {
-  if (bucket.unpricedRecords === bucket.records) return "unpriced";
+  if (bucket.unpricedRecords > 0) return "unpriced";
   if (bucket.providerReportedRecords === bucket.records) return "providerReported";
   return "modelPriced";
 }

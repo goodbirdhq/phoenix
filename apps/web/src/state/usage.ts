@@ -23,6 +23,7 @@ import {
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
+import { refreshUsage as refreshUsageQuery } from "@t3tools/client-runtime/state/usage";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -37,7 +38,6 @@ import {
   capacityRefreshSettlementStep,
   hasUnsettledCapacityRefresh,
   parseCapacityRefreshKey,
-  refreshHistoricalUsage,
   refreshProviderCapacity,
   resolveAvailabilityEntries,
   selectHistoricalUsageEnvironments,
@@ -228,7 +228,8 @@ export interface UsageView {
   readonly allEnvironments: readonly EnvironmentUsageStatus[];
   /** The selected Environment's historical usage, or every Environment for All Environments. */
   readonly environments: readonly EnvironmentUsageStatus[];
-  /** True until at least one environment has answered. */
+  readonly selectedEnvironments: readonly EnvironmentUsageStatus[];
+  /** True until at least one selected environment has answered. */
   readonly isPending: boolean;
   /**
    * True while environments that have not failed are still answering. Failed
@@ -250,7 +251,7 @@ export interface UsageView {
 
 export function useUsage(
   input: UsageSummaryInput,
-  historicalEnvironmentId: EnvironmentId | null = null,
+  historicalEnvironmentId: EnvironmentId | ReadonlySet<EnvironmentId> | null = null,
   accountKey: string | null = null,
 ): UsageView {
   const windowKey = useMemo(
@@ -276,13 +277,21 @@ export function useUsage(
   );
   const atom = usageByWindowAtom(windowKey);
   const allEnvironments = useAtomValue(atom);
-  const environments = useMemo(
-    () => selectHistoricalUsageEnvironments(allEnvironments, historicalEnvironmentId),
+  const selectedEnvironments = useMemo(
+    () =>
+      historicalEnvironmentId instanceof Set
+        ? allEnvironments.filter((environment) =>
+            historicalEnvironmentId.has(environment.environmentId),
+          )
+        : selectHistoricalUsageEnvironments(
+            allEnvironments,
+            historicalEnvironmentId as EnvironmentId | null,
+          ),
     [allEnvironments, historicalEnvironmentId],
   );
   useEffect(() => {
-    appAtomRegistry.set(sidebarHistoryAtom, environments);
-  }, [environments]);
+    appAtomRegistry.set(sidebarHistoryAtom, selectedEnvironments);
+  }, [selectedEnvironments]);
   useEffect(() => () => appAtomRegistry.set(sidebarHistoryAtom, []), []);
   const refreshKey = useAtomValue(activeCapacityRefreshAtom);
   const setRefreshKey = useCallback((value: string | ((current: string) => string)) => {
@@ -353,6 +362,7 @@ export function useUsage(
   }, [providerAvailability, refreshKey, setRefreshKey]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const onFocus = () => setFocusGeneration((generation) => generation + 1);
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
@@ -375,12 +385,20 @@ export function useUsage(
 
   // Refreshing only the derived atom would re-read the per-environment SWR
   // queries within their stale window and change nothing. Refresh each
-  // environment's query so the button always rescans.
+  // environment's query so the button always rescans. Pricing refreshes first,
+  // and each environment's query aborts if it disconnects mid-refresh so a
+  // reconnect cannot reuse a stale summary.
   const refreshUsage = useCallback(
     (refreshInput: UsageSummaryInput = input) => {
-      refreshHistoricalUsage(usageRefreshPorts, environments, refreshInput);
+      void refreshUsageQuery({
+        registry: appAtomRegistry,
+        server: serverEnvironment,
+        presentations: environmentPresentations,
+        environmentIds: selectedEnvironments.map(({ environmentId }) => environmentId),
+        input: refreshInput,
+      });
     },
-    [environments, input],
+    [input, selectedEnvironments],
   );
 
   const refreshCapacity = useCallback(
@@ -397,7 +415,7 @@ export function useUsage(
   const selectedAccount = findUsageAccount(accounts, accountKey);
 
   const merged = useMemo(() => {
-    const answered: EnvironmentUsage[] = environments.flatMap((environment) =>
+    const answered: EnvironmentUsage[] = selectedEnvironments.flatMap((environment) =>
       environment.summary === null
         ? []
         : [
@@ -424,10 +442,12 @@ export function useUsage(
           ],
     );
     return mergeUsage(answered, USAGE_CONTRACT_VERSION);
-  }, [environments, accountKey, selectedAccount]);
+  }, [selectedEnvironments, accountKey, selectedAccount]);
 
-  const answeredCount = environments.filter((environment) => environment.summary !== null).length;
-  const stillReporting = environments.filter(
+  const answeredCount = selectedEnvironments.filter(
+    (environment) => environment.summary !== null,
+  ).length;
+  const stillReporting = selectedEnvironments.filter(
     (environment) => environment.summary === null && environment.error === null,
   ).length;
 
@@ -435,10 +455,11 @@ export function useUsage(
     accounts,
     merged,
     allEnvironments,
-    environments,
+    environments: allEnvironments,
+    selectedEnvironments,
     isPending: answeredCount === 0 && stillReporting > 0,
     isPartial: answeredCount > 0 && stillReporting > 0,
-    isUsageRefreshing: environments.some((environment) => environment.isPending),
+    isUsageRefreshing: selectedEnvironments.some((environment) => environment.isPending),
     refreshUsage,
     refreshCapacity,
     providerAvailability,

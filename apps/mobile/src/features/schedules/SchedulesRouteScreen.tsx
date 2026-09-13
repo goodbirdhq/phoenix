@@ -95,12 +95,10 @@ export function SchedulesRouteScreen() {
           })),
         })),
         schedules: environments.flatMap((environment) =>
-          environment.schedules.map(
-            (schedule): MobileSchedule => ({
-              ...schedule,
-              environmentId: String(environment.environmentId),
-            }),
-          ),
+          environment.schedules.map((schedule): MobileSchedule => ({
+            ...schedule,
+            environmentId: String(environment.environmentId),
+          })),
         ),
         filters,
       }),

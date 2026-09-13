@@ -38,7 +38,7 @@ export interface ConversationSeedLimits {
   readonly maxMessageCharacters: number;
 }
 
-export const CONVERSATION_SEED_LIMITS: ConversationSeedLimits = {
+const CONVERSATION_SEED_LIMITS: ConversationSeedLimits = {
   maxMessages: 60,
   maxTotalCharacters: 60_000,
   maxMessageCharacters: 8_000,

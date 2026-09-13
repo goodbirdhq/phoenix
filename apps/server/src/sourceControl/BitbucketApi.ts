@@ -38,13 +38,21 @@ const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 /** Bitbucket redirects a diff once; this leaves room without following a chain forever. */
 const MAX_REDIRECTS = 3;
 
+const preferredEnv = (phoenixName: string, upstreamName: string) =>
+  Config.all([
+    Config.string(phoenixName).pipe(Config.option),
+    Config.string(upstreamName).pipe(Config.option),
+  ]).pipe(Config.map(([phoenix, upstream]) => Option.orElse(phoenix, () => upstream)));
+
+// Phoenix names lead. T3 Code names remain only as a compatible deployment
+// alias, so an environment that carries both cannot silently use the old one.
 const BitbucketApiEnvConfig = Config.all({
-  baseUrl: Config.string("T3CODE_BITBUCKET_API_BASE_URL").pipe(
-    Config.withDefault(DEFAULT_API_BASE_URL),
+  baseUrl: preferredEnv("PHOENIX_BITBUCKET_API_BASE_URL", "T3CODE_BITBUCKET_API_BASE_URL").pipe(
+    Config.map(Option.getOrElse(() => DEFAULT_API_BASE_URL)),
   ),
-  accessToken: Config.string("T3CODE_BITBUCKET_ACCESS_TOKEN").pipe(Config.option),
-  email: Config.string("T3CODE_BITBUCKET_EMAIL").pipe(Config.option),
-  apiToken: Config.string("T3CODE_BITBUCKET_API_TOKEN").pipe(Config.option),
+  accessToken: preferredEnv("PHOENIX_BITBUCKET_ACCESS_TOKEN", "T3CODE_BITBUCKET_ACCESS_TOKEN"),
+  email: preferredEnv("PHOENIX_BITBUCKET_EMAIL", "T3CODE_BITBUCKET_EMAIL"),
+  apiToken: preferredEnv("PHOENIX_BITBUCKET_API_TOKEN", "T3CODE_BITBUCKET_API_TOKEN"),
 });
 
 const BitbucketApiOperation = Schema.Literals([
@@ -63,7 +71,7 @@ const BitbucketApiOperation = Schema.Literals([
 ]);
 type BitbucketApiOperation = typeof BitbucketApiOperation.Type;
 
-export class BitbucketRepositoryLocatorError extends Schema.TaggedErrorClass<BitbucketRepositoryLocatorError>()(
+export class BitbucketRepositoryLocatorError extends Schema.TaggedError<BitbucketRepositoryLocatorError>()(
   "BitbucketRepositoryLocatorError",
   {
     repository: Schema.String,
@@ -78,7 +86,7 @@ export class BitbucketRepositoryLocatorError extends Schema.TaggedErrorClass<Bit
   }
 }
 
-export class BitbucketRequestError extends Schema.TaggedErrorClass<BitbucketRequestError>()(
+export class BitbucketRequestError extends Schema.TaggedError<BitbucketRequestError>()(
   "BitbucketRequestError",
   {
     operation: BitbucketApiOperation,
@@ -94,7 +102,7 @@ export class BitbucketRequestError extends Schema.TaggedErrorClass<BitbucketRequ
   }
 }
 
-export class BitbucketResponseError extends Schema.TaggedErrorClass<BitbucketResponseError>()(
+export class BitbucketResponseError extends Schema.TaggedError<BitbucketResponseError>()(
   "BitbucketResponseError",
   {
     operation: BitbucketApiOperation,
@@ -112,7 +120,7 @@ export class BitbucketResponseError extends Schema.TaggedErrorClass<BitbucketRes
   }
 }
 
-export class BitbucketResponseBodyReadError extends Schema.TaggedErrorClass<BitbucketResponseBodyReadError>()(
+export class BitbucketResponseBodyReadError extends Schema.TaggedError<BitbucketResponseBodyReadError>()(
   "BitbucketResponseBodyReadError",
   {
     operation: BitbucketApiOperation,
@@ -129,7 +137,7 @@ export class BitbucketResponseBodyReadError extends Schema.TaggedErrorClass<Bitb
   }
 }
 
-export class BitbucketResponseDecodeError extends Schema.TaggedErrorClass<BitbucketResponseDecodeError>()(
+export class BitbucketResponseDecodeError extends Schema.TaggedError<BitbucketResponseDecodeError>()(
   "BitbucketResponseDecodeError",
   {
     operation: BitbucketApiOperation,
@@ -146,7 +154,7 @@ export class BitbucketResponseDecodeError extends Schema.TaggedErrorClass<Bitbuc
   }
 }
 
-export class BitbucketRepositoryVcsResolveError extends Schema.TaggedErrorClass<BitbucketRepositoryVcsResolveError>()(
+export class BitbucketRepositoryVcsResolveError extends Schema.TaggedError<BitbucketRepositoryVcsResolveError>()(
   "BitbucketRepositoryVcsResolveError",
   {
     cwd: Schema.String,
@@ -162,7 +170,7 @@ export class BitbucketRepositoryVcsResolveError extends Schema.TaggedErrorClass<
   }
 }
 
-export class BitbucketRepositoryRemotesListError extends Schema.TaggedErrorClass<BitbucketRepositoryRemotesListError>()(
+export class BitbucketRepositoryRemotesListError extends Schema.TaggedError<BitbucketRepositoryRemotesListError>()(
   "BitbucketRepositoryRemotesListError",
   {
     cwd: Schema.String,
@@ -178,7 +186,7 @@ export class BitbucketRepositoryRemotesListError extends Schema.TaggedErrorClass
   }
 }
 
-export class BitbucketRepositoryRemoteNotFoundError extends Schema.TaggedErrorClass<BitbucketRepositoryRemoteNotFoundError>()(
+export class BitbucketRepositoryRemoteNotFoundError extends Schema.TaggedError<BitbucketRepositoryRemoteNotFoundError>()(
   "BitbucketRepositoryRemoteNotFoundError",
   {
     cwd: Schema.String,
@@ -193,7 +201,7 @@ export class BitbucketRepositoryRemoteNotFoundError extends Schema.TaggedErrorCl
   }
 }
 
-export class BitbucketPullRequestBodyReadError extends Schema.TaggedErrorClass<BitbucketPullRequestBodyReadError>()(
+export class BitbucketPullRequestBodyReadError extends Schema.TaggedError<BitbucketPullRequestBodyReadError>()(
   "BitbucketPullRequestBodyReadError",
   {
     cwd: Schema.String,
@@ -210,7 +218,7 @@ export class BitbucketPullRequestBodyReadError extends Schema.TaggedErrorClass<B
   }
 }
 
-export class BitbucketCheckoutError extends Schema.TaggedErrorClass<BitbucketCheckoutError>()(
+export class BitbucketCheckoutError extends Schema.TaggedError<BitbucketCheckoutError>()(
   "BitbucketCheckoutError",
   {
     cwd: Schema.String,
@@ -232,7 +240,7 @@ export class BitbucketCheckoutError extends Schema.TaggedErrorClass<BitbucketChe
  * the request carries the account's credentials and a url that came back in a response — a
  * pagination cursor, or the target of a redirect — is not this server's to trust.
  */
-export class BitbucketUntrustedUrlError extends Schema.TaggedErrorClass<BitbucketUntrustedUrlError>()(
+export class BitbucketUntrustedUrlError extends Schema.TaggedError<BitbucketUntrustedUrlError>()(
   "BitbucketUntrustedUrlError",
   {
     /** The host only. A rejected hop is often a signed url, whose query carries a credential. */
@@ -262,7 +270,7 @@ export const BitbucketApiError = Schema.Union([
   BitbucketCheckoutError,
 ]);
 export type BitbucketApiError = typeof BitbucketApiError.Type;
-export const isBitbucketApiError = Schema.is(BitbucketApiError);
+const isBitbucketApiError = Schema.is(BitbucketApiError);
 
 const RawBitbucketRepositorySchema = Schema.Struct({
   full_name: TrimmedNonEmptyString,
@@ -562,7 +570,7 @@ function authFromConfig(
     account: Option.none(),
     host: Option.some("bitbucket.org"),
     detail: Option.some(
-      "Set T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN, or T3CODE_BITBUCKET_ACCESS_TOKEN.",
+      "Set PHOENIX_BITBUCKET_EMAIL and PHOENIX_BITBUCKET_API_TOKEN, or PHOENIX_BITBUCKET_ACCESS_TOKEN.",
     ),
   };
 }
@@ -606,6 +614,7 @@ function responseError(
   });
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const config = yield* BitbucketApiEnvConfig;
   const httpClient = yield* HttpClient.HttpClient;

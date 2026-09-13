@@ -5,6 +5,12 @@ fresh integration branch and is reviewed as a three-way semantic merge. The obje
 to make Git accept the result: Phoenix behavior must survive while receiving every compatible
 upstream improvement, including improvements to code Phoenix changed independently.
 
+## Excluded upstream application
+
+Phoenix does not maintain a marketing website in this repository. Exclude upstream
+`apps/marketing` changes and its workspace commands, dependencies, and deployment jobs from
+future syncs. Shared runtime code and app-store tooling remain in scope.
+
 ## Non-negotiable rule
 
 Do not resolve a conflict by choosing “ours” because Phoenix changed the file, or “theirs” because

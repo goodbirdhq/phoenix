@@ -3,6 +3,7 @@ import * as NodeHttp from "node:http";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -26,7 +27,7 @@ import * as CliError from "effect/unstable/cli/CliError";
 import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/unstable/cli";
 
-import { cli, makeCli } from "./bin.ts";
+import { cli } from "./bin.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import {
   SERVICE_LAUNCHER_CONTEXT_ENV,
@@ -69,11 +70,8 @@ const DisconnectedLauncherChildLayer = Layer.mergeAll(
 );
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}
 
-const connectCli = makeCli({ cloudEnabled: true });
-const noConnectCli = makeCli({ cloudEnabled: false });
 const runCli = (args: ReadonlyArray<string>, command = cli) =>
   Command.runWith(command, { version: "0.0.0" })(args);
-const runConnectCli = (args: ReadonlyArray<string>) => runCli(args, connectCli);
 const runCliWithRuntime = (args: ReadonlyArray<string>) =>
   runCli(args).pipe(Effect.provide(CliRuntimeLayer));
 
@@ -136,6 +134,225 @@ const readPersistedSnapshot = (baseDir: string) =>
       return yield* projectionSnapshotQuery.getSnapshot();
     }).pipe(Effect.provide(makeProjectPersistenceLayer(config)));
   });
+
+const makeProjectLookupFixture = Effect.fn("makeProjectLookupFixture")(function* (
+  withThread: boolean,
+  removeWorkspace: boolean,
+) {
+  const baseDir = NodeFS.mkdtempSync(
+    NodePath.join(NodeOS.tmpdir(), "t3-cli-project-lookup-state-"),
+  );
+  const workspaceRoot = NodeFS.mkdtempSync(
+    NodePath.join(NodeOS.tmpdir(), "t3-cli-project-lookup-git-"),
+  );
+  NodeChildProcess.execFileSync("git", ["init", "--initial-branch=main", workspaceRoot], {
+    stdio: "ignore",
+  });
+  yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+  const snapshot = yield* readPersistedSnapshot(baseDir);
+  const project = snapshot.projects.find((candidate) => candidate.workspaceRoot === workspaceRoot)!;
+  assert.isDefined(project);
+  if (withThread) {
+    const config = yield* makeCliTestServerConfig(baseDir);
+    yield* Effect.gen(function* () {
+      const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-project-lookup-thread"),
+        threadId: ThreadId.make("thread-project-lookup"),
+        projectId: project.id,
+        title: "Project lookup test",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        interactionMode: "default",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: DateTime.formatIso(yield* DateTime.now),
+      });
+    }).pipe(Effect.provide(makeProjectPersistenceLayer(config)));
+  }
+  if (removeWorkspace) {
+    NodeFS.renameSync(workspaceRoot, `${workspaceRoot}-removed`);
+    assert.isFalse(NodeFS.existsSync(workspaceRoot));
+  }
+  return { baseDir, workspaceRoot, project };
+});
+
+it.layer(NodeServices.layer)("project lookup with unavailable workspaces", (it) => {
+  it.effect("removes an empty project by ID without force after its directory is gone", () =>
+    Effect.gen(function* () {
+      const { baseDir, project } = yield* makeProjectLookupFixture(false, true);
+      yield* runCliWithRuntime(["project", "remove", project.id, "--base-dir", baseDir]);
+      const after = yield* readPersistedSnapshot(baseDir);
+      assert.isNotNull(after.projects.find((candidate) => candidate.id === project.id)!.deletedAt);
+    }),
+  );
+
+  it.effect.each([true, false])(
+    "requires force for child threads, then removes by ID; missing=%s",
+    (removeWorkspace) =>
+      Effect.gen(function* () {
+        const { baseDir, project } = yield* makeProjectLookupFixture(true, removeWorkspace);
+        const error = yield* runCliWithRuntime([
+          "project",
+          "remove",
+          project.id,
+          "--base-dir",
+          baseDir,
+        ]).pipe(Effect.flip);
+        assert.include(error.message, "cannot be deleted without force=true");
+        const retained = yield* readPersistedSnapshot(baseDir);
+        assert.isNull(
+          retained.projects.find((candidate) => candidate.id === project.id)!.deletedAt,
+        );
+        assert.isNull(
+          retained.threads.find((thread) => thread.id === "thread-project-lookup")!.deletedAt,
+        );
+        yield* runCliWithRuntime([
+          "project",
+          "remove",
+          project.id,
+          "--force",
+          "--base-dir",
+          baseDir,
+        ]);
+        const after = yield* readPersistedSnapshot(baseDir);
+        assert.isNotNull(
+          after.projects.find((candidate) => candidate.id === project.id)!.deletedAt,
+        );
+        assert.isNotNull(
+          after.threads.find((thread) => thread.id === "thread-project-lookup")!.deletedAt,
+        );
+      }),
+  );
+
+  it.effect("cannot remove the old environment's ID from a replacement empty database", () =>
+    Effect.gen(function* () {
+      const { baseDir, project } = yield* makeProjectLookupFixture(true, true);
+      const replacementDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-project-lookup-new-state-"),
+      );
+      const error = yield* runCliWithRuntime([
+        "project",
+        "remove",
+        project.id,
+        "--force",
+        "--base-dir",
+        replacementDir,
+      ]).pipe(Effect.flip);
+      assert.include(error.message, "No active project found");
+      assert.include(String(error.cause), "Workspace root does not exist");
+      const original = yield* readPersistedSnapshot(baseDir);
+      assert.isNull(original.projects.find((candidate) => candidate.id === project.id)!.deletedAt);
+      const replacement = yield* readPersistedSnapshot(replacementDir);
+      assert.equal(replacement.projects.length, 0);
+    }),
+  );
+
+  it.effect("renames by ID and stored path, then force removes after the directory is gone", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot, project } = yield* makeProjectLookupFixture(true, true);
+      yield* runCliWithRuntime([
+        "project",
+        "rename",
+        project.id,
+        "Renamed by ID",
+        "--base-dir",
+        baseDir,
+      ]);
+      const afterIdRename = yield* readPersistedSnapshot(baseDir);
+      assert.equal(
+        afterIdRename.projects.find((candidate) => candidate.id === project.id)!.title,
+        "Renamed by ID",
+      );
+      yield* runCliWithRuntime([
+        "project",
+        "rename",
+        workspaceRoot,
+        "Renamed by stored path",
+        "--base-dir",
+        baseDir,
+      ]);
+      const afterPathRename = yield* readPersistedSnapshot(baseDir);
+      assert.equal(
+        afterPathRename.projects.find((candidate) => candidate.id === project.id)!.title,
+        "Renamed by stored path",
+      );
+      const error = yield* runCliWithRuntime([
+        "project",
+        "remove",
+        workspaceRoot,
+        "--base-dir",
+        baseDir,
+      ]).pipe(Effect.flip);
+      assert.include(error.message, "cannot be deleted without force=true");
+      yield* runCliWithRuntime([
+        "project",
+        "remove",
+        workspaceRoot,
+        "--force",
+        "--base-dir",
+        baseDir,
+      ]);
+      const after = yield* readPersistedSnapshot(baseDir);
+      assert.isNotNull(after.projects.find((candidate) => candidate.id === project.id)!.deletedAt);
+      assert.isNotNull(
+        after.threads.find((thread) => thread.id === "thread-project-lookup")!.deletedAt,
+      );
+      assert.isFalse(NodeFS.existsSync(workspaceRoot));
+    }),
+  );
+
+  it.effect("preserves normalized paths and distinct symlink project entries", () =>
+    Effect.gen(function* () {
+      const { baseDir, workspaceRoot, project } = yield* makeProjectLookupFixture(false, false);
+      const normalizedInput = `${workspaceRoot}${NodePath.sep}.`;
+      yield* runCliWithRuntime([
+        "project",
+        "rename",
+        normalizedInput,
+        "Normalized",
+        "--base-dir",
+        baseDir,
+      ]);
+      const renamed = yield* readPersistedSnapshot(baseDir);
+      assert.equal(
+        renamed.projects.find((candidate) => candidate.id === project.id)!.title,
+        "Normalized",
+      );
+      const aliasPath = `${workspaceRoot}-alias`;
+      NodeFS.symlinkSync(workspaceRoot, aliasPath, "junction");
+      const error = yield* runCliWithRuntime([
+        "project",
+        "remove",
+        aliasPath,
+        "--force",
+        "--base-dir",
+        baseDir,
+      ]).pipe(Effect.flip);
+      assert.include(error.message, "No active project found");
+      yield* runCliWithRuntime(["project", "add", aliasPath, "--base-dir", baseDir]);
+      const added = yield* readPersistedSnapshot(baseDir);
+      const aliasProject = added.projects.find(
+        (candidate) => candidate.workspaceRoot === aliasPath,
+      )!;
+      assert.notEqual(aliasProject.id, project.id);
+      yield* runCliWithRuntime([
+        "project",
+        "remove",
+        `${aliasPath}${NodePath.sep}.`,
+        "--base-dir",
+        baseDir,
+      ]);
+      const after = yield* readPersistedSnapshot(baseDir);
+      assert.isNotNull(
+        after.projects.find((candidate) => candidate.id === aliasProject.id)!.deletedAt,
+      );
+      assert.isNull(after.projects.find((candidate) => candidate.id === project.id)!.deletedAt);
+      assert.isTrue(NodeFS.existsSync(workspaceRoot));
+    }),
+  );
+});
 
 const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
@@ -217,151 +434,12 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
-  it.effect("rejects connect commands when public configuration is missing", () =>
+  it.effect("rejects removed managed connect commands", () =>
     Effect.gen(function* () {
-      const error = yield* runCli(["connect", "status"], noConnectCli).pipe(Effect.flip);
-
-      if (!CliError.isCliError(error)) {
-        assert.fail(`Expected CliError, got ${String(error)}`);
-      }
-      if (error._tag !== "ShowHelp") {
-        assert.fail(`Expected ShowHelp, got ${error._tag}`);
-      }
-      assert.deepEqual(error.commandPath, ["phoenix", "connect"]);
-      assert.include(error.errors[0]?.message ?? "", "missing T3 Connect public configuration");
-
-      const output = (yield* TestConsole.errorLines).join("\n");
-      assert.include(output, "ERROR");
-      assert.include(output, "missing T3 Connect public configuration");
+      const error = yield* runCli(["connect", "status"]).pipe(Effect.flip);
+      assert.isTrue(CliError.isCliError(error));
     }).pipe(Effect.provide(Layer.mergeAll(CliRuntimeLayer, TestConsole.layer))),
   );
-
-  it.effect("only exposes supported service commands without T3 Connect configuration", () =>
-    Effect.gen(function* () {
-      const { output } = yield* captureStdout(runCli(["service", "--help"], noConnectCli));
-
-      assert.include(output, "Manage the Phoenix background service.");
-      assert.include(output, "uninstall");
-      assert.include(output, "status");
-      assert.include(output, "install");
-      assert.include(output, "update");
-    }),
-  );
-
-  it.effect("reports fresh headless connect state without requiring local configuration", () =>
-    Effect.gen(function* () {
-      const baseDir = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "t3-cli-cloud-status-test-"),
-      );
-      const { output } = yield* captureStdout(
-        runConnectCli(["connect", "status", "--base-dir", baseDir, "--json"]),
-      );
-      // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is decoded as a presentation DTO.
-      const status = JSON.parse(output) as {
-        readonly desired: boolean;
-        readonly authenticated: boolean;
-        readonly linked: boolean;
-        readonly cloudUserId: string | null;
-        readonly relayUrl: string | null;
-      };
-
-      assert.equal(status.desired, false);
-      assert.equal(status.authenticated, false);
-      assert.equal(status.linked, false);
-      assert.equal(status.cloudUserId, null);
-      assert.equal(status.relayUrl, null);
-    }).pipe(Effect.provide(DisconnectedLauncherChildLayer)),
-  );
-
-  it.effect("reports actionable human-readable headless connect state", () =>
-    Effect.gen(function* () {
-      const baseDir = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "t3-cli-cloud-status-human-test-"),
-      );
-      const { output } = yield* captureStdout(
-        runConnectCli(["connect", "status", "--base-dir", baseDir]),
-      );
-
-      assert.include(output, "T3 Connect\n  Exposure: disabled");
-      assert.include(output, "  Authorization: missing");
-      assert.include(output, "  Environment link: not provisioned");
-      assert.include(
-        output,
-        "Next: Run `phoenix connect link` to authorize and enable T3 Connect.",
-      );
-    }),
-  );
-
-  it.effect("accepts the --headless login override without enabling access", () =>
-    Effect.gen(function* () {
-      const baseDir = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "t3-cli-cloud-login-test-"),
-      );
-      const { secretsDir } = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
-      NodeFS.mkdirSync(secretsDir, { recursive: true });
-      NodeFS.writeFileSync(
-        NodePath.join(secretsDir, "cloud-cli-oauth-token.bin"),
-        // @effect-diagnostics-next-line preferSchemaOverJson:off - Test fixture matches the persisted CLI token representation.
-        JSON.stringify({
-          accessToken: "access-token",
-          refreshToken: "refresh-token",
-          expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-        }),
-      );
-
-      const login = yield* captureStdout(
-        runConnectCli(["connect", "login", "--base-dir", baseDir, "--headless"]),
-      );
-      const status = yield* captureStdout(
-        runConnectCli(["connect", "status", "--base-dir", baseDir, "--json"]),
-      );
-      // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is decoded as a presentation DTO.
-      const decoded = JSON.parse(status.output) as {
-        readonly desired: boolean;
-        readonly authenticated: boolean;
-      };
-
-      assert.equal(login.output, "✓ Signed in");
-      assert.isFalse(decoded.desired);
-      assert.isTrue(decoded.authenticated);
-    }),
-  );
-
-  it.effect("disables headless connect without a running server", () =>
-    Effect.gen(function* () {
-      const baseDir = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "t3-cli-cloud-unlink-test-"),
-      );
-      const { output } = yield* captureStdout(
-        runConnectCli(["connect", "unlink", "--base-dir", baseDir]),
-      );
-
-      assert.equal(output, "T3 Connect is disabled locally.");
-    }),
-  );
-
-  it.effect("logs out of headless connect and removes the stored CLI authorization", () =>
-    Effect.gen(function* () {
-      const baseDir = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "t3-cli-cloud-logout-test-"),
-      );
-      const { secretsDir } = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
-      const tokenPath = NodePath.join(secretsDir, "cloud-cli-oauth-token.bin");
-      NodeFS.mkdirSync(secretsDir, { recursive: true });
-      NodeFS.writeFileSync(tokenPath, "invalid persisted token");
-
-      const { output } = yield* captureStdout(
-        runConnectCli(["connect", "logout", "--base-dir", baseDir]),
-      );
-
-      assert.equal(
-        output,
-        "Signed out of T3 Connect locally.\nThe background service is managed separately with `phoenix service`.",
-      );
-      assert.isFalse(NodeFS.existsSync(tokenPath));
-    }),
-  );
-
   it.effect("executes auth pairing subcommands and redacts secrets from list output", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(

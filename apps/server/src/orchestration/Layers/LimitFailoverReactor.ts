@@ -75,7 +75,7 @@ export const failoverCandidates = (
       resolveProviderInstanceEnabled(config),
   );
 
-export const makeLimitFailoverReactor = Effect.gen(function* () {
+const makeLimitFailoverReactor = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const settingsService = yield* ServerSettingsService;

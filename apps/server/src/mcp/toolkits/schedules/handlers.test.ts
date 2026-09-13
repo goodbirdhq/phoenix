@@ -35,6 +35,7 @@ const callingShell = {
   modelSelection: { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-opus" },
   runtimeMode: "full-access",
   interactionMode: "default",
+  pullRequests: [],
   branch: null,
   worktreePath: null,
   latestTurn: null,

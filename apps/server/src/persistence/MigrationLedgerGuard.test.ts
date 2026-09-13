@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { MigrationLedgerMismatchError, runMigrations } from "./Migrations.ts";
-import * as NodeSqliteClient from "./NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const cleanLayer = it.layer(NodeSqliteClient.layerMemory());
 const renamedLayer = it.layer(NodeSqliteClient.layerMemory());
@@ -63,5 +63,26 @@ rollbackLayer("migration ledger guard", (it) => {
       const executed = yield* runMigrations({ toMigrationInclusive: 6 });
       assert.deepStrictEqual(executed, []);
     }),
+  );
+});
+
+it.layer(NodeSqliteClient.layerMemory())("upstream migration upgrade", (it) => {
+  it.effect(
+    "extends the Phoenix ledger through upstream migrations without changing shipped IDs",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 40 });
+        yield* runMigrations({ toMigrationInclusive: 62 });
+        const before =
+          yield* sql`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
+        assert.lengthOf(before, 62);
+        yield* runMigrations({ toMigrationInclusive: 69 });
+        const after =
+          yield* sql`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
+        assert.lengthOf(after, 69);
+        assert.deepStrictEqual(after.slice(0, 62), before);
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 69 }), []);
+      }),
   );
 });

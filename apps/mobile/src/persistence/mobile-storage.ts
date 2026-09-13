@@ -14,11 +14,12 @@ import {
 import * as MobileSecureStorage from "./mobile-secure-storage";
 
 const CONNECTIONS_KEY = "t3code.connections";
-const AGENT_AWARENESS_DEVICE_ID_KEY = "t3code.agent-awareness.device-id";
+const AGENT_AWARENESS_DEVICE_ID_KEY = "phoenix.agent-awareness.device-id";
+const LEGACY_AGENT_AWARENESS_DEVICE_ID_KEY = "t3code.agent-awareness.device-id";
 const AGENT_AWARENESS_REGISTRATION_KEY = "t3code.agent-awareness.registration";
 const RECENT_THREAD_SHORTCUTS_KEY = "t3code.recent-thread-shortcuts";
 
-export class MobileStorageDecodeError extends Schema.TaggedErrorClass<MobileStorageDecodeError>()(
+export class MobileStorageDecodeError extends Schema.TaggedError<MobileStorageDecodeError>()(
   "MobileStorageDecodeError",
   {
     key: Schema.String,
@@ -30,7 +31,7 @@ export class MobileStorageDecodeError extends Schema.TaggedErrorClass<MobileStor
   }
 }
 
-export class MobileStorageEncodeError extends Schema.TaggedErrorClass<MobileStorageEncodeError>()(
+export class MobileStorageEncodeError extends Schema.TaggedError<MobileStorageEncodeError>()(
   "MobileStorageEncodeError",
   {
     key: Schema.String,
@@ -42,7 +43,7 @@ export class MobileStorageEncodeError extends Schema.TaggedErrorClass<MobileStor
   }
 }
 
-export class MobileDeviceIdGenerationError extends Schema.TaggedErrorClass<MobileDeviceIdGenerationError>()(
+export class MobileDeviceIdGenerationError extends Schema.TaggedError<MobileDeviceIdGenerationError>()(
   "MobileDeviceIdGenerationError",
   { cause: Schema.Defect() },
 ) {
@@ -191,6 +192,13 @@ export const make = Effect.fn("MobileStorage.make")(function* () {
   const loadOrCreateAgentAwarenessDeviceId = Effect.gen(function* () {
     const existing = yield* secureStorage.getItem(AGENT_AWARENESS_DEVICE_ID_KEY);
     if (existing?.trim()) return existing;
+    // Keep an existing Phoenix installation's relay identity stable while
+    // moving the key into Phoenix's namespace.
+    const legacy = yield* secureStorage.getItem(LEGACY_AGENT_AWARENESS_DEVICE_ID_KEY);
+    if (legacy?.trim()) {
+      yield* secureStorage.setItem(AGENT_AWARENESS_DEVICE_ID_KEY, legacy);
+      return legacy;
+    }
     const deviceId = yield* Effect.tryPromise({
       try: () => import("../lib/uuid").then(({ uuidv4 }) => uuidv4()),
       catch: (cause) => new MobileDeviceIdGenerationError({ cause }),
@@ -199,9 +207,12 @@ export const make = Effect.fn("MobileStorage.make")(function* () {
     return deviceId;
   });
 
-  const loadAgentAwarenessDeviceId = secureStorage
-    .getItem(AGENT_AWARENESS_DEVICE_ID_KEY)
-    .pipe(Effect.map((existing) => (existing?.trim() ? existing : null)));
+  const loadAgentAwarenessDeviceId = Effect.gen(function* () {
+    const existing = yield* secureStorage.getItem(AGENT_AWARENESS_DEVICE_ID_KEY);
+    if (existing?.trim()) return existing;
+    const legacy = yield* secureStorage.getItem(LEGACY_AGENT_AWARENESS_DEVICE_ID_KEY);
+    return legacy?.trim() ? legacy : null;
+  });
 
   const loadAgentAwarenessRegistrationRecord = readJson<AgentAwarenessRegistrationRecord>(
     AGENT_AWARENESS_REGISTRATION_KEY,

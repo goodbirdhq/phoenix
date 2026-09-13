@@ -170,7 +170,7 @@ export class ScheduleService extends Context.Service<ScheduleService, ScheduleSe
   "t3/schedule/ScheduleService",
 ) {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const crypto = yield* Crypto.Crypto;
   const projection = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;

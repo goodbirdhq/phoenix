@@ -217,7 +217,7 @@ describe("t3 pair", () => {
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("directs to t3 serve or t3 connect when no server is running", () =>
+  it.effect("directs to serve and pair when no server is running", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-none-test-"));
 
@@ -230,7 +230,8 @@ describe("t3 pair", () => {
       );
       assert.include(rendered, "No running Phoenix server found.");
       assert.include(rendered, "phoenix serve");
-      assert.include(rendered, "phoenix connect");
+      assert.include(rendered, "phoenix pair");
+      assert.notInclude(rendered, "phoenix connect");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

@@ -68,6 +68,7 @@ const makeShell = (
   worktreePath: null,
   spawnedByThreadId: threadId === CHILD_ID ? PARENT_ID : null,
   reportDelivery,
+  pullRequests: [],
   latestTurn: null,
   createdAt: NOW,
   updatedAt,
@@ -191,6 +192,8 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
 
   const engine = OrchestrationEngineService.of({
     readEvents: () => Stream.empty,
+    readThreadEvents: () => Stream.empty,
+    getThreadReplayStats: () => Effect.die("unused"),
     dispatch: (command) =>
       Effect.gen(function* () {
         yield* Ref.update(commands, (entries) => [...entries, command]);

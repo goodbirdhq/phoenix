@@ -227,7 +227,7 @@ export interface TerminalWorktreeRisk {
  * where the durable account lives. A parent that opted out of report wakes
  * still needs to know its child is gone; silence here is how work gets lost.
  */
-export const formatDeathNotice = (input: {
+const formatDeathNotice = (input: {
   readonly childTitle: string;
   readonly episodeKey: string;
   readonly endedAt: string;

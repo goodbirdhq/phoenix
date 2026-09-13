@@ -215,7 +215,7 @@ export const failoverGroupDriverConflicts = (
   return conflicts;
 };
 
-export const failoverGroupsShareOneDriver = Schema.makeFilter(
+const failoverGroupsShareOneDriver = Schema.makeFilter(
   (instances: Readonly<Record<string, ProviderInstanceConfig>>) => {
     const conflicts = failoverGroupDriverConflicts(instances);
     if (conflicts.length === 0) return true;

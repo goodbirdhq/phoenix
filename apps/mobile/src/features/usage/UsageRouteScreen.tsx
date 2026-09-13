@@ -16,8 +16,14 @@ import {
   type SubscriptionAvailabilitySource,
   type SubscriptionLimit,
 } from "@t3tools/client-runtime/usage/subscription-availability";
-import type { MergedUsage } from "@t3tools/shared/usageMerge";
 import * as DateTime from "effect/DateTime";
+import { EnvironmentId, USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
+import {
+  isCompatibleUsageContractVersion,
+  isModelCostUnknown,
+  type DailyTotals,
+  type MergedUsage,
+} from "@t3tools/shared/usageMerge";
 import {
   enumerateDays,
   enumerateHourStarts,
@@ -27,29 +33,71 @@ import {
   formatDateTimeShort,
   makeWindow,
 } from "@t3tools/shared/usageFormat";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../components/AppText";
+import { cn } from "../../lib/cn";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { SettingsSection } from "../settings/components/SettingsSection";
 import { LineAreaChart } from "../../components/charts/LineAreaChart";
 import type { UsageChartMetric } from "@t3tools/client-runtime/usage/chart-series";
+import { UsageDailyChart } from "./UsageDailyChart";
+import { toggleUsageEnvironment } from "./usageEnvironmentSelection";
+import { useRefreshLimits } from "./UsageLimitsSection";
+import { UsageLimitsSection } from "./UsageLimitsPooled";
+import { ControlPillMenu } from "../../components/ControlPill";
+import { SymbolView } from "../../components/AppSymbol";
 import { PROVIDER_LABEL, useProviderColors } from "./usageProviders";
 
+type UsageTab = "usage" | "limits";
+const TAB_OPTIONS = [
+  { value: "usage", label: "Usage" },
+  { value: "limits", label: "Limits" },
+] as const satisfies readonly { value: UsageTab; label: string }[];
+
+// Labels are abbreviated to share a row with the metric toggle; screen
+// readers get the full phrase.
 const WINDOW_OPTIONS = [
-  { days: 1, label: "Past 24h" },
-  { days: 7, label: "7 days" },
-  { days: 30, label: "30 days" },
-  { days: 90, label: "90 days" },
+  { value: 1, label: "24h", accessibilityLabel: "Past 24 hours" },
+  { value: 7, label: "7d", accessibilityLabel: "Past 7 days" },
+  { value: 30, label: "30d", accessibilityLabel: "Past 30 days" },
+  { value: 90, label: "90d", accessibilityLabel: "Past 90 days" },
 ] as const;
+
+const METRIC_OPTIONS = [
+  { value: "cost", label: "Cost" },
+  { value: "tokens", label: "Tokens" },
+] as const satisfies readonly { value: UsageChartMetric; label: string }[];
 
 const CHART_HEIGHT = 180;
 
+function UsageCoverageNotice(props: {
+  readonly environments: readonly EnvironmentUsageStatus[];
+  readonly merged: MergedUsage;
+  readonly isPartial: boolean;
+}) {
+  const unavailable = props.environments.filter((environment) => environment.error !== null);
+  const pending = props.environments.filter((environment) => environment.isPending);
+  if (!props.isPartial && unavailable.length === 0 && pending.length === 0) return null;
+  const label =
+    unavailable.length > 0
+      ? `Usage is incomplete: ${unavailable.map((environment) => environment.label).join(", ")} could not be read.`
+      : pending.length > 0
+        ? "Refreshing usage from connected environments…"
+        : "Usage is incomplete for one or more environments.";
+  return <Text className="text-xs text-foreground-muted">{label}</Text>;
+}
+
+/**
+ * Two tabs over one screen. Usage is the transcript-derived spend for a
+ * period; Limits is the live subscription quota, which has no period. Both
+ * pull to refresh, each refreshing its own data.
+ */
 export function UsageRouteScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
@@ -59,6 +107,8 @@ export function UsageRouteScreen() {
   }));
   const [accountKey, setAccountKey] = useState<string | null>(null);
   const [environmentId, setEnvironmentId] = useState<string | null>(null);
+  // Overview is the default; Limits (live subscription quotas) stays a tap away.
+  const [mainTab, setMainTab] = useState<UsageTab>("usage");
   const [tab, setTab] = useState("overview");
   const [grouping, setGrouping] = useState<UsageChartGrouping>("provider");
   const [threadByProvider, setThreadByProvider] = useState(false);
@@ -71,11 +121,20 @@ export function UsageRouteScreen() {
   const [metric, setMetric] = useState<UsageChartMetric>("cost");
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
+  const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
+    useState<ReadonlySet<EnvironmentId> | null>(null);
+  // The account view scopes history to one environment at a time; the Limits
+  // tab pools across the (possibly multiple) environments chosen there.
+  const accountScopedEnvironmentIds = useMemo(
+    () => (environmentId === null ? null : new Set([EnvironmentId.make(environmentId)])),
+    [environmentId],
+  );
   const {
     merged,
     accounts,
     allEnvironments,
     environments,
+    selectedEnvironments,
     isPending,
     isPartial,
     refresh,
@@ -84,21 +143,22 @@ export function UsageRouteScreen() {
     hasProviderAvailabilityError,
   } = useUsage(
     { ...window, includeSessions: tab === "projects" || tab === "threads" },
-    environmentId,
+    accountScopedEnvironmentIds,
     accountKey,
   );
+  const limits = useRefreshLimits(selectedEnvironmentIds);
   const selectedAccount = findUsageAccount(accounts, accountKey);
   const hasMappedHistory = useMemo(
     () =>
       !accountKey ||
       (selectedAccount &&
-        environments.some(
+        selectedEnvironments.some(
           (environment) =>
             environment.summary &&
             scopeAccountHistory(environment.summary, environment.environmentId, selectedAccount)
               .sources.length > 0,
         )),
-    [accountKey, selectedAccount, environments],
+    [accountKey, selectedAccount, selectedEnvironments],
   );
   const subscriptionLimits = useMemo(
     () =>
@@ -202,10 +262,9 @@ export function UsageRouteScreen() {
     threadByProvider,
   ]);
 
-  // The pull spinner tracks re-scans of environments that have answered
-  // before. The initial scan renders its own placeholder, and an unreachable
-  // environment stays pending forever — neither may pin the spinner on.
-  const refreshing = environments.some((entry) => entry.isPending && entry.summary !== null);
+  const [refreshingUsage, setRefreshingUsage] = useState(false);
+  const refreshingRef = useRef(false);
+  const showingLimits = tab === "limits";
   const selectWindow = (days: number) => {
     setWindowSelection({
       days,
@@ -213,17 +272,122 @@ export function UsageRouteScreen() {
     });
   };
   const refreshWindow = () => {
+    if (refreshingRef.current) return;
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
-    refresh({ ...nextWindow, includeSessions: tab === "projects" || tab === "threads" });
-    setWindowSelection({ days: windowDays, window: nextWindow });
+    if (
+      nextWindow.sinceDay !== window.sinceDay ||
+      nextWindow.untilDay !== window.untilDay ||
+      nextWindow.sinceTime !== window.sinceTime ||
+      nextWindow.untilTime !== window.untilTime
+    ) {
+      setWindowSelection({ days: windowDays, window: nextWindow });
+    }
+    refreshingRef.current = true;
+    setRefreshingUsage(true);
+    void refresh({
+      ...nextWindow,
+      includeSessions: tab === "projects" || tab === "threads",
+    }).finally(() => {
+      refreshingRef.current = false;
+      setRefreshingUsage(false);
+    });
   };
+
+  const showEnvironmentFilter = environments.length > 0 || selectedEnvironmentIds !== null;
+  const hasLoadingEnvironments = selectedEnvironments.some(isUsageLoading);
+  const filterAccessibilityLabel = hasLoadingEnvironments
+    ? "Filter usage environments, some environments are loading"
+    : "Filter usage environments";
+  const filterIcon =
+    selectedEnvironmentIds === null
+      ? "line.3.horizontal.decrease"
+      : "line.3.horizontal.decrease.circle.fill";
+  const environmentActions = useMemo(
+    () => [
+      {
+        id: "all",
+        title: "All environments",
+        subtitle: undefined,
+        state: selectedEnvironmentIds === null ? ("on" as const) : ("off" as const),
+      },
+      ...environments.map((environment) => ({
+        id: environment.environmentId,
+        title: environment.label,
+        subtitle: usageEnvironmentStatus(environment),
+        state:
+          selectedEnvironmentIds === null || selectedEnvironmentIds.has(environment.environmentId)
+            ? ("on" as const)
+            : ("off" as const),
+      })),
+    ],
+    [environments, selectedEnvironmentIds],
+  );
+  const selectEnvironment = useCallback(
+    (value: string) => {
+      if (value === "all") {
+        setSelectedEnvironmentIds(null);
+        return;
+      }
+      const id = EnvironmentId.make(value);
+      setSelectedEnvironmentIds((selected) => toggleUsageEnvironment(selected, environments, id));
+    },
+    [environments],
+  );
+  const environmentFilter = useMemo(
+    () =>
+      showEnvironmentFilter ? (
+        <ControlPillMenu
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel={filterAccessibilityLabel}
+          title="Environments"
+          actions={environmentActions}
+          onPressAction={({ nativeEvent }) => selectEnvironment(nativeEvent.event)}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={filterAccessibilityLabel}
+            className={cn(
+              "items-center justify-center rounded-full",
+              Platform.OS === "ios" ? "size-[28px]" : "size-[44px]",
+            )}
+          >
+            <SymbolView name={filterIcon} size={22} tintColorClassName="accent-icon" />
+            {hasLoadingEnvironments ? (
+              <View
+                pointerEvents="none"
+                className="absolute -right-[2px] -top-[2px] size-[9px] rounded-full bg-amber-500"
+              />
+            ) : null}
+          </Pressable>
+        </ControlPillMenu>
+      ) : null,
+    [
+      showEnvironmentFilter,
+      environmentActions,
+      selectEnvironment,
+      filterAccessibilityLabel,
+      filterIcon,
+      hasLoadingEnvironments,
+    ],
+  );
+
+  useLayoutEffect(() => {
+    if (Platform.OS === "ios") {
+      navigation.setOptions({ headerRight: () => environmentFilter });
+    }
+  }, [navigation, environmentFilter]);
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
       {Platform.OS === "android" ? (
         <>
           <NativeStackScreenOptions options={{ headerShown: false }} />
-          <AndroidScreenHeader title="Usage" onBack={() => navigation.goBack()} />
+          <AndroidScreenHeader
+            title="Usage"
+            onBack={() => navigation.goBack()}
+            trailing={environmentFilter}
+          />
         </>
       ) : null}
       <ScrollView
@@ -232,7 +396,12 @@ export function UsageRouteScreen() {
         className="flex-1"
         contentContainerClassName="gap-6 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshWindow} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={showingLimits ? limits.refreshing : refreshingUsage}
+            onRefresh={showingLimits ? () => void limits.refresh() : refreshWindow}
+          />
+        }
       >
         <Text className="text-xs text-foreground-muted">Accounts</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -320,170 +489,189 @@ export function UsageRouteScreen() {
             "projects",
             "threads",
             ...(selectedAccount ? ["environments"] : []),
+            "limits",
           ].map((value) => ({ value, label: value[0]!.toUpperCase() + value.slice(1) }))}
           selected={tab}
           onSelect={setTab}
         />
-        <SegmentedControl
-          options={WINDOW_OPTIONS.map((option) => ({ value: option.days, label: option.label }))}
-          selected={windowDays}
-          onSelect={selectWindow}
-        />
-
-        <UsageCoverageNotice environments={environments} merged={merged} isPartial={isPartial} />
-
-        {selectedAccount && tab === "overview" && (
-          <SubscriptionLimitsSection
-            limits={subscriptionLimits}
-            isPending={isProviderAvailabilityPending}
-            hasError={hasProviderAvailabilityError}
-            nowMs={resetClockMs}
+        {showingLimits ? (
+          <UsageLimitsSection
+            now={limits.now}
+            failedLabels={limits.failedLabels}
+            selectedEnvironmentIds={selectedEnvironmentIds}
           />
-        )}
-
-        {isPending || (Boolean(accountKey) && !selectedAccount && isProviderAvailabilityPending) ? (
-          <Text className="py-16 text-center text-base text-foreground-muted">
-            Scanning provider transcripts…
-          </Text>
-        ) : environments.length === 0 ? (
-          <Text className="py-16 text-center text-base text-foreground-muted">
-            Connect an environment to see usage.
-          </Text>
-        ) : !hasMappedHistory && tab !== "environments" ? (
-          <Text className="py-8 text-sm text-foreground-muted">
-            No history can currently be assigned to this account in the selected environments.
-            Shared or unmapped history is available in All accounts.
-          </Text>
         ) : (
           <>
-            {tab === "environments" && selectedAccount ? (
-              selectedAccount.memberships
-                .filter(
-                  (member) => environmentId === null || member.environmentId === environmentId,
-                )
-                .map((member) => (
-                  <View
-                    key={usageAccountMemberKey(member)}
-                    className="gap-1 border-b border-border pb-3"
-                  >
-                    <Text className="font-t3-medium text-foreground">
-                      {member.environmentLabel}
-                    </Text>
-                    <Text className="text-sm text-foreground-muted">
-                      {member.provider.version ?? "Version not reported"}
-                      {member.provider.versionAdvisory?.status === "behind_latest"
-                        ? " · Update available"
-                        : ""}
-                    </Text>
-                    <Text className="text-xs text-foreground-muted">
-                      {member.isConnected === false
-                        ? "Offline"
-                        : !member.provider.enabled
-                          ? "Disabled"
-                          : !member.provider.installed
-                            ? "Not installed"
-                            : member.provider.auth.status === "authenticated"
-                              ? "Signed in"
-                              : member.provider.auth.status === "unauthenticated"
-                                ? "Signed out"
-                                : "Unknown"}{" "}
-                      · {formatDateTimeShort(member.provider.checkedAt, window.timeZone)}
-                    </Text>
-                  </View>
-                ))
+            <SegmentedControl
+              options={WINDOW_OPTIONS.map((option) => ({
+                value: option.value,
+                label: option.label,
+              }))}
+              selected={windowDays}
+              onSelect={selectWindow}
+            />
+
+            <UsageCoverageNotice
+              environments={environments}
+              merged={merged}
+              isPartial={isPartial}
+            />
+
+            {selectedAccount && tab === "overview" && (
+              <SubscriptionLimitsSection
+                limits={subscriptionLimits}
+                isPending={isProviderAvailabilityPending}
+                hasError={hasProviderAvailabilityError}
+                nowMs={resetClockMs}
+              />
+            )}
+
+            {isPending ||
+            (Boolean(accountKey) && !selectedAccount && isProviderAvailabilityPending) ? (
+              <Text className="py-16 text-center text-base text-foreground-muted">
+                Scanning provider transcripts…
+              </Text>
+            ) : environments.length === 0 ? (
+              <Text className="py-16 text-center text-base text-foreground-muted">
+                Connect an environment to see usage.
+              </Text>
+            ) : !hasMappedHistory && tab !== "environments" ? (
+              <Text className="py-8 text-sm text-foreground-muted">
+                No history can currently be assigned to this account in the selected environments.
+                Shared or unmapped history is available in All accounts.
+              </Text>
             ) : (
               <>
-                <View className="gap-1">
-                  <Text className="text-3xl font-t3-medium tabular-nums text-foreground">
-                    {metric === "cost"
-                      ? formatUsd(merged.costUsd)
-                      : formatTokens(merged.totalTokens)}
-                  </Text>
-                  <Text className="text-sm text-foreground-muted">
-                    {metric === "cost" ? "Estimated API cost" : "Processed tokens"} · selected
-                    period
-                  </Text>
-                </View>
-                <SegmentedControl
-                  options={[
-                    { value: "cost", label: "API cost" },
-                    { value: "tokens", label: "Tokens" },
-                  ]}
-                  selected={metric}
-                  onSelect={setMetric}
-                />
-                {tab === "overview" && (
-                  <SegmentedControl
-                    options={[
-                      { value: "provider", label: "Provider" },
-                      { value: "account", label: "Account" },
-                      { value: "environment", label: "Environment" },
-                    ]}
-                    selected={grouping}
-                    onSelect={setGrouping}
-                  />
-                )}
-                {tab === "threads" && (
+                {tab === "environments" && selectedAccount ? (
+                  selectedAccount.memberships
+                    .filter(
+                      (member) => environmentId === null || member.environmentId === environmentId,
+                    )
+                    .map((member) => (
+                      <View
+                        key={usageAccountMemberKey(member)}
+                        className="gap-1 border-b border-border pb-3"
+                      >
+                        <Text className="font-t3-medium text-foreground">
+                          {member.environmentLabel}
+                        </Text>
+                        <Text className="text-sm text-foreground-muted">
+                          {member.provider.version ?? "Version not reported"}
+                          {member.provider.versionAdvisory?.status === "behind_latest"
+                            ? " · Update available"
+                            : ""}
+                        </Text>
+                        <Text className="text-xs text-foreground-muted">
+                          {member.isConnected === false
+                            ? "Offline"
+                            : !member.provider.enabled
+                              ? "Disabled"
+                              : !member.provider.installed
+                                ? "Not installed"
+                                : member.provider.auth.status === "authenticated"
+                                  ? "Signed in"
+                                  : member.provider.auth.status === "unauthenticated"
+                                    ? "Signed out"
+                                    : "Unknown"}{" "}
+                          · {formatDateTimeShort(member.provider.checkedAt, window.timeZone)}
+                        </Text>
+                      </View>
+                    ))
+                ) : (
                   <>
-                    <Text className="text-base font-t3-medium text-foreground">
-                      Sessions created
-                    </Text>
-                    {!selectedAccount && (
+                    <View className="gap-1">
+                      <Text className="text-3xl font-t3-medium tabular-nums text-foreground">
+                        {metric === "cost"
+                          ? formatUsd(merged.costUsd)
+                          : formatTokens(merged.totalTokens)}
+                      </Text>
+                      <Text className="text-sm text-foreground-muted">
+                        {metric === "cost" ? "Estimated API cost" : "Processed tokens"} · selected
+                        period
+                      </Text>
+                    </View>
+                    <SegmentedControl
+                      options={[
+                        { value: "cost", label: "API cost" },
+                        { value: "tokens", label: "Tokens" },
+                      ]}
+                      selected={metric}
+                      onSelect={setMetric}
+                    />
+                    {tab === "overview" && (
                       <SegmentedControl
                         options={[
-                          { value: "total", label: "Total" },
-                          { value: "provider", label: "By provider" },
+                          { value: "provider", label: "Provider" },
+                          { value: "account", label: "Account" },
+                          { value: "environment", label: "Environment" },
                         ]}
-                        selected={threadByProvider ? "provider" : "total"}
-                        onSelect={(value) => setThreadByProvider(value === "provider")}
+                        selected={grouping}
+                        onSelect={setGrouping}
                       />
                     )}
+                    {tab === "threads" && (
+                      <>
+                        <Text className="text-base font-t3-medium text-foreground">
+                          Sessions created
+                        </Text>
+                        {!selectedAccount && (
+                          <SegmentedControl
+                            options={[
+                              { value: "total", label: "Total" },
+                              { value: "provider", label: "By provider" },
+                            ]}
+                            selected={threadByProvider ? "provider" : "total"}
+                            onSelect={(value) => setThreadByProvider(value === "provider")}
+                          />
+                        )}
+                      </>
+                    )}
+                    <LineAreaChart
+                      periods={chartDays}
+                      label={
+                        tab === "threads"
+                          ? "Sessions created"
+                          : metric === "cost"
+                            ? "API cost"
+                            : "Tokens"
+                      }
+                      height={CHART_HEIGHT}
+                      series={chartRows}
+                    />
+                    <View className="flex-row justify-between">
+                      <Text className="text-xs text-foreground-muted">
+                        {chartDays[0]?.slice(0, 16).replace("T", " ")}
+                      </Text>
+                      <Text className="text-xs text-foreground-muted">
+                        {chartDays.at(-1)?.slice(0, 16).replace("T", " ")}
+                      </Text>
+                    </View>
+                    {tab === "threads" && (
+                      <Text className="text-xs text-foreground-muted">
+                        Phoenix threads created, including those without token usage.
+                        {merged.threadCreationReporting === 0
+                          ? " Creation history is not available from these environments."
+                          : ""}
+                      </Text>
+                    )}
+                    <View className="flex-row flex-wrap gap-3">
+                      {chartRows.map((row) => (
+                        <Text key={row.id} className="text-xs text-foreground-muted">
+                          {row.label}
+                        </Text>
+                      ))}
+                    </View>
+                    {tab === "overview" && (
+                      <>
+                        <ProviderSection merged={merged} metric={metric} />
+                        <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
+                      </>
+                    )}
+                    {tab === "models" && <ModelsSection merged={merged} />}
+                    {(tab === "projects" || tab === "threads") && (
+                      <UsageReport key={tab} mode={tab} merged={merged} />
+                    )}
                   </>
-                )}
-                <LineAreaChart
-                  periods={chartDays}
-                  label={
-                    tab === "threads"
-                      ? "Sessions created"
-                      : metric === "cost"
-                        ? "API cost"
-                        : "Tokens"
-                  }
-                  height={CHART_HEIGHT}
-                  series={chartRows}
-                />
-                <View className="flex-row justify-between">
-                  <Text className="text-xs text-foreground-muted">
-                    {chartDays[0]?.slice(0, 16).replace("T", " ")}
-                  </Text>
-                  <Text className="text-xs text-foreground-muted">
-                    {chartDays.at(-1)?.slice(0, 16).replace("T", " ")}
-                  </Text>
-                </View>
-                {tab === "threads" && (
-                  <Text className="text-xs text-foreground-muted">
-                    Phoenix threads created, including those without token usage.
-                    {merged.threadCreationReporting === 0
-                      ? " Creation history is not available from these environments."
-                      : ""}
-                  </Text>
-                )}
-                <View className="flex-row flex-wrap gap-3">
-                  {chartRows.map((row) => (
-                    <Text key={row.id} className="text-xs text-foreground-muted">
-                      {row.label}
-                    </Text>
-                  ))}
-                </View>
-                {tab === "overview" && (
-                  <>
-                    <ProviderSection merged={merged} metric={metric} />
-                    <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
-                  </>
-                )}
-                {tab === "models" && <ModelsSection merged={merged} />}
-                {(tab === "projects" || tab === "threads") && (
-                  <UsageReport key={tab} mode={tab} merged={merged} />
                 )}
               </>
             )}
@@ -787,10 +975,14 @@ function ModelsSection(props: { readonly merged: MergedUsage }) {
               {model.model}
             </Text>
             <Text className="text-sm text-foreground-muted">
-              {formatPercent(model.costShare)} of cost · {formatTokens(model.totalTokens)} tokens
+              {isModelCostUnknown(model)
+                ? `no known rates · ${formatTokens(model.totalTokens)} tokens`
+                : `${formatPercent(model.costShare)} of cost · ${formatTokens(model.totalTokens)} tokens`}
             </Text>
           </View>
-          <Text className="text-base tabular-nums text-foreground">{formatUsd(model.costUsd)}</Text>
+          <Text className="text-base tabular-nums text-foreground">
+            {isModelCostUnknown(model) ? "Unpriced" : formatUsd(model.costUsd)}
+          </Text>
         </View>
       ))}
     </SettingsSection>
@@ -802,48 +994,22 @@ function ModelsSection(props: { readonly merged: MergedUsage }) {
  * one that failed, or one whose transcripts another environment already
  * reported.
  */
-function UsageCoverageNotice(props: {
-  readonly environments: readonly EnvironmentUsageStatus[];
-  readonly merged: MergedUsage;
-  readonly isPartial: boolean;
-}) {
-  const failed = props.environments.filter((environment) => environment.error !== null);
-  const stale = props.environments.filter((environment) =>
-    props.merged.staleEnvironments.includes(environment.environmentId),
-  );
-  const duplicateSources = props.merged.duplicateSources;
-  if (
-    failed.length === 0 &&
-    stale.length === 0 &&
-    duplicateSources.length === 0 &&
-    !props.isPartial
-  ) {
-    return null;
-  }
+function isUsageLoading(environment: EnvironmentUsageStatus) {
+  return environment.isPending || (environment.summary === null && environment.error === null);
+}
 
-  return (
-    <View className="gap-1 rounded-[16px] border-continuous bg-card px-4 py-3">
-      {props.isPartial ? (
-        <Text className="text-sm text-foreground-muted">
-          Some environments are still reporting. Totals are partial.
-        </Text>
-      ) : null}
-      {failed.map((environment) => (
-        <Text key={environment.environmentId} className="text-sm text-foreground-muted">
-          {environment.label} could not report usage.
-        </Text>
-      ))}
-      {stale.map((environment) => (
-        <Text key={environment.environmentId} className="text-sm text-foreground-muted">
-          {environment.label} runs an older server version and is excluded from totals.
-        </Text>
-      ))}
-      {duplicateSources.length > 0 ? (
-        <Text className="text-sm text-foreground-muted">
-          Counted once across environments sharing a transcript directory:{" "}
-          {duplicateSources.join(", ")}
-        </Text>
-      ) : null}
-    </View>
-  );
+function usageEnvironmentStatus(environment: EnvironmentUsageStatus): string {
+  if (
+    environment.summary &&
+    !isCompatibleUsageContractVersion(environment.summary.contractVersion, USAGE_CONTRACT_VERSION)
+  ) {
+    return "Older server · excluded from usage totals";
+  }
+  if (!environment.isConnected)
+    return environment.summary ? "Disconnected · showing saved usage" : "Waiting for connection…";
+  if (environment.error)
+    return environment.summary ? "Usage unavailable · showing saved totals" : "Usage unavailable";
+  if (isUsageLoading(environment))
+    return environment.summary ? "Updating usage…" : "Loading usage…";
+  return "Usage up to date";
 }

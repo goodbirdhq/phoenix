@@ -21,7 +21,7 @@ function resetLabel(window: ProviderAvailabilityWindow): string {
     : `Resets ${date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}`;
 }
 
-export function QuotaBar({
+function QuotaBar({
   window,
   color,
   prominent = false,

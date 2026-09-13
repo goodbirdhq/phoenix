@@ -7,7 +7,7 @@ Phoenix requires OpenCode 1.14.19 or newer. It checks the server version before 
 starts work. If the check fails, update OpenCode or fix the server URL and password, then refresh
 the provider status. Reconnecting the client also runs the check again.
 
-## Server authentication
+## Local or external server
 
 Without a server URL, Phoenix starts a local OpenCode server. The process inherits
 `OPENCODE_SERVER_PASSWORD` from the environment. A password in the provider settings overrides
@@ -17,7 +17,19 @@ With a server URL, Phoenix connects to that external server and uses only the pa
 provider settings. It does not send a local `OPENCODE_SERVER_PASSWORD` to an external server.
 OpenCode uses this password for HTTP Basic authentication.
 
-## Stop a turn
+After a lost connection, send another prompt to reconnect to the same OpenCode session.
+
+## Approvals
+
+OpenCode follows the shared [permission modes](./permission-modes.md). **Auto** has
+the same rules as **Supervised** because OpenCode has no AI approval reviewer.
+Environment files such as `.env` and `.env.local` need approval in restricted
+modes even though normal file reads do not; `.env.example` is allowed.
+
+**Allow for workspace** applies to matching requests in other OpenCode sessions
+using the same workspace. It is broader than the current thread, especially on a
+shared external server. Use **Allow once** for a single request. Denying an action
+does not stop the whole turn.
 
 When you select **Stop**, Phoenix stops the main OpenCode session and all nested child sessions.
 Phoenix waits for this cleanup before it marks the turn as stopped or sends the next prompt. It
@@ -26,7 +38,7 @@ does not stop unrelated OpenCode sessions.
 Stop reports an error if OpenCode cannot list or stop a child session. When Phoenix closes an
 OpenCode session, it also tries to stop the child sessions, but this teardown is best effort.
 
-## Refresh the model list
+## Refresh models, commands, and skills
 
 Phoenix loads the model list when an enabled OpenCode provider starts and keeps the list in its
 cache. Reconnecting a client or using a refresh control asks OpenCode for the list again. The

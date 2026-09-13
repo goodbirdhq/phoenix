@@ -62,7 +62,7 @@ export const LIST_SESSIONS_MAX_ENTRIES = 50;
 export const SESSION_REPORT_INLINE_MAX_CHARS = 1024;
 // When a large report carries no author abstract, the envelope falls back to
 // this many leading characters of the summary.
-export const SESSION_REPORT_ABSTRACT_FALLBACK_CHARS = 500;
+const SESSION_REPORT_ABSTRACT_FALLBACK_CHARS = 500;
 // Upper bound on one read_report page.
 export const READ_REPORT_MAX_CHARS = 16_384;
 
@@ -818,7 +818,7 @@ const SessionOrchestrationErrorFields = {
   message: Schema.String,
 };
 
-export class SessionOrchestrationDeniedError extends Schema.TaggedErrorClass<SessionOrchestrationDeniedError>()(
+export class SessionOrchestrationDeniedError extends Schema.TaggedError<SessionOrchestrationDeniedError>()(
   "SessionOrchestrationDeniedError",
   {
     ...SessionOrchestrationErrorFields,
@@ -847,7 +847,7 @@ export class SessionOrchestrationDeniedError extends Schema.TaggedErrorClass<Ses
  * Structured rather than a message so the caller can decide what to do with
  * the specific files and commits at risk instead of parsing prose.
  */
-export class SessionOrchestrationWorktreeNotEmptyError extends Schema.TaggedErrorClass<SessionOrchestrationWorktreeNotEmptyError>()(
+export class SessionOrchestrationWorktreeNotEmptyError extends Schema.TaggedError<SessionOrchestrationWorktreeNotEmptyError>()(
   "SessionOrchestrationWorktreeNotEmptyError",
   {
     ...SessionOrchestrationErrorFields,
@@ -872,7 +872,7 @@ export class SessionOrchestrationWorktreeNotEmptyError extends Schema.TaggedErro
  * branch head, and the head commit of a merged pull request all being the same
  * commit. `reason` says which leg of that failed, and the SHAs say by how much.
  */
-export class SessionOrchestrationBranchNotMergedError extends Schema.TaggedErrorClass<SessionOrchestrationBranchNotMergedError>()(
+export class SessionOrchestrationBranchNotMergedError extends Schema.TaggedError<SessionOrchestrationBranchNotMergedError>()(
   "SessionOrchestrationBranchNotMergedError",
   {
     ...SessionOrchestrationErrorFields,
@@ -893,7 +893,7 @@ export class SessionOrchestrationBranchNotMergedError extends Schema.TaggedError
  * leaves behind) blocks every later git command on that repository until its
  * lock is removed, and only the caller can confirm no live git process owns it.
  */
-export class SessionOrchestrationGitLockError extends Schema.TaggedErrorClass<SessionOrchestrationGitLockError>()(
+export class SessionOrchestrationGitLockError extends Schema.TaggedError<SessionOrchestrationGitLockError>()(
   "SessionOrchestrationGitLockError",
   {
     ...SessionOrchestrationErrorFields,
@@ -908,7 +908,7 @@ export class SessionOrchestrationGitLockError extends Schema.TaggedErrorClass<Se
   },
 ) {}
 
-export class SessionOrchestrationInvalidInputError extends Schema.TaggedErrorClass<SessionOrchestrationInvalidInputError>()(
+export class SessionOrchestrationInvalidInputError extends Schema.TaggedError<SessionOrchestrationInvalidInputError>()(
   "SessionOrchestrationInvalidInputError",
   SessionOrchestrationErrorFields,
 ) {}
@@ -921,7 +921,7 @@ export class SessionOrchestrationInvalidInputError extends Schema.TaggedErrorCla
  * of a concurrent-amendment race, where the winner's id is the only thing the
  * loser needs to make progress.
  */
-export class SessionOrchestrationReportAlreadySupersededError extends Schema.TaggedErrorClass<SessionOrchestrationReportAlreadySupersededError>()(
+export class SessionOrchestrationReportAlreadySupersededError extends Schema.TaggedError<SessionOrchestrationReportAlreadySupersededError>()(
   "SessionOrchestrationReportAlreadySupersededError",
   {
     ...SessionOrchestrationErrorFields,
@@ -935,12 +935,12 @@ export class SessionOrchestrationReportAlreadySupersededError extends Schema.Tag
   },
 ) {}
 
-export class SessionOrchestrationUnavailableError extends Schema.TaggedErrorClass<SessionOrchestrationUnavailableError>()(
+export class SessionOrchestrationUnavailableError extends Schema.TaggedError<SessionOrchestrationUnavailableError>()(
   "SessionOrchestrationUnavailableError",
   SessionOrchestrationErrorFields,
 ) {}
 
-export class SessionOrchestrationOperationError extends Schema.TaggedErrorClass<SessionOrchestrationOperationError>()(
+export class SessionOrchestrationOperationError extends Schema.TaggedError<SessionOrchestrationOperationError>()(
   "SessionOrchestrationOperationError",
   SessionOrchestrationErrorFields,
 ) {}

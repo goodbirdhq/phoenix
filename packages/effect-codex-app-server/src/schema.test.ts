@@ -4,10 +4,37 @@ import * as Schema from "effect/Schema";
 import * as CodexSchema from "./schema.ts";
 
 const isGetAccountResponse = Schema.is(CodexSchema.V2GetAccountResponse);
+const isThreadReadResponse = Schema.is(CodexSchema.V2ThreadReadResponse);
 const isThreadResumeResponse = Schema.is(CodexSchema.V2ThreadResumeResponse);
+const isThreadRollbackResponse = Schema.is(CodexSchema.V2ThreadRollbackResponse);
+const isThreadForkResponse = Schema.is(CodexSchema.V2ThreadForkResponse);
+const isTurnCompletedNotification = Schema.is(CodexSchema.V2TurnCompletedNotification);
 const decodeThreadResumeResponse = Schema.decodeUnknownSync(CodexSchema.V2ThreadResumeResponse);
 
-it("preserves Codex resume errors introduced after the generated protocol", () => {
+it("keeps async questions in live notifications and thread history", () => {
+  const item = {
+    type: "agentMessage",
+    id: "question-1",
+    text: "Which package?\n- pnpm\n- npm\n\nWhat should it be named?",
+    phase: "final_answer",
+    delivery: "async",
+    questions: [
+      { title: "Which package manager?", options: ["pnpm", "npm"] },
+      { title: "What should it be named?" },
+    ],
+  } as const;
+  for (const schema of [
+    CodexSchema.ServerNotification__ThreadItem,
+    CodexSchema.V2ItemStartedNotification__ThreadItem,
+    CodexSchema.V2ItemCompletedNotification__ThreadItem,
+    CodexSchema.V2ThreadReadResponse__ThreadItem,
+    CodexSchema.V2ThreadResumeResponse__ThreadItem,
+  ]) {
+    assert.deepEqual(Schema.decodeUnknownSync(schema)(item), item);
+  }
+});
+
+it("accepts Codex 0.150 multi-agent values", () => {
   const schemas = [
     CodexSchema.ServerNotification__SubAgentActivityKind,
     CodexSchema.V2ItemStartedNotification__SubAgentActivityKind,
@@ -42,7 +69,7 @@ it("preserves Codex resume errors introduced after the generated protocol", () =
     modelProvider: "openai",
     sandbox: { type: "dangerFullAccess" },
     thread: {
-      cliVersion: "0.154.0",
+      cliVersion: "0.150.0",
       createdAt: 0,
       cwd: "/tmp/project",
       ephemeral: false,
@@ -54,12 +81,8 @@ it("preserves Codex resume errors introduced after the generated protocol", () =
       status: { type: "idle" },
       turns: [
         {
-          error: {
-            codexErrorInfo: "misalignmentPolicyViolation",
-            message: "The prior turn was blocked by policy.",
-          },
           id: "turn-1",
-          status: "failed",
+          status: "completed",
           items: [
             {
               agentsStates: {},
@@ -77,45 +100,105 @@ it("preserves Codex resume errors introduced after the generated protocol", () =
     },
   };
 
-  const decoded = decodeThreadResumeResponse(resumeResponse);
-  assert.deepEqual(decoded.thread.turns[0]?.error, {
-    codexErrorInfo: "misalignmentPolicyViolation",
-    message: "The prior turn was blocked by policy.",
-  });
+  assert.equal(Schema.is(CodexSchema.V2ThreadResumeResponse)(resumeResponse), true);
+});
 
-  const structuredErrorResponse = {
-    ...resumeResponse,
-    thread: {
-      ...resumeResponse.thread,
-      turns: [
-        {
-          ...resumeResponse.thread.turns[0],
-          error: {
-            codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 503 } },
-            message: "The response stream disconnected.",
-          },
+it("accepts Codex rate limit errors for thread responses", () => {
+  const failedThread = {
+    cliVersion: "0.150.0",
+    createdAt: 0,
+    cwd: "/tmp/project",
+    ephemeral: false,
+    id: "thread-1",
+    modelProvider: "openai",
+    preview: "",
+    sessionId: "session-1",
+    source: "cli",
+    status: { type: "idle" },
+    turns: [
+      {
+        error: {
+          codexErrorInfo: "rateLimitExceeded",
+          message: "Rate limit exceeded",
         },
-      ],
-    },
+        id: "turn-1",
+        items: [],
+        status: "failed",
+      },
+    ],
+    updatedAt: 0,
   };
-  assert.equal(isThreadResumeResponse(structuredErrorResponse), true);
+  assert.equal(isThreadReadResponse({ thread: failedThread }), true);
+  assert.equal(
+    isThreadResumeResponse({
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      cwd: "/tmp/project",
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      sandbox: { type: "dangerFullAccess" },
+      thread: failedThread,
+    }),
+    true,
+  );
+  assert.equal(isThreadRollbackResponse({ thread: failedThread }), true);
+});
 
-  const malformedErrorResponse = {
-    ...resumeResponse,
-    thread: {
-      ...resumeResponse.thread,
-      turns: [
-        {
-          ...resumeResponse.thread.turns[0],
-          error: {
-            codexErrorInfo: 503,
-            message: "Malformed error code.",
-          },
+it("accepts Codex misalignment policy errors for thread responses", () => {
+  const failedThread = {
+    cliVersion: "0.150.0",
+    createdAt: 0,
+    cwd: "/tmp/project",
+    ephemeral: false,
+    id: "thread-1",
+    modelProvider: "openai",
+    preview: "",
+    sessionId: "session-1",
+    source: "cli",
+    status: { type: "idle" },
+    turns: [
+      {
+        error: {
+          codexErrorInfo: "misalignmentPolicyViolation",
+          message: "Misalignment policy violation",
         },
-      ],
-    },
+        id: "turn-1",
+        items: [],
+        status: "failed",
+      },
+    ],
+    updatedAt: 0,
   };
-  assert.equal(isThreadResumeResponse(malformedErrorResponse), false);
+  const resumeLikeResponse = {
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    cwd: "/tmp/project",
+    model: "gpt-5.6-sol",
+    modelProvider: "openai",
+    sandbox: { type: "dangerFullAccess" },
+    thread: failedThread,
+  };
+  assert.equal(isThreadReadResponse({ thread: failedThread }), true);
+  assert.equal(isThreadResumeResponse(resumeLikeResponse), true);
+  assert.equal(isThreadRollbackResponse({ thread: failedThread }), true);
+  assert.equal(isThreadForkResponse(resumeLikeResponse), true);
+  const decodedResume = decodeThreadResumeResponse(resumeLikeResponse);
+  assert.equal(decodedResume.thread.turns[0]?.error?.codexErrorInfo, "misalignmentPolicyViolation");
+  assert.equal(
+    isTurnCompletedNotification({
+      threadId: "thread-1",
+      turn: {
+        error: {
+          codexErrorInfo: "misalignmentPolicyViolation",
+          message: "Misalignment policy violation",
+        },
+        id: "turn-1",
+        items: [],
+        status: "failed",
+      },
+    }),
+    true,
+  );
 });
 
 it("accepts Codex 0.150 account plan values", () => {
