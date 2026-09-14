@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "build (+ auto-submit to TestFlight) or update (OTA)"
+        description: "build (iOS TestFlight, Android APK) or update (OTA)"
         required: true
         type: choice
         default: build
@@ -188,12 +188,19 @@ jobs:
             echo "> Apple closes an iOS release train after App Store approval. Before building iOS, confirm \`$version\` is newer than the approved App Store version."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build and submit (manual)
-        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'build'
+      - name: Build iOS and submit to TestFlight (manual)
+        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'build' && (inputs.platform == 'ios' || inputs.platform == 'all')
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas build --platform ${{ inputs.platform }} --profile production --auto-submit --non-interactive --no-wait
+        run: eas build --platform ios --profile production --auto-submit --non-interactive --no-wait
+
+      - name: Build Android APK (manual)
+        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'build' && (inputs.platform == 'android' || inputs.platform == 'all')
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas build --platform android --profile production:apk --non-interactive --no-wait
 
       - name: Publish OTA update (manual)
         if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'update'

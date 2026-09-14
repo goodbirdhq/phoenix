@@ -170,7 +170,7 @@ const config: ExpoConfig = {
   slug: "phoenix",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: "1.0.5",
+  version: "1.0.6",
   runtimeVersion: {
     // Development manifests resolve on every launch, so avoid fingerprint's
     // expensive native-project calculation there. Preview and production stay

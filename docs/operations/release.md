@@ -71,10 +71,10 @@ use `/__t3code/channel` and the existing channel cookie when routing is configur
 
 Use **Actions → Mobile EAS Production → Run workflow**, selecting the intended ref:
 
-- `mode=build` builds and auto-submits the selected platform (`ios`, `android`, or
-  `all`) using the production profile. iOS submission goes to TestFlight; releasing
-  to the App Store remains a separate App Store Connect action. Android submission
-  requires the Phoenix Play credentials to have been configured.
+- `mode=build` targets `ios`, `android`, or `all`. iOS uses the production profile
+  and auto-submits to TestFlight; App Store release is a separate action. Android
+  uses `production:apk` to produce an installable APK with production configuration
+  and no Google Play submission. Download the APK from the EAS build page.
 - `mode=update` explicitly publishes an OTA to the production channel for the
   selected platform. Confirm compatible production binaries exist before choosing
   this mode. There is no automatic merge-driven build reconciliation or OTA.
