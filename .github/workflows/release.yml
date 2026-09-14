@@ -184,8 +184,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: .github/scripts
-          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
       - id: config
         name: Validate requested publishers and hosted web targets
         env:
