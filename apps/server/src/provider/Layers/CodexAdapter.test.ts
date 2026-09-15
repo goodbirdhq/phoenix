@@ -718,6 +718,34 @@ function codexTurnEvent(method: "turn/started" | "turn/completed", turnId: strin
 }
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("maps native thread system errors to a terminal session state", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-thread-system-error"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-09-12T12:28:57.013Z",
+        method: "thread/status/changed",
+        payload: { threadId: "thread-1", status: { type: "systemError" } },
+      });
+
+      const event = yield* Fiber.join(eventFiber);
+      NodeAssert.equal(event._tag, "Some");
+      if (event._tag !== "Some") {
+        return;
+      }
+      NodeAssert.equal(event.value.type, "session.state.changed");
+      if (event.value.type !== "session.state.changed") {
+        return;
+      }
+      NodeAssert.equal(event.value.payload.state, "error");
+    }),
+  );
+
   it.effect("calculates one Codex turn total from cumulative counters", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

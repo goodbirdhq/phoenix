@@ -75,6 +75,12 @@ when it resets, when Codex reports them. Send the message again after the reset.
 message also says whether your workspace owner needs to add credits or raise the
 spend limit to continue sooner.
 
+## Recover from a provider error
+
+If Codex reports a system error, Phoenix stops showing the thread as running and
+preserves the response received so far. Send another message to try again. If the
+error persists, check the error details before retrying.
+
 ## Send feedback to OpenAI
 
 In an existing Codex thread, send `/feedback` with an optional description, for

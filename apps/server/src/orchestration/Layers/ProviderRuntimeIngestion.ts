@@ -1882,8 +1882,12 @@ const make = Effect.gen(function* () {
         });
       }
 
-      if (isTerminalTurn) {
-        const turnId = toTurnId(event.turnId);
+      const isTerminalSessionError =
+        event.type === "session.state.changed" &&
+        event.payload.state === "error" &&
+        shouldApplyThreadLifecycle;
+      if (isTerminalTurn || isTerminalSessionError) {
+        const turnId = isTerminalTurn ? toTurnId(event.turnId) : activeTurnId;
         if (turnId) {
           const userInputActivities =
             yield* projectionThreadActivityRepository.listUserInputLifecycleByThreadId({
