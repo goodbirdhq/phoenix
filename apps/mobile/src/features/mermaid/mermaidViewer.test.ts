@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 
-import { canViewMermaid } from "../../../modules/t3-markdown-text/src/mermaidCodeBlock";
+import {
+  canViewMermaid,
+  completedMermaidSources,
+} from "../../../modules/t3-markdown-text/src/mermaidCodeBlock";
 import { parseViewerMessage, shouldShowViewerSource } from "./viewerState";
 
 describe("Android Mermaid code blocks", () => {
@@ -11,6 +14,13 @@ describe("Android Mermaid code blocks", () => {
     expect(canViewMermaid("android", "mermaid", false)).toBe(false);
     expect(canViewMermaid("android", "typescript", true)).toBe(false);
     expect(canViewMermaid("ios", "mermaid", true)).toBe(false);
+  });
+
+  it("requires a closing fence before offering a diagram", () => {
+    expect(completedMermaidSources("```mermaid\nflowchart TD\n A-->B").size).toBe(0);
+    expect(completedMermaidSources("```Mermaid\nflowchart TD\n A-->B\n````")).toContain(
+      "flowchart TD\n A-->B\n",
+    );
   });
 
   it("ships a local bundle with a restrictive policy and no remote script", () => {

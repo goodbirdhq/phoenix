@@ -13,6 +13,7 @@ import {
   MarkdownMermaidViewerContext,
   NativeMarkdownBlock,
 } from "./NativeMarkdownBlock";
+import { completedMermaidSources } from "./mermaidCodeBlock";
 import {
   MarkdownContextClipboardContext,
   MarkdownFileContextMenuContext,
@@ -81,11 +82,19 @@ export function SelectableMarkdownText({
         : null,
     [fileContextMenu, onFileContextMenuAction],
   );
+  const viewMermaid = useMemo(() => {
+    if (!onViewMermaid || !/mermaid/i.test(markdown)) return null;
+    const sources = completedMermaidSources(markdown);
+    if (sources.size === 0) return null;
+    return (source: string) => {
+      if (sources.has(source)) onViewMermaid(source);
+    };
+  }, [markdown, onViewMermaid]);
 
   return (
     <MarkdownContextClipboardContext.Provider value={contextClipboardFragment ?? ""}>
       <MarkdownImageRendererContext.Provider value={renderImage ?? null}>
-        <MarkdownMermaidViewerContext.Provider value={onViewMermaid ?? null}>
+        <MarkdownMermaidViewerContext.Provider value={viewMermaid}>
           <MarkdownFileContextMenuContext.Provider value={fileContextMenuHandlers}>
             {/* A percentage width here creates a cyclic intrinsic measurement inside
           shrink-to-fit containers such as user-message bubbles. Yoga then gives
