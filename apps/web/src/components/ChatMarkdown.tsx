@@ -682,10 +682,15 @@ function extractCodeBlock(
 
 function closedMermaidCodeFences(text: string): Set<string> {
   const code = new Set<string>();
-  for (const match of text
-    .replace(/\r\n?/g, "\n")
-    .matchAll(/^ {0,3}(`{3,}|~{3,})mermaid(?:[ \t][^\n]*)?\n([\s\S]*?)^ {0,3}\1[ \t]*$/gm)) {
-    if (match[2]) code.add(match[2]);
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const open = /^ {0,3}(`{3,}|~{3,})mermaid(?:[ \t][^\n]*)?$/i.exec(lines[i] ?? "");
+    if (!open) continue;
+    const fence = open[1] ?? "";
+    const close = new RegExp(`^ {0,3}${fence[0]}{${fence.length},}[ \\t]*$`);
+    const start = i + 1;
+    while (++i < lines.length && !close.test(lines[i] ?? "")) {}
+    if (i < lines.length) code.add(`${lines.slice(start, i).join("\n")}\n`);
   }
   return code;
 }
@@ -2333,7 +2338,7 @@ function useChatMarkdownState({
   const { resolvedTheme } = useTheme();
   const mermaidCodeFences = useMemo(
     () =>
-      isStreaming || !text.includes("mermaid") ? new Set<string>() : closedMermaidCodeFences(text),
+      isStreaming || !/mermaid/i.test(text) ? new Set<string>() : closedMermaidCodeFences(text),
     [isStreaming, text],
   );
   const [localMediaPreview, setLocalMediaPreview] = useState<ExpandedImagePreview | null>(null);
@@ -3296,7 +3301,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
         fenceTitle={fenceTitle}
         theme={resolvedTheme}
         viewMermaid={
-          language === "mermaid" && !isStreaming && mermaidCodeFences.has(codeBlock.code)
+          language.toLowerCase() === "mermaid" &&
+          !isStreaming &&
+          mermaidCodeFences.has(codeBlock.code)
         }
       >
         <RenderErrorBoundary

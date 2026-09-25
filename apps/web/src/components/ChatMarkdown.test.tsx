@@ -108,6 +108,23 @@ describe("ChatMarkdown Mermaid fences", () => {
     }
   });
 
+  it("accepts a longer closing fence and case-insensitive language", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(
+          <ChatMarkdown cwd={undefined} text={"```Mermaid\nflowchart TD\n  A-->B\n````"} />,
+        );
+      });
+      expect(codeButton(renderer!, "View diagram")).toBeDefined();
+    } finally {
+      await act(async () => {
+        renderer?.unmount();
+      });
+    }
+  });
+
   it("keeps ordinary, streaming, and unclosed fences as code without a viewer action", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     for (const [text, isStreaming] of [
