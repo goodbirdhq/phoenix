@@ -4,6 +4,7 @@
 
 - [Install and first run](./user/install.md)
 - [Messages and context](./user/composer.md)
+- [View Mermaid diagrams](./user/mermaid-diagrams.md)
 - [Working with threads](./user/thread-sidebar.md)
 - [Permission modes](./user/permission-modes.md)
 - [Terminal history](./user/terminal.md)
