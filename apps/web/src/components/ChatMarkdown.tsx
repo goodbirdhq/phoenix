@@ -97,6 +97,7 @@ import {
   type ExpandedImagePreview,
 } from "./chat/ExpandedImagePreview";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
+import { MermaidViewer } from "./MermaidViewer";
 import { markdownImageGallery, markdownImageItems } from "./chat/markdownImageGallery";
 import { MediaVideoPlayer } from "./media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "./media/MediaActions";
@@ -679,6 +680,16 @@ function extractCodeBlock(
   };
 }
 
+function closedMermaidCodeFences(text: string): Set<string> {
+  const code = new Set<string>();
+  for (const match of text
+    .replace(/\r\n?/g, "\n")
+    .matchAll(/^ {0,3}(`{3,}|~{3,})mermaid(?:[ \t][^\n]*)?\n([\s\S]*?)^ {0,3}\1[ \t]*$/gm)) {
+    if (match[2]) code.add(match[2]);
+  }
+  return code;
+}
+
 function createHighlightCacheKey(code: string, language: string, themeName: DiffThemeName): string {
   return `${fnv1a32(code).toString(36)}:${code.length}:${language}:${themeName}`;
 }
@@ -910,16 +921,19 @@ function MarkdownCodeBlock({
   language,
   fenceTitle,
   theme,
+  viewMermaid,
   children,
 }: {
   code: string;
   language: string;
   fenceTitle: string | null;
   theme: "light" | "dark";
+  viewMermaid: boolean;
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
   const [wrapped, setWrapped] = useState(readInitialWordWrapSetting);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapLabel = wrapped ? "Disable line wrap" : "Wrap lines";
   const copyLabel = copied ? "Copied" : "Copy code";
@@ -977,6 +991,17 @@ function MarkdownCodeBlock({
           />
         </span>
         <span className="flex items-center gap-0.5" role="toolbar" aria-label="Code block actions">
+          {viewMermaid ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label="View diagram"
+              onClick={() => setViewerOpen(true)}
+            >
+              View diagram
+            </Button>
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1015,6 +1040,14 @@ function MarkdownCodeBlock({
         </span>
       </div>
       {children}
+      {viewerOpen ? (
+        <MermaidViewer
+          source={code}
+          open={viewerOpen}
+          onClose={() => setViewerOpen(false)}
+          theme={theme}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2298,6 +2331,11 @@ function useChatMarkdownState({
   renderContextReference,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
+  const mermaidCodeFences = useMemo(
+    () =>
+      isStreaming || !text.includes("mermaid") ? new Set<string>() : closedMermaidCodeFences(text),
+    [isStreaming, text],
+  );
   const [localMediaPreview, setLocalMediaPreview] = useState<ExpandedImagePreview | null>(null);
   const markdownRef = useRef<HTMLDivElement>(null);
   const expandMedia = onImageExpand ?? setLocalMediaPreview;
@@ -2718,6 +2756,7 @@ function useChatMarkdownState({
       isStreaming,
       linkTargetPreference,
       markdownFileLinkMetaByHref,
+      mermaidCodeFences,
       onTaskListChange,
       onUseArtifactTemplate,
       openChangeRequestLink,
@@ -2746,6 +2785,7 @@ function useChatMarkdownState({
       isStreaming,
       linkTargetPreference,
       markdownFileLinkMetaByHref,
+      mermaidCodeFences,
       onTaskListChange,
       onUseArtifactTemplate,
       openChangeRequestLink,
@@ -3239,7 +3279,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <MarkdownDetails open={detailsOpen}>{children}</MarkdownDetails>;
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { resolvedTheme, diffThemeName, isStreaming } = use(ChatMarkdownRendererContext);
+    const { resolvedTheme, diffThemeName, isStreaming, mermaidCodeFences } = use(
+      ChatMarkdownRendererContext,
+    );
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
@@ -3253,6 +3295,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
         language={language}
         fenceTitle={fenceTitle}
         theme={resolvedTheme}
+        viewMermaid={
+          language === "mermaid" && !isStreaming && mermaidCodeFences.has(codeBlock.code)
+        }
       >
         <RenderErrorBoundary
           resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}
