@@ -129,6 +129,9 @@ export function sanitizeMermaidSvg(svg: string): string {
   }
 
   clean(root);
+  // Mermaid puts its intrinsic width in an inline max-width, which prevents
+  // the viewer's fit-to-canvas SVG from growing to the available space.
+  root.removeAttribute("style");
   root.setAttribute("xmlns", SVG_NS);
   root.setAttribute("width", "100%");
   root.setAttribute("height", "100%");

@@ -68,7 +68,7 @@ export function MermaidViewer({
     setPan({ x: 0, y: 0 });
   };
   const frame = result.svg
-    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'none'; connect-src 'none'; font-src 'none'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}svg{display:block;width:100%;height:100%}</style>${result.svg}`
+    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'none'; connect-src 'none'; font-src 'none'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}svg{display:block;width:100%;height:100%;max-width:none!important;max-height:none!important}</style>${result.svg}`
     : "";
 
   return (
