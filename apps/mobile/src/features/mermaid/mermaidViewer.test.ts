@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import * as NodeFS from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -25,7 +25,7 @@ describe("Android Mermaid code blocks", () => {
 
   it("ships a local bundle with a restrictive policy and no remote script", () => {
     const html: string = JSON.parse(
-      readFileSync(new URL("./viewerAsset.json", import.meta.url), "utf8"),
+      NodeFS.readFileSync(new URL("./viewerAsset.json", import.meta.url), "utf8"),
     );
     const shell = html.slice(0, html.indexOf("<script>"));
     expect(shell).toContain("Content-Security-Policy");
