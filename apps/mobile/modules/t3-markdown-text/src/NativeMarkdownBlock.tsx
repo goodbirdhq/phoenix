@@ -1,5 +1,5 @@
 import { createContext, memo, useContext, useMemo } from "react";
-import { Image, Platform, ScrollView, Text, useColorScheme, View } from "react-native";
+import { Image, Platform, Pressable, ScrollView, Text, useColorScheme, View } from "react-native";
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 
 import { CopyTextButton } from "./CopyTextButton";
@@ -18,9 +18,11 @@ import type {
   SelectableMarkdownSkill,
 } from "./SelectableMarkdownText.types";
 import { useHighlightedCode, type HighlightedCode } from "./useHighlightedCode";
+import { canViewMermaid } from "./mermaidCodeBlock";
 
 /** Set by SelectableMarkdownText so images anywhere in the block tree can use it. */
 export const MarkdownImageRendererContext = createContext<MarkdownImageRenderer | null>(null);
+export const MarkdownMermaidViewerContext = createContext<((source: string) => void) | null>(null);
 
 const MONO_FONT_FAMILY = Platform.select({
   ios: "ui-monospace",
@@ -145,7 +147,9 @@ function NativeCodeBlock(props: {
   readonly highlightCode: MarkdownCodeHighlighter;
   readonly compact?: boolean;
 }) {
-  const content = nodeText(props.node).replace(/\n$/, "");
+  const onViewMermaid = useContext(MarkdownMermaidViewerContext);
+  const source = nodeText(props.node);
+  const content = source.replace(/\n$/, "");
   const colorScheme = useColorScheme();
   const theme = colorScheme === "dark" ? "dark" : "light";
   const highlighted = useHighlightedCode(content, props.node.language, theme, props.highlightCode);
@@ -185,6 +189,16 @@ function NativeCodeBlock(props: {
         >
           {languageLabel}
         </Text>
+        {canViewMermaid(Platform.OS, props.node.language, Boolean(onViewMermaid)) ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="View diagram"
+            onPress={() => onViewMermaid?.(source)}
+            style={{ paddingHorizontal: 10, paddingVertical: 8 }}
+          >
+            <Text style={{ color: props.textStyle.linkColor }}>View diagram</Text>
+          </Pressable>
+        ) : null}
         <CopyTextButton
           accessibilityLabel={`Copy ${languageLabel.toLowerCase()} code`}
           text={content}
