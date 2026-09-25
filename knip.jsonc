@@ -64,7 +64,8 @@
     },
     "apps/mobile": {
       // Expo loads local config plugins by string; Metro handles platform variants.
-      "entry": ["index.ts!", "plugins/*.cjs"],
+      // The Mermaid asset builder gives esbuild this runtime entry as a path string.
+      "entry": ["index.ts!", "plugins/*.cjs", "src/features/mermaid/viewerRuntime.js!"],
       // Fonts are configured as asset paths; Expo autolinks the native packages.
       "ignoreDependencies": [
         "@expo-google-fonts/dm-sans",
