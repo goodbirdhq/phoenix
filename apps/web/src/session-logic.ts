@@ -212,6 +212,8 @@ export interface TimelineEntriesProjection {
   readonly messages: ReadonlyArray<ChatMessage>;
   readonly proposedPlans: ReadonlyArray<ProposedPlan>;
   readonly workEntries: ReadonlyArray<WorkLogEntry>;
+  readonly turnPlans: ReadonlyArray<TurnPlanEntry>;
+  readonly reports: ReadonlyArray<SessionReport>;
   readonly entries: TimelineEntry[];
 }
 
@@ -1835,12 +1837,30 @@ function timelineEntryFromProposedPlan(proposedPlan: ProposedPlan): TimelineEntr
   };
 }
 
+function timelineEntryFromTurnPlan(turnPlan: TurnPlanEntry): TimelineEntry {
+  return {
+    id: turnPlan.id,
+    kind: "turn-plan",
+    createdAt: turnPlan.createdAt,
+    turnPlan,
+  };
+}
+
 function timelineEntryFromWork(workEntry: WorkLogEntry): TimelineEntry {
   return {
     id: workEntry.id,
     kind: "work",
     createdAt: workEntry.createdAt,
     entry: workEntry,
+  };
+}
+
+function timelineEntryFromReport(report: SessionReport): TimelineEntry {
+  return {
+    id: report.reportId,
+    kind: "session-report",
+    createdAt: report.createdAt,
+    report,
   };
 }
 
@@ -1854,10 +1874,12 @@ function timelineEntrySourceOrder(entry: TimelineEntry): number {
       return 0;
     case "proposed-plan":
       return 1;
-    case "work":
+    case "turn-plan":
       return 2;
-    default:
+    case "work":
       return 3;
+    case "session-report":
+      return 4;
   }
 }
 
@@ -1865,8 +1887,8 @@ function shouldTakePreviousTimelineEntry(previous: TimelineEntry, suffix: Timeli
   const createdAtComparison = compareTimelineEntriesByCreatedAt(previous, suffix);
   if (createdAtComparison !== 0) return createdAtComparison < 0;
   // The original full derivation sorts a source-ordered array with a stable
-  // comparator. On a tie, messages precede plans, plans precede work, and an
-  // older item in the same source array precedes a newly appended item.
+  // comparator. On a tie, sources keep the order of timelineEntrySourceOrder,
+  // and an older item in the same source array precedes a newly appended item.
   return timelineEntrySourceOrder(previous) <= timelineEntrySourceOrder(suffix);
 }
 
@@ -2040,22 +2062,31 @@ function replaceStreamingTimelineMessages(
   });
 }
 
-/** Reuse ordered entries across immutable stream updates. Other changes keep the full sort. */
+/** Reuse ordered entries across immutable stream updates. Other changes keep the full sort.
+ *  Phoenix's turn plans and reports trail `previous` so upstream call sites keep their shape. */
 export function deriveTimelineEntriesWithState(
   messages: ReadonlyArray<ChatMessage>,
   proposedPlans: ReadonlyArray<ProposedPlan>,
   workEntries: ReadonlyArray<WorkLogEntry>,
   previous: TimelineEntriesProjection | null = null,
+  turnPlans: ReadonlyArray<TurnPlanEntry> = [],
+  reports: ReadonlyArray<SessionReport> = [],
 ): TimelineEntriesProjection {
   if (
     previous !== null &&
     previous.proposedPlans.length === proposedPlans.length &&
     previous.workEntries.length === workEntries.length &&
+    previous.turnPlans.length === turnPlans.length &&
+    previous.reports.length === reports.length &&
     hasExactArrayPrefix(previous.proposedPlans, proposedPlans) &&
-    hasExactArrayPrefix(previous.workEntries, workEntries)
+    hasExactArrayPrefix(previous.workEntries, workEntries) &&
+    hasExactArrayPrefix(previous.turnPlans, turnPlans) &&
+    hasExactArrayPrefix(previous.reports, reports)
   ) {
     const entries = replaceStreamingTimelineMessages(messages, previous);
-    if (entries !== null) return { messages, proposedPlans, workEntries, entries };
+    if (entries !== null) {
+      return { messages, proposedPlans, workEntries, turnPlans, reports, entries };
+    }
   }
   const foldedAnswerMessageIds = new Set(
     workEntries.flatMap((entry) =>
@@ -2069,7 +2100,9 @@ export function deriveTimelineEntriesWithState(
     !previous.entries.some((entry) => entry.kind === "message" && !showMessage(entry.message)) &&
     hasExactArrayPrefix(previous.messages, messages) &&
     hasExactArrayPrefix(previous.proposedPlans, proposedPlans) &&
-    hasExactArrayPrefix(previous.workEntries, workEntries);
+    hasExactArrayPrefix(previous.workEntries, workEntries) &&
+    hasExactArrayPrefix(previous.turnPlans, turnPlans) &&
+    hasExactArrayPrefix(previous.reports, reports);
 
   if (canAppend) {
     const messageRows = messages
@@ -2079,28 +2112,44 @@ export function deriveTimelineEntriesWithState(
     const proposedPlanRows = proposedPlans
       .slice(previous.proposedPlans.length)
       .map(timelineEntryFromProposedPlan);
+    const turnPlanRows = turnPlans.slice(previous.turnPlans.length).map(timelineEntryFromTurnPlan);
     const workRows = workEntries.slice(previous.workEntries.length).map(timelineEntryFromWork);
-    const suffix = [...messageRows, ...proposedPlanRows, ...workRows].toSorted(
-      compareTimelineEntriesByCreatedAt,
-    );
+    const reportRows = reports.slice(previous.reports.length).map(timelineEntryFromReport);
+    const suffix = [
+      ...messageRows,
+      ...proposedPlanRows,
+      ...turnPlanRows,
+      ...workRows,
+      ...reportRows,
+    ].toSorted(compareTimelineEntriesByCreatedAt);
     return {
       messages,
       proposedPlans,
       workEntries,
+      turnPlans,
+      reports,
       entries: mergeTimelineEntrySuffix(previous.entries, suffix),
     };
   }
 
   const messageRows = messages.filter(showMessage).map(timelineEntryFromMessage);
   const proposedPlanRows = proposedPlans.map(timelineEntryFromProposedPlan);
+  const turnPlanRows = turnPlans.map(timelineEntryFromTurnPlan);
   const workRows = workEntries.map(timelineEntryFromWork);
+  const reportRows = reports.map(timelineEntryFromReport);
   return {
     messages,
     proposedPlans,
     workEntries,
-    entries: [...messageRows, ...proposedPlanRows, ...workRows].toSorted(
-      compareTimelineEntriesByCreatedAt,
-    ),
+    turnPlans,
+    reports,
+    entries: [
+      ...messageRows,
+      ...proposedPlanRows,
+      ...turnPlanRows,
+      ...workRows,
+      ...reportRows,
+    ].toSorted(compareTimelineEntriesByCreatedAt),
   };
 }
 
@@ -2111,43 +2160,14 @@ export function deriveTimelineEntries(
   turnPlans: ReadonlyArray<TurnPlanEntry> = [],
   reports: ReadonlyArray<SessionReport> = [],
 ): TimelineEntry[] {
-  const messageRows: TimelineEntry[] = messages.map((message) => ({
-    id: message.id,
-    kind: "message",
-    createdAt: message.createdAt,
-    message,
-  }));
-  const proposedPlanRows: TimelineEntry[] = proposedPlans.map((proposedPlan) => ({
-    id: proposedPlan.id,
-    kind: "proposed-plan",
-    createdAt: proposedPlan.createdAt,
-    proposedPlan,
-  }));
-  const turnPlanRows: TimelineEntry[] = turnPlans.map((turnPlan) => ({
-    id: turnPlan.id,
-    kind: "turn-plan",
-    createdAt: turnPlan.createdAt,
-    turnPlan,
-  }));
-  const workRows: TimelineEntry[] = workEntries.map((entry) => ({
-    id: entry.id,
-    kind: "work",
-    createdAt: entry.createdAt,
-    entry,
-  }));
-  const reportRows: TimelineEntry[] = reports.map((report) => ({
-    id: report.reportId,
-    kind: "session-report",
-    createdAt: report.createdAt,
-    report,
-  }));
-  return [
-    ...messageRows,
-    ...proposedPlanRows,
-    ...turnPlanRows,
-    ...workRows,
-    ...reportRows,
-  ].toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return deriveTimelineEntriesWithState(
+    messages,
+    proposedPlans,
+    workEntries,
+    null,
+    turnPlans,
+    reports,
+  ).entries;
 }
 
 export function inferCheckpointTurnCountByTurnId(

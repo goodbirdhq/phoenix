@@ -129,7 +129,7 @@ import {
 } from "../composer-logic";
 import {
   createMessageAttachmentPreviewProjector,
-  deriveTimelineEntries,
+  deriveTimelineEntriesWithState,
   derivePhase,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
@@ -139,6 +139,7 @@ import {
   hasActionableProposedPlan,
   isLatestTurnSettled,
   selectHandoffImageResources,
+  type TimelineEntriesProjection,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
 import { SessionReportDigest } from "./chat/SessionReportDigest";
@@ -3596,23 +3597,31 @@ export default function ChatView(props: ChatViewProps) {
     optimisticUserMessages,
     projectHandoffMessagePreviews,
   ]);
-  const timelineEntries = useMemo(
-    () =>
-      deriveTimelineEntries(
-        timelineMessages,
-        activeThread?.proposedPlans ?? [],
-        workLogEntries,
-        turnPlans,
-        activeThread?.reports ?? [],
-      ),
-    [
-      activeThread?.proposedPlans,
-      activeThread?.reports,
+  const timelineProjectionRef = useRef<{
+    threadKey: string | null;
+    projection: TimelineEntriesProjection;
+  } | null>(null);
+  const timelineEntries = useMemo(() => {
+    const previous = timelineProjectionRef.current;
+    const projection = deriveTimelineEntriesWithState(
       timelineMessages,
-      turnPlans,
+      activeThread?.proposedPlans ?? [],
       workLogEntries,
-    ],
-  );
+      previous?.threadKey === activeThreadKey ? previous.projection : null,
+      turnPlans,
+      activeThread?.reports ?? [],
+    );
+    timelineProjectionRef.current = { threadKey: activeThreadKey, projection };
+    return projection.entries;
+  }, [
+    timelineProjectionRef,
+    activeThreadKey,
+    activeThread?.proposedPlans,
+    activeThread?.reports,
+    timelineMessages,
+    turnPlans,
+    workLogEntries,
+  ]);
   const displayedTimeline = resolveThreadSwitchTimeline({
     loading: timelineEntries.length === 0 && threadSyncPhase !== null,
     activeThreadKey,
