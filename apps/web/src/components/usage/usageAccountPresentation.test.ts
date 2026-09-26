@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ProviderAvailability } from "@t3tools/contracts";
 import { blockedSessionWindow, lastKnownUsageWindow } from "@t3tools/client-runtime/usage/quotas";
+import { compareUsageAccountProviders, usageProviderKind } from "./usageAccountPresentation";
 
 const availability = (windows: ProviderAvailability["windows"]): ProviderAvailability => ({
   status: "available",
@@ -84,4 +85,22 @@ it("retains a failed reading for labelled last-known bars without claiming a ses
   expect(lastKnownUsageWindow("claude", reading)?.usedPercent).toBe(40);
   expect(blockedSessionWindow("claude", reading)).toBeUndefined();
   expect(lastKnownUsageWindow("grok", { ...reading, source: "unsupported" })).toBeUndefined();
+});
+
+it("presents every usage account driver, including Cursor and Antigravity", () => {
+  const drivers = ["antigravity", "cursor", "grok", "claudeAgent", "opencode", "codex"];
+  expect(drivers.map(usageProviderKind)).toEqual([
+    "antigravity",
+    "cursor",
+    "grok",
+    "claude",
+    "opencode",
+    "codex",
+  ]);
+  expect(
+    drivers
+      .map((driver) => ({ driver }))
+      .toSorted(compareUsageAccountProviders)
+      .map(({ driver }) => driver),
+  ).toEqual(["codex", "claudeAgent", "opencode", "grok", "cursor", "antigravity"]);
 });

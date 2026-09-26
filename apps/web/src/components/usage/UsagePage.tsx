@@ -57,6 +57,7 @@ import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import type { UsageChartMetric } from "@t3tools/client-runtime/usage/chart-series";
 import { UsageLimitsSection } from "./UsageLimits";
+import { providerLimitReadings } from "./providerLimitReadings";
 import { UsageQuotas } from "./UsageQuotas";
 import { subscriptionAvailabilitySources } from "@t3tools/client-runtime/usage/usage-warning";
 import { readUsagePagePreferences, saveUsagePagePreferences } from "./usagePagePreferences";
@@ -156,6 +157,10 @@ export function UsagePage() {
           ),
       ),
     [providerAvailability, accountKey, selectedAccount],
+  );
+  const providerLimits = useMemo(
+    () => providerLimitReadings(selectedAccount, capacitySources),
+    [selectedAccount, capacitySources],
   );
 
   useEffect(() => {
@@ -501,6 +506,8 @@ export function UsagePage() {
                     <UsageQuotas
                       driver={selectedAccount.driver}
                       sources={capacitySources}
+                      providerLimits={providerLimits}
+                      now={limitsNow}
                       isPending={isProviderAvailabilityPending}
                       key={selectedAccount.key}
                       refreshFailed={selectedAccount.memberships.some((member) =>
