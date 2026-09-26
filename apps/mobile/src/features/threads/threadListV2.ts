@@ -254,10 +254,6 @@ export interface ThreadListV2ThreadListItem {
       snooze). Keeping it out of the list's `extraData` means the minute tick
       re-renders just these rows instead of every visible one. */
   readonly snoozePresetMinute: string | undefined;
-  /** Inset hairline drawn under the row. Precomputed from the final order so
-      a neighbour change (e.g. the queued block appearing) updates the row
-      through recycled-list equality instead of leaving a stale divider. */
-  readonly showTrailingDivider: boolean;
   /** A message for this thread is waiting in the outbox. Carried on the item
       so an outbox write (which never touches the thread shell) reaches the
       row through recycled-list equality instead of leaving a stale icon. */
@@ -337,9 +333,6 @@ export interface ThreadListV2PendingListItem {
   readonly pendingTask: PendingNewTask;
   /** First queued row after the active block draws the PENDING divider. */
   readonly showPendingDivider: boolean;
-  /** Same rule as the thread rows: a hairline unless the next row carries its
-      own section rule or none follows. */
-  readonly showTrailingDivider: boolean;
 }
 
 export interface ThreadListV2SnoozedShelfListItem {
@@ -419,7 +412,6 @@ export function threadListV2ListItemsAreEqual(
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&
-        previous.showTrailingDivider === item.showTrailingDivider &&
         previous.hasQueuedMessages === item.hasQueuedMessages &&
         previous.canMoveUp === item.canMoveUp &&
         previous.canMoveDown === item.canMoveDown
@@ -429,8 +421,7 @@ export function threadListV2ListItemsAreEqual(
         previous.type === "v2-pending" &&
         previous.key === item.key &&
         previous.pendingTask === item.pendingTask &&
-        previous.showPendingDivider === item.showPendingDivider &&
-        previous.showTrailingDivider === item.showTrailingDivider
+        previous.showPendingDivider === item.showPendingDivider
       );
     case "v2-snoozed-shelf":
       return (
@@ -449,17 +440,16 @@ export function threadListV2ListItemsAreEqual(
   }
 }
 
-/** The timestamp a row renders when it shows no status label: the settle
-    stamp on settled slim rows, otherwise the latest activity. Blank for
-    status-labelled cards and snoozed rows with a wake countdown — those
-    never draw a time, so their minute tick must not invalidate the cell. */
+/** The timestamp beside a row's title: the settle stamp on settled slim rows,
+    otherwise the latest activity. Blank for snoozed rows with a wake
+    countdown — they never draw a time, so their minute tick must not
+    invalidate the cell. */
 function resolveThreadListV2ItemTimeLabel(
   item: ThreadListV2Item,
   showSnoozeWakeLabel: boolean,
 ): string {
   const { thread, variant, snoozed } = item;
   if (showSnoozeWakeLabel) return "";
-  if (variant === "card" && resolveThreadListV2Status(thread) !== "ready") return "";
   const settledTimestamp =
     variant === "slim" && !snoozed ? resolveSettledThreadTimestamp(thread) : null;
   return relativeTime(
@@ -527,7 +517,6 @@ export function buildThreadListV2ListItems(input: {
       snoozeWakeLabelText,
       timeLabel: resolveThreadListV2ItemTimeLabel(item, snoozeWakeLabelText !== undefined),
       snoozePresetMinute,
-      showTrailingDivider: false,
       hasQueuedMessages:
         input.queuedThreadKeys?.has(`${item.thread.environmentId}:${item.thread.id}`) === true,
       canMoveUp: move?.canMoveUp === true,
@@ -539,7 +528,6 @@ export function buildThreadListV2ListItems(input: {
     key: `v2-${pendingTask.key}`,
     pendingTask,
     showPendingDivider: index === 0,
-    showTrailingDivider: false,
   }));
   const snoozedCount = input.snoozedCount ?? 0;
   const snoozedShelfHeaderIndex = input.snoozedShelfHeaderIndex ?? null;
@@ -635,17 +623,7 @@ export function buildThreadListV2ListItems(input: {
     });
     result.push(...threadItems.slice(settledShelfHeaderIndex));
   }
-  // Hairlines depend on the final neighbour, so they are stamped after the
-  // splice: a recycled cell only re-renders when its divider actually flips.
-  return result.map((entry, index) => {
-    if (entry.type !== "v2-thread" && entry.type !== "v2-pending") return entry;
-    const next = result[index + 1];
-    const showTrailingDivider =
-      next?.type === "v2-thread" || (next?.type === "v2-pending" && !next.showPendingDivider);
-    return showTrailingDivider === entry.showTrailingDivider
-      ? entry
-      : { ...entry, showTrailingDivider };
-  });
+  return result;
 }
 
 /**

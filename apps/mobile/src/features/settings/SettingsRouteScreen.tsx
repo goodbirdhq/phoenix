@@ -1,8 +1,7 @@
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomSet } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import { SymbolView } from "../../components/AppSymbol";
-import { AsyncResult } from "effect/unstable/reactivity";
 import { deriveProjectGroupLabel } from "@t3tools/client-runtime/state/project-grouping";
 import { type ComponentProps } from "react";
 import { Platform, View } from "react-native";
@@ -12,7 +11,8 @@ import { AppText as Text } from "../../components/AppText";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { NativeHeaderToolbar } from "../../native/StackHeader";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { updateMobilePreferencesAtom } from "../../state/preferences";
+import { useThreadAttentionPreferences } from "../threads/use-thread-attention";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
@@ -135,20 +135,19 @@ function UnavailableCapabilityRow(props: {
 
 function GeneralSettingsSection() {
   const schedulesValue = useScheduleSettingsValue();
-  const preferences = useAtomValue(mobilePreferencesAtom);
+  // Reads the same default the thread lists sort by, so the switch cannot
+  // disagree with the order on screen.
+  const attention = useThreadAttentionPreferences();
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
 
   return (
     <SettingsSection title="General">
       <SettingsSwitchRow
         icon="arrow.up"
-        label="Attention ordering"
-        subtitle="Prioritize decisions, failures and unread results. Turn off for Manual ordering and drag arrangement."
-        disabled={!AsyncResult.isSuccess(preferences)}
-        value={
-          AsyncResult.isSuccess(preferences) &&
-          preferences.value.sidebarAttentionFirstEnabled !== false
-        }
+        label="Attention first"
+        subtitle="Prioritize decisions, failures and unread results. Off keeps Manual ordering and drag arrangement."
+        disabled={!attention.loaded}
+        value={attention.attentionFirstEnabled}
         onValueChange={(value) => savePreferences({ sidebarAttentionFirstEnabled: value })}
       />
       <SessionOrchestrationSettingsRows />

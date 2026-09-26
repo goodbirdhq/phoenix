@@ -86,6 +86,7 @@ export function ThreadAvatar({
           <ProjectFavicon
             environmentId={thread.environmentId}
             faviconPath={project.faviconPath}
+            projectIcon={project.projectIcon}
             projectTitle={project.title}
             workspaceRoot={project.workspaceRoot}
             size={size * 0.54}
