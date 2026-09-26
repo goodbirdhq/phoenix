@@ -2527,16 +2527,16 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       const first = yield* adapter
         .sendTurn({ threadId, input: "ask before continuing", attachments: [] })
         .pipe(Effect.forkChild);
-      const requestedEvent = yield* Deferred.await(requested);
+      yield* Deferred.await(requested);
       const steer = yield* adapter
         .sendTurn({ threadId, input: "also check the tests", attachments: [] })
         .pipe(Effect.forkChild);
       yield* Effect.repeat(Effect.yieldNow, { times: 50 });
 
       yield* adapter.interruptTurn(threadId);
-      const steered = yield* Fiber.join(steer);
+      const error = yield* Fiber.join(steer).pipe(Effect.flip);
       yield* Fiber.await(first);
-      assert.equal(String(steered.turnId), String(requestedEvent.turnId));
+      assert.equal(error._tag, "ProviderAdapterTurnStoppedError");
       const requestLog = yield* Effect.promise(() => readJsonLines(requestLogPath));
       assert.lengthOf(
         requestLog.filter((entry) => entry.method === "session/prompt"),

@@ -52,6 +52,21 @@ export class ProviderAdapterSessionClosedError extends Schema.TaggedError<Provid
 }
 
 /**
+ * ProviderAdapterTurnStoppedError - Stop ended the turn before this input reached the provider.
+ */
+export class ProviderAdapterTurnStoppedError extends Schema.TaggedError<ProviderAdapterTurnStoppedError>()(
+  "ProviderAdapterTurnStoppedError",
+  {
+    provider: Schema.String,
+    threadId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `${this.provider} turn was stopped before the input was sent: ${this.threadId}`;
+  }
+}
+
+/**
  * ProviderAdapterRequestError - Provider protocol request failed or timed out.
  */
 export class ProviderAdapterRequestError extends Schema.TaggedError<ProviderAdapterRequestError>()(
@@ -207,6 +222,7 @@ export type ProviderAdapterError =
   | ProviderAdapterValidationError
   | ProviderAdapterSessionNotFoundError
   | ProviderAdapterSessionClosedError
+  | ProviderAdapterTurnStoppedError
   | ProviderAdapterRequestError
   | ProviderAdapterProcessError;
 
