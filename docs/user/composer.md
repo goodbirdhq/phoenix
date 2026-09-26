@@ -77,7 +77,8 @@ the oldest queued message now. Change `thread.steerQueuedMessage` in
 in the composer and waits if the agent needs an approval or an answer.
 
 On mobile, a message sent during a running turn goes to the agent right away,
-like **Steer**. Servers from before this option queue it until the turn ends.
+like **Steer**. It waits instead while the agent needs an approval or an answer, and
+servers from before this option queue it until the turn ends.
 
 ## Queue messages offline on mobile
 
