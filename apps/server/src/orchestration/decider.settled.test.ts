@@ -967,6 +967,36 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         "thread.turn-start-requested",
       ]);
 
+      // A steer never lands on an unanswered approval or blocking question; it
+      // waits in the queue. An async question leaves the agent working.
+      const blocker = (kind: string, requestId: string, payload: Record<string, unknown> = {}) =>
+        ({
+          id: EventId.make(`activity-${requestId}`),
+          tone: "approval" as const,
+          kind,
+          summary: kind,
+          payload: { requestId, ...payload },
+          turnId: null,
+          createdAt: NOW,
+        }) as OrchestrationThread["activities"][number];
+      for (const [activity, expected] of [
+        [blocker("approval.requested", "req-approval"), "thread.turn-start-queued"],
+        [blocker("user-input.requested", "req-question"), "thread.turn-start-queued"],
+        [
+          blocker("user-input.requested", "req-async", { responseMode: "message" }),
+          "thread.turn-start-requested",
+        ],
+      ] as const) {
+        const events = yield* decideOrchestrationCommand({
+          command: makeCommand("steer"),
+          readModel: makeReadModel(null, null, runningSession, [activity]),
+        });
+        expect((Array.isArray(events) ? events : [events]).map((event) => event.type)).toEqual([
+          "thread.message-sent",
+          expected,
+        ]);
+      }
+
       const released = yield* decideOrchestrationCommand({
         command: {
           type: "thread.turn.start.queued",
