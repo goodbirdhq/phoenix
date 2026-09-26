@@ -181,6 +181,41 @@ describe("usage accounts", () => {
       false,
     );
   });
+  it("lists Cursor and Antigravity accounts with their own history stores", () => {
+    const [source] = history.sources;
+    const store = (id: string, kind: "cursor" | "antigravity", instanceId: string) => ({
+      ...source!,
+      id,
+      fingerprint: { ...source!.fingerprint, provider: kind },
+      configuredInstanceIds: [instanceId],
+    });
+    const summary = decodeSummary({
+      ...history,
+      contractVersion: 7,
+      sources: [
+        store("cursor-source", "cursor", "cursor"),
+        store("ag-source", "antigravity", "ag"),
+      ],
+    });
+    const cursor = provider({
+      instanceId: ProviderInstanceId.make("cursor"),
+      driver: ProviderDriverKind.make("cursor"),
+    });
+    const antigravity = provider({
+      instanceId: ProviderInstanceId.make("ag"),
+      driver: ProviderDriverKind.make("antigravity"),
+    });
+    const accounts = buildUsageAccounts(
+      [environment("a", [cursor, antigravity])],
+      [{ environmentId: "a", summary }],
+    );
+    expect(
+      accounts.map((account) => [account.driver, account.memberships[0]?.historySources[0]?.id]),
+    ).toEqual([
+      ["antigravity", "ag-source"],
+      ["cursor", "cursor-source"],
+    ]);
+  });
   it("keeps keys and ordering stable when environments arrive in another order", () => {
     const inputs = [environment("b", [provider()]), environment("a", [provider()])];
     expect(buildUsageAccounts(inputs, [])).toEqual(buildUsageAccounts(inputs.toReversed(), []));

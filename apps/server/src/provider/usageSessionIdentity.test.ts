@@ -10,13 +10,14 @@ describe("native usage session identity", () => {
     expect(usageSessionIdentity("codex", { threadId: "native" })).toBe("native");
   });
   it("accepts supported ACP cursors and rejects unknown versions or providers", () => {
-    for (const provider of ["grok", "opencode"]) {
+    for (const provider of ["grok", "opencode", "cursor", "antigravity"]) {
       expect(usageSessionIdentity(provider, { schemaVersion: 1, sessionId: "native" })).toBe(
         "native",
       );
       expect(usageSessionIdentity(provider, { schemaVersion: 2, sessionId: "native" })).toBeNull();
     }
     expect(usageSessionIdentity("cursor", { threadId: "native" })).toBeNull();
+    expect(usageSessionIdentity("unknown", { schemaVersion: 1, sessionId: "native" })).toBeNull();
     expect(usageSessionIdentity("codex", null)).toBeNull();
   });
 });

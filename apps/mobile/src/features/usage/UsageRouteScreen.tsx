@@ -54,7 +54,7 @@ import { useRefreshLimits } from "./UsageLimitsSection";
 import { UsageLimitsSection } from "./UsageLimitsPooled";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
-import { PROVIDER_LABEL, useProviderColors } from "./usageProviders";
+import { PROVIDER_LABEL, PROVIDER_ORDER, useProviderColors } from "./usageProviders";
 
 // Labels are abbreviated to share a row with the metric toggle; screen
 // readers get the full phrase.
@@ -266,21 +266,14 @@ export function UsageRouteScreen() {
             tab === "models" ? "model" : grouping,
             metric,
           );
+    const kindOf = (value: string | null | undefined) =>
+      PROVIDER_ORDER.find((provider) => provider === value);
+    const accountKind = kindOf(
+      selectedAccount?.driver === "claudeAgent" ? "claude" : selectedAccount?.driver,
+    );
     return rows.map((row) => ({
       ...row,
-      color:
-        row.provider === "claude" ||
-        row.provider === "codex" ||
-        row.provider === "grok" ||
-        row.provider === "opencode"
-          ? colors[row.provider]
-          : selectedAccount?.driver === "claudeAgent"
-            ? colors.claude
-            : selectedAccount?.driver === "grok"
-              ? colors.grok
-              : selectedAccount?.driver === "opencode"
-                ? colors.opencode
-                : colors.codex,
+      color: colors[kindOf(row.provider) ?? accountKind ?? "codex"],
     }));
   }, [
     merged,

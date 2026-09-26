@@ -1,6 +1,10 @@
 import type { UsageAccount } from "@t3tools/client-runtime/usage/accounts";
 import { useMemo } from "react";
-import type { ProviderAvailabilityWindow } from "@t3tools/contracts";
+import type {
+  ProviderAvailabilityWindow,
+  ServerProvider,
+  ServerProviderUsageWindow,
+} from "@t3tools/contracts";
 import {
   deriveSubscriptionLimits,
   subscriptionLimitWindowLabel,
@@ -10,6 +14,7 @@ import { blockedSessionWindow, lastKnownUsageWindow } from "@t3tools/client-runt
 import { PROVIDER_PRESENTATION } from "./usageProviders";
 import { usageProviderKind } from "./usageAccountPresentation";
 import { UsageRefreshButton } from "./UsageRefreshButton";
+import { LimitWindows } from "./UsageLimits";
 
 function resetLabel(window: ProviderAvailabilityWindow): string {
   if (!window.resetsAt) return "Reset not reported";
@@ -69,6 +74,13 @@ function QuotaBar({
   );
 }
 
+export interface ProviderLimitReading {
+  readonly key: string;
+  readonly label: string;
+  readonly driver: ServerProvider["driver"];
+  readonly windows: ReadonlyArray<ServerProviderUsageWindow>;
+}
+
 export function UsageQuotas({
   sources,
   driver,
@@ -77,6 +89,8 @@ export function UsageQuotas({
   onRefresh,
   connected = true,
   refreshFailed = false,
+  providerLimits = [],
+  now,
 }: {
   readonly sources: readonly SubscriptionAvailabilitySource[];
   readonly driver: string;
@@ -85,8 +99,12 @@ export function UsageQuotas({
   readonly isPending: boolean;
   readonly isRefreshing: boolean;
   readonly onRefresh: () => void;
+  /** Readings from providers with no availability channel (Cursor's dashboard). */
+  readonly providerLimits?: readonly ProviderLimitReading[];
+  readonly now?: number;
 }) {
   const limits = useMemo(() => deriveSubscriptionLimits(sources), [sources]);
+  const hasReading = limits.length > 0 || providerLimits.length > 0;
   const canRefresh =
     connected &&
     sources.some(
@@ -100,11 +118,13 @@ export function UsageQuotas({
     ? "Environment offline. Reconnect to refresh limits."
     : isPending
       ? "Waiting for account status…"
-      : driver === "opencode"
-        ? "Balance refresh is not supported by this OpenCode connection. Refresh usage updates token and cost history."
-        : driver === "grok"
-          ? "Quota refresh is unavailable on this Grok connection. Check its CLI version and sign-in status."
-          : "Manual quota refresh is unavailable. Check this account’s connection, installation and sign-in status.";
+      : providerLimits.length > 0
+        ? "These limits update when Phoenix next checks this provider's status."
+        : driver === "opencode"
+          ? "Balance refresh is not supported by this OpenCode connection. Refresh usage updates token and cost history."
+          : driver === "grok"
+            ? "Quota refresh is unavailable on this Grok connection. Check its CLI version and sign-in status."
+            : "Manual quota refresh is unavailable. Check this account’s connection, installation and sign-in status.";
 
   return (
     <section
@@ -122,7 +142,8 @@ export function UsageQuotas({
                 : refreshFailed ||
                     limits.some((limit) => limit.isStale || limit.isCurrentAvailabilityUnknown)
                   ? "Last known"
-                  : limits.some((limit) => limit.availability.windows.length)
+                  : providerLimits.length > 0 ||
+                      limits.some((limit) => limit.availability.windows.length)
                     ? "Ready"
                     : "Unavailable"}
           </span>
@@ -149,7 +170,7 @@ export function UsageQuotas({
           {refreshUnavailableReason}
         </p>
       )}
-      {isPending && limits.length === 0 && (
+      {isPending && !hasReading && (
         <div
           role="status"
           aria-label="Loading limits"
@@ -259,7 +280,13 @@ export function UsageQuotas({
           </div>
         );
       })}
-      {!isPending && limits.length === 0 && (
+      {providerLimits.map((reading) => (
+        <div className="space-y-3" key={reading.key}>
+          {providerLimits.length > 1 && <h3 className="text-sm font-medium">{reading.label}</h3>}
+          <LimitWindows driver={reading.driver} windows={reading.windows} now={now ?? Date.now()} />
+        </div>
+      ))}
+      {!isPending && !hasReading && (
         <p className="text-sm text-muted-foreground">
           {driver === "opencode"
             ? "Pay as you go. Balance and budget are not reported; API cost below is an estimate."
