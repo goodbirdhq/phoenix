@@ -781,28 +781,34 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
     [draftId, onDiscard],
   );
   return (
-    <li className="list-none py-0.5">
+    // Same geometry as SidebarThreadRow: a 66px row on a 74px pitch.
+    <li className="list-none pt-1 pb-0.75">
       <div
         role="button"
         tabIndex={0}
         data-testid="sidebar-draft-row"
         className={cn(
-          "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left text-sidebar-foreground outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-lg text-left text-sidebar-foreground outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
           props.isActive ? "bg-sidebar-row-active" : draftSurfaceClassName,
         )}
         onClick={handleActivate}
         onKeyDown={handleKeyDown}
       >
-        <div className="relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
-          <div className="flex h-5 min-w-0 items-center gap-1.5">
+        <div className="relative z-10 flex min-h-[66px] flex-col justify-center gap-1 px-(--sidebar-row-content-inset) py-3">
+          <div className="flex h-4.5 min-w-0 items-center gap-1.5">
             <SquarePenIcon aria-hidden className={draftPenClassName} />
             {props.project ? (
-              <ProjectFavicon project={props.project} className="size-4 shrink-0" />
+              <ProjectFavicon
+                project={props.project}
+                fallbackIcon={FolderIcon}
+                monogramFallback={false}
+                className="size-4 shrink-0"
+              />
             ) : null}
-            <span className="min-w-0 flex-1 truncate text-xs font-medium text-secondary-label">
+            <span className="min-w-0 flex-1 truncate text-xs leading-4.5 font-medium text-secondary-label">
               {props.projectDisplayName}
             </span>
-            <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-end">
+            <span className="ml-auto flex h-4.5 min-w-5 shrink-0 items-center justify-end">
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -820,7 +826,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
               </Tooltip>
             </span>
           </div>
-          <div className="mt-0.5 truncate text-sm font-medium text-foreground/90">{preview}</div>
+          <div className="truncate text-sm leading-5 font-medium text-foreground/90">{preview}</div>
         </div>
       </div>
     </li>
@@ -1713,7 +1719,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     ) : (
                       <span
                         className={cn(
-                          "w-[30px] shrink-0 text-right text-xs leading-4.5 text-sidebar-muted-foreground group-hover/sidebar-row:invisible group-focus-visible/sidebar-row:invisible group-has-[:focus-visible]/sidebar-title-line:invisible",
+                          "w-[30px] shrink-0 text-right text-xs leading-4.5 text-sidebar-muted-foreground group-hover/sidebar-row:invisible group-focus-visible/sidebar-row:invisible",
+                          // A focused rename input is not an action: keep the time beside it.
+                          !isRenaming && "group-has-[:focus-visible]/sidebar-title-line:invisible",
                           snoozeMenuOpen && "invisible",
                         )}
                       >
