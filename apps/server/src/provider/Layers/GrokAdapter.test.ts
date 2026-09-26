@@ -9,6 +9,7 @@ import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -2432,6 +2433,66 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
 
       yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("leaves an open question to the user when a steer arrives", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-steer-waits-for-question");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockGrokWrapper({ T3_ACP_EMIT_XAI_ASK_USER_QUESTION: "1" }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const requested =
+        yield* Queue.unbounded<Extract<ProviderRuntimeEvent, { type: "user-input.requested" }>>();
+      const resolved =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "user-input.resolved" }>>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+        if (String(event.threadId) !== String(threadId)) return Effect.void;
+        if (event.type === "user-input.requested") {
+          return Queue.offer(requested, event).pipe(Effect.asVoid);
+        }
+        if (event.type === "user-input.resolved") {
+          return Deferred.succeed(resolved, event).pipe(Effect.ignore);
+        }
+        return Effect.void;
+      }).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("grok"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const first = yield* adapter
+        .sendTurn({ threadId, input: "ask before continuing", attachments: [] })
+        .pipe(Effect.forkChild);
+      const requestedEvent = yield* Queue.take(requested);
+
+      const steer = yield* adapter
+        .sendTurn({ threadId, input: "also check the tests", attachments: [] })
+        .pipe(Effect.forkChild);
+      // Let the steer run as far as it can on its own.
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+      assert.isFalse(yield* Deferred.isDone(resolved));
+
+      yield* adapter.respondToUserInput(
+        threadId,
+        ApprovalRequestId.make(String(requestedEvent.requestId)),
+        { "Which scope should Grok use?": "Workspace" },
+      );
+      const resolvedEvent = yield* Deferred.await(resolved);
+      assert.deepEqual(resolvedEvent.payload.answers, {
+        "Which scope should Grok use?": "Workspace",
+      });
+      // The steer re-prompts only after the answer; the mock asks again.
+      const reasked = yield* Queue.take(requested);
+      assert.notEqual(String(reasked.requestId), String(requestedEvent.requestId));
+
+      yield* adapter.stopSession(threadId);
+      yield* Fiber.await(steer);
+      yield* Fiber.await(first);
+      yield* Fiber.interrupt(eventsFiber);
     }),
   );
 

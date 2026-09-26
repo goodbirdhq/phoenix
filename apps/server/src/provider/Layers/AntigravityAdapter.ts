@@ -1189,6 +1189,9 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
       // commands when its session closes, so Stop with nothing else running
       // ends the session, as Claude's does. The next turn resumes it.
       let idleWithCommands = false;
+      // Answer open requests as cancelled before the lock: a steer waiting on
+      // them holds promptLock until they resolve.
+      yield* cancelRequests(context);
       yield* context.promptLock
         .withPermit(
           Effect.gen(function* () {

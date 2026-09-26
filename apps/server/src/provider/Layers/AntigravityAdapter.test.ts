@@ -632,6 +632,39 @@ it.layer(layer)("AntigravityAdapter", (it) => {
     }),
   );
 
+  it.effect("stops a turn whose steer is waiting on the user", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      yield* h.adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      const first = yield* h.adapter
+        .sendTurn({ threadId, input: "Ask a question" })
+        .pipe(Effect.forkChild);
+      yield* h.nextPrompt;
+      const question = yield* h
+        .invokePermission({
+          sessionId: nativeSessionId,
+          toolCall: { toolCallId: "interaction_stop", title: "Continue?" },
+          options: [{ optionId: "yes", name: "Yes", kind: "allow_once" }],
+        })
+        .pipe(Effect.forkChild);
+      yield* h.waitForEvent((event) => event.type === "user-input.requested");
+      const steer = yield* h.adapter
+        .sendTurn({ threadId, input: "Also check the tests" })
+        .pipe(Effect.forkChild);
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+
+      // Stop is not held up by the waiting steer; it answers the question as cancelled.
+      yield* h.adapter.interruptTurn(threadId);
+      expect(yield* Fiber.join(question)).toEqual({ outcome: { outcome: "cancelled" } });
+      yield* Fiber.await(steer);
+      yield* Fiber.await(first);
+    }),
+  );
+
   it.effect("waits for native cancellation before a steer changes the model", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness({ holdCancel: true });
