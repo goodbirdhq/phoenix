@@ -288,11 +288,14 @@ describe("ProviderCommandReactor", () => {
         ),
       );
     });
-    const sendTurn = vi.fn((_: Parameters<ProviderServiceShape["sendTurn"]>[0]) =>
-      Effect.succeed({
-        threadId: ThreadId.make("thread-1"),
-        turnId: asTurnId("turn-1"),
-      }),
+    const sendTurn = vi.fn(
+      (
+        _: Parameters<ProviderServiceShape["sendTurn"]>[0],
+      ): ReturnType<ProviderServiceShape["sendTurn"]> =>
+        Effect.succeed({
+          threadId: ThreadId.make("thread-1"),
+          turnId: asTurnId("turn-1"),
+        }),
     );
     const compactThread = vi.fn((_: ThreadId) => input?.compactThreadEffect?.() ?? Effect.void);
     const interruptTurn = vi.fn<ProviderServiceShape["interruptTurn"]>(

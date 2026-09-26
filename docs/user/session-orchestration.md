@@ -193,6 +193,8 @@ Claude uses native interruption when possible, retaining the conversation runtim
 work or a failed interrupt requires a restart, Phoenix confirms process exit before resuming.
 An ordinary interrupt does not generate a session death notice. If Phoenix cannot confirm that
 a provider stopped, it keeps queued instructions blocked and sends the parent a failure notice.
+If a parent's message never reaches the child's agent, for example because Stop ended the turn a
+steer was waiting to join, the parent also gets a notice naming that message.
 Inspect the session error, resolve the provider problem, and retry Stop before resuming work.
 
 A delivery receipt confirms that the provider accepted an input for a particular turn. It does not
