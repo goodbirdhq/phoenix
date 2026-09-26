@@ -11,4 +11,4 @@ result, duration, and main-agent token totals when available.
 Events do not include prompts, responses, file contents, authentication tokens, conversation IDs,
 raw provider events, or child-agent output. Child-agent token use is excluded from the totals.
 
-To stop collection, remove the key or set `T3CODE_TELEMETRY_ENABLED=false`.
+To stop collection, remove the key or set `T3CODE_TELEMETRY_ENABLED=false`, then restart the server.

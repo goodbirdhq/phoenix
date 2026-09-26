@@ -87,6 +87,8 @@ export const make = Effect.gen(function* () {
   const posthogKey = telemetryConfig.enabled
     ? Option.getOrUndefined(telemetryConfig.posthogKey)
     : undefined;
+  // Without a key nothing can be sent, so skip identity lookup and the flush loop entirely.
+  if (!posthogKey) return AnalyticsService.of({ record: () => Effect.void, flush: Effect.void });
   const httpClient = yield* HttpClient.HttpClient;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const identifier = yield* getTelemetryIdentifier;
@@ -125,7 +127,7 @@ export const make = Effect.gen(function* () {
   const sendBatch = Effect.fn("AnalyticsService.sendBatch")(function* (
     events: ReadonlyArray<BufferedAnalyticsEvent>,
   ) {
-    if (!posthogKey || !identifier) return;
+    if (!identifier) return;
 
     const payload = {
       api_key: posthogKey,
@@ -184,7 +186,7 @@ export const make = Effect.gen(function* () {
 
   const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
     function* (event, properties) {
-      if (!posthogKey || !identifier) return;
+      if (!identifier) return;
 
       const enqueueResult = yield* enqueueBufferedEvent(event, properties);
       if (enqueueResult.dropped) {
