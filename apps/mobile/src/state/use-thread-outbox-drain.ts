@@ -912,6 +912,12 @@ export function useThreadOutboxDrain(): void {
           runtimeMode: sendSettings.runtimeMode,
           interactionMode: sendSettings.interactionMode,
           createdAt: queuedMessage.createdAt,
+          // Like upstream, a message sent while the agent is busy joins the
+          // running turn. Servers without turnSteer queue it instead; on an
+          // idle thread the server starts a normal turn either way.
+          ...(currentConfig.environment.capabilities.turnSteer === true
+            ? { deliveryMode: "steer" as const }
+            : {}),
         },
       });
       const failure = reportFailure(deliveryResult, "start-turn");
