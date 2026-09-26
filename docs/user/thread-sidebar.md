@@ -37,10 +37,9 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 
 Pin a thread from its menu to keep it above your active work.
 
-**Attention ordering** is on by default, bringing threads that need your attention forward.
-Turn it off in Settings to use **Manual ordering** and keep the positions you arrange.
-An existing saved Manual preference is preserved. The drag-order behavior below describes
-Manual ordering.
+**Manual ordering** is the default: active threads keep the positions you arrange, and the
+drag-order behavior below describes it. Turn on [Attention first](#attention-first) in
+Settings to bring threads that need your attention forward instead.
 
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous

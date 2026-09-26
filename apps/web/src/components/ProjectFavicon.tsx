@@ -34,8 +34,12 @@ export function ProjectFavicon(input: {
   project: ProjectFaviconProject;
   className?: string | undefined;
   fallbackIcon?: ComponentType<{ className?: string }>;
+  // Surfaces that draw their own identity frame (sidebar thread avatars) keep
+  // the plain icon; everywhere else a missing favicon becomes a monogram.
+  monogramFallback?: boolean;
 }) {
   const { project } = input;
+  const fallbackProjectName = input.monogramFallback === false ? undefined : project.title;
   const src = useAtomValue(
     projectFaviconUrlAtom({
       environmentId: project.environmentId,
@@ -87,7 +91,7 @@ export function ProjectFavicon(input: {
       <ProjectFaviconFallback
         className={input.className}
         icon={FallbackIcon}
-        projectName={project.title}
+        projectName={fallbackProjectName}
       />
     );
   }
@@ -104,7 +108,7 @@ export function ProjectFavicon(input: {
       src={src}
       className={input.className}
       fallbackIcon={FallbackIcon}
-      fallbackProjectName={project.title}
+      fallbackProjectName={fallbackProjectName}
     />
   );
 }
