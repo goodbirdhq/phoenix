@@ -57,6 +57,13 @@ vi.mock("~/lib/openPullRequestLink", () => ({
   parseChangeRequestUrl: () => null,
   useOpenChangeRequestLink: () => vi.fn(),
 }));
+vi.mock("./MermaidViewer", () => ({
+  MermaidViewer: ({ source, onClose }: { source: string; onClose: () => void }) => (
+    <section data-mermaid-source={source}>
+      <button onClick={onClose}>Close diagram</button>
+    </section>
+  ),
+}));
 
 import ChatMarkdown, {
   canUseMarkdownFileShellActions,
@@ -71,6 +78,79 @@ function codeButton(renderer: ReactTestRenderer, label: string) {
   if (!button) throw new Error(`Missing code button: ${label}`);
   return button.props as ComponentProps<typeof Button>;
 }
+
+describe("ChatMarkdown Mermaid fences", () => {
+  it("offers a viewer only for a completed Mermaid fence and passes the exact source", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const source = "flowchart TD\n  A-->B\n";
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(<ChatMarkdown cwd={undefined} text={`\`\`\`mermaid\n${source}\`\`\``} />);
+      });
+      const action = codeButton(renderer!, "View diagram");
+      expect(renderer!.root.findAllByProps({ "data-mermaid-source": source })).toHaveLength(0);
+      await act(async () => {
+        action.onClick?.({} as never);
+      });
+      expect(renderer!.root.findAllByProps({ "data-mermaid-source": source })).toHaveLength(1);
+      await act(async () => {
+        renderer!.root
+          .findByProps({ "data-mermaid-source": source })
+          .findByType("button")
+          .props.onClick();
+      });
+      expect(renderer!.root.findAllByProps({ "data-mermaid-source": source })).toHaveLength(0);
+    } finally {
+      await act(async () => {
+        renderer?.unmount();
+      });
+    }
+  });
+
+  it("accepts a longer closing fence and case-insensitive language", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(
+          <ChatMarkdown cwd={undefined} text={"```Mermaid\nflowchart TD\n  A-->B\n````"} />,
+        );
+      });
+      expect(codeButton(renderer!, "View diagram")).toBeDefined();
+    } finally {
+      await act(async () => {
+        renderer?.unmount();
+      });
+    }
+  });
+
+  it("keeps ordinary, streaming, and unclosed fences as code without a viewer action", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    for (const [text, isStreaming] of [
+      ["```typescript\nconst x = 1;\n```", false],
+      ["```mermaid\nflowchart TD\n  A-->B\n```", true],
+      ["```mermaid\nflowchart TD\n  A-->B", false],
+    ] as const) {
+      let renderer: ReactTestRenderer | undefined;
+      try {
+        await act(async () => {
+          renderer = create(<ChatMarkdown cwd={undefined} text={text} isStreaming={isStreaming} />);
+        });
+        expect(
+          renderer!.root
+            .findAllByType(Button)
+            .some((button) => button.props["aria-label"] === "View diagram"),
+        ).toBe(false);
+        expect(codeButton(renderer!, "Copy code")).toBeDefined();
+      } finally {
+        await act(async () => {
+          renderer?.unmount();
+        });
+      }
+    }
+  });
+});
 
 describe("ChatMarkdown context references", () => {
   it("renders text and image references through the chip renderer, with readable fallback", async () => {

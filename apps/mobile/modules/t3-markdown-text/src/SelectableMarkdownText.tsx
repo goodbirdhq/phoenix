@@ -8,7 +8,12 @@ import {
   nativeMarkdownDocumentRuns,
   nativeMarkdownWithPreservedSoftBreaks,
 } from "./nativeMarkdownText";
-import { MarkdownImageRendererContext, NativeMarkdownBlock } from "./NativeMarkdownBlock";
+import {
+  MarkdownImageRendererContext,
+  MarkdownMermaidViewerContext,
+  NativeMarkdownBlock,
+} from "./NativeMarkdownBlock";
+import { completedMermaidSources } from "./mermaidCodeBlock";
 import {
   MarkdownContextClipboardContext,
   MarkdownFileContextMenuContext,
@@ -44,6 +49,7 @@ export function SelectableMarkdownText({
   highlightCode,
   preserveSoftBreaks = false,
   onLinkPress,
+  onViewMermaid,
   fileContextMenu,
   onFileContextMenuAction,
   renderImage,
@@ -76,45 +82,55 @@ export function SelectableMarkdownText({
         : null,
     [fileContextMenu, onFileContextMenuAction],
   );
+  const viewMermaid = useMemo(() => {
+    if (!onViewMermaid || !/mermaid/i.test(markdown)) return null;
+    const sources = completedMermaidSources(markdown);
+    if (sources.size === 0) return null;
+    return (source: string) => {
+      if (sources.has(source)) onViewMermaid(source);
+    };
+  }, [markdown, onViewMermaid]);
 
   return (
     <MarkdownContextClipboardContext.Provider value={contextClipboardFragment ?? ""}>
       <MarkdownImageRendererContext.Provider value={renderImage ?? null}>
-        <MarkdownFileContextMenuContext.Provider value={fileContextMenuHandlers}>
-          {/* A percentage width here creates a cyclic intrinsic measurement inside
+        <MarkdownMermaidViewerContext.Provider value={viewMermaid}>
+          <MarkdownFileContextMenuContext.Provider value={fileContextMenuHandlers}>
+            {/* A percentage width here creates a cyclic intrinsic measurement inside
           shrink-to-fit containers such as user-message bubbles. Yoga then gives
           the native text node an unbounded second pass and the parent only clips
           the resulting single-line width instead of reflowing it. */}
-          <View style={{ flexShrink: 1, minWidth: 0, marginTop, marginBottom }}>
-            {chunks.map((chunk, index) => {
-              const content =
-                chunk.kind === "rich" ? (
-                  <NativeMarkdownBlock
-                    node={chunk.node}
-                    skills={skills}
-                    textStyle={textStyle}
-                    highlightCode={highlightCode}
-                    onLinkPress={onLinkPress}
-                  />
-                ) : (
-                  <NativeMarkdownSelectableText
-                    runs={chunk.runs}
-                    textStyle={textStyle}
-                    onLinkPress={onLinkPress}
-                  />
-                );
+            <View style={{ flexShrink: 1, minWidth: 0, marginTop, marginBottom }}>
+              {chunks.map((chunk, index) => {
+                const content =
+                  chunk.kind === "rich" ? (
+                    <NativeMarkdownBlock
+                      node={chunk.node}
+                      skills={skills}
+                      textStyle={textStyle}
+                      highlightCode={highlightCode}
+                      onLinkPress={onLinkPress}
+                    />
+                  ) : (
+                    <NativeMarkdownSelectableText
+                      runs={chunk.runs}
+                      textStyle={textStyle}
+                      onLinkPress={onLinkPress}
+                    />
+                  );
 
-              return (
-                <View
-                  key={chunk.key}
-                  style={{ paddingTop: nativeMarkdownChunkSpacing(chunks[index - 1], chunk) }}
-                >
-                  {content}
-                </View>
-              );
-            })}
-          </View>
-        </MarkdownFileContextMenuContext.Provider>
+                return (
+                  <View
+                    key={chunk.key}
+                    style={{ paddingTop: nativeMarkdownChunkSpacing(chunks[index - 1], chunk) }}
+                  >
+                    {content}
+                  </View>
+                );
+              })}
+            </View>
+          </MarkdownFileContextMenuContext.Provider>
+        </MarkdownMermaidViewerContext.Provider>
       </MarkdownImageRendererContext.Provider>
     </MarkdownContextClipboardContext.Provider>
   );

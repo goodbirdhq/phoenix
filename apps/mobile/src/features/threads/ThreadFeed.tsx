@@ -44,6 +44,8 @@ import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
   createContext,
+  lazy,
+  Suspense,
   memo,
   useCallback,
   useContext,
@@ -56,6 +58,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+
 import {
   Markdown,
   type CustomRenderers,
@@ -192,6 +195,10 @@ import {
   ThreadMarkdownImageUnavailable,
   ThreadMarkdownImageView,
 } from "./ThreadMarkdownImage";
+
+const MermaidViewer = lazy(() =>
+  import("../mermaid/MermaidViewer").then((module) => ({ default: module.MermaidViewer })),
+);
 
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
   // Native iOS blockquotes and adjacent selectable text are separate layout
@@ -772,6 +779,7 @@ interface MarkdownLinkHandlers {
 
 const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly markdown: string;
+  readonly onViewMermaid?: (source: string) => void;
   readonly markdownStyles: MarkdownStyleSet;
   readonly linkHandlers: MarkdownLinkHandlers;
   readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
@@ -804,6 +812,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
         textStyle={props.markdownStyles.nativeTextStyle}
         {...props.linkHandlers}
         renderImage={props.renderImage}
+        onViewMermaid={props.onViewMermaid}
       />
     ) : (
       <Markdown
@@ -1378,6 +1387,7 @@ function renderFeedEntry(
     readonly markdownLinkHandlers: MarkdownLinkHandlers;
     readonly renderMarkdownImage: MarkdownImageRenderer;
     readonly renderViewedImage: MarkdownImageRenderer;
+    readonly onViewMermaid: (source: string) => void;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
     readonly screenColor: string;
     readonly userBubbleColor: string | import("react-native").ColorValue;
@@ -1602,6 +1612,7 @@ function renderFeedEntry(
                   skills={props.skills}
                   linkHandlers={props.markdownLinkHandlers}
                   renderImage={props.renderMarkdownImage}
+                  onViewMermaid={!message.streaming ? props.onViewMermaid : undefined}
                 />
               </MarkdownImageAvailableWidthContext>
             ) : null}
@@ -1671,6 +1682,7 @@ function renderFeedEntry(
               linkHandlers={props.markdownLinkHandlers}
               onUseArtifactTemplate={props.onUseArtifactTemplate}
               renderImage={props.renderMarkdownImage}
+              onViewMermaid={!message.streaming ? props.onViewMermaid : undefined}
               skills={props.skills}
             />
           </MarkdownImageAvailableWidthContext>
@@ -1740,6 +1752,7 @@ function renderFeedEntry(
 
 type UserMessageContentProps = {
   readonly text: string;
+  readonly onViewMermaid?: (source: string) => void;
   readonly environmentId: EnvironmentId;
   readonly context?: OrchestrationMessageContext;
   readonly markdownStyles: MarkdownStyleSet;
@@ -1826,6 +1839,7 @@ function LegacyUserMessageContent(props: UserMessageContentProps) {
           preserveSoftBreaks
           {...props.linkHandlers}
           renderImage={props.renderImage}
+          onViewMermaid={props.onViewMermaid}
         />
       );
     }
@@ -1869,6 +1883,7 @@ function LegacyUserMessageContent(props: UserMessageContentProps) {
             preserveSoftBreaks
             {...props.linkHandlers}
             renderImage={props.renderImage}
+            onViewMermaid={props.onViewMermaid}
           />
         ) : (
           <Markdown
@@ -1988,6 +2003,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
   const [expandedFile, setExpandedFile] = useState<FilePreviewSource | null>(null);
   const [expandedVideo, setExpandedVideo] = useState<VideoPreviewSource | null>(null);
+  const [mermaidSource, setMermaidSource] = useState<string | null>(null);
   const fileShareSourceIdentifier = useId();
   const shareFileChip = useFileChipShare(
     props.environmentId,
@@ -2696,6 +2712,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             markdownLinkHandlers,
             renderMarkdownImage,
             renderViewedImage,
+            onViewMermaid: setMermaidSource,
             iconSubtleColor,
             screenColor,
             userBubbleColor,
@@ -2744,6 +2761,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       pendingDeliveries,
       renderMarkdownImage,
       renderViewedImage,
+      setMermaidSource,
     ],
   );
 
@@ -2929,6 +2947,15 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         ) : null}
         <VideoPreviewModal source={expandedVideo} onRequestClose={() => setExpandedVideo(null)} />
         <FilePreviewModal source={expandedFile} onRequestClose={() => setExpandedFile(null)} />
+        {mermaidSource !== null ? (
+          <Suspense fallback={null}>
+            <MermaidViewer
+              source={mermaidSource}
+              theme={themeAppearance}
+              onClose={() => setMermaidSource(null)}
+            />
+          </Suspense>
+        ) : null}
       </View>
     </PresentationSource>
   );

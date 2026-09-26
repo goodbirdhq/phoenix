@@ -1,7 +1,7 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { resolveMediaSource } from "@t3tools/client-runtime/media-source";
 import { getBrowseDirectoryPath } from "@t3tools/client-runtime/state/projects";
-import { useCallback, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useMemo, useState } from "react";
 import {
   Markdown,
   type CustomRenderers,
@@ -29,6 +29,9 @@ import {
   type NativeMarkdownTextStyle,
 } from "../../native/SelectableMarkdownText";
 import { resolveWorkspaceFilePath } from "./filePath";
+const MermaidViewer = lazy(() =>
+  import("../mermaid/MermaidViewer").then((module) => ({ default: module.MermaidViewer })),
+);
 
 interface MarkdownPreviewStyles {
   readonly theme: PartialMarkdownTheme;
@@ -200,6 +203,8 @@ export function FileMarkdownPreview(props: {
   readonly onRefresh?: () => Promise<void> | void;
 }) {
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const [mermaidSource, setMermaidSource] = useState<string | null>(null);
+  const { themeAppearance } = useAppearancePreferences();
   const handlePullToRefresh = useCallback(async () => {
     if (!props.onRefresh) {
       return;
@@ -251,37 +256,49 @@ export function FileMarkdownPreview(props: {
   }, []);
 
   return (
-    <ScrollView
-      className="flex-1 bg-sheet"
-      contentContainerStyle={{ padding: 18 }}
-      refreshControl={
-        props.onRefresh ? (
-          <RefreshControl
-            refreshing={isPullRefreshing}
-            onRefresh={() => void handlePullToRefresh()}
+    <>
+      <ScrollView
+        className="flex-1 bg-sheet"
+        contentContainerStyle={{ padding: 18 }}
+        refreshControl={
+          props.onRefresh ? (
+            <RefreshControl
+              refreshing={isPullRefreshing}
+              onRefresh={() => void handlePullToRefresh()}
+            />
+          ) : undefined
+        }
+      >
+        <View className="mx-auto w-full max-w-[760px]">
+          {hasNativeSelectableMarkdownText() ? (
+            <SelectableMarkdownText
+              markdown={props.markdown}
+              onLinkPress={onLinkPress}
+              renderImage={renderImage}
+              textStyle={styles.nativeTextStyle}
+              onViewMermaid={setMermaidSource}
+            />
+          ) : (
+            <Markdown
+              options={{ gfm: true }}
+              renderers={styles.renderers}
+              styles={styles.styles}
+              theme={styles.theme}
+            >
+              {props.markdown}
+            </Markdown>
+          )}
+        </View>
+      </ScrollView>
+      {mermaidSource !== null ? (
+        <Suspense fallback={null}>
+          <MermaidViewer
+            source={mermaidSource}
+            theme={themeAppearance}
+            onClose={() => setMermaidSource(null)}
           />
-        ) : undefined
-      }
-    >
-      <View className="mx-auto w-full max-w-[760px]">
-        {hasNativeSelectableMarkdownText() ? (
-          <SelectableMarkdownText
-            markdown={props.markdown}
-            onLinkPress={onLinkPress}
-            renderImage={renderImage}
-            textStyle={styles.nativeTextStyle}
-          />
-        ) : (
-          <Markdown
-            options={{ gfm: true }}
-            renderers={styles.renderers}
-            styles={styles.styles}
-            theme={styles.theme}
-          >
-            {props.markdown}
-          </Markdown>
-        )}
-      </View>
-    </ScrollView>
+        </Suspense>
+      ) : null}
+    </>
   );
 }

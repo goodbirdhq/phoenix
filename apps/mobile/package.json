@@ -42,7 +42,9 @@
     "sync:pierre-icons": "node modules/t3-markdown-text/scripts/sync-pierre-file-icons.mjs",
     "generate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/generate-uniwind-themes.mts",
     "test": "vp test run",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "build:mermaid-viewer": "node scripts/build-mermaid-viewer.mjs",
+    "check:mermaid-viewer": "node scripts/build-mermaid-viewer.mjs --check"
   },
   "dependencies": {
     "@effect/atom-react": "catalog:",
@@ -103,6 +105,7 @@
     "expo-updates": "~57.0.19",
     "expo-video": "~57.0.3",
     "expo-widgets": "~57.0.15",
+    "mermaid": "11.12.3",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
@@ -128,6 +131,7 @@
     "@types/react": "~19.2.0",
     "@types/react-dom": "~19.2.3",
     "babel-preset-expo": "~57.0.9",
+    "esbuild": "0.25.12",
     "tailwindcss": "^4.0.0",
     "typescript": "catalog:"
   },
