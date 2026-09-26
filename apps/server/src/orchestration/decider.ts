@@ -1659,7 +1659,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
       const sessionIsBusy =
         targetThread.session?.status === "starting" || targetThread.session?.status === "running";
-      const deliveryMode = command.deliveryMode ?? "queue";
+      // A steer on a turn blocked by an approval or a blocking question would make
+      // providers cancel the request (Antigravity does), so it waits in the queue
+      // like web's composer does. Async questions leave the agent working.
+      const steerBlocked =
+        command.deliveryMode === "steer" &&
+        Array.from(openRequests(targetThread).values()).some(
+          (activity) =>
+            activity.kind !== "user-input.requested" ||
+            !Predicate.isObject(activity.payload) ||
+            activity.payload.responseMode !== "message",
+        );
+      const deliveryMode = steerBlocked ? "queue" : (command.deliveryMode ?? "queue");
       // Graceful-stop notices and explicit steers reach the provider as an in-turn steer so
       // the running turn sees them before it ends; ordinary messages stay queued.
       if (sessionIsBusy && command.graceStopNotice !== true && deliveryMode !== "steer") {
