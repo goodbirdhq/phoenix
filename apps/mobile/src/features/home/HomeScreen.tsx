@@ -120,21 +120,22 @@ interface HomeScreenProps {
 
 /* ─── Layout constants ───────────────────────────────────────────────── */
 
-// v2 rows are mixed-height: settled slim rows run ~60dp, single-line cards
-// measured ~74dp on device (252px on the Pixel 10 Pro screenshot), two-line
-// cards ~94dp. The estimate seeds the recycler's initial container count,
+// Thread, queued and draft rows are all one two-line height, 78dp at default
+// text size (74 minimum plus a 4 margin), whether card, settled or snoozed.
+// Section labels (32dp), shelf headers (56dp) and the settled pager are
+// shorter. The estimate seeds the recycler's initial container count,
 // `ceil((scrollLength + 2 * INITIAL_DRAW_DISTANCE) / estimate)` with the
 // initial draw distance capped at 50, so an estimate at or below the average
-// row height starts the pool at or above the item count for the short lists
+// item height starts the pool at or above the item count for the short lists
 // that LegendList otherwise keeps pooling to exactly its item count — that is
 // what stopped the dev-mode "no unused container available" warning on the
 // seeded short-list device passes. It is a mitigation, not an elimination:
 // after first layout the full drawDistance applies, and a sudden expansion
 // past the pooled headroom (~25+ items appearing at once) still creates a
 // container on demand with the dev-only warning one pass ahead of the
-// measured-height pool expansion. The old tallest-card estimate (~92) fired
-// that warning on every ordinary shelf expand, so the average wins.
-const ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT = 72;
+// measured-height pool expansion. Hence just under the row height rather
+// than on it.
+const ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT = 76;
 // Rows away from the viewport are cheap dormant frames (see
 // swipe-row-activation), so render further ahead: a fast fling then reaches
 // rows that are already built instead of rows still being rebuilt.
@@ -736,7 +737,6 @@ export function HomeScreen(props: HomeScreenProps) {
             }
             environmentMachine={machineByEnvironmentId.get(item.pendingTask.environmentId)}
             showPendingDivider={item.showPendingDivider}
-            showTrailingDivider={item.showTrailingDivider}
             onSelectPendingTask={props.onSelectPendingTask}
             onDeletePendingTask={props.onDeletePendingTask}
           />
@@ -769,6 +769,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onNewThreadOnBranch={props.onNewThreadOnBranch}
           thread={thread}
           agentThreads={item.agentThreads}
+          agentRowStamps={item.agentRowStamps}
           variant={item.item.variant}
           hasQueuedMessages={item.hasQueuedMessages}
           snoozed={item.item.snoozed}
@@ -776,7 +777,6 @@ export function HomeScreen(props: HomeScreenProps) {
           snoozePresetMinute={item.snoozePresetMinute ?? ""}
           snoozeWakeLabelText={item.snoozeWakeLabelText}
           timeLabel={item.timeLabel}
-          showTrailingDivider={item.showTrailingDivider}
           project={
             projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
           }

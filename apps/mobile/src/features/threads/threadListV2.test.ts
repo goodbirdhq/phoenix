@@ -1877,47 +1877,6 @@ describe("threadListV2ListItemsAreEqual", () => {
     const pendingItem = built.find((item) => item.type === "v2-pending")!;
     expect(threadListV2ListItemsAreEqual(threadItem, pendingItem)).toBe(false);
   });
-
-  it("notices a trailing-divider flip caused by a neighbour change", () => {
-    const threadA = makeThread({ id: ThreadId.make("flip-a"), title: "flip a" });
-    const threadB = makeThread({ id: ThreadId.make("flip-b"), title: "flip b" });
-    const bare = buildThreadListV2ListItems({
-      items: buildThreadListV2Items({
-        threads: [threadA, threadB],
-        environmentId: null,
-        searchQuery: "",
-        now: NOW,
-      }).items,
-      pendingTasks: [],
-      snoozeLabelNow: NOW,
-    });
-    // The same shells with B settled: A now sits above the Settled section
-    // rule instead of another row, so A's hairline must flip through the
-    // recycled equality — its own shell reference never changed.
-    const settledB = makeThread({
-      id: ThreadId.make("flip-b"),
-      title: "flip b",
-      settledOverride: "settled",
-      settledAt: NOW,
-    });
-    const withSettled = buildThreadListV2ListItems({
-      items: buildThreadListV2Items({
-        threads: [threadA, settledB],
-        environmentId: null,
-        searchQuery: "",
-        now: NOW,
-      }).items,
-      pendingTasks: [],
-      settledCount: 1,
-      settledShelfHeaderIndex: 1,
-      snoozeLabelNow: NOW,
-    });
-    const firstA = bare[0]!;
-    const secondA = withSettled[0]!;
-    expect(firstA.type === "v2-thread" && firstA.showTrailingDivider).toBe(true);
-    expect(secondA.type === "v2-thread" && secondA.showTrailingDivider).toBe(false);
-    expect(threadListV2ListItemsAreEqual(firstA, secondA)).toBe(false);
-  });
 });
 
 describe("isThreadListV2ListItem", () => {
@@ -1963,7 +1922,7 @@ describe("buildThreadListV2ListItems clock scoping", () => {
     expect(ready.type === "v2-thread" && ready.snoozePresetMinute).toBeUndefined();
   });
 
-  it("blanks the precomputed time for rows that render a label instead", () => {
+  it("gives every row a time except snoozed rows showing their wake countdown", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(BASE_MS);
@@ -1984,11 +1943,12 @@ describe("buildThreadListV2ListItems clock scoping", () => {
         const item = byKey.get(key)!;
         return item.type === "v2-thread" ? item.timeLabel : "<shelf>";
       };
-      // Ready cards and settled/snoozed slim rows draw a time; the wake
-      // countdown outranks the time on snoozed rows; cards with a status
-      // label never draw one.
+      // The status word sits on the row's second line, so working cards
+      // keep their time beside the title like ready ones; settled rows use
+      // their settle stamp, and the wake countdown outranks the time on
+      // snoozed rows.
       expect(label(`v2-thread:${environmentId}:tick-ready`)).toBe("5m");
-      expect(label(`v2-thread:${environmentId}:tick-working`)).toBe("");
+      expect(label(`v2-thread:${environmentId}:tick-working`)).toBe("5m");
       expect(label(`v2-thread:${environmentId}:tick-settled`)).toBe("3d");
       expect(label(`v2-thread:${environmentId}:tick-snoozed`)).toBe("");
       const snoozed = byKey.get(`v2-thread:${environmentId}:tick-snoozed`)!;
@@ -2020,13 +1980,13 @@ describe("thread list v2 minute tick invalidation", () => {
           invalidated.push(atStart[index]!.key);
         }
       }
-      // The ready row draws a minute-granular time and carries the snooze
-      // menu, and the settled slim row's swipe-revealed snooze menu shows
-      // preset times too, so both rows' menu content moved. Every other row
-      // — the approval card (status label, never snoozable), the snoozed
-      // shelf row ("2h" unchanged, Wake only), the shelf headers, and the
-      // queued row — survives the tick untouched.
+      // The approval and ready cards draw a minute-granular time, and the
+      // settled slim row's swipe-revealed snooze menu shows preset times, so
+      // those rows moved. Every other row — the snoozed shelf row ("2h"
+      // unchanged, Wake only), the shelf headers, and the queued row —
+      // survives the tick untouched.
       expect(invalidated).toEqual([
+        `v2-thread:${environmentId}:tick-approval`,
         `v2-thread:${environmentId}:tick-ready`,
         `v2-thread:${environmentId}:tick-settled`,
       ]);
@@ -2086,31 +2046,6 @@ describe("thread list v2 minute tick invalidation", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe("buildThreadListV2ListItems trailing dividers", () => {
-  it("follows the final neighbour order, not the pre-splice blocks", () => {
-    const activeA = makeThread({ id: ThreadId.make("div-a"), title: "a" });
-    const activeB = makeThread({ id: ThreadId.make("div-b"), title: "b" });
-    const layout = buildThreadListV2Items({
-      threads: [activeA, activeB],
-      environmentId: null,
-      searchQuery: "",
-      now: NOW,
-    });
-    const items = buildThreadListV2ListItems({
-      items: layout.items,
-      pendingTasks: [makePendingTask("div-q1"), makePendingTask("div-q2")],
-      snoozeLabelNow: NOW,
-    });
-    const dividers = items.map((item) =>
-      item.type === "v2-thread" || item.type === "v2-pending" ? item.showTrailingDivider : "n/a",
-    );
-    // thread A | thread B | queued 1 | queued 2: consecutive threads keep
-    // their hairlines, the row before the Unsent section rule loses its own,
-    // queued rows divide each other, and the last row has nothing under it.
-    expect(dividers).toEqual([true, false, true, false]);
   });
 });
 
@@ -2204,6 +2139,88 @@ describe("buildThreadListV2ListItems row-state stamps", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("gives each spawned child its own time, refreshed by the parent's minute tick", () => {
+    vi.useFakeTimers();
+    try {
+      const parent = makeThread({
+        id: ThreadId.make("stamp-parent"),
+        title: "stamp parent",
+        latestUserMessageAt: isoAt(BASE_MS - 3 * 24 * 60 * MINUTE_MS),
+      });
+      const child = makeThread({
+        id: ThreadId.make("stamp-child"),
+        title: "stamp child",
+        spawnedByThreadId: parent.id,
+        latestUserMessageAt: isoAt(BASE_MS - 2 * MINUTE_MS),
+        session: runningSession("stamp-child"),
+      });
+      const parentKey = `v2-thread:${environmentId}:stamp-parent`;
+      const childKey = `${environmentId}:stamp-child`;
+      vi.setSystemTime(BASE_MS);
+      const atStart = buildTickList([parent, child], BASE_MS, []);
+      const parentRow = itemsByThreadKey(atStart).get(parentKey)!;
+      expect(parentRow.type === "v2-thread" && parentRow.timeLabel).toBe("3d");
+      // A working child two minutes old keeps its own age, not the parent's.
+      expect(
+        parentRow.type === "v2-thread" && parentRow.agentRowStamps?.get(childKey)?.timeLabel,
+      ).toBe("2m");
+
+      vi.setSystemTime(BASE_MS + MINUTE_MS);
+      const atNextMinute = buildTickList([parent, child], BASE_MS + MINUTE_MS, []);
+      const parentRowNext = itemsByThreadKey(atNextMinute).get(parentKey)!;
+      expect(
+        parentRowNext.type === "v2-thread" &&
+          parentRowNext.agentRowStamps?.get(childKey)?.timeLabel,
+      ).toBe("3m");
+      // The parent's own "3d" did not move, so only the child's label can
+      // carry the tick to the expanded child row.
+      expect(parentRowNext.type === "v2-thread" && parentRowNext.timeLabel).toBe("3d");
+      expect(threadListV2ListItemsAreEqual(parentRow, parentRowNext)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives each spawned child its own queued-message state, not the parent's", () => {
+    const parent = makeThread({ id: ThreadId.make("queue-parent"), title: "queue parent" });
+    const child = makeThread({
+      id: ThreadId.make("queue-child"),
+      title: "queue child",
+      spawnedByThreadId: parent.id,
+    });
+    const parentKey = `v2-thread:${environmentId}:queue-parent`;
+    const childKey = `${environmentId}:queue-child`;
+    const build = (queued: ReadonlyArray<string>) =>
+      itemsByThreadKey(
+        buildTickList([parent, child], BASE_MS, [], {
+          queuedThreadKeys: new Set(queued),
+          snoozeEnvironmentIds: allEnvironments,
+        }),
+      ).get(parentKey)!;
+
+    // The parent's outbox leaves the expanded child's queued icon off...
+    const parentQueued = build([`${environmentId}:queue-parent`]);
+    expect(parentQueued.type === "v2-thread" && parentQueued.hasQueuedMessages).toBe(true);
+    expect(
+      parentQueued.type === "v2-thread" &&
+        parentQueued.agentRowStamps?.get(childKey)?.hasQueuedMessages,
+    ).toBe(false);
+    // ...and the child's own outbox turns it on without touching the parent.
+    const childQueued = build([childKey]);
+    expect(childQueued.type === "v2-thread" && childQueued.hasQueuedMessages).toBe(false);
+    expect(
+      childQueued.type === "v2-thread" &&
+        childQueued.agentRowStamps?.get(childKey)?.hasQueuedMessages,
+    ).toBe(true);
+    // Only the child's stamp moved, so the parent row must still re-render.
+    expect(threadListV2ListItemsAreEqual(build([]), childQueued)).toBe(false);
+    // The child's snooze menu clock is its own too.
+    expect(
+      childQueued.type === "v2-thread" &&
+        childQueued.agentRowStamps?.get(childKey)?.snoozePresetMinute,
+    ).toBe(NOW);
   });
 
   it("stamps the shelf loading-disabled state so recycled headers refresh", () => {

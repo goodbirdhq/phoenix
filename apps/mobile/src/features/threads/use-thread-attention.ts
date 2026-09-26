@@ -11,12 +11,9 @@ const EMPTY_VISITS: Readonly<Record<string, string>> = {};
 export function useThreadAttentionPreferences() {
   const preferences = useAtomValue(mobilePreferencesAtom);
   const loaded = AsyncResult.isSuccess(preferences);
-  const attentionFirstEnabled =
-    loaded &&
-    // Attention is the default for a new install. Only an explicit false is
-    // Manual ordering; keeping the key optional makes existing saved false
-    // choices stable while letting unset preferences adopt the new default.
-    preferences.value.sidebarAttentionFirstEnabled !== false;
+  // Manual ordering is the default; only an explicit opt-in on this device
+  // turns attention ordering on.
+  const attentionFirstEnabled = loaded && preferences.value.sidebarAttentionFirstEnabled === true;
   return {
     loaded,
     attentionFirstEnabled,
