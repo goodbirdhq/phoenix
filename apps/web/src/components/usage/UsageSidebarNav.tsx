@@ -30,6 +30,7 @@ import { scopeAccountHistory } from "@t3tools/client-runtime/usage/account-histo
 import { mergeUsageCostSummary } from "@t3tools/shared/usageMerge";
 import { formatUsd } from "@t3tools/shared/usageFormat";
 import { USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
+import { providerLimitReadings } from "./providerLimitReadings";
 import { sidebarQuotaPresentation } from "./usageSidebarPresentation";
 import { usageProviderKind, compareUsageAccountProviders } from "./usageAccountPresentation";
 
@@ -275,7 +276,11 @@ export function UsageSidebarNavView({
                 ),
               );
               const limit = limits[0];
-              const quota = sidebarQuotaPresentation(kind, limit?.availability);
+              const quota = sidebarQuotaPresentation(
+                kind,
+                limit?.availability,
+                providerLimitReadings(account, sources).flatMap((reading) => reading.windows),
+              );
               const pending =
                 !limit?.availability.windows.length &&
                 account.memberships.some((member) =>
