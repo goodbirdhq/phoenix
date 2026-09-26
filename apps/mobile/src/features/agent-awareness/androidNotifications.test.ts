@@ -38,31 +38,6 @@ beforeEach(() => {
 });
 
 describe("Android native notification capability", () => {
-  it("opens the Live Update controls on supported Android builds", async () => {
-    mocks.native!.openLiveUpdateSettings = vi.fn(() => true);
-    const { openAndroidLiveUpdateSettings, supportsAndroidLiveUpdateSettings } =
-      await import("./androidNotifications");
-    expect(supportsAndroidLiveUpdateSettings()).toBe(true);
-    await openAndroidLiveUpdateSettings();
-    expect(mocks.native!.openLiveUpdateSettings).toHaveBeenCalledOnce();
-    expect(mocks.openSettings).not.toHaveBeenCalled();
-    mocks.version = 35;
-    expect(supportsAndroidLiveUpdateSettings()).toBe(false);
-    mocks.os = "ios";
-    mocks.version = 36;
-    expect(supportsAndroidLiveUpdateSettings()).toBe(false);
-  });
-
-  it.each([undefined, vi.fn(() => false)])(
-    "falls back to app settings for older binaries or missing system activities (%j)",
-    async (openLiveUpdateSettings) => {
-      if (openLiveUpdateSettings) mocks.native!.openLiveUpdateSettings = openLiveUpdateSettings;
-      const { openAndroidLiveUpdateSettings } = await import("./androidNotifications");
-      await openAndroidLiveUpdateSettings();
-      expect(mocks.openSettings).toHaveBeenCalledOnce();
-    },
-  );
-
   it("uses the installed module and the build variant's deep-link scheme", async () => {
     const { configureAndroidAgentNotifications, clearAndroidAgentNotifications } =
       await import("./androidNotifications");

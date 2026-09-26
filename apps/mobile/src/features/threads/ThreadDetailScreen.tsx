@@ -868,7 +868,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     (props.connectionStateLabel !== "connected" || threadSyncLabel !== null);
   const usageWarningStacksAboveNotice = showScrollToEndButton || hasVisibleComposerStatus;
 
-  const { themeAppearance, materialYouStyleLayoutActive } = useAppearancePreferences();
+  const { themeAppearance } = useAppearancePreferences();
   const isDarkMode = themeAppearance === "dark";
 
   const handleFeedTouchStart = useCallback((event: GestureResponderEvent) => {
@@ -914,7 +914,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           <View
             pointerEvents="none"
             className={
-              materialYouStyleLayoutActive
+              Platform.OS === "android"
                 ? "absolute inset-0 bg-thread-canvas"
                 : "absolute inset-0 bg-screen"
             }

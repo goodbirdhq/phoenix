@@ -1,5 +1,4 @@
 import { useThreadAttentionPreferences } from "../threads/use-thread-attention";
-import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { useSessionRefresh } from "./use-session-refresh";
 import type { ThreadListActions } from "./useThreadListActions";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
@@ -23,9 +22,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Platform,
-  Pressable,
   RefreshControl,
   ScrollView,
   View,
@@ -214,7 +211,7 @@ function deriveEmptyState(props: {
 
 export function HomeScreen(props: HomeScreenProps) {
   const colors = useNavigationColors();
-  const { materialYouStyleLayoutActive } = useAppearancePreferences();
+  const materialLayout = Platform.OS === "android";
   const refresh = props.refresh;
   const refreshControl = (
     <RefreshControl
@@ -923,12 +920,9 @@ export function HomeScreen(props: HomeScreenProps) {
 
   if (!hasAnyThreads) {
     return (
-      <View className={materialYouStyleLayoutActive ? "flex-1 bg-header" : "flex-1 bg-screen"}>
+      <View className={materialLayout ? "flex-1 bg-header" : "flex-1 bg-screen"}>
         <ScrollView
-          className={cn(
-            "flex-1 bg-screen",
-            materialYouStyleLayoutActive && "overflow-hidden rounded-t-[28px]",
-          )}
+          className={cn("flex-1 bg-screen", materialLayout && "overflow-hidden rounded-t-[28px]")}
           alwaysBounceVertical
           refreshControl={refreshControl}
           contentContainerStyle={{
@@ -985,12 +979,10 @@ export function HomeScreen(props: HomeScreenProps) {
     );
 
   return (
-    <View className={materialYouStyleLayoutActive ? "flex-1 bg-header" : "flex-1 bg-screen"}>
+    <View className={materialLayout ? "flex-1 bg-header" : "flex-1 bg-screen"}>
       <View
         className={
-          materialYouStyleLayoutActive
-            ? "flex-1 overflow-hidden rounded-t-[28px] bg-screen"
-            : "flex-1 bg-screen"
+          materialLayout ? "flex-1 overflow-hidden rounded-t-[28px] bg-screen" : "flex-1 bg-screen"
         }
       >
         {/* Shared with the iPad sidebar: cells are reused across data

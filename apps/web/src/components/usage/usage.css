@@ -15,6 +15,8 @@ html:not(.dark):not([data-theme-id]) [data-usage-surface] {
   --sidebar-foreground: #27272a;
   --sidebar-muted-foreground: #71717b;
   --sidebar-border: #e4e4e7;
+  /* The base selected row is white, which vanishes on this #fafafa sidebar. */
+  --sidebar-row-selected: #e4e4e7;
   --muted-foreground: #71717b;
   --border: #e4e4e7;
   --contrast-foreground: #27272a;

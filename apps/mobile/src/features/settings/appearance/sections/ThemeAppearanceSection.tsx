@@ -1,5 +1,5 @@
 import { memo, useId } from "react";
-import { Platform, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 import Svg, { Circle, Defs, RadialGradient, Stop } from "react-native-svg";
 import { ScopedTheme, ScopedVariables } from "uniwind";
 
@@ -18,8 +18,6 @@ import {
 import { getMobileUniwindThemeName } from "../../../../lib/mobileThemeRuntime";
 import { cn } from "../../../../lib/cn";
 import { useAppearancePreferences } from "../AppearancePreferencesProvider";
-import { SettingsSection } from "../../components/SettingsSection";
-import { SettingsSwitchRow } from "../../components/SettingsSwitchRow";
 
 const APPEARANCE_MODES: ReadonlyArray<{
   readonly id: MobileThemeMode;
@@ -295,8 +293,6 @@ export function ThemeAppearanceSection() {
     themeIds,
     themeMode,
     systemColorsAvailable,
-    materialYouStyleLayoutEnabled,
-    setMaterialYouStyleLayoutEnabled,
   } = useAppearancePreferences();
 
   return (
@@ -337,19 +333,6 @@ export function ThemeAppearanceSection() {
           ))}
         </View>
       </View>
-
-      {Platform.OS === "android" ? (
-        <SettingsSection title="Android">
-          <SettingsSwitchRow
-            disabled={!isReady}
-            icon="square.grid.2x2"
-            label="Material You Layout"
-            onValueChange={setMaterialYouStyleLayoutEnabled}
-            subtitle="Use Material You surfaces, shapes, and component styling."
-            value={materialYouStyleLayoutEnabled}
-          />
-        </SettingsSection>
-      ) : null}
     </View>
   );
 }

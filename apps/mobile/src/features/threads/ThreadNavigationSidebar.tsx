@@ -4,7 +4,6 @@ import { HomeHeader } from "../home/HomeHeader";
 import { NavigationFooter } from "../home/NavigationFooter";
 import type { FooterRootNavigation } from "../home/navigation-footer-layout";
 import { useNavigationColors } from "../../components/useNavigationColors";
-import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { computeThreadMoveAvailability } from "./threadOrder";
 import type {
   EnvironmentProject,
@@ -18,7 +17,7 @@ import { LegendList } from "@legendapp/list/react-native";
 import { useAtomValue } from "@effect/atom-react";
 import { type EnvironmentId, resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, RefreshControl, StyleSheet, View } from "react-native";
+import { RefreshControl, StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
@@ -86,7 +85,6 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
   // Keep the Phoenix header/footer shell so tablet navigation exposes the
   // same environment and orchestration controls as the phone home screen.
   const colors = useNavigationColors();
-  const { materialYouStyleLayoutActive } = useAppearancePreferences();
   const projects = useProjects();
   const threads = useThreadShells();
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();

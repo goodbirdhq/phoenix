@@ -413,6 +413,9 @@ export function threadListV2ListItemsAreEqual(
         previous.item.variant === item.item.variant &&
         previous.item.snoozed === item.item.snoozed &&
         previous.item.pinned === item.item.pinned &&
+        previous.agentThreads?.length === item.agentThreads?.length &&
+        (previous.agentThreads?.every((thread, index) => thread === item.agentThreads?.[index]) ??
+          true) &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&

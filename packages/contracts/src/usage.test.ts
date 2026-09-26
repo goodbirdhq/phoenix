@@ -126,7 +126,7 @@ describe("narrowUsageSummary", () => {
     expect(narrowUsageSummary(summary, 5)).toBe(summary);
   });
 
-  it("keeps cursor and antigravity from a deployed v6 caller", () => {
+  it("drops cursor and antigravity buckets for a deployed v6 caller", () => {
     const withNewProviders = {
       ...summary,
       contractVersion: 7,

@@ -71,9 +71,6 @@ interface AppearancePreferencesContextValue {
   /** Pass null to clear the override and follow the base font size. */
   readonly setCodeFontSize: (value: number | null) => void;
   readonly setCodeWordBreak: (value: boolean) => void;
-  readonly materialYouStyleLayoutEnabled: boolean;
-  readonly materialYouStyleLayoutActive: boolean;
-  readonly setMaterialYouStyleLayoutEnabled: (value: boolean) => void;
 }
 
 const AppearancePreferencesContext = createContext<AppearancePreferencesContextValue | null>(null);
@@ -98,8 +95,6 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
   );
   const themeId = themeIds[themeAppearance];
   const systemColorsActive = themeId === "material-you" && isSystemColorsAvailable;
-  const materialYouStyleLayoutEnabled = storedPreferences?.materialYouStyleLayoutEnabled ?? false;
-  const materialYouStyleLayoutActive = Platform.OS === "android" && materialYouStyleLayoutEnabled;
   const [systemColorPalettes, setSystemColorPalettes] = useState(readSystemColorPalettes);
   useEffect(() => {
     if (!isSystemColorsAvailable) return;
@@ -277,13 +272,6 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
     [updatePreferences],
   );
 
-  const setMaterialYouStyleLayoutEnabled = useCallback(
-    (value: boolean) => {
-      updatePreferences({ materialYouStyleLayoutEnabled: value });
-    },
-    [updatePreferences],
-  );
-
   const value = useMemo(
     (): AppearancePreferencesContextValue => ({
       appearance,
@@ -304,9 +292,6 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       setTerminalFontSize,
       setCodeFontSize,
       setCodeWordBreak,
-      materialYouStyleLayoutEnabled,
-      materialYouStyleLayoutActive,
-      setMaterialYouStyleLayoutEnabled,
     }),
     [
       appearance,
@@ -326,9 +311,6 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       setTerminalFontSize,
       setCodeFontSize,
       setCodeWordBreak,
-      materialYouStyleLayoutEnabled,
-      materialYouStyleLayoutActive,
-      setMaterialYouStyleLayoutEnabled,
     ],
   );
 

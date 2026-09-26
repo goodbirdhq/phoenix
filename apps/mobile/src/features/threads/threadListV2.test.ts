@@ -1807,6 +1807,16 @@ describe("threadListV2ListItemsAreEqual", () => {
     expect(threadListV2ListItemsAreEqual(previousThread, nextThread)).toBe(false);
   });
 
+  it("notices a parent's spawned sessions changing", () => {
+    const parentRow = build().find((item) => item.type === "v2-thread")!;
+    const child = makeThread({ id: ThreadId.make("eq-child"), title: "child" });
+    const withChild = { ...parentRow, agentThreads: [child] };
+    const childSettled = { ...parentRow, agentThreads: [{ ...child, title: "child settled" }] };
+    expect(threadListV2ListItemsAreEqual(parentRow, withChild)).toBe(false);
+    expect(threadListV2ListItemsAreEqual(withChild, childSettled)).toBe(false);
+    expect(threadListV2ListItemsAreEqual(withChild, { ...withChild })).toBe(true);
+  });
+
   it("notices a changed wake countdown label", () => {
     const snoozedLayout = buildThreadListV2Items({
       threads: [
