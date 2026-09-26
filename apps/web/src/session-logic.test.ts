@@ -1,10 +1,12 @@
 import {
+  ApprovalRequestId,
   classifyTaskAgentKind,
   EventId,
   MessageId,
   ThreadId,
   TurnId,
   type OrchestrationThreadActivity,
+  type SessionReport,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { resolveWorkEntryToolPresentation } from "@t3tools/client-runtime/work-log/presentation";
@@ -27,6 +29,7 @@ import {
   selectHandoffImageResources,
   selectMessageImageResources,
   workEntryIndicatesToolNeutralStatus,
+  type TimelineEntriesProjection,
 } from "./session-logic";
 
 let nextActivityId = 0;
@@ -2398,6 +2401,154 @@ describe("deriveTimelineEntries", () => {
     expect(
       deriveTimelineEntriesWithState([corrected, appendedMessage], [plan], work, appended).entries,
     ).toEqual(deriveTimelineEntries([corrected, appendedMessage], [plan], work));
+  });
+
+  describe("with turn plans and reports", () => {
+    const at = (second: number) => `2026-02-23T00:00:0${second}.000Z`;
+    const history = {
+      ...streamingMessage,
+      id: MessageId.make("history"),
+      createdAt: at(1),
+      streaming: false,
+    };
+    const live = { ...streamingMessage, createdAt: at(6) };
+    const proposedPlan = {
+      id: "plan:thread:turn",
+      turnId: streamingMessage.turnId,
+      planMarkdown: "Plan",
+      implementedAt: null,
+      implementationThreadId: null,
+      createdAt: at(2),
+      updatedAt: at(2),
+    };
+    const turnPlan = (step: string) => ({
+      id: "turn-plan:streaming-turn",
+      createdAt: at(3),
+      turnId: streamingMessage.turnId,
+      plan: {
+        createdAt: at(3),
+        turnId: streamingMessage.turnId,
+        steps: [{ step, status: "inProgress" as const }],
+      },
+    });
+    const work = [{ id: "work", createdAt: at(4), label: "Ran tests", tone: "tool" as const }];
+    const report = (reportId: string, second: number): SessionReport => ({
+      reportId,
+      threadId: ThreadId.make("child"),
+      status: "success",
+      title: "Done",
+      summary: "Finished",
+      artifacts: [],
+      origin: "agent",
+      createdAt: at(second),
+    });
+    const turnPlans = [turnPlan("Build")];
+    const reports = [report("report-1", 5)];
+    const derive = (
+      messages: ReadonlyArray<typeof history>,
+      previous: TimelineEntriesProjection | null,
+      nextTurnPlans = turnPlans,
+      nextReports = reports,
+    ) =>
+      deriveTimelineEntriesWithState(
+        messages,
+        [proposedPlan],
+        work,
+        previous,
+        nextTurnPlans,
+        nextReports,
+      );
+
+    it("keeps every other row when a reply streams", () => {
+      const first = derive([history, live], null);
+      expect(first.entries.map((entry) => entry.kind)).toEqual([
+        "message",
+        "proposed-plan",
+        "turn-plan",
+        "work",
+        "session-report",
+        "message",
+      ]);
+
+      const streamed = { ...live, text: "More", updatedAt: at(7) };
+      const next = derive([history, streamed], first);
+      expect(next.entries).toEqual(
+        deriveTimelineEntries([history, streamed], [proposedPlan], work, turnPlans, reports),
+      );
+      expect(next.entries.slice(0, 5)).toEqual(first.entries.slice(0, 5));
+      for (const [index, entry] of next.entries.slice(0, 5).entries()) {
+        expect(entry).toBe(first.entries[index]);
+      }
+      expect(next.entries[5]).not.toBe(first.entries[5]);
+      expect(next.entries[5]).toMatchObject({ message: { text: "More" } });
+    });
+
+    it("replaces a changed plan and slots in a new report", () => {
+      const first = derive([history, live], null);
+      const replanned = [turnPlan("Ship")];
+      const replannedTimeline = derive([history, live], first, replanned);
+      expect(replannedTimeline.entries).toEqual(
+        deriveTimelineEntries([history, live], [proposedPlan], work, replanned, reports),
+      );
+      expect(replannedTimeline.entries[2]).toMatchObject({
+        kind: "turn-plan",
+        turnPlan: { plan: { steps: [{ step: "Ship" }] } },
+      });
+      expect(first.entries[2]).toMatchObject({
+        turnPlan: { plan: { steps: [{ step: "Build" }] } },
+      });
+
+      const reported = [...reports, report("report-2", 7)];
+      const reportedTimeline = derive([history, live], replannedTimeline, replanned, reported);
+      expect(reportedTimeline.entries.map((entry) => entry.id)).toEqual([
+        history.id,
+        proposedPlan.id,
+        "turn-plan:streaming-turn",
+        "work",
+        "report-1",
+        live.id,
+        "report-2",
+      ]);
+      for (const [index, entry] of replannedTimeline.entries.entries()) {
+        expect(reportedTimeline.entries[index]).toBe(entry);
+      }
+    });
+
+    it("never reuses another thread's rows", () => {
+      const otherThread = derive([history, live], null);
+      const threadMessages = [{ ...history }, { ...live, text: "Other" }];
+      const timeline = derive(threadMessages, otherThread);
+      expect(timeline.entries).toEqual(
+        deriveTimelineEntries(threadMessages, [proposedPlan], work, turnPlans, reports),
+      );
+      expect(timeline.entries[0]).not.toBe(otherThread.entries[0]);
+      expect(timeline.entries.at(-1)).toMatchObject({ message: { text: "Other" } });
+    });
+  });
+
+  it("folds an answered question's message into its work row", () => {
+    const requestId = ApprovalRequestId.make("question");
+    const answerMessage = {
+      ...streamingMessage,
+      id: MessageId.make(`async-answer:${requestId}`),
+      role: "user" as const,
+      streaming: false,
+    };
+    const answer = {
+      id: "answer",
+      createdAt: streamingMessage.createdAt,
+      label: "User input submitted",
+      tone: "info" as const,
+      questionAnswer: {
+        requestId,
+        answers: { scope: "Private" },
+        questionTextById: { scope: "Which repository?" },
+        attachmentsByQuestionId: {},
+      },
+    };
+    expect(deriveTimelineEntries([answerMessage], [], [answer]).map((entry) => entry.kind)).toEqual(
+      ["work"],
+    );
   });
 
   it("includes proposed plans alongside messages and work entries in chronological order", () => {

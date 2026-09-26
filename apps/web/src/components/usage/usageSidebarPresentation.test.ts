@@ -71,3 +71,21 @@ it("shows Grok's reported weekly allowance and retains it as last known after a 
     status: "Last known · needs refresh",
   });
 });
+
+it("shows a Cursor account's dashboard limit when it has no availability channel", () => {
+  const windows = [
+    { id: "included", kind: "monthly" as const, label: "Included usage", usedPercent: 40 },
+    { id: "ondemand", kind: "other" as const, label: "On-demand", usedPercent: 75 },
+  ];
+  const unsupported: ProviderAvailability = {
+    source: "unsupported",
+    status: "unknown",
+    windows: [],
+  };
+  expect(sidebarQuotaPresentation("cursor", unsupported, windows)).toEqual({
+    bars: [{ label: "On-demand", usedPercent: 75, spark: false }],
+    status: null,
+    warning: false,
+  });
+  expect(sidebarQuotaPresentation("cursor", unsupported).status).toBe("Limits unavailable");
+});

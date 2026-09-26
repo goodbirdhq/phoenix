@@ -20,6 +20,8 @@ export function usageSessionIdentity(provider: string, cursor: unknown): string 
       return isClaudeCursor(cursor) ? cursor.resume : null;
     case "opencode":
     case "grok":
+    case "cursor":
+    case "antigravity":
       return isAcpCursor(cursor) ? cursor.sessionId : null;
     default:
       return null;

@@ -205,6 +205,27 @@ function settlePendingUserInputsAsCancelled(
   );
 }
 
+/**
+ * A steer cancels the in-flight prompt, which abandons open approvals and
+ * questions. Those belong to the user, so a steer waits until they are
+ * answered. Stop settles them before taking the thread lock, so it never waits.
+ */
+function awaitUserRequests(ctx: GrokSessionContext): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const unresolved = () => [
+      ...[...ctx.pendingApprovals.values()].flatMap(({ decision }) =>
+        Deferred.isDoneUnsafe(decision) ? [] : [Deferred.await(decision)],
+      ),
+      ...[...ctx.pendingUserInputs.values()].flatMap(({ resolution }) =>
+        Deferred.isDoneUnsafe(resolution) ? [] : [Deferred.await(resolution)],
+      ),
+    ];
+    for (let open = unresolved(); open.length > 0; open = unresolved()) {
+      yield* Effect.all(open, { discard: true });
+    }
+  });
+}
+
 function appendPromptResultToTurn(
   ctx: GrokSessionContext,
   turnId: TurnId,
@@ -1540,6 +1561,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               "Change permissions with Phoenix's permission selector instead of /always-approve.",
           });
         }
+        // Waiting before the thread lock keeps Stop and other thread work moving.
+        const current = sessions.get(input.threadId);
+        if (current && current.promptsInFlight > 0) yield* awaitUserRequests(current);
         const prepared = yield* withThreadLock(
           input.threadId,
           Effect.gen(function* () {
@@ -1714,8 +1738,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 // ready. A failed steer must not skip the live prompt, which
                 // settles without a terminal event when emitTurnCompletion is
                 // false.
-                yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-                yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
+                yield* awaitUserRequests(ctx);
                 ctx.discardBeforeEpoch = promptEpoch;
               }
 
@@ -1768,6 +1791,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 return { _tag: "Skipped" as const, interrupted };
               }
               if (prepared.steeringTurnId !== undefined) {
+                // Covers a request opened after this steer was prepared.
+                yield* awaitUserRequests(liveCtx);
                 yield* Effect.ignore(
                   liveCtx.acp.cancel.pipe(
                     Effect.mapError((error) =>
@@ -2074,6 +2099,13 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         if (observed._tag === "Ignore") {
           return;
         }
+        // Stop answers open requests as cancelled before taking the thread
+        // lock, which releases a steer that is waiting on them.
+        const stopping = sessions.get(threadId);
+        if (stopping) {
+          yield* settlePendingApprovalsAsCancelled(stopping.pendingApprovals);
+          yield* settlePendingUserInputsAsCancelled(stopping.pendingUserInputs);
+        }
 
         yield* withThreadLock(
           threadId,
@@ -2190,13 +2222,21 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       });
 
     const stopSession: GrokAdapterShape["stopSession"] = (threadId) =>
-      withThreadLock(
-        threadId,
-        Effect.gen(function* () {
-          const ctx = yield* requireSession(threadId);
-          yield* stopSessionInternal(ctx);
-        }),
-      );
+      Effect.gen(function* () {
+        // Release a steer waiting on open requests before taking the lock.
+        const stopping = sessions.get(threadId);
+        if (stopping) {
+          yield* settlePendingApprovalsAsCancelled(stopping.pendingApprovals);
+          yield* settlePendingUserInputsAsCancelled(stopping.pendingUserInputs);
+        }
+        yield* withThreadLock(
+          threadId,
+          Effect.gen(function* () {
+            const ctx = yield* requireSession(threadId);
+            yield* stopSessionInternal(ctx);
+          }),
+        );
+      });
 
     const listSessions: GrokAdapterShape["listSessions"] = () =>
       Effect.sync(() => Array.from(sessions.values(), (c) => ({ ...c.session })));
