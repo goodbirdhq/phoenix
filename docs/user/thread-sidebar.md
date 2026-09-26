@@ -37,9 +37,10 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 
 Pin a thread from its menu to keep it above your active work.
 
-**Manual ordering** is the default: active threads keep the positions you arrange, and the
-drag-order behavior below describes it. Turn on [Attention first](#attention-first) in
-Settings to bring threads that need your attention forward instead.
+On web and desktop, **Manual ordering** is the default: active threads keep the positions you
+arrange, and the drag-order behavior below describes it. Turn on
+[Attention first](#attention-first) in Settings to bring threads that need your attention
+forward instead. Mobile starts with Attention first on.
 
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
@@ -224,7 +225,7 @@ Deleting requires the explicit Delete conversation button and permanently remove
 
 Turn on **Settings → General → Attention first** on web, desktop, or mobile to
 move work that needs you to the top of the active thread list. It is off by
-default. The setting is available with the current thread list; turn off the
+default on web and desktop and on by default on mobile. The setting is available with the current thread list; turn off the
 legacy sidebar or legacy thread list to use it.
 
 Decisions and actionable plans come first, followed by failures, unread results,

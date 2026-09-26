@@ -1465,8 +1465,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   ) : (
     <span
       className={cn(
-        // Hover and keyboard focus make room for the row actions.
-        "min-w-0 flex-1 truncate text-sm leading-5 transition-opacity motion-reduce:transition-none group-hover/sidebar-row:pr-18 group-focus-visible/sidebar-row:pr-18 group-has-[:focus-visible]/sidebar-title-line:pr-18",
+        "min-w-0 flex-1 truncate text-sm leading-5 transition-opacity motion-reduce:transition-none",
+        // Hover and keyboard focus make room for the row actions, which overlay
+        // the time slot. Beside Woke they take their own room in the line.
+        !isWokeStatus &&
+          "group-hover/sidebar-row:pr-18 group-focus-visible/sidebar-row:pr-18 group-has-[:focus-visible]/sidebar-title-line:pr-18",
         props.isActive || isSelected || isUnread || isWoke
           ? "font-medium text-sidebar-foreground"
           : "font-normal text-sidebar-muted-foreground group-hover/sidebar-row:text-sidebar-foreground",
@@ -1597,8 +1600,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           : undefined),
       }}
       className={cn(
-        // Matches the min-h-[66px] content box; the py-1 padding spaces rows apart.
-        "list-none py-1 [content-visibility:auto] [contain-intrinsic-size:auto_66px]",
+        // Matches the min-h-[66px] content box. The 7px of padding plus the
+        // list's 1px gap gives the 8px spacing between rows.
+        "list-none pt-1 pb-0.75 [content-visibility:auto] [contain-intrinsic-size:auto_66px]",
         isNested && "relative",
         sortable?.isDragging && "relative z-20",
       )}
@@ -1687,39 +1691,52 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 ) : (
                   <>
                     {/* The time slot speaks only for finished work; working and
-                      blocked threads show their state on the avatar ring. */}
-                    <span
-                      className={cn(
-                        "w-[30px] shrink-0 text-right text-xs leading-4.5 text-sidebar-muted-foreground group-hover/sidebar-row:invisible group-focus-visible/sidebar-row:invisible group-has-[:focus-visible]/sidebar-title-line:invisible",
-                        snoozeMenuOpen && "invisible",
-                      )}
-                    >
-                      {isWokeStatus ? (
-                        <button
-                          type="button"
-                          aria-label="Dismiss Woke notification"
-                          onClick={handleAcknowledgeWokeClick}
-                          className="text-warning-foreground"
+                      blocked threads show their state on the avatar ring. Woke
+                      is itself an action, so it stays visible and focusable
+                      while the row actions appear beside it. */}
+                    {isWokeStatus ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Dismiss Woke notification"
+                              onClick={handleAcknowledgeWokeClick}
+                              className="shrink-0 cursor-pointer rounded-sm text-xs leading-4.5 font-medium text-warning-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                            />
+                          }
                         >
-                          Woke
-                        </button>
-                      ) : variant === "slim" ? (
-                        variantAction === "unsnooze" ? (
-                          props.snoozeWakeLabelText
-                        ) : (
-                          settledTimeLabel(thread)
-                        )
-                      ) : status === "ready" ? (
-                        threadTimeLabel(thread)
-                      ) : null}
-                    </span>
+                          <span role="status">Woke</span>
+                        </TooltipTrigger>
+                        <TooltipPopup side="top">Dismiss Woke notification</TooltipPopup>
+                      </Tooltip>
+                    ) : (
+                      <span
+                        className={cn(
+                          "w-[30px] shrink-0 text-right text-xs leading-4.5 text-sidebar-muted-foreground group-hover/sidebar-row:invisible group-focus-visible/sidebar-row:invisible group-has-[:focus-visible]/sidebar-title-line:invisible",
+                          snoozeMenuOpen && "invisible",
+                        )}
+                      >
+                        {variant === "slim"
+                          ? variantAction === "unsnooze"
+                            ? props.snoozeWakeLabelText
+                            : settledTimeLabel(thread)
+                          : status === "ready"
+                            ? threadTimeLabel(thread)
+                            : null}
+                      </span>
+                    )}
                     {/* focus-visible, not focus-within: a mouse click leaves the
                       clicked action focused, and focus-within would keep the
                       actions pinned over the time slot after the pointer leaves. */}
                     <span
                       className={cn(
                         "pointer-events-none absolute right-0 -top-0.5 flex h-6 shrink-0 items-center rounded-sm opacity-0 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100 group-focus-visible/sidebar-row:pointer-events-auto group-focus-visible/sidebar-row:opacity-100 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100 [@media(pointer:coarse)]:[&>*:not(:last-child)]:hidden",
+                        // Revealed actions join the line after Woke instead of covering it.
+                        isWokeStatus &&
+                          "group-hover/sidebar-row:static group-focus-visible/sidebar-row:static has-[:focus-visible]:static [@media(pointer:coarse)]:static",
                         snoozeMenuOpen && "pointer-events-auto opacity-100",
+                        snoozeMenuOpen && isWokeStatus && "static",
                       )}
                     >
                       {hasUnsentDraft ? (
@@ -1803,6 +1820,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     aria-hidden
                     kind={props.environmentMachine}
                     className="size-3.5 shrink-0 text-sidebar-muted-foreground/70"
+                  />
+                ) : null}
+                {/* The avatar's provider badge is too small to carry initials, so
+                  rows from a provider with several accounts name theirs here. */}
+                {!isNested && showInstanceBadge ? (
+                  <ProviderInstanceIcon
+                    driverKind={providerEntry.driverKind}
+                    displayName={providerEntry.displayName}
+                    accentColor={providerEntry.accentColor}
+                    showBadge
+                    // Glyph dims, badge stays saturated; offset matches the composer trigger.
+                    iconClassName="size-3.5 opacity-60"
+                    badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs"
                   />
                 ) : null}
                 {teamMembers.length > 1 ? (

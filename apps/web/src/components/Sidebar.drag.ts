@@ -133,10 +133,10 @@ export function createSidebarSortingStrategy(input: {
       }
       if (item.key !== active.key) groups[item.section].push(item);
     }
-    // Every section shares one row height (66px plus 8px padding), so the
+    // Every section shares one row height (66px plus 7px padding), so the
     // lifted row measures the slot it opens anywhere. Placeholders are h-9.
-    const rowHeight = rects[activeIndex]?.height ?? 74;
-    const scale = headerScale ?? rowHeight / 74;
+    const rowHeight = rects[activeIndex]?.height ?? 73;
+    const scale = headerScale ?? rowHeight / 73;
     const placeholderHeight = 36 * scale;
     const labelHeight = (input.boundaryLabelHeight ?? 0) * scale;
     const group = groups[target.section];
