@@ -779,17 +779,19 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
           : {};
       if (typeof payload.requestId !== "string") return;
       const child = yield* snapshotQuery.getThreadShellById(event.payload.threadId);
+      const parentThreadId = Option.isSome(child) ? child.value.spawnedByThreadId : null;
+      // A failure that also errored the session reaches the parent as a terminal notice.
+      if (!parentThreadId || Option.getOrUndefined(child)?.session?.status === "error") return;
       const turnStart = yield* snapshotQuery.getTurnStartMessage({
         threadId: event.payload.threadId,
         messageId: MessageId.make(payload.requestId),
       });
-      const parentThreadId = Option.isSome(child) ? child.value.spawnedByThreadId : null;
       const origin = Option.isSome(turnStart) ? turnStart.value.message.origin : undefined;
-      if (!parentThreadId || origin?.kind !== "session" || origin.threadId !== parentThreadId) {
-        return;
-      }
+      if (origin?.kind !== "session" || origin.threadId !== parentThreadId) return;
       const key = `session-message-not-sent:${event.payload.threadId}:${event.eventId}`;
-      const detail = typeof payload.detail === "string" ? ` ${payload.detail}` : "";
+      // Keep the parent's prompt short: a provider defect's detail can be a full stack trace.
+      const firstLine = typeof payload.detail === "string" ? payload.detail.split("\n")[0] : "";
+      const detail = firstLine ? ` ${firstLine.slice(0, 300)}` : "";
       yield* notifyParent({
         childThreadId: event.payload.threadId,
         origin: { kind: "phoenix", threadId: event.payload.threadId },

@@ -459,6 +459,56 @@ describe("SessionSpawnReactor queued delivery", () => {
     ),
   );
 
+  it.effect("leaves an errored child's failure to the terminal notice", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* createHarness({
+          status: "error",
+          queued: [],
+          boundaryEvents: [notSentEvent],
+          turnStartOrigin: { kind: "session", threadId: PARENT_ID },
+        });
+        expect(
+          parentNotices(harness.commands).filter(
+            (c) => c.type === "thread.turn.start" && c.message.text.includes("did not reach"),
+          ),
+        ).toEqual([]);
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("forwards only the first line of a failure detail to the parent", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const multiline: OrchestrationEvent =
+          notSentEvent.type === "thread.activity-appended"
+            ? {
+                ...notSentEvent,
+                payload: {
+                  ...notSentEvent.payload,
+                  activity: {
+                    ...notSentEvent.payload.activity,
+                    payload: { requestId: "steer-message", detail: "Error: boom\n    at frame" },
+                  },
+                },
+              }
+            : notSentEvent;
+        const harness = yield* createHarness({
+          status: "running",
+          queued: [],
+          live: true,
+          boundaryEvents: [multiline],
+          turnStartOrigin: { kind: "session", threadId: PARENT_ID },
+        });
+        const text = parentNotices(harness.commands)
+          .map((c) => (c.type === "thread.turn.start" ? c.message.text : ""))
+          .join("");
+        expect(text).toContain("Error: boom");
+        expect(text).not.toContain("at frame");
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
   it.effect("does not tell the parent about a message a person sent the child", () =>
     Effect.scoped(
       Effect.gen(function* () {
