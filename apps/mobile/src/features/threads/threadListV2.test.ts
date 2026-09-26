@@ -2141,6 +2141,45 @@ describe("buildThreadListV2ListItems row-state stamps", () => {
     }
   });
 
+  it("gives each spawned child its own time, refreshed by the parent's minute tick", () => {
+    vi.useFakeTimers();
+    try {
+      const parent = makeThread({
+        id: ThreadId.make("stamp-parent"),
+        title: "stamp parent",
+        latestUserMessageAt: isoAt(BASE_MS - 3 * 24 * 60 * MINUTE_MS),
+      });
+      const child = makeThread({
+        id: ThreadId.make("stamp-child"),
+        title: "stamp child",
+        spawnedByThreadId: parent.id,
+        latestUserMessageAt: isoAt(BASE_MS - 2 * MINUTE_MS),
+        session: runningSession("stamp-child"),
+      });
+      const parentKey = `v2-thread:${environmentId}:stamp-parent`;
+      const childKey = `${environmentId}:stamp-child`;
+      vi.setSystemTime(BASE_MS);
+      const atStart = buildTickList([parent, child], BASE_MS, []);
+      const parentRow = itemsByThreadKey(atStart).get(parentKey)!;
+      expect(parentRow.type === "v2-thread" && parentRow.timeLabel).toBe("3d");
+      // A working child two minutes old keeps its own age, not the parent's.
+      expect(parentRow.type === "v2-thread" && parentRow.agentTimeLabels?.get(childKey)).toBe("2m");
+
+      vi.setSystemTime(BASE_MS + MINUTE_MS);
+      const atNextMinute = buildTickList([parent, child], BASE_MS + MINUTE_MS, []);
+      const parentRowNext = itemsByThreadKey(atNextMinute).get(parentKey)!;
+      expect(
+        parentRowNext.type === "v2-thread" && parentRowNext.agentTimeLabels?.get(childKey),
+      ).toBe("3m");
+      // The parent's own "3d" did not move, so only the child's label can
+      // carry the tick to the expanded child row.
+      expect(parentRowNext.type === "v2-thread" && parentRowNext.timeLabel).toBe("3d");
+      expect(threadListV2ListItemsAreEqual(parentRow, parentRowNext)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stamps the shelf loading-disabled state so recycled headers refresh", () => {
     const loading = buildTickList([settledThread], BASE_MS, [], {
       shelfPreferencesLoading: true,

@@ -4,7 +4,7 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { useContext, useEffect, useRef, useState } from "react";
+import { createContext, use, useContext, useEffect, useRef, useState } from "react";
 import { NavigationContext, useIsFocused } from "@react-navigation/native";
 import { AccessibilityInfo, Animated, AppState, Easing, View } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
@@ -12,6 +12,13 @@ import { resolveThreadListV2Status } from "../features/threads/threadListV2";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderIcon } from "./ProviderIcon";
 import { useNavigationColors } from "./useNavigationColors";
+
+/**
+ * Whether working arcs may rotate. Thread lists provide false for rows outside
+ * the viewport (dormant frames), which draw the arc still and hold no motion
+ * or app-state listeners; everywhere else the arc animates.
+ */
+export const ThreadAvatarMotionContext = createContext(true);
 
 /** Spoken identity for rows and dialogs that group the decorative avatar. */
 export function threadIdentityLabel(thread: EnvironmentThreadShell, providerDriver: string | null) {
@@ -172,7 +179,20 @@ export function ThreadAvatar({
 
 /** Rotate only the arc, on the native driver; identity and attention badges stay still. */
 function WorkingArc(props: { size: number; color: string }) {
+  const motion = use(ThreadAvatarMotionContext);
   const navigation = useContext(NavigationContext);
+  if (!motion) {
+    return (
+      <View
+        pointerEvents="none"
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        style={{ position: "absolute", left: 0, top: 0, width: props.size, height: props.size }}
+      >
+        <WorkingArcPath {...props} />
+      </View>
+    );
+  }
   // Global confirmation dialogs live outside the navigation container.
   return navigation ? <FocusedWorkingArc {...props} /> : <AnimatedWorkingArc {...props} focused />;
 }
@@ -238,16 +258,22 @@ function AnimatedWorkingArc({
         ],
       }}
     >
-      <Svg width={size} height={size} viewBox="0 0 30 30">
-        <Path
-          d="M15 1.25a13.75 13.75 0 0 1 13.75 13.75"
-          fill="none"
-          stroke={color}
-          strokeWidth={1.8}
-          strokeLinecap="round"
-        />
-      </Svg>
+      <WorkingArcPath size={size} color={color} />
     </Animated.View>
+  );
+}
+
+function WorkingArcPath({ size, color }: { size: number; color: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 30 30">
+      <Path
+        d="M15 1.25a13.75 13.75 0 0 1 13.75 13.75"
+        fill="none"
+        stroke={color}
+        strokeWidth={1.8}
+        strokeLinecap="round"
+      />
+    </Svg>
   );
 }
 

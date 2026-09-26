@@ -38,7 +38,11 @@ import { ThreadAgentGroup } from "./ThreadAgentGroup";
 import { ThreadPullRequestPicker } from "./ThreadPullRequestPicker";
 import { SymbolView } from "../../components/AppSymbol";
 import { ThreadActionSheet } from "./ThreadActionSheet";
-import { ThreadAvatar, threadIdentityLabel } from "../../components/ThreadAvatar";
+import {
+  ThreadAvatar,
+  ThreadAvatarMotionContext,
+  threadIdentityLabel,
+} from "../../components/ThreadAvatar";
 import { useNavigationColors } from "../../components/useNavigationColors";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
@@ -405,6 +409,9 @@ interface ThreadListV2RowProps {
   readonly parentProjectId?: EnvironmentThreadShell["projectId"];
   readonly selectedThreadKey?: string;
   readonly agentThreads?: ReadonlyArray<EnvironmentThreadShell>;
+  /** Root row's per-descendant time labels (see ThreadListV2ThreadListItem),
+      handed down unchanged so every nesting level reads its own entry. */
+  readonly agentTimeLabels?: ReadonlyMap<string, string>;
   readonly thread: EnvironmentThreadShell;
   readonly variant: "card" | "slim";
   /** A message for this thread is waiting in the outbox. */
@@ -1085,7 +1092,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
         onSelectThread(thread);
       }}
       style={{
-        minHeight: variant === "slim" ? 56 : 74,
+        // Settled and snoozed rows keep both lines, so every row is one height:
+        // the lines (22 + 5 gap + 26) and 20 padding fit the 74 minimum.
+        minHeight: 74,
         marginHorizontal: sidebarPane ? 0 : 14,
         marginBottom: 4,
         padding: 10,
@@ -1123,66 +1132,69 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
       {customSnoozeOpen && (
         <CustomSnoozeSheet onClose={() => setCustomSnoozeOpen(false)} onSnooze={handleSnooze} />
       )}
-      <ThreadSwipeable
-        dormant={dormant}
-        threadKey={`${thread.environmentId}:${thread.id}`}
-        backgroundColor={rowColors.swipeBackgroundColor}
-        containerStyle={
-          sidebarPane ? { borderRadius: THREAD_ROW_RADIUS, overflow: "hidden" } : undefined
-        }
-        enableTrackpadSwipe
-        // Full swipe commits the advertised lifecycle action (Settle /
-        // Un-settle), never the secondary snooze action.
-        fullSwipeAction="primary"
-        fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
-        onSwipeableClose={props.onSwipeableClose}
-        onSwipeableWillOpen={props.onSwipeableWillOpen}
-        leadingAction={
-          props.pinningSupported
-            ? {
-                accessibilityLabel: `${thread.pinnedAt != null ? "Unpin" : "Pin"} ${thread.title}`,
-                label: thread.pinnedAt != null ? "Unpin" : "Pin",
-                icon: thread.pinnedAt != null ? "pin.slash" : "pin",
-                onPress: thread.pinnedAt != null ? handleUnpin : handlePin,
-              }
-            : undefined
-        }
-        primaryAction={primaryAction}
-        secondaryAction={secondaryAction}
-        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}`}
-        simultaneousWithExternalGesture={props.simultaneousSwipeGesture}
-        threadTitle={thread.title}
-      >
-        {(close) => (
-          <ControlPillMenu
-            actions={[
-              ...(thread.branch
-                ? [
-                    {
-                      id: "new-thread-on-branch",
-                      title: getThreadListV2NewBranchMenuTitle(thread.branch),
-                      image: "square.and.pencil",
-                    },
-                  ]
-                : []),
-              { id: "copy-thread-id", title: "Copy thread ID", image: "doc.on.doc" },
-              ...(snoozedRow
-                ? snoozedMenuActions
-                : !props.settlementSupported
-                  ? legacyMenuActions
-                  : canUnsettle
-                    ? slimMenuActions
-                    : swipeActions.secondary === "snooze"
-                      ? snoozableCardMenuActions
-                      : cardMenuActions),
-            ]}
-            onPressAction={handleMenuAction}
-            shouldOpenOnLongPress
-          >
-            {rowContent(close)}
-          </ControlPillMenu>
-        )}
-      </ThreadSwipeable>
+      {/* Dormant rows sit outside the viewport; their working arcs hold still. */}
+      <ThreadAvatarMotionContext value={!dormant}>
+        <ThreadSwipeable
+          dormant={dormant}
+          threadKey={`${thread.environmentId}:${thread.id}`}
+          backgroundColor={rowColors.swipeBackgroundColor}
+          containerStyle={
+            sidebarPane ? { borderRadius: THREAD_ROW_RADIUS, overflow: "hidden" } : undefined
+          }
+          enableTrackpadSwipe
+          // Full swipe commits the advertised lifecycle action (Settle /
+          // Un-settle), never the secondary snooze action.
+          fullSwipeAction="primary"
+          fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
+          onSwipeableClose={props.onSwipeableClose}
+          onSwipeableWillOpen={props.onSwipeableWillOpen}
+          leadingAction={
+            props.pinningSupported
+              ? {
+                  accessibilityLabel: `${thread.pinnedAt != null ? "Unpin" : "Pin"} ${thread.title}`,
+                  label: thread.pinnedAt != null ? "Unpin" : "Pin",
+                  icon: thread.pinnedAt != null ? "pin.slash" : "pin",
+                  onPress: thread.pinnedAt != null ? handleUnpin : handlePin,
+                }
+              : undefined
+          }
+          primaryAction={primaryAction}
+          secondaryAction={secondaryAction}
+          resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}`}
+          simultaneousWithExternalGesture={props.simultaneousSwipeGesture}
+          threadTitle={thread.title}
+        >
+          {(close) => (
+            <ControlPillMenu
+              actions={[
+                ...(thread.branch
+                  ? [
+                      {
+                        id: "new-thread-on-branch",
+                        title: getThreadListV2NewBranchMenuTitle(thread.branch),
+                        image: "square.and.pencil",
+                      },
+                    ]
+                  : []),
+                { id: "copy-thread-id", title: "Copy thread ID", image: "doc.on.doc" },
+                ...(snoozedRow
+                  ? snoozedMenuActions
+                  : !props.settlementSupported
+                    ? legacyMenuActions
+                    : canUnsettle
+                      ? slimMenuActions
+                      : swipeActions.secondary === "snooze"
+                        ? snoozableCardMenuActions
+                        : cardMenuActions),
+              ]}
+              onPressAction={handleMenuAction}
+              shouldOpenOnLongPress
+            >
+              {rowContent(close)}
+            </ControlPillMenu>
+          )}
+        </ThreadSwipeable>
+      </ThreadAvatarMotionContext>
       {props.agentThreads?.length && canExpandAgents && groupExpanded ? (
         <ExpandedThreadAgentRows
           parentProps={props}
@@ -1328,6 +1340,7 @@ function NestedThreadRow({
       pinned={thread.pinnedAt != null}
       snoozed={false}
       snoozeWakeLabelText={undefined}
+      timeLabel={parentProps.agentTimeLabels?.get(`${thread.environmentId}:${thread.id}`) ?? ""}
       canMoveUp={false}
       canMoveDown={false}
       searchMatch={undefined}

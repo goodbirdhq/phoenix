@@ -241,6 +241,11 @@ export interface ThreadListV2Layout {
 export interface ThreadListV2ThreadListItem {
   readonly type: "v2-thread";
   readonly agentThreads?: ReadonlyArray<EnvironmentThreadShell>;
+  /** Each descendant's own time label, keyed `environmentId:threadId`, from
+      the same clock as `timeLabel`. Expanded child rows read theirs here, so
+      a young child under an old parent shows its own age and the minute
+      tick reaches it through the parent row's equality. */
+  readonly agentTimeLabels?: ReadonlyMap<string, string>;
   readonly key: string;
   readonly item: ThreadListV2Item;
   /** Precomputed so recycled-list equality can see a minute-tick change. */
@@ -409,6 +414,7 @@ export function threadListV2ListItemsAreEqual(
         previous.agentThreads?.length === item.agentThreads?.length &&
         (previous.agentThreads?.every((thread, index) => thread === item.agentThreads?.[index]) ??
           true) &&
+        timeLabelsAreEqual(previous.agentTimeLabels, item.agentTimeLabels) &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&
@@ -438,6 +444,16 @@ export function threadListV2ListItemsAreEqual(
         previous.disabled === item.disabled
       );
   }
+}
+
+function timeLabelsAreEqual(
+  previous: ReadonlyMap<string, string> | undefined,
+  next: ReadonlyMap<string, string> | undefined,
+): boolean {
+  if (previous === next) return true;
+  if (previous === undefined || next === undefined || previous.size !== next.size) return false;
+  for (const [key, label] of previous) if (next.get(key) !== label) return false;
+  return true;
 }
 
 /** The timestamp beside a row's title: the settle stamp on settled slim rows,
@@ -580,14 +596,22 @@ export function buildThreadListV2ListItems(input: {
         row.type !== "v2-thread" ||
         !groupedChildren.has(`${row.item.thread.environmentId}:${row.item.thread.id}`),
     )
-    .map((row) =>
-      row.type === "v2-thread"
-        ? {
-            ...row,
-            agentThreads: children.get(`${row.item.thread.environmentId}:${row.item.thread.id}`),
-          }
-        : row,
-    );
+    .map((row) => {
+      if (row.type !== "v2-thread") return row;
+      const agentThreads = children.get(`${row.item.thread.environmentId}:${row.item.thread.id}`);
+      return {
+        ...row,
+        agentThreads,
+        agentTimeLabels: agentThreads
+          ? new Map(
+              agentThreads.map((thread) => {
+                const key = `${thread.environmentId}:${thread.id}`;
+                return [key, rowsByKey.get(key)?.timeLabel ?? ""] as const;
+              }),
+            )
+          : undefined,
+      };
+    });
   const pinnedCount = activeItems.filter(
     (item) => item.type === "v2-thread" && item.item.pinned,
   ).length;

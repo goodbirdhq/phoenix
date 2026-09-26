@@ -581,6 +581,7 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
               onNewThreadOnBranch={props.onNewThreadOnBranch}
               thread={thread}
               agentThreads={item.agentThreads}
+              agentTimeLabels={item.agentTimeLabels}
               variant={item.item.variant}
               hasQueuedMessages={item.hasQueuedMessages}
               snoozed={item.item.snoozed}
@@ -773,7 +774,8 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
             }
             data={listItems}
             drawDistance={500}
-            estimatedItemSize={74}
+            // Same rows as Home; see ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT there.
+            estimatedItemSize={76}
             extraData={listExtraData}
             getItemType={(item) => item.type}
             itemsAreEqual={sidebarItemsAreEqual}
