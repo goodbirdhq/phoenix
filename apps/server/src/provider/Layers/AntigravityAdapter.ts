@@ -989,6 +989,21 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
       Effect.provideService(Path.Path, path),
       Effect.mapError((cause) => mapAntigravityError(input.threadId, "session/prompt", cause)),
     );
+    // A steer re-prompts, and re-prompting cancels open approvals and questions.
+    // Those belong to the user, so a steer waits until they are answered.
+    const awaitUserRequests = Effect.gen(function* () {
+      const unresolved = () => [
+        ...[...context.approvals.values()].flatMap(({ response }) =>
+          Deferred.isDoneUnsafe(response) ? [] : [Deferred.await(response)],
+        ),
+        ...[...context.questions.values()].flatMap(({ response }) =>
+          Deferred.isDoneUnsafe(response) ? [] : [Deferred.await(response)],
+        ),
+      ];
+      for (let open = unresolved(); open.length > 0; open = unresolved()) {
+        yield* Effect.all(open, { discard: true });
+      }
+    });
     let intent: TurnIntent | undefined;
     // The caller holds promptLock while it changes or settles the active turn.
     const finishTurn = (turn: TurnIntent, payload: TurnCompletedPayload) =>
@@ -1027,6 +1042,8 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
       }).pipe(Effect.uninterruptible);
 
     return yield* Effect.gen(function* () {
+      // Waiting outside promptLock keeps Stop responsive while the user decides.
+      if (context.promptFiber) yield* awaitUserRequests;
       const launch = yield* context.promptLock.withPermit(
         Effect.gen(function* () {
           yield* requireSession(input.threadId);
@@ -1059,6 +1076,8 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
             });
           }
           if (context.promptFiber) {
+            // Covers a request opened while this steer took the lock.
+            yield* awaitUserRequests;
             yield* cancelRequests(context);
             yield* context.runtime.cancel;
             yield* Fiber.await(context.promptFiber);
