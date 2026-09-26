@@ -660,8 +660,12 @@ it.layer(layer)("AntigravityAdapter", (it) => {
       // Stop is not held up by the waiting steer; it answers the question as cancelled.
       yield* h.adapter.interruptTurn(threadId);
       expect(yield* Fiber.join(question)).toEqual({ outcome: { outcome: "cancelled" } });
-      yield* Fiber.await(steer);
       yield* Fiber.await(first);
+      // The steer belonged to the stopped turn, so it starts no new work.
+      const steered = yield* Fiber.join(steer);
+      const stopped = yield* h.waitForEvent((event) => event.type === "turn.completed");
+      expect(steered.turnId).toBe(stopped.turnId);
+      expect(h.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:1"]);
     }),
   );
 

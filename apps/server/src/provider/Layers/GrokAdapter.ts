@@ -1563,7 +1563,19 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         }
         // Waiting before the thread lock keeps Stop and other thread work moving.
         const current = sessions.get(input.threadId);
-        if (current && current.promptsInFlight > 0) yield* awaitUserRequests(current);
+        const joinedTurnId =
+          current && current.promptsInFlight > 0 ? current.activeTurnId : undefined;
+        if (current && joinedTurnId !== undefined) {
+          yield* awaitUserRequests(current);
+          // Stop ended the turn this steer was joining; it must not start work again.
+          if (current.interruptedTurnIds.has(joinedTurnId)) {
+            return {
+              threadId: input.threadId,
+              turnId: joinedTurnId,
+              resumeCursor: current.session.resumeCursor,
+            };
+          }
+        }
         const prepared = yield* withThreadLock(
           input.threadId,
           Effect.gen(function* () {
