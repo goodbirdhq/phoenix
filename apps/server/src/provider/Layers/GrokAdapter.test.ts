@@ -2496,6 +2496,58 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }),
   );
 
+  it.effect("does not restart work when Stop ends a turn a steer was waiting on", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-steer-stopped-while-waiting");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-acp-steer-stop-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockGrokWrapper({
+          T3_ACP_EMIT_XAI_ASK_USER_QUESTION: "1",
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const requested =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "user-input.requested" }>>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        String(event.threadId) === String(threadId) && event.type === "user-input.requested"
+          ? Deferred.succeed(requested, event).pipe(Effect.ignore)
+          : Effect.void,
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("grok"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const first = yield* adapter
+        .sendTurn({ threadId, input: "ask before continuing", attachments: [] })
+        .pipe(Effect.forkChild);
+      const requestedEvent = yield* Deferred.await(requested);
+      const steer = yield* adapter
+        .sendTurn({ threadId, input: "also check the tests", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+
+      yield* adapter.interruptTurn(threadId);
+      const steered = yield* Fiber.join(steer);
+      yield* Fiber.await(first);
+      assert.equal(String(steered.turnId), String(requestedEvent.turnId));
+      const requestLog = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      assert.lengthOf(
+        requestLog.filter((entry) => entry.method === "session/prompt"),
+        1,
+      );
+
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("settles a stalled Grok turn after its first activity is user input", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("grok-xai-ask-user-question");
