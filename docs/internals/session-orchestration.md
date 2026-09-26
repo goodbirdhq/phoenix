@@ -69,8 +69,8 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   joins the running turn through the same decider path as a human steer and the graceful-stop
   notice; it still queues while the child is starting or blocked on an approval or blocking
   question. Providers land it differently: Claude and OpenCode inject mid-turn, Grok and
-  Antigravity cancel the current step and re-prompt, Codex and Cursor deliver after the current
-  step. Stopped/error sessions cancel queued messages instead of resurrecting the child;
+  Antigravity cancel the current step and re-prompt, Cursor delivers after the current step, and
+  Codex runs it as a follow-up turn. Stopped/error sessions cancel queued messages instead of resurrecting the child;
   restart and periodic recovery only release stale persisted sessions after confirming there is
   no live provider binding.
 - **Persistence** — migrations 041 (`projection_threads.spawned_by_thread_id`), 042
