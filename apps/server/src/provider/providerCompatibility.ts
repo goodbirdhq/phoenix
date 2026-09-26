@@ -14,7 +14,7 @@ import * as Schema from "effect/Schema";
  * Compare against the upstream release this build is synced to; bump it with
  * every upstream integration.
  */
-export const T3CODE_BASE_VERSION = "0.0.42";
+const T3CODE_BASE_VERSION = "0.0.42";
 
 // Deliberately uses the shared CLI gate syntax: comparator groups joined by ||.
 // Prereleases and unrecognized release tags remain unknown.

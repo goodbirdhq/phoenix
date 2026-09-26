@@ -63,12 +63,6 @@ export const ENVIRONMENT_MACHINE_KIND_LABELS: Record<EnvironmentMachineKind, str
   "mac-studio": "Workstation",
 };
 
-export function environmentMachineIcon(
-  kind: EnvironmentMachineKind,
-): FunctionComponent<LucideProps> {
-  return ICON_BY_KIND[kind];
-}
-
 export function EnvironmentMachineIcon({
   kind,
   ...props

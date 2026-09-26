@@ -5,7 +5,7 @@ import { useCallback, useEffect } from "react";
 // Phoenix's Usage and Pull Requests footer tabs, is the main app that Back and
 // Escape return to. Legacy `/projects/<key>` links redirect into settings, so
 // they count too and are never remembered.
-export function isSidebarUtilityPage(pathname: string) {
+function isSidebarUtilityPage(pathname: string) {
   return (
     pathname === "/settings" ||
     pathname.startsWith("/settings/") ||

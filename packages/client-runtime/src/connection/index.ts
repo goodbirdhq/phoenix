@@ -21,5 +21,3 @@ export {
 } from "./registry.ts";
 export type { EnvironmentSupervisorOptions } from "./supervisor.ts";
 export * as Wakeups from "./wakeups.ts";
-
-export { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
