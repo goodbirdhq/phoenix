@@ -44,6 +44,7 @@ import {
   ProviderAdapterRequestError,
   ProviderAdapterProcessError,
   ProviderAdapterSessionNotFoundError,
+  ProviderAdapterTurnStoppedError,
   ProviderAdapterValidationError,
   ProviderWorkspaceMissingError,
 } from "../../provider/Errors.ts";
@@ -75,6 +76,7 @@ import * as TerminalManager from "../../terminal/Manager.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterSessionNotFoundError = Schema.is(ProviderAdapterSessionNotFoundError);
+const isProviderAdapterTurnStoppedError = Schema.is(ProviderAdapterTurnStoppedError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
@@ -1498,6 +1500,18 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.void;
+        }
+        // A deliberate Stop is not a session error, but the message stays visible in the thread.
+        if (
+          cause.reasons.some(
+            (reason) =>
+              Cause.isFailReason(reason) && isProviderAdapterTurnStoppedError(reason.error),
+          )
+        ) {
+          return appendTurnStartFailure(
+            "Message was not sent",
+            "Stop ended the turn before this message reached the agent. Send it again to continue.",
+          );
         }
         const detail = formatFailureDetail(cause);
         return setThreadSessionErrorOnTurnStartFailure({

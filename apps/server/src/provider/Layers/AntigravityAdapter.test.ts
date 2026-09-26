@@ -661,10 +661,9 @@ it.layer(layer)("AntigravityAdapter", (it) => {
       yield* h.adapter.interruptTurn(threadId);
       expect(yield* Fiber.join(question)).toEqual({ outcome: { outcome: "cancelled" } });
       yield* Fiber.await(first);
-      // The steer belonged to the stopped turn, so it starts no new work.
-      const steered = yield* Fiber.join(steer);
-      const stopped = yield* h.waitForEvent((event) => event.type === "turn.completed");
-      expect(steered.turnId).toBe(stopped.turnId);
+      // The steer belonged to the stopped turn, so it starts no new work and reports it was not sent.
+      const error = yield* Fiber.join(steer).pipe(Effect.flip);
+      expect(error._tag).toBe("ProviderAdapterTurnStoppedError");
       expect(h.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:1"]);
     }),
   );
@@ -721,10 +720,9 @@ it.layer(layer)("AntigravityAdapter", (it) => {
 
       yield* Deferred.succeed(h.dispatchRelease, undefined);
       yield* Fiber.join(stop);
-      const steered = yield* Fiber.join(steer);
+      const error = yield* Fiber.join(steer).pipe(Effect.flip);
+      expect(error._tag).toBe("ProviderAdapterTurnStoppedError");
       yield* Fiber.await(first);
-      const stopped = yield* h.waitForEvent((event) => event.type === "turn.completed");
-      expect(steered.turnId).toBe(stopped.turnId);
       expect(h.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:1"]);
     }),
   );

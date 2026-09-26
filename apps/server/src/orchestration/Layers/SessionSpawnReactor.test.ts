@@ -10,6 +10,7 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationCommand,
+  type OrchestrationMessage,
   type OrchestrationEvent,
   type OrchestrationSession,
   type OrchestrationThread,
@@ -180,6 +181,7 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
   readonly reportDelivery?: OrchestrationThreadShell["reportDelivery"];
   readonly reports?: OrchestrationThread["reports"];
   readonly recoverTerminalAtStartup?: boolean;
+  readonly turnStartOrigin?: OrchestrationMessage["origin"];
 }) {
   const commands = yield* Ref.make<Array<OrchestrationCommand>>([]);
   const preActivationObserved = yield* Deferred.make<void>();
@@ -305,6 +307,22 @@ const createHarness = Effect.fn("createSessionSpawnReactorHarness")(function* (i
               })
             : Option.none();
       }),
+    getTurnStartMessage: ({ messageId }: { readonly messageId: MessageId }) =>
+      Effect.succeed(
+        Option.some({
+          message: {
+            id: messageId,
+            role: "user",
+            text: "also check the tests",
+            ...(input.turnStartOrigin !== undefined ? { origin: input.turnStartOrigin } : {}),
+            turnId: null,
+            streaming: false,
+            createdAt: NOW,
+            updatedAt: NOW,
+          },
+          hasOtherUserMessages: true,
+        }),
+      ),
     getLatestUsageActivity: () => Effect.succeed(Option.none()),
     getThreadTurnCount: () => Effect.succeed(null),
   } as unknown as ProjectionSnapshotQuery["Service"]);
@@ -396,6 +414,111 @@ describe("SessionSpawnReactor queued delivery", () => {
         );
         expect(harness.commands.some((c) => c.type === "thread.report.post")).toBe(false);
         expect(harness.queuedRows[0]?.state).toBe("queued");
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  const notSentEvent: OrchestrationEvent = {
+    ...sessionSetEvent(makeShell(CHILD_ID, "running")),
+    type: "thread.activity-appended",
+    payload: {
+      threadId: CHILD_ID,
+      activity: {
+        id: EventId.make("message-not-sent"),
+        kind: "provider.turn.start.failed",
+        tone: "error",
+        summary: "Message was not sent",
+        payload: {
+          requestId: "steer-message",
+          detail: "Stop ended the turn before this message reached the agent.",
+        },
+        turnId: null,
+        createdAt: NOW,
+      },
+    },
+  };
+  const parentNotices = (commands: ReadonlyArray<OrchestrationCommand>) =>
+    commands.filter((c) => c.type === "thread.turn.start" && c.threadId === PARENT_ID);
+
+  it.effect("tells the parent when a message it sent never reached the child", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* createHarness({
+          status: "running",
+          queued: [],
+          live: true,
+          boundaryEvents: [notSentEvent, notSentEvent],
+          turnStartOrigin: { kind: "session", threadId: PARENT_ID },
+        });
+        const notices = parentNotices(harness.commands);
+        expect(new Set(notices.map((c) => c.commandId)).size).toBe(1);
+        const text = notices[0]?.type === "thread.turn.start" ? notices[0].message.text : "";
+        expect(text).toContain("steer-message");
+        expect(text).toContain("Message was not sent");
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("leaves an errored child's failure to the terminal notice", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* createHarness({
+          status: "error",
+          queued: [],
+          boundaryEvents: [notSentEvent],
+          turnStartOrigin: { kind: "session", threadId: PARENT_ID },
+        });
+        expect(
+          parentNotices(harness.commands).filter(
+            (c) => c.type === "thread.turn.start" && c.message.text.includes("did not reach"),
+          ),
+        ).toEqual([]);
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("forwards only the first line of a failure detail to the parent", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const multiline: OrchestrationEvent =
+          notSentEvent.type === "thread.activity-appended"
+            ? {
+                ...notSentEvent,
+                payload: {
+                  ...notSentEvent.payload,
+                  activity: {
+                    ...notSentEvent.payload.activity,
+                    payload: { requestId: "steer-message", detail: "Error: boom\n    at frame" },
+                  },
+                },
+              }
+            : notSentEvent;
+        const harness = yield* createHarness({
+          status: "running",
+          queued: [],
+          live: true,
+          boundaryEvents: [multiline],
+          turnStartOrigin: { kind: "session", threadId: PARENT_ID },
+        });
+        const text = parentNotices(harness.commands)
+          .map((c) => (c.type === "thread.turn.start" ? c.message.text : ""))
+          .join("");
+        expect(text).toContain("Error: boom");
+        expect(text).not.toContain("at frame");
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
+  it.effect("does not tell the parent about a message a person sent the child", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* createHarness({
+          status: "running",
+          queued: [],
+          live: true,
+          boundaryEvents: [notSentEvent],
+        });
+        expect(parentNotices(harness.commands)).toEqual([]);
       }).pipe(Effect.provide(NodeServices.layer)),
     ),
   );

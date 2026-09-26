@@ -48,6 +48,7 @@ import {
   ProviderAdapterRequestError,
   ProviderAdapterProcessError,
   ProviderAdapterSessionNotFoundError,
+  ProviderAdapterTurnStoppedError,
   ProviderWorkspaceMissingError,
   type ProviderServiceError,
 } from "../../provider/Errors.ts";
@@ -287,11 +288,14 @@ describe("ProviderCommandReactor", () => {
         ),
       );
     });
-    const sendTurn = vi.fn((_: Parameters<ProviderServiceShape["sendTurn"]>[0]) =>
-      Effect.succeed({
-        threadId: ThreadId.make("thread-1"),
-        turnId: asTurnId("turn-1"),
-      }),
+    const sendTurn = vi.fn(
+      (
+        _: Parameters<ProviderServiceShape["sendTurn"]>[0],
+      ): ReturnType<ProviderServiceShape["sendTurn"]> =>
+        Effect.succeed({
+          threadId: ThreadId.make("thread-1"),
+          turnId: asTurnId("turn-1"),
+        }),
     );
     const compactThread = vi.fn((_: ThreadId) => input?.compactThreadEffect?.() ?? Effect.void);
     const interruptTurn = vi.fn<ProviderServiceShape["interruptTurn"]>(
@@ -1155,6 +1159,49 @@ describe("ProviderCommandReactor", () => {
         expect(harness.startSession).not.toHaveBeenCalled();
         expect(harness.sendTurn).not.toHaveBeenCalled();
       }),
+  );
+
+  effectIt.effect("marks a message Stop dropped before delivery as not sent", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const threadId = ThreadId.make("thread-1");
+      harness.sendTurn.mockImplementation(() =>
+        Effect.fail(new ProviderAdapterTurnStoppedError({ provider: "grok", threadId })),
+      );
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-stopped-before-send"),
+        threadId,
+        message: {
+          messageId: asMessageId("message-stopped-before-send"),
+          role: "user",
+          text: "also check the tests",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      const notSent = (model: Awaited<ReturnType<typeof harness.readModel>>) =>
+        model.threads
+          .find((entry) => entry.id === threadId)
+          ?.activities.some((activity) => activity.summary === "Message was not sent") ?? false;
+      yield* Effect.promise(() => waitFor(async () => notSent(await harness.readModel())));
+      yield* Effect.promise(() => harness.drain());
+
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      expect(thread?.session?.status).not.toBe("error");
+      expect(thread?.activities).toContainEqual(
+        expect.objectContaining({
+          kind: "provider.turn.start.failed",
+          summary: "Message was not sent",
+          payload: expect.objectContaining({ requestId: "message-stopped-before-send" }),
+        }),
+      );
+    }),
   );
 
   effectIt.effect("clears a failed sign-out request without sending it as a prompt", () =>

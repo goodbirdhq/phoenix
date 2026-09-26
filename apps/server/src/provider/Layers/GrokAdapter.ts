@@ -49,6 +49,7 @@ import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
+  ProviderAdapterTurnStoppedError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
@@ -1569,11 +1570,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           yield* awaitUserRequests(current);
           // Stop ended the turn this steer was joining; it must not start work again.
           if (current.interruptedTurnIds.has(joinedTurnId)) {
-            return {
+            return yield* new ProviderAdapterTurnStoppedError({
+              provider: PROVIDER,
               threadId: input.threadId,
-              turnId: joinedTurnId,
-              resumeCursor: current.session.resumeCursor,
-            };
+            });
           }
         }
         const prepared = yield* withThreadLock(
@@ -1864,6 +1864,12 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               ),
             );
             yield* Ref.set(promptSettled, true);
+            if (promptStart.interrupted && prepared.steeringTurnId !== undefined) {
+              return yield* new ProviderAdapterTurnStoppedError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+              });
+            }
             const liveCtx = sessions.get(input.threadId);
             return {
               threadId: input.threadId,

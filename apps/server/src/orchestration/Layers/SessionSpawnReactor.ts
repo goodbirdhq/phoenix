@@ -47,13 +47,13 @@ type ReportPostedEvent = Extract<OrchestrationEvent, { type: "thread.report-post
 type SessionSetEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
 type TurnQueuedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-queued" }>;
 type TurnRequestedEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>;
-type StopFailureEvent = Extract<OrchestrationEvent, { type: "thread.activity-appended" }>;
+type ParentNoticeActivityEvent = Extract<OrchestrationEvent, { type: "thread.activity-appended" }>;
 type WatchedEvent =
   | ReportPostedEvent
   | SessionSetEvent
   | TurnQueuedEvent
   | TurnRequestedEvent
-  | StopFailureEvent;
+  | ParentNoticeActivityEvent;
 type WorkerInput =
   | { readonly type: "event"; readonly event: WatchedEvent }
   | { readonly type: "recover"; readonly threadId: ThreadId }
@@ -766,6 +766,42 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
   const processEvent = Effect.fn("SessionSpawnReactor.processEvent")(function* (
     event: WatchedEvent,
   ) {
+    if (
+      event.type === "thread.activity-appended" &&
+      event.payload.activity.kind === "provider.turn.start.failed"
+    ) {
+      // send_to_session reports delivery before the provider runs, so a
+      // parent only learns its message never reached the child from here.
+      const { activity } = event.payload;
+      const payload =
+        typeof activity.payload === "object" && activity.payload !== null
+          ? (activity.payload as { readonly requestId?: unknown; readonly detail?: unknown })
+          : {};
+      if (typeof payload.requestId !== "string") return;
+      const child = yield* snapshotQuery.getThreadShellById(event.payload.threadId);
+      const parentThreadId = Option.isSome(child) ? child.value.spawnedByThreadId : null;
+      // A failure that also errored the session reaches the parent as a terminal notice.
+      if (!parentThreadId || Option.getOrUndefined(child)?.session?.status === "error") return;
+      const turnStart = yield* snapshotQuery.getTurnStartMessage({
+        threadId: event.payload.threadId,
+        messageId: MessageId.make(payload.requestId),
+      });
+      const origin = Option.isSome(turnStart) ? turnStart.value.message.origin : undefined;
+      if (origin?.kind !== "session" || origin.threadId !== parentThreadId) return;
+      const key = `session-message-not-sent:${event.payload.threadId}:${event.eventId}`;
+      // Keep the parent's prompt short: a provider defect's detail can be a full stack trace.
+      const firstLine = typeof payload.detail === "string" ? payload.detail.split("\n")[0] : "";
+      const detail = firstLine ? ` ${firstLine.slice(0, 300)}` : "";
+      yield* notifyParent({
+        childThreadId: event.payload.threadId,
+        origin: { kind: "phoenix", threadId: event.payload.threadId },
+        commandTag: "session-message-not-sent",
+        commandId: CommandId.make(key),
+        messageId: MessageId.make(key),
+        text: `[Phoenix] Your message ${payload.requestId} to spawned session ${event.payload.threadId} did not reach its agent: ${activity.summary}.${detail} Check read_session before sending it again.`,
+      }).pipe(Effect.retry({ times: 2, schedule: Schedule.exponential(100) }));
+      return;
+    }
     if (event.type === "thread.activity-appended") {
       if (event.payload.activity.kind !== "provider.session.stop.failed") return;
       const key = `session-stop-unconfirmed:${event.payload.threadId}:${event.eventId}`;
@@ -1219,7 +1255,8 @@ export const makeSessionSpawnReactor = Effect.gen(function* () {
         if (
           !(
             event.type === "thread.activity-appended" &&
-            event.payload.activity.kind === "provider.session.stop.failed"
+            (event.payload.activity.kind === "provider.session.stop.failed" ||
+              event.payload.activity.kind === "provider.turn.start.failed")
           ) &&
           event.type !== "thread.report-posted" &&
           event.type !== "thread.session-set" &&
