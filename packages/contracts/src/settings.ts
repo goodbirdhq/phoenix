@@ -529,7 +529,7 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT)),
   ),
   sidebarAttentionFirstEnabled: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(true)),
+    Schema.withDecodingDefault(Effect.succeed(false)),
   ),
   // Nests spawned threads under the session that spawned them instead of
   // listing every thread flat. Purely a rendering mode over the

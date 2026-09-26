@@ -25,9 +25,7 @@ import {
   resolveProjectStatusIndicator,
   resolveSidebarThreadStatus,
   resolveThreadStatusPill,
-  resolveWorkingStartedAt,
   searchSidebarThreads,
-  formatWorkingDurationLabel,
   shouldClearThreadSelectionOnMouseDown,
   shouldRecedeSidebarThread,
   sortLogicalProjectsForSidebar,
@@ -2006,73 +2004,6 @@ describe("sortPinnedThreadsForSidebar", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
-  });
-});
-
-describe("resolveWorkingStartedAt", () => {
-  const session = {
-    threadId: ThreadId.make("thread-1"),
-    status: "running" as const,
-    providerName: "Codex",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-    runtimeMode: DEFAULT_RUNTIME_MODE,
-    activeTurnId: "turn-1" as never,
-    lastError: null,
-    updatedAt: "2026-03-09T10:02:00.000Z",
-  };
-
-  it("uses the running turn's start time", () => {
-    expect(
-      resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn({ completedAt: null }),
-        session,
-      }),
-    ).toBe("2026-03-09T10:00:00.000Z");
-  });
-
-  it("uses the request time while a turn awaits adoption", () => {
-    expect(
-      resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn({ startedAt: null, completedAt: null }),
-        session,
-      }),
-    ).toBe("2026-03-09T10:00:00.000Z");
-  });
-
-  it("falls back to the session transition when the latest turn already completed", () => {
-    expect(
-      resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn(),
-        session,
-      }),
-    ).toBe("2026-03-09T10:02:00.000Z");
-  });
-
-  it("skips a malformed startedAt instead of returning it", () => {
-    expect(
-      resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn({ startedAt: "not-a-date", completedAt: null }),
-        session,
-      }),
-    ).toBe("2026-03-09T10:00:00.000Z");
-  });
-
-  it("returns null with neither a running turn nor a session", () => {
-    expect(resolveWorkingStartedAt({ latestTurn: null, session: null })).toBeNull();
-  });
-});
-
-describe("formatWorkingDurationLabel", () => {
-  it("formats seconds, minutes, and hours", () => {
-    expect(formatWorkingDurationLabel(0)).toBe("0s");
-    expect(formatWorkingDurationLabel(42_000)).toBe("42s");
-    expect(formatWorkingDurationLabel(5 * 60_000)).toBe("5m");
-    expect(formatWorkingDurationLabel(90 * 60_000)).toBe("1h 30m");
-  });
-
-  it("clamps negative and non-finite elapsed values to zero", () => {
-    expect(formatWorkingDurationLabel(-5_000)).toBe("0s");
-    expect(formatWorkingDurationLabel(Number.NaN)).toBe("0s");
   });
 });
 

@@ -2960,10 +2960,16 @@ export function GeneralSettingsPanel() {
                 : "Keep active threads in their manual order. Turn on Attention first to prioritize work that needs you."
           }
           resetAction={
-            !settings.sidebarAttentionFirstEnabled ? (
+            settings.sidebarAttentionFirstEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarAttentionFirstEnabled ? (
               <SettingResetButton
-                label="manual ordering"
-                onClick={() => updateSettings({ sidebarAttentionFirstEnabled: true })}
+                label="thread ordering"
+                onClick={() =>
+                  updateSettings({
+                    sidebarAttentionFirstEnabled:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarAttentionFirstEnabled,
+                  })
+                }
               />
             ) : null
           }

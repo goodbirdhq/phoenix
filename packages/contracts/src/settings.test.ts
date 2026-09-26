@@ -622,11 +622,11 @@ describe("ClientSettings editor handoff", () => {
 });
 
 describe("ClientSettings sidebar", () => {
-  it("defaults to attention ordering and preserves an explicit manual choice", () => {
-    expect(decodeClientSettings({}).sidebarAttentionFirstEnabled).toBe(true);
+  it("defaults to manual ordering and preserves an explicit attention choice", () => {
+    expect(decodeClientSettings({}).sidebarAttentionFirstEnabled).toBe(false);
     expect(
-      decodeClientSettings({ sidebarAttentionFirstEnabled: false }).sidebarAttentionFirstEnabled,
-    ).toBe(false);
+      decodeClientSettings({ sidebarAttentionFirstEnabled: true }).sidebarAttentionFirstEnabled,
+    ).toBe(true);
     expect(
       decodeClientSettingsPatch({ sidebarAttentionFirstEnabled: true })
         .sidebarAttentionFirstEnabled,

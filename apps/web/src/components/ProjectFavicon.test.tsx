@@ -146,6 +146,19 @@ describe("ProjectFavicon", () => {
     expect(element.props.projectName).toBe("agent-runtime");
   });
 
+  it("keeps the plain icon fallback when a surface opts out of the monogram", () => {
+    testState.faviconUrl = `https://environment.test/api/assets/token/${PROJECT_FAVICON_FALLBACK_MARKER}`;
+
+    const element = ProjectFavicon({
+      project: makeProject({ workspaceRoot: "/workspace/analytics-db", title: "analytics-db" }),
+      monogramFallback: false,
+    }) as ReactElement<{
+      readonly projectName?: string;
+    }>;
+
+    expect(element.props.projectName).toBeUndefined();
+  });
+
   it("renders a saved Lucide icon and color ahead of an uploaded favicon", () => {
     const element = ProjectFavicon({
       project: makeProject({
