@@ -208,6 +208,8 @@ interface SessionContext {
   activeTurnId: TurnId | undefined;
   promptFiber: Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError> | undefined;
   generation: number;
+  /** Counts Stops, so a steer that waited through one does not restart work. */
+  interrupts: number;
   stopped: boolean;
   closed: boolean;
   disconnected: boolean;
@@ -878,6 +880,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                 turns: [],
                 session,
                 activeTurnId: undefined,
+                interrupts: 0,
                 promptFiber: undefined,
                 generation: 0,
                 stopped: false,
@@ -1043,7 +1046,19 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
 
     return yield* Effect.gen(function* () {
       // Waiting outside promptLock keeps Stop responsive while the user decides.
-      if (context.promptFiber) yield* awaitUserRequests;
+      const joinedTurnId = context.promptFiber ? context.activeTurnId : undefined;
+      const interruptsAtSend = context.interrupts;
+      if (joinedTurnId !== undefined) {
+        yield* awaitUserRequests;
+        // Stop ended the turn this steer was joining; it must not start work again.
+        if (context.interrupts !== interruptsAtSend) {
+          return {
+            threadId: input.threadId,
+            turnId: joinedTurnId,
+            resumeCursor: context.session.resumeCursor,
+          };
+        }
+      }
       const launch = yield* context.promptLock.withPermit(
         Effect.gen(function* () {
           yield* requireSession(input.threadId);
@@ -1191,6 +1206,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
       let idleWithCommands = false;
       // Answer open requests as cancelled before the lock: a steer waiting on
       // them holds promptLock until they resolve.
+      context.interrupts += 1;
       yield* cancelRequests(context);
       yield* context.promptLock
         .withPermit(
