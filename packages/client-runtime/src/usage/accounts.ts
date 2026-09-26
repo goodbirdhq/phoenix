@@ -37,7 +37,14 @@ export interface UsageAccount {
   readonly memberships: readonly UsageAccountMembership[];
 }
 
-const USAGE_DRIVERS = new Set(["claudeAgent", "codex", "opencode", "grok"]);
+const USAGE_DRIVERS = new Set([
+  "claudeAgent",
+  "codex",
+  "opencode",
+  "grok",
+  "cursor",
+  "antigravity",
+]);
 /** Builds current account membership without inferring identity from email, plan or history. */
 export function buildUsageAccounts(
   environments: readonly AccountEnvironment[],
