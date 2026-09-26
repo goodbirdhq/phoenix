@@ -135,6 +135,10 @@ Walk the overlapping-file queue after textual conflicts are gone. Pay particular
 - `T3CODE_BASE_VERSION` in `apps/server/src/provider/providerCompatibility.ts`. Provider
   compatibility policies key on upstream release numbers, not Phoenix's, so set it to the upstream
   head's `apps/server/package.json` version on every sync.
+- `apps/server/src/provider/model-manifest.json`. Running servers fetch it hourly from Phoenix's
+  `main` (`MODEL_MANIFEST_URL` in `ModelManifest.ts`), so take upstream's version on each sync and
+  review its compatibility ranges; between syncs, new models reach users only when this file changes
+  on `main`.
 
 Search the staged delta for newly introduced upstream product identifiers, then classify each hit as
 runtime identity, deliberate source identity, test data, or attribution. The branding policy's source

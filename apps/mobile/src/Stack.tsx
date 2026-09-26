@@ -84,7 +84,6 @@ import {
   SettingsEnvironmentSourceControlRouteScreen,
 } from "./features/settings/SettingsServerControlsRouteScreen";
 import { SettingsKeyboardRouteScreen } from "./features/settings/SettingsKeyboardRouteScreen";
-import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
 import {
   SettingsOpenSourceLicenseRouteScreen,
   SettingsOpenSourceLicensesRouteScreen,
@@ -109,10 +108,6 @@ import {
   ScheduleNewRouteScreen,
 } from "./features/schedules/ScheduleEditorRouteScreen";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
-import {
-  SettingsLegalDocumentCloseHeaderButton,
-  SettingsLegalDocumentExternalHeaderButton,
-} from "./features/settings/components/SettingsLegalDocumentRouteScreen";
 import { useAppShortcuts } from "./features/shortcuts/useAppShortcuts";
 import { useIncomingShare } from "./features/sharing/IncomingShareProvider";
 import {
@@ -164,26 +159,12 @@ const SOLID_HEADER_OPTIONS: AppScreenOptions = {
   unstable_navigationItemStyle: Platform.OS === "ios" ? "editor" : undefined,
 };
 
-// Solid header variant for screens inside sheets (centered title, no editor style).
-const SHEET_SOLID_HEADER_OPTIONS: AppScreenOptions = {
-  ...SOLID_HEADER_OPTIONS,
-  unstable_navigationItemStyle: undefined,
-};
-
 // A native glass header for a sheet screen whose primary child is a scroll
 // view. The centered sheet title stays stable while UIKit supplies scroll-edge
 // fading from that child.
 const SHEET_GLASS_HEADER_OPTIONS: AppScreenOptions = {
   ...GLASS_HEADER_OPTIONS,
   unstable_navigationItemStyle: undefined,
-};
-
-const LEGAL_DOCUMENT_HEADER_OPTIONS: AppScreenOptions = {
-  ...SHEET_SOLID_HEADER_OPTIONS,
-  headerBackVisible: false,
-  headerLeft: SettingsLegalDocumentCloseHeaderButton,
-  headerRight: () => <SettingsLegalDocumentExternalHeaderButton />,
-  presentation: "fullScreenModal",
 };
 
 function SettingsNavigationFooter(props: React.ComponentProps<typeof NavigationFooter>) {
@@ -543,7 +524,6 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "GitConfirm",
   "GitOverview",
   "NewTaskSheet",
-  "SettingsLegal",
   "SettingsSheet",
   "ThreadReviewComment",
   "ThreadDevicePreview",
@@ -800,14 +780,6 @@ const RootStackConfig = createNativeStackNavigator({
       options: {
         gestureEnabled: true,
         headerShown: false,
-      },
-    }),
-    SettingsLegal: createNativeStackScreen({
-      screen: SettingsLegalRouteScreen,
-      linking: "settings/legal",
-      options: {
-        ...LEGAL_DOCUMENT_HEADER_OPTIONS,
-        title: "Legal",
       },
     }),
     Connections: createNativeStackScreen({
