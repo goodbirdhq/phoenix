@@ -4,7 +4,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommand,
 } from "@t3tools/client-runtime/state/runtime";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 
@@ -37,6 +37,18 @@ async function run<W, A, E>(command: AtomCommand<W, A, E>, input: W): Promise<A>
   const result = await runAtomCommand(appAtomRegistry, command, input, { reportFailure: false });
   if (result._tag === "Failure") throw squashAtomCommandFailure(result);
   return result.value;
+}
+
+/**
+ * Steer delivery for a turn sent while the agent may still be working. The
+ * server queues messages to a busy thread unless told to steer, and servers
+ * without `turnSteer` would ignore the request, so it is read at dispatch time.
+ */
+export function turnSteerDelivery(environmentId: EnvironmentId) {
+  const config = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId);
+  return config?.environment.capabilities.turnSteer === true
+    ? ({ deliveryMode: "steer" } as const)
+    : {};
 }
 
 /**
@@ -193,6 +205,7 @@ export async function sendQueuedMessage(
         modelSelection: sendSettings.modelSelection,
         runtimeMode: sendSettings.runtimeMode,
         interactionMode: sendSettings.interactionMode,
+        ...turnSteerDelivery(environmentId),
         createdAt,
       },
     });

@@ -1876,7 +1876,8 @@ export const ThreadTurnStartCommand = Schema.Struct({
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   graceStopNotice: Schema.optional(Schema.Boolean),
-  deliveryMode: Schema.optional(Schema.Literals(["queue", "interrupt"])),
+  // "steer" hands a busy thread's message to the running turn instead of queuing it.
+  deliveryMode: Schema.optional(Schema.Literals(["queue", "interrupt", "steer"])),
   // Server-only companion activity committed atomically with the turn start.
   // Used by send_to_parent so delivery and the child's awaiting-reply marker
   // cannot be separated by a process failure. The client schema omits it.
@@ -1907,6 +1908,9 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   graceStopNotice: Schema.optional(Schema.Boolean),
+  // Steer and Send now. Only sent to servers advertising `turnSteer`; without
+  // it a busy thread queues the message on the server.
+  deliveryMode: Schema.optional(Schema.Literal("steer")),
   createdAt: IsoDateTime,
 });
 

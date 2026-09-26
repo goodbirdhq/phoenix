@@ -335,7 +335,7 @@ import {
   useQueuedMessages,
   useQueuedMessageStore,
 } from "../queuedMessageStore";
-import { sendQueuedMessage } from "./chat/sendQueuedMessage";
+import { sendQueuedMessage, turnSteerDelivery } from "./chat/sendQueuedMessage";
 import { type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
@@ -8529,6 +8529,9 @@ export default function ChatView(props: ChatViewProps) {
           runtimeMode,
           interactionMode: sendInteractionMode,
           ...(bootstrap ? { bootstrap } : {}),
+          // Only a steer follow-up reaches here while the agent is working;
+          // queued follow-ups go through the queue instead.
+          ...turnSteerDelivery(environmentId),
           createdAt: messageCreatedAt,
         },
       });

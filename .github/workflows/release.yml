@@ -1,20 +1,14 @@
 name: Release
 
 on:
-  # Parked: upstream added a schedule/tag-push trigger with automatic nightly
-  # promotion here. Phoenix's release policy is manual-dispatch-only ("All
-  # production publication is manual" — docs/operations/release.md); adopting
-  # an automatic trigger is a deliberate policy decision, not a mechanical
-  # merge. See the resolve_commit job below for the matching parked machinery.
   workflow_dispatch:
     inputs:
       channel:
         description: "Release channel"
         required: false
-        default: preview
+        default: stable
         type: choice
         options:
-          - preview
           - stable
           - nightly
       version:
@@ -96,28 +90,6 @@ jobs:
             echo "release_channel=nightly" >> "$GITHUB_OUTPUT"
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
             echo "make_latest=false" >> "$GITHUB_OUTPUT"
-          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${DISPATCH_CHANNEL:-preview}" == "preview" ]]; then
-            # Manual-only test train: exercises the whole release flow for a
-            # commit end users must never receive. Never scheduled.
-            # Same versioning as nightly under its own prerelease identifier.
-            # A preview release is reachable only by asking for it: npm gets it
-            # under the `preview` dist-tag, which nothing resolves by default,
-            # its desktop builds carry no update feed, and no updater manifest
-            # is attached to the release, so neither stable nor nightly
-            # installs can ever be offered one.
-            nightly_date="$(date -u -d "$NIGHTLY_DATE" +%Y%m%d)"
-
-            node scripts/resolve-nightly-release.ts \
-              --channel preview \
-              --date "$nightly_date" \
-              --run-number "$NIGHTLY_RUN_NUMBER" \
-              --sha "$NIGHTLY_SHA" \
-              --github-output
-
-            echo "release_channel=preview" >> "$GITHUB_OUTPUT"
-            echo "cli_dist_tag=preview" >> "$GITHUB_OUTPUT"
-            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "make_latest=false" >> "$GITHUB_OUTPUT"
           else
             raw="$DISPATCH_VERSION"
             if [[ -z "$raw" ]]; then
@@ -192,76 +164,13 @@ jobs:
       - name: Typecheck
         run: vp run typecheck
 
-  # Keep tests on their own runners, using the same package split and server
-  # shards as CI, so the release check job does not spend its budget on tests.
-  test:
-    name: Release tests
-    needs: [preflight]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Ensure Electron runtime is installed
-        run: vp run --filter @t3tools/desktop ensure:electron
-
       - uses: ./.github/actions/setup-apt-mirrors
 
       - name: Install browser secret helper build libraries
-        run: |
-          sudo sed -i 's|http://|https://|g' /etc/apt/blacksmith-ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config build-essential
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
 
       - name: Test
-        run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
-
-  test_server:
-    name: Release server tests ${{ matrix.shard }}
-    needs: [preflight]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      # No Electron setup here: `t3` (apps/server) has no Electron dependency
-      # and none of its tests touch the runtime. Only the non-server `test`
-      # job, which covers @t3tools/desktop, needs the download.
-      - name: Test
-        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: vp run test
 
   public_config:
     name: Validate public client configuration
@@ -407,8 +316,21 @@ jobs:
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
-          cache: true
+          cache: ${{ matrix.platform != 'win' }}
           run-install: false
+
+      - name: Resolve Windows package cache path
+        if: matrix.platform == 'win'
+        id: package_cache_path
+        shell: pwsh
+        run: '"path=$(vp pm cache dir)" >> $env:GITHUB_OUTPUT'
+
+      - name: Cache Windows packages
+        if: matrix.platform == 'win'
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.package_cache_path.outputs.path }}
+          key: windows-release-packages-v1-${{ matrix.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       # pnpm checks the lockfile and policy before reusing this result. A missing
       # artifact leaves the cache empty, so installation runs the checks again.
@@ -419,10 +341,10 @@ jobs:
           name: release-dependency-verification
           path: ${{ runner.temp }}/pnpm-metadata
 
-      - name: Install bundle dependencies
+      - name: Install desktop dependencies
         env:
           pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-metadata
-        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+        run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
 
       - name: Cache resource monitor
         id: resource_monitor_cache
@@ -450,18 +372,48 @@ jobs:
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
+      - name: Download WSL node-pty prebuild
+        if: matrix.platform == 'win'
+        uses: actions/download-artifact@v7
+        with:
+          name: wsl-node-pty-x64
+          path: wsl-prebuild
+
+      - name: Install Spectre-mitigated MSVC libs
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
+            "Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre", "--quiet", "--norestart" `
+            -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -ne 0) {
+            $code = if ($null -ne $proc) { $proc.ExitCode } else { 1 }
+            Write-Error "Visual Studio Installer failed with exit code $code"
+            exit $code
+          }
+
       - uses: ./.github/actions/setup-apt-mirrors
+        if: matrix.platform == 'linux'
 
-      # @t3tools/desktop#build compiles the Linux browser secret helper on a
-      # Linux host before packing, and that needs libsecret headers.
-      - name: Install browser secret helper build libraries
-        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+      - name: Install Linux desktop build libraries
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev pkg-config
+          if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
+              sudo apt-get install -y imagemagick
+          fi
 
-      # Runs t3#build (which depends on @t3tools/web#build) and
-      # @t3tools/desktop#build, so apps/server/dist holds the server bundle
-      # plus the web client and apps/desktop/dist-electron the Electron main.
-      - name: Build JS bundle
-        run: vp run build:desktop
+          if command -v magick >/dev/null 2>&1; then
+              magick -version
+          else
+              convert -version
+          fi
 
       - name: Prepare Azure Trusted Signing
         if: matrix.platform == 'win'
@@ -645,12 +597,9 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: js-bundle
-          path: |
-            apps/server/dist
-            apps/desktop/dist-electron
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release-publish/*
           if-no-files-found: error
-          retention-days: 1
 
   publish_cli:
     name: Publish CLI to npm
@@ -685,6 +634,7 @@ jobs:
           run-install: |
             args:
               - --filter=t3...
+              - --filter=@t3tools/web...
               - --filter=@t3tools/scripts...
 
       - name: Align package versions to release version
@@ -747,51 +697,7 @@ jobs:
           merge-multiple: true
           path: release-assets
 
-      - name: Download all CLI archives
-        uses: actions/download-artifact@v8
-        with:
-          pattern: cli-*
-          merge-multiple: true
-          path: release-assets
-
-      # Installers verify archives against this file, so it is written from the
-      # signed bytes that get uploaded, never from an earlier stage.
-      - name: Write CLI archive checksums
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd release-assets
-          shopt -s nullglob
-          archives=(t3-*.tar.gz t3-*.zip)
-          if [[ ${#archives[@]} -eq 0 ]]; then
-            echo "No CLI archives were produced." >&2
-            exit 1
-          fi
-          sha256sum "${archives[@]}" > SHA256SUMS
-          cat SHA256SUMS
-
-      # The desktop build omits the publish config for preview versions, so
-      # electron-builder emits no updater manifests for them. Refuse to publish
-      # if one shows up anyway: a `latest*.yml` or `nightly*.yml` on a preview
-      # release is what would let a stable or nightly install update onto it.
-      - name: Refuse updater metadata on preview releases
-        if: needs.preflight.outputs.release_channel == 'preview'
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob extglob
-          # builder-debug.yml is electron-builder's config dump, not a feed.
-          updater_files=(release-assets/!(builder-debug).yml release-assets/*.blockmap)
-          if [[ ${#updater_files[@]} -ne 0 ]]; then
-            printf 'Preview releases must not carry updater metadata, found: %s\n' "${updater_files[*]}" >&2
-            exit 1
-          fi
-
-      # electron-updater reads one manifest per platform and channel and picks
-      # the file entry whose name carries the running arch, so the per-arch
-      # manifests the build jobs wrote are merged back into that one file.
       - name: Merge macOS updater manifests
-        if: needs.preflight.outputs.release_channel != 'preview'
         run: |
           shopt -s nullglob
           for x64_manifest in release-assets/*-mac-x64.yml; do
@@ -1064,7 +970,6 @@ jobs:
     if: |
       always() && !cancelled() &&
       needs.preflight.result == 'success' &&
-      needs.preflight.outputs.release_channel != 'preview' &&
       needs.public_config.result == 'success' &&
       needs.release.result == 'success' &&
       needs.deploy_web.result == 'success' &&

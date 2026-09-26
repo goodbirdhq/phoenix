@@ -125,6 +125,13 @@ function isNodeScriptRunner(runner: RemoteT3RunnerOptions | undefined): boolean 
   return Boolean(runner?.nodeScriptPath?.trim());
 }
 
+// Archive helpers only exist inside a release executable. Without an explicit
+// archive the launch script keeps its Node helpers, so reusing a server that
+// is already running works even though provisioning a new one is refused.
+function usesArchiveHelpers(runner: RemoteT3RunnerOptions | undefined): boolean {
+  return !isNodeScriptRunner(runner) && Boolean(runner?.archiveVersion?.trim());
+}
+
 function sshRunnerLogFields(runner: RemoteT3RunnerOptions | undefined) {
   if (runner?.nodeScriptPath?.trim()) {
     return { runner: "node-script", nodeScriptPath: runner.nodeScriptPath.trim() };
@@ -682,7 +689,7 @@ export function buildRemoteNodeEnvScript(input?: RemoteT3RunnerOptions): string 
 
 export function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
   return applyScriptPlaceholders(REMOTE_LAUNCH_SCRIPT, {
-    T3_ARCHIVE_MODE: isNodeScriptRunner(input) ? "0" : "1",
+    T3_ARCHIVE_MODE: usesArchiveHelpers(input) ? "1" : "0",
     T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
     T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteT3RunnerScript(input)),
     T3_PICK_PORT_SCRIPT: stripTrailingNewlines(REMOTE_PICK_PORT_SCRIPT),

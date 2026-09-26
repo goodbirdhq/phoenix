@@ -2140,10 +2140,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           AND event_type IN (
             'thread.message-sent',
             'thread.proposed-plan-upserted',
+            'thread.report-posted',
             'thread.activity-appended',
+            'thread.migrated',
             'thread.turn-diff-completed',
             'thread.reverted',
-            'thread.session-set'
+            'thread.session-set',
+            'thread.turn-start-requested',
+            'thread.turn-start-queued',
+            'thread.turn-start-consumed',
+            'thread.turn-start-cancelled',
+            'thread.turn-start-requeued'
           )
       `,
   });

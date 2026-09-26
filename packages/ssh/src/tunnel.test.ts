@@ -126,6 +126,13 @@ describe("ssh tunnel scripts", () => {
     // launch error rather than a missing-node message.
     assert.include(buildRemoteLaunchScript(ARCHIVE), "T3_ARCHIVE_MODE=1");
     assert.include(buildRemoteLaunchScript(NODE_SCRIPT), "T3_ARCHIVE_MODE=0");
+    // The packaged desktop passes only an engine range. It must keep the Node
+    // helpers so a server already running on the remote is still reused.
+    assert.include(
+      buildRemoteLaunchScript({ nodeEngineRange: TEST_NODE_ENGINE_RANGE }),
+      "T3_ARCHIVE_MODE=0",
+    );
+    assert.include(buildRemoteLaunchScript(undefined), "T3_ARCHIVE_MODE=0");
   });
 
   it("does not hard-code a remote node engine range", () => {
