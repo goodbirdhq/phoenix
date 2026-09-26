@@ -669,6 +669,36 @@ it.layer(layer)("AntigravityAdapter", (it) => {
     }),
   );
 
+  it.effect("does not launch a steer that Stop overtook while it waited for the lock", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ holdDispatch: true });
+      yield* h.adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      // The first prompt holds promptLock until its dispatch is released.
+      const first = yield* h.adapter
+        .sendTurn({ threadId, input: "First prompt" })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(h.dispatchStarted);
+      const steer = yield* h.adapter
+        .sendTurn({ threadId, input: "Also check the tests" })
+        .pipe(Effect.forkChild);
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+      const stop = yield* h.adapter.interruptTurn(threadId).pipe(Effect.forkChild);
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+
+      yield* Deferred.succeed(h.dispatchRelease, undefined);
+      yield* Fiber.join(stop);
+      const steered = yield* Fiber.join(steer);
+      yield* Fiber.await(first);
+      const stopped = yield* h.waitForEvent((event) => event.type === "turn.completed");
+      expect(steered.turnId).toBe(stopped.turnId);
+      expect(h.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:1"]);
+    }),
+  );
+
   it.effect("waits for native cancellation before a steer changes the model", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness({ holdCancel: true });

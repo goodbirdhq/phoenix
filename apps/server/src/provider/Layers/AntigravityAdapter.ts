@@ -1048,17 +1048,17 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
       // Waiting outside promptLock keeps Stop responsive while the user decides.
       const joinedTurnId = context.promptFiber ? context.activeTurnId : undefined;
       const interruptsAtSend = context.interrupts;
-      if (joinedTurnId !== undefined) {
-        yield* awaitUserRequests;
-        // Stop ended the turn this steer was joining; it must not start work again.
-        if (context.interrupts !== interruptsAtSend) {
-          return {
-            threadId: input.threadId,
-            turnId: joinedTurnId,
-            resumeCursor: context.session.resumeCursor,
-          };
-        }
-      }
+      // Stop ended the turn this steer was joining; it must not start work again.
+      const stoppedTurnId = () =>
+        context.interrupts !== interruptsAtSend ? joinedTurnId : undefined;
+      const stoppedResult = (turnId: TurnId) => ({
+        threadId: input.threadId,
+        turnId,
+        resumeCursor: context.session.resumeCursor,
+      });
+      if (joinedTurnId !== undefined) yield* awaitUserRequests;
+      const stoppedBeforeLock = stoppedTurnId();
+      if (stoppedBeforeLock !== undefined) return stoppedResult(stoppedBeforeLock);
       const launch = yield* context.promptLock.withPermit(
         Effect.gen(function* () {
           yield* requireSession(input.threadId);
@@ -1075,6 +1075,12 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
               `Antigravity model '${model}' is unavailable for this Google account. Select an available model.`,
             );
           }
+          // Covers a request opened, or a Stop, while this steer took the lock.
+          // Checked before any turn state changes; a steer that joins the
+          // active turn does not yield again before cancelling the old prompt.
+          if (context.promptFiber) yield* awaitUserRequests;
+          const stopped = stoppedTurnId();
+          if (stopped !== undefined) return { _tag: "Stopped" as const, turnId: stopped };
           const turnId = context.activeTurnId ?? TurnId.make(yield* randomId);
           const steering = context.activeTurnId !== undefined;
           const turn: TurnIntent = { turnId, generation: ++context.generation, settled: false };
@@ -1091,8 +1097,6 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
             });
           }
           if (context.promptFiber) {
-            // Covers a request opened while this steer took the lock.
-            yield* awaitUserRequests;
             yield* cancelRequests(context);
             yield* context.runtime.cancel;
             yield* Fiber.await(context.promptFiber);
@@ -1136,9 +1140,10 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
               Effect.asVoid,
             ),
           );
-          return { turn, fiber };
+          return { _tag: "Launched" as const, turn, fiber };
         }),
       );
+      if (launch._tag === "Stopped") return stoppedResult(launch.turnId);
       const result = yield* Fiber.await(launch.fiber).pipe(Effect.flatMap((exit) => exit));
       yield* context.runtime.drainEvents;
       if (context.stopped) {
