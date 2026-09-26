@@ -180,7 +180,10 @@ Provider metadata warnings do not prevent starting a child when the provider is 
 
 ## Coordinating messages reliably
 
-A busy session receives queued messages in order after its turn ends. A child asking a blocking
+A busy session receives queued messages in order after its turn ends. A parent can instead steer
+a busy child, which delivers the message now, ahead of anything queued. How the agent takes it in
+depends on the provider: some read it mid-turn, others finish or stop their current step first. A
+steer still waits while the child is starting or needs an approval or an answer. A child asking a blocking
 question should send it once and finish its turn so the parent's answer can arrive. Polling or
 continuing to use tools in the same turn keeps the answer waiting.
 

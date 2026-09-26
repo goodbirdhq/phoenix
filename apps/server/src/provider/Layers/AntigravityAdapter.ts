@@ -1056,7 +1056,19 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
         turnId,
         resumeCursor: context.session.resumeCursor,
       });
+      // Stopping the session also releases a waiting steer; it must not reach the closed runtime.
+      const requireOpen = Effect.suspend(() =>
+        context.stopped
+          ? Effect.fail(
+              new ProviderAdapterSessionClosedError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+              }),
+            )
+          : Effect.void,
+      );
       if (joinedTurnId !== undefined) yield* awaitUserRequests;
+      yield* requireOpen;
       const stoppedBeforeLock = stoppedTurnId();
       if (stoppedBeforeLock !== undefined) return stoppedResult(stoppedBeforeLock);
       const launch = yield* context.promptLock.withPermit(
@@ -1079,6 +1091,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
           // Checked before any turn state changes; a steer that joins the
           // active turn does not yield again before cancelling the old prompt.
           if (context.promptFiber) yield* awaitUserRequests;
+          yield* requireOpen;
           const stopped = stoppedTurnId();
           if (stopped !== undefined) return { _tag: "Stopped" as const, turnId: stopped };
           const turnId = context.activeTurnId ?? TurnId.make(yield* randomId);

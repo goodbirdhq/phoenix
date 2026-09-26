@@ -669,6 +669,36 @@ it.layer(layer)("AntigravityAdapter", (it) => {
     }),
   );
 
+  it.effect("fails a waiting steer when the session stops", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      yield* h.adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      yield* h.adapter.sendTurn({ threadId, input: "Ask a question" }).pipe(Effect.forkChild);
+      yield* h.nextPrompt;
+      yield* h
+        .invokePermission({
+          sessionId: nativeSessionId,
+          toolCall: { toolCallId: "interaction_close", title: "Continue?" },
+          options: [{ optionId: "yes", name: "Yes", kind: "allow_once" }],
+        })
+        .pipe(Effect.forkChild);
+      yield* h.waitForEvent((event) => event.type === "user-input.requested");
+      const steer = yield* h.adapter
+        .sendTurn({ threadId, input: "Also check the tests" })
+        .pipe(Effect.forkChild);
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+
+      yield* h.adapter.stopSession(threadId);
+      const error = yield* Fiber.join(steer).pipe(Effect.flip);
+      expect(error._tag).toBe("ProviderAdapterSessionClosedError");
+      expect(h.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:1"]);
+    }),
+  );
+
   it.effect("does not launch a steer that Stop overtook while it waited for the lock", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness({ holdDispatch: true });
