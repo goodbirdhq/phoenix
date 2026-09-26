@@ -966,7 +966,6 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         "thread.message-sent",
         "thread.turn-start-requested",
       ]);
-
       // A steer never lands on an unanswered approval or blocking question; it
       // waits in the queue. An async question leaves the agent working.
       const blocker = (kind: string, requestId: string, payload: Record<string, unknown> = {}) =>
