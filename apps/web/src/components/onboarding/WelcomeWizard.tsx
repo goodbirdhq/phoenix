@@ -317,40 +317,39 @@ function ConnectionStep({
         </fieldset>
       ) : null}
       <div className="mt-4 space-y-2">
-        <Collapsible
-          open={pairingOpen}
-          onOpenChange={setPairingOpen}
-          className="rounded-lg border border-border bg-background"
-        >
-          <CollapsibleTrigger
-            disabled={isPairing}
-            render={
-              <Button
-                variant="ghost"
-                className="h-auto min-h-14 w-full justify-start gap-3 px-3 py-3 text-left whitespace-normal sm:h-auto"
+        <div className="rounded-lg border border-border bg-background">
+          <Collapsible open={pairingOpen} onOpenChange={setPairingOpen}>
+            <CollapsibleTrigger
+              disabled={isPairing}
+              render={
+                <Button
+                  variant="ghost"
+                  size="sm-multiline"
+                  className="min-h-14 w-full justify-start"
+                />
+              }
+            >
+              <LinkIcon className="size-4 text-muted-foreground" />
+              <span className="flex-1 text-left">Add a computer</span>
+              <ChevronRightIcon
+                className={cn("size-4 text-muted-foreground", pairingOpen && "rotate-90")}
               />
-            }
-          >
-            <LinkIcon className="size-4 text-muted-foreground" />
-            <span className="flex-1">Add a computer</span>
-            <ChevronRightIcon
-              className={cn("size-4 text-muted-foreground", pairingOpen && "rotate-90")}
-            />
-          </CollapsibleTrigger>
-          <CollapsiblePanel>
-            <div className="px-3 pb-3">
-              <PairingForm
-                isPairing={isPairing}
-                setIsPairing={setIsPairing}
-                onPaired={(environmentId) => {
-                  setPairingOpen(false);
-                  onPaired(environmentId);
-                  requestAnimationFrame(() => continueRef.current?.focus());
-                }}
-              />
-            </div>
-          </CollapsiblePanel>
-        </Collapsible>
+            </CollapsibleTrigger>
+            <CollapsiblePanel>
+              <div className="px-3 pb-3">
+                <PairingForm
+                  isPairing={isPairing}
+                  setIsPairing={setIsPairing}
+                  onPaired={(environmentId) => {
+                    setPairingOpen(false);
+                    onPaired(environmentId);
+                    requestAnimationFrame(() => continueRef.current?.focus());
+                  }}
+                />
+              </div>
+            </CollapsiblePanel>
+          </Collapsible>
+        </div>
       </div>
       <div className="mt-6 flex items-center justify-end gap-3">
         <Button
@@ -470,8 +469,8 @@ function PairingForm({
               {isPairing ? "Pairing..." : "Pair"}
             </Button>
           </div>
-          <CollapsiblePanel className="pt-3">
-            <p className="text-sm text-muted-foreground">
+          <CollapsiblePanel>
+            <p className="pt-3 text-sm text-muted-foreground">
               Run this on the computer with your code.
             </p>
             <CommandBlock command="npx @goodbirdhq/phoenix pair" className="mt-2" />
@@ -519,10 +518,7 @@ function AgentsStep({
   const { environments } = useEnvironments();
   return (
     <StepShell title="Your agents" description="Agents available on your selected computers.">
-      <ScrollArea
-        scrollFade
-        className="mt-5 h-auto max-h-96 [&_[data-slot=scroll-area-scrollbar]]:opacity-100"
-      >
+      <ScrollArea scrollFade className="mt-5 h-auto max-h-96">
         <div className="space-y-5 pr-3">
           {environmentIds.map((environmentId) => (
             <ConnectedAgentsStep
@@ -779,9 +775,12 @@ function AgentInstallTerminal({
   ]);
 
   return (
-    <div className="thread-terminal-drawer mt-4 overflow-hidden rounded-lg border border-border/70 bg-background text-foreground">
+    <div
+      data-thread-terminal-drawer
+      className="mt-4 overflow-hidden rounded-lg border border-border/70 bg-background text-foreground"
+    >
       <div className="flex items-center justify-between border-b border-border/60 bg-background/60 px-3 py-1.5">
-        <span className="text-[11px] font-medium text-muted-foreground">
+        <span className="text-2xs font-medium text-muted-foreground">
           {setupState === "writeFailed" ? (
             <>
               Run <code className="rounded bg-muted px-1 font-mono">{command}</code> in this
@@ -1045,7 +1044,7 @@ function ImportStep({
       <div className="flex h-full min-h-40 flex-col">
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">Your projects</h1>
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-6">
-          <Spinner className="size-5 text-muted-foreground" />
+          <Spinner size="lg" tone="muted" />
           <p className="text-center text-sm text-muted-foreground">
             Looking for projects from Claude Code and Codex…
           </p>
@@ -1089,10 +1088,7 @@ function ImportStep({
           </div>
         </div>
       ) : null}
-      <ScrollArea
-        scrollFade
-        className="mt-2 h-auto max-h-80 [&_[data-slot=scroll-area-scrollbar]]:opacity-100"
-      >
+      <ScrollArea scrollFade className="mt-2 h-auto max-h-80">
         <div className="space-y-5 pr-3">
           {scans.map((scan) => {
             const scanCandidates = candidates.filter(
@@ -1112,7 +1108,7 @@ function ImportStep({
                 ) : null}
                 {scan.isPending && scan.data === null ? (
                   <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
-                    <Spinner className="size-4" />
+                    <Spinner size="md" />
                     Looking for projects…
                   </div>
                 ) : scan.error !== null ? (
@@ -1337,12 +1333,10 @@ function ImportCandidateRow({
             {label}
           </span>
           {secondary !== undefined ? (
-            <span className="truncate font-mono text-[11px] text-muted-foreground">
-              {secondary}
-            </span>
+            <span className="truncate font-mono text-2xs text-muted-foreground">{secondary}</span>
           ) : null}
         </TooltipTrigger>
-        <TooltipPopup className="max-w-96 break-all font-mono">{candidate.path}</TooltipPopup>
+        <TooltipPopup variant="code">{candidate.path}</TooltipPopup>
       </Tooltip>
       <ImportRowMeta
         sources={nested ? null : candidate.sources}

@@ -1,6 +1,6 @@
 import { SearchIcon, FilterIcon, ComposeIcon } from "../../components/NavigationIcons";
 import { BrandMark } from "../../components/BrandMark";
-import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useMemo, useRef } from "react";
 import { Pressable, TextInput, View } from "react-native";
@@ -9,7 +9,6 @@ import IconX from "@tabler/icons-react-native/IconX";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { useNavigationColors } from "../../components/useNavigationColors";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 import {
@@ -30,25 +29,22 @@ export function HomeHeader(props: {
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
-  readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
-  readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   readonly onOpenEnvironmentSettings: () => void;
   readonly onStartNewTask: () => void;
 }) {
   const colors = useNavigationColors();
   const insets = useSafeAreaInsets();
   const input = useRef<TextInput>(null);
-  const v2 = useThreadListV2Enabled();
   useHardwareKeyboardCommand("focusSearch", () => {
     props.beforeFocusSearch?.();
     input.current?.focus();
     return true;
   });
-  const menu = buildHomeListFilterMenu({ ...props, listOrganization: !v2 });
+  const menu = buildHomeListFilterMenu(props);
   const { actions, handlers } = useMemo(() => {
     const handlers = new Map<string, () => void>();
     const actions: MenuAction[] = menu.items.map((item, i) => {

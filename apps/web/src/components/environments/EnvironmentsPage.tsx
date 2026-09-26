@@ -104,8 +104,12 @@ export function EnvironmentsPage() {
   const snapshot = live.data ?? selected?.snapshot ?? null;
 
   return (
-    <SidebarInset className="usage-surface environment-surface h-dvh min-h-0 overflow-hidden bg-background text-foreground isolate">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden isolate">
+      <div
+        data-usage-surface=""
+        data-environment-surface=""
+        className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
+      >
         <PageHeader
           label={selected ? appearance[selected.environmentId]?.alias || selected.label : undefined}
         />
@@ -130,7 +134,6 @@ export function EnvironmentsPage() {
                         data-environment-control
                         variant="outline"
                         size="sm"
-                        className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px] shadow-none"
                         onClick={() =>
                           void navigate({ to: "/environments", search: { ...route, edit: true } })
                         }
@@ -190,7 +193,6 @@ export function EnvironmentsPage() {
                           data-environment-control
                           size="sm"
                           variant="outline"
-                          className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px] shadow-none"
                           render={<Link to="/settings/diagnostics" />}
                         >
                           View process details

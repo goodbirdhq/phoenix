@@ -17,7 +17,7 @@ export function PageHeading({
   return (
     <header className={`flex flex-wrap items-start justify-between gap-4 ${className ?? ""}`}>
       <div className="min-w-0 space-y-1.5">
-        <h1 className="flex items-center gap-2.5 text-[28px] leading-9 font-semibold tracking-[-0.025em] text-foreground">
+        <h1 className="flex items-center gap-2.5 text-3xl leading-9 font-semibold tracking-tight text-foreground">
           {icon && (
             <span
               className="flex size-7 shrink-0 items-center justify-center [&>svg]:size-7"
@@ -29,7 +29,7 @@ export function PageHeading({
           {title}
         </h1>
         {description && (
-          <div className="text-[13px] leading-4 text-muted-foreground">{description}</div>
+          <div className="text-xs leading-4 text-muted-foreground">{description}</div>
         )}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}

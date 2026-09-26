@@ -1,11 +1,14 @@
 @import "@fontsource-variable/inter";
 
-.usage-surface {
+/* The class form is kept for surfaces that have not moved to the data attribute. */
+.usage-surface,
+[data-usage-surface] {
   font-family: "Inter Variable", var(--font-sans);
 }
 
 /* Paper's default light palette. Named themes and dark mode retain their tokens. */
-html:not(.dark):not([data-theme-id]) .usage-surface {
+html:not(.dark):not([data-theme-id]) .usage-surface,
+html:not(.dark):not([data-theme-id]) [data-usage-surface] {
   --background: #fff;
   --foreground: #27272a;
   --sidebar: #fafafa;

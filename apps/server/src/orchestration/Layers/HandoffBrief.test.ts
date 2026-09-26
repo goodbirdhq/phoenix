@@ -60,6 +60,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import { ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
 import { RuntimeReceiptBusLive } from "./RuntimeReceiptBus.ts";
+import * as TerminalManager from "../../terminal/Manager.ts";
 
 const THREAD_ID = ThreadId.make("handoff-thread");
 const PROJECT_ID = ProjectId.make("handoff-project");
@@ -236,9 +237,13 @@ const makeTestLayer = (providerLayer: Layer.Layer<ProviderService>) => {
     Layer.provideMerge(providerLayer),
     Layer.provideMerge(makeProviderRegistryLayer([{ instanceId: PROVIDER_INSTANCE_ID }] as never)),
     Layer.provideMerge(
-      Layer.mock(GitWorkflowService.GitWorkflowService)({
-        renameBranch: () => Effect.die("renameBranch should not be called in handoff brief tests"),
-      }),
+      Layer.mergeAll(
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          renameBranch: () =>
+            Effect.die("renameBranch should not be called in handoff brief tests"),
+        }),
+        Layer.mock(TerminalManager.TerminalManager)({ closeIdle: () => Effect.void }),
+      ),
     ),
     Layer.provideMerge(
       Layer.succeed(VcsStatusBroadcaster, {

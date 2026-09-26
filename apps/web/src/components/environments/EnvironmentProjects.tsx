@@ -39,8 +39,8 @@ export function EnvironmentProjects({
     <section className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h2 className="text-base leading-[22px] font-semibold">Projects on {label}</h2>
-          <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+          <h2 className="text-base leading-5.5 font-semibold">Projects on {label}</h2>
+          <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
             {projects.length} {projects.length === 1 ? "project" : "projects"} · Workspaces
             registered on this environment
           </p>
@@ -50,7 +50,6 @@ export function EnvironmentProjects({
           <Button
             data-environment-control
             size="sm"
-            className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px]"
             disabled={!canEdit}
             onClick={() => openCommandPalette({ open: "add-project", environmentId })}
           >
@@ -59,7 +58,7 @@ export function EnvironmentProjects({
         </div>
       </div>
       <div className="space-y-3">
-        <Table className="environment-table">
+        <Table data-environment-table="">
           <TableHeader>
             <TableRow>
               <TableHead>Project</TableHead>
@@ -80,7 +79,7 @@ export function EnvironmentProjects({
                     <div className="flex items-center gap-3">
                       <ProjectFavicon project={p} className="size-5" />
                       <div className="min-w-0">
-                        <p className="text-[13px] leading-[18px] font-medium">{p.title}</p>
+                        <p className="leading-4.5 font-medium">{p.title}</p>
                         <Tooltip>
                           <TooltipTrigger
                             render={
@@ -97,7 +96,9 @@ export function EnvironmentProjects({
                       </div>
                     </div>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">{counts.get(p.id) ?? 0}</TableCell>
+                  <TableCell className="text-right">
+                    <span className="tabular-nums">{counts.get(p.id) ?? 0}</span>
+                  </TableCell>
                   <TableCell>
                     <div className="flex items-center justify-between gap-5 px-6">
                       <Button
@@ -116,7 +117,7 @@ export function EnvironmentProjects({
                           to="/projects/$projectKey"
                           params={{ projectKey: group.projectKey }}
                           aria-label={`Settings for ${p.title}`}
-                          className="rounded-sm text-[13px] text-sky-600 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                          className="rounded-sm text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           Project settings
                         </Link>
@@ -128,10 +129,12 @@ export function EnvironmentProjects({
             })}
             {!visible.length && (
               <TableRow>
-                <TableCell colSpan={3} className="text-center text-muted-foreground">
-                  {projects.length
-                    ? "No projects match your search."
-                    : "No projects on this environment yet."}
+                <TableCell colSpan={3} className="text-center">
+                  <span className="text-muted-foreground">
+                    {projects.length
+                      ? "No projects match your search."
+                      : "No projects on this environment yet."}
+                  </span>
                 </TableCell>
               </TableRow>
             )}

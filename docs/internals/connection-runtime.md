@@ -88,6 +88,22 @@ and thread synchronization are independent data states. A healthy RPC transport
 with a failed shell subscription is shown as connected with a synchronization
 error, not as a reconnect that is not actually scheduled.
 
+### Keep-alive
+
+The desktop app adds one consumer: a
+[keep-alive](../../apps/web/src/state/threads.ts) mounts every thread whose
+session is starting or running, in each enabled environment. Opening a running
+thread then needs no replay. The shell and detail streams are independent, so
+the shell can report a stop before the detail loads or catches up. A stopped
+thread stays mounted until its own stream is live and shows the stop, and the
+stream then closes and saves the settled state.
+Web and mobile do not keep threads alive.
+
+Retain state and cursor together only after an update finishes. Cancellation must
+not advance the cached cursor beyond the applied data, and an old scope must not
+overwrite its successor's cache. Preserve pagination data on reuse, but clear
+canceled loading state.
+
 ## Data Boundary
 
 Finite requests, durable subscriptions, and commands are separate APIs:

@@ -1,3 +1,4 @@
+import type { UsageProviderKind } from "@t3tools/contracts";
 import { usageReportSeries } from "@t3tools/client-runtime/usage/report-chart-series";
 import { useMemo, useState } from "react";
 import type { MergedUsage } from "@t3tools/shared/usageMerge";
@@ -45,8 +46,8 @@ export function UsageReportChart({
       ).map((row, index) => {
         const kind = row.provider ?? (accountDriver === "claudeAgent" ? "claude" : accountDriver);
         const presentation =
-          kind === "claude" || kind === "codex" || kind === "grok" || kind === "opencode"
-            ? PROVIDER_PRESENTATION[kind]
+          kind !== undefined && Object.hasOwn(PROVIDER_PRESENTATION, kind)
+            ? PROVIDER_PRESENTATION[kind as UsageProviderKind]
             : undefined;
         return {
           ...row,

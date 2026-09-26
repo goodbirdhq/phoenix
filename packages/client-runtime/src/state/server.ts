@@ -967,6 +967,14 @@ export function createServerEnvironmentAtoms<R, E>(
       );
     }).pipe(Atom.withLabel(`environment-data:server:usage-prices:${environmentId}`)),
   );
+  const usageScanSettingsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) =>
+      JSON.stringify([
+        get(usagePricesAtom(environmentId)),
+        get(settingsValueAtom(environmentId))?.cursorKeychainUsageEnabled ?? false,
+      ]),
+    ).pipe(Atom.withLabel(`environment-data:server:usage-scan-settings:${environmentId}`)),
+  );
   const providersValueAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => get(configValueAtom(environmentId))?.providers ?? null).pipe(
       Atom.withLabel(`environment-data:server:providers:${environmentId}`),
@@ -1003,7 +1011,7 @@ export function createServerEnvironmentAtoms<R, E>(
     label: "environment-data:server:usage-summary",
     tag: WS_METHODS.serverGetUsageSummary,
     staleTimeMs: 60_000,
-    refreshTrigger: ({ environmentId }) => usagePricesAtom(environmentId),
+    refreshTrigger: ({ environmentId }) => usageScanSettingsAtom(environmentId),
   });
 
   return {
@@ -1023,6 +1031,10 @@ export function createServerEnvironmentAtoms<R, E>(
         mode: "singleFlight",
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
       },
+    }),
+    respondProviderAuth: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:provider:auth-respond",
+      tag: WS_METHODS.providerAuthRespond,
     }),
     completeProviderAuth: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:provider:auth-complete",

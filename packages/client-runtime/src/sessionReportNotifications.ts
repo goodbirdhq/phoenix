@@ -11,7 +11,7 @@ export const deriveSessionReportNotifications = (
 ): ReadonlyArray<SessionReportNotificationActivity> => {
   const ordered = activities
     .filter(isSessionReportNotificationActivity)
-    .toSorted((left, right) =>
+    .sort((left, right) =>
       left.sequence !== undefined && right.sequence !== undefined
         ? left.sequence - right.sequence
         : left.createdAt.localeCompare(right.createdAt),
@@ -58,7 +58,7 @@ export const deriveSessionReportInboxChildren = (
       unreadCount: (previous?.unreadCount ?? 0) + 1,
     });
   }
-  return [...byChild.values()].toSorted((left, right) => {
+  return [...byChild.values()].sort((left, right) => {
     const leftSequence = left.latest.sequence;
     const rightSequence = right.latest.sequence;
     return leftSequence !== undefined && rightSequence !== undefined

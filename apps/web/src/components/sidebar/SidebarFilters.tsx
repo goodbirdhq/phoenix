@@ -11,7 +11,6 @@ import {
   MenuSeparator,
   MenuItem,
 } from "../ui/menu";
-import { SidebarMenuButton } from "../ui/sidebar";
 import { cn } from "../../lib/utils";
 import {
   activeSidebarFilterCount,
@@ -31,8 +30,7 @@ export interface SidebarFilterCategory {
   allLabel: string;
   options: readonly SidebarFilterOption[];
 }
-const popupClass =
-  "w-[300px] rounded-[8px] max-w-[calc(100vw-24px)] border border-border bg-popover shadow-[0_4px_12px_#00000014] backdrop-filter-none [--glass-opacity:100%]";
+const popupClass = "w-[300px] max-w-[calc(100vw-24px)]";
 
 function FilterCategory({
   category,
@@ -65,7 +63,7 @@ function FilterCategory({
         if (!open) setQuery("");
       }}
     >
-      <MenuSubTrigger className="h-8 rounded-[4px] text-sm [&>svg]:ms-0 [&>svg]:size-3.5">
+      <MenuSubTrigger className="h-8 [&>svg]:ms-0 [&>svg]:size-3.5">
         <span className="min-w-0 flex-1">{category.label}</span>
         <span
           className={cn(
@@ -76,9 +74,9 @@ function FilterCategory({
           {summary}
         </span>
       </MenuSubTrigger>
-      <MenuSubPopup className={popupClass} sideOffset={4}>
+      <MenuSubPopup variant="solid" className={popupClass} sideOffset={4}>
         <MenuCheckboxItem
-          className="h-8 rounded-[4px] text-sm"
+          className="h-8"
           checked={selected.length === 0}
           onCheckedChange={() => onChange([])}
           closeOnClick={false}
@@ -112,10 +110,7 @@ function FilterCategory({
             {category.key === "statuses" && index === 7 ? <MenuSeparator className="mx-0" /> : null}
             <div className="flex items-center">
               <MenuCheckboxItem
-                className={cn(
-                  "min-w-0 flex-1 rounded-[4px] text-sm",
-                  option.description ? "h-12" : "h-8",
-                )}
+                className={cn("min-w-0 flex-1", option.description ? "h-12" : "h-8")}
                 checked={selected.includes(option.key)}
                 closeOnClick={false}
                 onCheckedChange={(checked) =>
@@ -136,7 +131,7 @@ function FilterCategory({
               {option.onEdit ? (
                 <MenuItem
                   aria-label={`Project settings for ${option.label}${option.description ? ` (${option.description})` : ""}`}
-                  className="size-8 shrink-0 justify-center p-0"
+                  className="size-8 shrink-0 justify-center"
                   onClick={() => {
                     onClose();
                     option.onEdit?.();
@@ -155,7 +150,7 @@ function FilterCategory({
           <>
             <MenuSeparator className="mx-0" />
             <MenuItem
-              className="h-8 rounded-[4px] text-sm"
+              className="h-8"
               onClick={() => {
                 onClose();
                 onNewProject();
@@ -191,20 +186,21 @@ export function SidebarFiltersMenu({
     <Menu open={open} onOpenChange={onOpenChange}>
       <MenuTrigger
         render={
-          <SidebarMenuButton
-            size="icon"
+          // A plain button: the filter trigger's coarse-pointer hit area and
+          // active tint are its own look, not a SidebarMenuButton variant.
+          <button
+            type="button"
             aria-label={count ? `Filter threads, ${count} active categories` : "Filter threads"}
             className={cn(
-              "relative size-8 pointer-coarse:size-11 pointer-coarse:bg-transparent pointer-coarse:hover:bg-transparent pointer-coarse:data-popup-open:bg-transparent pointer-coarse:before:absolute pointer-coarse:before:size-8 pointer-coarse:before:rounded-[8px] pointer-coarse:hover:before:bg-sidebar-row-hover pointer-coarse:data-popup-open:before:bg-sidebar-row-hover pointer-coarse:[&>svg]:relative shrink-0 overflow-visible rounded-[8px] text-sidebar-muted-foreground data-popup-open:bg-sidebar-row-hover [&>svg]:text-current",
-              count > 0 &&
-                "bg-[#0284C7]/10 pointer-coarse:before:bg-[#0284C7]/10 text-[#0284C7] dark:text-sky-400",
+              "relative inline-flex size-8 shrink-0 cursor-pointer items-center justify-center overflow-visible rounded-md text-sidebar-muted-foreground outline-hidden ring-ring transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 data-popup-open:bg-sidebar-row-hover pointer-coarse:size-11 pointer-coarse:bg-transparent pointer-coarse:hover:bg-transparent pointer-coarse:data-popup-open:bg-transparent pointer-coarse:before:absolute pointer-coarse:before:size-8 pointer-coarse:before:rounded-md pointer-coarse:hover:before:bg-sidebar-row-hover pointer-coarse:data-popup-open:before:bg-sidebar-row-hover pointer-coarse:[&>svg]:relative",
+              count > 0 && "bg-info/10 text-info-foreground pointer-coarse:before:bg-info/10",
             )}
           />
         }
       >
         <ListFilterIcon className="size-4" strokeWidth={1.7} />
         {count > 0 ? (
-          <span className="absolute -right-0.5 -top-0.5 pointer-coarse:right-1 pointer-coarse:top-1 flex size-3.5 items-center justify-center rounded-full bg-[#0284C7] text-[9px] font-semibold text-white">
+          <span className="absolute -right-0.5 -top-0.5 pointer-coarse:right-1 pointer-coarse:top-1 flex size-3.5 items-center justify-center rounded-full bg-info text-4xs font-semibold text-white">
             {count}
           </span>
         ) : null}
@@ -213,6 +209,7 @@ export function SidebarFiltersMenu({
         align="end"
         collisionPadding={16}
         collisionAvoidance={{ side: "flip", align: "shift", fallbackAxisSide: "none" }}
+        variant="solid"
         className={popupClass}
       >
         {categories.map((category) => (
@@ -227,7 +224,7 @@ export function SidebarFiltersMenu({
         ))}
         <MenuSeparator className="mx-0" />
         <MenuItem
-          className="h-8 rounded-[4px] text-sm"
+          className="h-8"
           disabled={count === 0}
           closeOnClick={false}
           onClick={() => onChange(EMPTY_SIDEBAR_FILTERS)}

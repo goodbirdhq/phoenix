@@ -88,7 +88,7 @@ function FilterSelect(props: {
         {props.label}
       </span>
       <select
-        className="h-10 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground"
+        className="h-10 w-full rounded-lg border border-input bg-background px-3 text-foreground"
         value={props.value}
         disabled={props.disabled}
         onChange={(event) => props.onChange(event.target.value)}
@@ -191,7 +191,7 @@ export function ScheduleEditor(props: {
   ]);
 
   return (
-    <div className="schedule-editor">
+    <div data-schedule-editor="">
       <div>
         <form className="grid gap-x-5 gap-y-6 md:grid-cols-2" onSubmit={props.onSubmit}>
           <fieldset disabled={props.pending} className="contents">
@@ -283,7 +283,8 @@ export function ScheduleEditor(props: {
                   onValueChange={(v) => setCronEditorMode(v === "manual" ? "manual" : "builder")}
                 >
                   <TabsList
-                    className="w-fit gap-1 rounded-lg border-0 bg-muted p-1 [&_button]:rounded-md [&_button]:border-0 [&_button]:px-3 [&_button]:py-2 [&_button[data-active]]:bg-background"
+                    data-schedule-segmented=""
+                    className="w-fit"
                     aria-label="Recurring rule editor"
                   >
                     <TabsTrigger value="builder">
@@ -312,7 +313,7 @@ export function ScheduleEditor(props: {
                   {cronEditorMode === "builder" ? (
                     <select
                       aria-label="Recurring Schedule preset"
-                      className="h-10 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground"
+                      className="h-10 w-full rounded-lg border border-input bg-background px-3 text-foreground"
                       value={props.draft.cron}
                       onChange={(event) => patchDraft({ cron: event.target.value })}
                     >
@@ -365,7 +366,7 @@ export function ScheduleEditor(props: {
               </EditorField>
               {props.draft.timingType === "cron" && (
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 md:col-span-2">
-                  <code className="rounded-md bg-muted/40 px-2.5 py-1.5 text-[13px] leading-4">
+                  <code className="rounded-md bg-muted/40 px-2.5 py-1.5 text-sm leading-4">
                     {props.draft.cron}
                   </code>
                   {cronInspection?.valid && (
@@ -390,7 +391,7 @@ export function ScheduleEditor(props: {
             </div>
             <div className="grid gap-x-5 gap-y-4 md:col-span-2 md:grid-cols-2">
               <div className="space-y-4 border-t pt-4 md:col-span-2">
-                <h2 className="text-base leading-[22px] font-semibold">Execution</h2>
+                <h2 className="text-base leading-5.5 font-semibold">Execution</h2>
                 <p className="text-xs text-muted-foreground">
                   These choices are saved with the schedule, even if project defaults change.
                 </p>
@@ -407,10 +408,7 @@ export function ScheduleEditor(props: {
                     })
                   }
                 >
-                  <SelectTrigger
-                    aria-label="Provider and model"
-                    className="h-10 text-[13px] shadow-none"
-                  >
+                  <SelectTrigger aria-label="Provider and model">
                     <span className="flex min-w-0 items-center gap-2">
                       {ProviderIcon && <ProviderIcon className="size-4" />}
                       <span className="truncate">
@@ -423,7 +421,7 @@ export function ScheduleEditor(props: {
                       </span>
                     </span>
                   </SelectTrigger>
-                  <SelectPopup className="schedule-surface" alignItemWithTrigger={false}>
+                  <SelectPopup data-schedule-surface="" alignItemWithTrigger={false}>
                     {modelOptions.map((model) => {
                       const Icon = model.icon;
                       return (
@@ -509,7 +507,7 @@ export function ScheduleEditor(props: {
             </div>
             <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-2 border-t bg-background py-4 md:col-span-2">
               {schedulePauseFieldLabel(props.editing) ? (
-                <label className="mr-auto flex items-center gap-2 text-[13px]">
+                <label className="mr-auto flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
                     checked={props.draft.createPaused}
@@ -519,7 +517,7 @@ export function ScheduleEditor(props: {
                 </label>
               ) : null}
               <Button
-                className="schedule-control"
+                data-schedule-control=""
                 type="button"
                 variant="outline"
                 onClick={props.onCancel}
@@ -527,7 +525,7 @@ export function ScheduleEditor(props: {
                 Cancel
               </Button>
               <Button
-                className="schedule-control"
+                data-schedule-control=""
                 disabled={
                   props.pending ||
                   !props.canSave ||

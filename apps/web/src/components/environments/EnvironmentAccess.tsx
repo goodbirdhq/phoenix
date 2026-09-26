@@ -190,7 +190,7 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
         </p>
       )}
       {access.error && (
-        <div role="alert" className="flex items-center gap-3 text-[13px]">
+        <div role="alert" className="flex items-center gap-3 text-sm">
           <span>Could not load access: {access.error}</span>
           <Button variant="outline" onClick={access.refresh}>
             Retry
@@ -201,7 +201,7 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold">Authorized clients</h2>
-            <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+            <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
               Devices with access to this environment.
             </p>
           </div>
@@ -234,7 +234,7 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
             </Button>
           </div>
         </div>
-        <Table className="environment-table">
+        <Table data-environment-table="">
           <TableHeader>
             <TableRow>
               <TableHead>Client</TableHead>
@@ -250,17 +250,19 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
               <TableRow key={client.sessionId}>
                 <TableCell>
                   <div className="flex items-center gap-3">
-                    <div className="text-[13px]">
+                    <div>
                       {client.client.label ?? client.client.os ?? "Client"}
-                      <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+                      <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
                         {client.client.os} · {client.client.browser ?? client.method}
                       </p>
                     </div>
                   </div>
                 </TableCell>
                 <TableCell>{client.lastSeenLabel}</TableCell>
-                <TableCell className="text-muted-foreground">
-                  {client.current ? "This client" : permissionSummary(client.scopes)}
+                <TableCell>
+                  <span className="text-muted-foreground">
+                    {client.current ? "This client" : permissionSummary(client.scopes)}
+                  </span>
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end gap-4">
@@ -295,12 +297,14 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
             ))}
             {!visibleClients?.length && (
               <TableRow>
-                <TableCell colSpan={4} className="text-center text-muted-foreground">
-                  {access.isPending && !snapshot
-                    ? "Loading clients…"
-                    : snapshot?.clientSessions.length
-                      ? "No clients match your search."
-                      : "No authorized clients."}
+                <TableCell colSpan={4} className="text-center">
+                  <span className="text-muted-foreground">
+                    {access.isPending && !snapshot
+                      ? "Loading clients…"
+                      : snapshot?.clientSessions.length
+                        ? "No clients match your search."
+                        : "No authorized clients."}
+                  </span>
                 </TableCell>
               </TableRow>
             )}
@@ -311,7 +315,7 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold">Pairing links</h2>
-            <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+            <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
               Active one-time invitations. Used or expired links can no longer pair a device.
             </p>
           </div>
@@ -321,7 +325,7 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
             onChange={setLinkSearch}
           />
         </div>
-        <Table className="environment-table">
+        <Table data-environment-table="">
           <TableHeader>
             <TableRow>
               <TableHead>Pairing link</TableHead>
@@ -336,16 +340,14 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
             {visibleLinks?.map((link) => (
               <TableRow key={link.id}>
                 <TableCell>
-                  <span className="flex items-center gap-3 text-[13px]">
-                    {link.label ?? "Pairing link"}
-                  </span>
-                  <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+                  <span className="flex items-center gap-3">{link.label ?? "Pairing link"}</span>
+                  <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
                     {permissionSummary(link.scopes)} permissions
                   </p>
                 </TableCell>
                 <TableCell>{link.expiryLabel}</TableCell>
                 <TableCell>
-                  <span className="text-emerald-700 dark:text-emerald-400">Ready to pair</span>
+                  <span className="text-success-foreground">Ready to pair</span>
                 </TableCell>
                 <TableCell>
                   <div className="flex justify-end gap-2">
@@ -364,12 +366,14 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
             ))}
             {!visibleLinks?.length && (
               <TableRow>
-                <TableCell colSpan={4} className="text-center text-muted-foreground">
-                  {access.isPending && !snapshot
-                    ? "Loading pairing links…"
-                    : snapshot?.pairingLinks.length
-                      ? "No pairing links match your search."
-                      : "No active pairing links."}
+                <TableCell colSpan={4} className="text-center">
+                  <span className="text-muted-foreground">
+                    {access.isPending && !snapshot
+                      ? "Loading pairing links…"
+                      : snapshot?.pairingLinks.length
+                        ? "No pairing links match your search."
+                        : "No active pairing links."}
+                  </span>
                 </TableCell>
               </TableRow>
             )}
@@ -380,18 +384,18 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
       <section className="space-y-5">
         <div>
           <h2 className="text-base font-semibold">This client’s permissions</h2>
-          <p className="mt-1 text-[13px] text-muted-foreground">
+          <p className="mt-1 text-xs text-muted-foreground">
             Administrative access includes the ability to grant or revoke access.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {session.data?.scopes?.map((scope) => (
-            <span key={scope} className="rounded-md bg-muted px-2.5 py-2 text-[11px]">
+            <span key={scope} className="rounded-md bg-muted px-2.5 py-2 text-2xs">
               {SCOPE_LABELS[scope]}
             </span>
           ))}
         </div>
-        <p className="rounded-lg border border-border p-4 text-xs leading-[18px] text-muted-foreground">
+        <p className="rounded-lg border border-border p-4 text-xs leading-4.5 text-muted-foreground">
           Revoked clients must use a new pairing link to reconnect. Revoking other clients keeps
           this client connected.
         </p>
@@ -402,20 +406,22 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
           if (!open) setPermissions(null);
         }}
       >
-        <DialogPopup className="usage-surface environment-surface rounded-[14px] sm:max-w-[620px]">
+        <DialogPopup data-usage-surface="" data-environment-surface="" className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>Permissions for {permissions?.label}</DialogTitle>
             <DialogDescription>
               Permissions granted to this client on the selected environment.
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-3">
-            {permissions?.scopes.map((scope) => (
-              <p key={scope} className="flex items-center gap-2 text-sm">
-                <ShieldCheckIcon className="size-4 text-muted-foreground" />
-                {SCOPE_LABELS[scope]}
-              </p>
-            ))}
+          <DialogPanel>
+            <div className="space-y-3">
+              {permissions?.scopes.map((scope) => (
+                <p key={scope} className="flex items-center gap-2 text-sm">
+                  <ShieldCheckIcon className="size-4 text-muted-foreground" />
+                  {SCOPE_LABELS[scope]}
+                </p>
+              ))}
+            </div>
           </DialogPanel>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPermissions(null)}>
@@ -430,65 +436,67 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
           if (!busy) setCreating(open);
         }}
       >
-        <DialogPopup className="usage-surface environment-surface rounded-[14px] sm:max-w-[620px]">
+        <DialogPopup data-usage-surface="" data-environment-surface="" className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>Create pairing link</DialogTitle>
             <DialogDescription>
               Choose the access granted to the connecting client.
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-5">
-            <label className="block space-y-2 text-sm">
-              <span>Label (optional)</span>
-              <Input
-                value={label}
-                onChange={(e) => setLabel(e.target.value)}
-                placeholder="My laptop"
-              />
-            </label>
-            <div className="flex gap-2">
-              <Button
-                data-environment-control
-                variant="outline"
-                size="sm"
-                onClick={() => setScopes(AuthStandardClientScopes)}
-              >
-                Standard
-              </Button>
-              <Button
-                data-environment-control
-                variant="outline"
-                size="sm"
-                onClick={() => setScopes(AuthAdministrativeScopes)}
-              >
-                Administrator
-              </Button>
+          <DialogPanel>
+            <div className="space-y-5">
+              <label className="block space-y-2 text-sm">
+                <span>Label (optional)</span>
+                <Input
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder="My laptop"
+                />
+              </label>
+              <div className="flex gap-2">
+                <Button
+                  data-environment-control
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setScopes(AuthStandardClientScopes)}
+                >
+                  Standard
+                </Button>
+                <Button
+                  data-environment-control
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setScopes(AuthAdministrativeScopes)}
+                >
+                  Administrator
+                </Button>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                {Object.entries(SCOPE_LABELS).map(([scope, title]) => (
+                  <label key={scope} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={scopes.includes(scope as AuthEnvironmentScope)}
+                      onChange={(e) =>
+                        setScopes(
+                          e.target.checked
+                            ? [...scopes, scope as AuthEnvironmentScope]
+                            : scopes.filter((s) => s !== scope),
+                        )
+                      }
+                    />
+                    {title}
+                  </label>
+                ))}
+              </div>
+              {error && (
+                <p role="alert" className="text-sm text-destructive">
+                  {error}
+                </p>
+              )}
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              {Object.entries(SCOPE_LABELS).map(([scope, title]) => (
-                <label key={scope} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={scopes.includes(scope as AuthEnvironmentScope)}
-                    onChange={(e) =>
-                      setScopes(
-                        e.target.checked
-                          ? [...scopes, scope as AuthEnvironmentScope]
-                          : scopes.filter((s) => s !== scope),
-                      )
-                    }
-                  />
-                  {title}
-                </label>
-              ))}
-            </div>
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
           </DialogPanel>
-          <DialogFooter className="border-t">
+          <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={() => setCreating(false)}>
               Cancel
             </Button>
@@ -513,52 +521,54 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
           if (!open) setSharing(null);
         }}
       >
-        <DialogPopup className="usage-surface environment-surface rounded-[14px] sm:max-w-[620px]">
+        <DialogPopup data-usage-surface="" data-environment-surface="" className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>Share pairing link</DialogTitle>
             <DialogDescription>
               This credential can be used once. Share it with the client you want to connect.
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-4">
-            {shareUrl && (
-              <div className="flex justify-center">
-                <QRCodeSvg
-                  value={shareUrl}
-                  size={180}
-                  level="M"
-                  marginSize={2}
-                  title="Scan to pair this environment"
-                />
-              </div>
-            )}
-            {!shareUrl && (
-              <p className="text-sm text-muted-foreground">
-                No address reachable by another device is available here. Use this code with the
-                host’s network address, or enable network access on the host.
-              </p>
-            )}
-            <Input
-              aria-label="Pairing credential"
-              readOnly
-              value={shareUrl ?? sharing?.credential ?? ""}
-              onFocus={(e) => e.target.select()}
-            />
-            <div className="flex gap-2">
+          <DialogPanel>
+            <div className="space-y-4">
               {shareUrl && (
-                <Button variant="outline" onClick={() => void copy(shareUrl)}>
-                  Copy URL
-                </Button>
+                <div className="flex justify-center">
+                  <QRCodeSvg
+                    value={shareUrl}
+                    size={180}
+                    level="M"
+                    marginSize={2}
+                    title="Scan to pair this environment"
+                  />
+                </div>
               )}
-              <Button variant="outline" onClick={() => sharing && void copy(sharing.credential)}>
-                Copy code
-              </Button>
+              {!shareUrl && (
+                <p className="text-sm text-muted-foreground">
+                  No address reachable by another device is available here. Use this code with the
+                  host’s network address, or enable network access on the host.
+                </p>
+              )}
+              <Input
+                aria-label="Pairing credential"
+                readOnly
+                value={shareUrl ?? sharing?.credential ?? ""}
+                onFocus={(e) => e.target.select()}
+              />
+              <div className="flex gap-2">
+                {shareUrl && (
+                  <Button variant="outline" onClick={() => void copy(shareUrl)}>
+                    Copy URL
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => sharing && void copy(sharing.credential)}>
+                  Copy code
+                </Button>
+              </div>
+              <p role="status" className="text-sm text-muted-foreground">
+                {copyStatus}
+              </p>
             </div>
-            <p role="status" className="text-sm text-muted-foreground">
-              {copyStatus}
-            </p>
           </DialogPanel>
-          <DialogFooter className="border-t">
+          <DialogFooter>
             <Button onClick={() => setSharing(null)}>Done</Button>
           </DialogFooter>
         </DialogPopup>
@@ -569,7 +579,7 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
           if (!open && !busy) setConfirm(null);
         }}
       >
-        <DialogPopup className="usage-surface environment-surface rounded-[14px] sm:max-w-[620px]">
+        <DialogPopup data-usage-surface="" data-environment-surface="" className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>
               {confirm?.kind === "revokeLink" ? "Revoke pairing link?" : "Revoke client access?"}
@@ -587,7 +597,7 @@ export function EnvironmentAccess({ environmentId }: { environmentId: Environmen
               </p>
             </DialogPanel>
           )}
-          <DialogFooter className="border-t">
+          <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={() => setConfirm(null)}>
               Cancel
             </Button>

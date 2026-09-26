@@ -21,7 +21,7 @@ import {
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
-import { refreshUsage } from "@t3tools/client-runtime/state/usage";
+import { needsCursorKeychainAccess, refreshUsage } from "@t3tools/client-runtime/state/usage";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import { subscriptionAvailabilityPresentationState } from "@t3tools/client-runtime/usage/subscription-availability";
 import * as Option from "effect/Option";
@@ -39,6 +39,7 @@ export interface EnvironmentUsageStatus {
   readonly isConnected: boolean;
   readonly error: string | null;
   readonly summary: UsageSummary | null;
+  readonly needsCursorKeychainAccess: boolean;
 }
 
 export interface EnvironmentProviderAvailabilityStatus {
@@ -108,13 +109,18 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
     const statuses: EnvironmentUsageStatus[] = [];
     for (const [environmentId, presentation] of presentations) {
       const result = get(serverEnvironment.usageSummary({ environmentId, input }));
+      const summary = Option.getOrNull(AsyncResult.value(result));
       statuses.push({
         environmentId,
         label: presentation.entry.target.label,
         isPending: result.waiting,
         isConnected: presentation.connection.phase === "connected",
         error: result._tag === "Failure" ? "This environment could not report usage." : null,
-        summary: Option.getOrNull(AsyncResult.value(result)),
+        summary,
+        needsCursorKeychainAccess: needsCursorKeychainAccess(
+          summary,
+          get(serverEnvironment.providersValueAtom(environmentId)),
+        ),
       });
     }
     return statuses;

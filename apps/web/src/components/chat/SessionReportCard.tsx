@@ -43,7 +43,7 @@ export const SessionReportCard = memo(function SessionReportCard({
   const canCollapse = report.summary.length > 900 || lineCount > 20;
 
   return (
-    <div className="rounded-[24px] border border-border/80 bg-card/70 p-4 sm:p-5">
+    <div className="rounded-3xl border border-border/80 bg-card/70 p-4 sm:p-5">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={STATUS_BADGE_VARIANT[report.status]}>{STATUS_LABEL[report.status]}</Badge>
         {/* A report Phoenix wrote for a session that died before reporting must

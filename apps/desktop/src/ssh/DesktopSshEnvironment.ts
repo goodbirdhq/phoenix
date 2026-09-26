@@ -45,10 +45,6 @@ export type DesktopSshEnvironmentOperationError =
 
 export type DesktopSshEnvironmentDiscoverError = SshHostDiscoveryError;
 
-export type DesktopSshEnvironmentError =
-  | DesktopSshEnvironmentDiscoverError
-  | DesktopSshEnvironmentOperationError;
-
 export class DesktopSshEnvironment extends Context.Service<
   DesktopSshEnvironment,
   {
@@ -166,5 +162,11 @@ export const make = Effect.gen(function* () {
 
 export const layer = (options: DesktopSshEnvironmentLayerOptions = {}) =>
   Layer.effect(DesktopSshEnvironment, make).pipe(
-    Layer.provide(SshTunnel.SshEnvironmentManager.layer(options)),
+    Layer.provide(
+      SshTunnel.SshEnvironmentManager.layer(
+        options.resolveCliRunner === undefined
+          ? {}
+          : { resolveCliRunner: options.resolveCliRunner },
+      ),
+    ),
   );

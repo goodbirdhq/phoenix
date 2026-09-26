@@ -133,18 +133,24 @@ export function EditEnvironmentDialog({
           if (!open) requestClose();
         }}
       >
-        <DialogPopup className="usage-surface environment-surface flex max-h-[90dvh] flex-col rounded-[14px] sm:max-w-[620px]">
+        <DialogPopup
+          data-usage-surface=""
+          data-environment-surface=""
+          className="flex max-h-[90dvh] flex-col sm:max-w-[620px]"
+        >
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <PreviewIcon className="size-5" strokeWidth={1.5} />
-              Edit {alias || environment.label}
+            <DialogTitle>
+              <span className="flex items-center gap-2">
+                <PreviewIcon className="size-5" strokeWidth={1.5} />
+                Edit {alias || environment.label}
+              </span>
             </DialogTitle>
             <DialogDescription>
               Manage this environment without leaving Environments.
             </DialogDescription>
           </DialogHeader>
           <Tabs defaultValue="general" className="flex min-h-0 flex-1 flex-col">
-            <TabsList className="mx-6 shrink-0 justify-start gap-6">
+            <TabsList className="mx-6 shrink-0 justify-start">
               <TabsTrigger value="general">
                 <SettingsIcon className="size-4" />
                 General
@@ -159,72 +165,74 @@ export function EditEnvironmentDialog({
               </TabsTrigger>
             </TabsList>
             <DialogPanel className="min-h-0 overflow-y-auto">
-              <TabsContent value="general" className="space-y-6">
-                <label className="block space-y-2 text-sm">
-                  <span>Environment name</span>
-                  <Input required value={alias} onChange={(e) => setAlias(e.target.value)} />
-                  <span className="block text-xs text-muted-foreground">
-                    Display name on this client.
-                  </span>
-                </label>
-                <div className="space-y-1 text-sm">
-                  <span>Location</span>
-                  <p className="text-muted-foreground">
-                    {environment.entry.target._tag === "PrimaryConnectionTarget"
-                      ? "This machine"
-                      : "Remote machine"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">Determined by its connection.</p>
-                </div>
-                <fieldset>
-                  <legend className="mb-2 text-sm">Environment icon</legend>
-                  <div className="flex gap-3">
-                    {Object.entries(ENVIRONMENT_ICONS).map(([kind, Icon]) => (
-                      <label
-                        key={kind}
-                        className="flex flex-1 cursor-pointer flex-col items-center gap-2 rounded-lg border p-3 has-[:checked]:border-foreground has-[:checked]:bg-muted has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
-                      >
-                        <input
-                          type="radio"
-                          name="environment-icon"
-                          value={kind}
-                          checked={icon === kind}
-                          onChange={() => setIcon(kind as EnvironmentIconKind)}
-                          className="sr-only"
-                        />
-                        <Icon className="size-5" strokeWidth={1.5} />
-                        <span className="text-sm capitalize">{kind}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Shown in the sidebar and page title.
-                  </p>
-                </fieldset>
-                <label className="block space-y-2 text-sm">
-                  <span>Working directory</span>
-                  <Input
-                    value={directory}
-                    disabled={!canConfigure}
-                    onChange={(e) => setDirectory(e.target.value)}
-                    placeholder="~/"
-                  />
-                  <span className="block text-xs text-muted-foreground">
-                    Starting folder when adding projects on this environment. Requires Operate tasks
-                    permission.
-                  </span>
-                </label>
-                {canSetAutoConnect && (
-                  <label className="flex items-center justify-between gap-4">
-                    <span>
-                      <span className="block text-sm">Reconnect automatically</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">
-                        Restore this environment when Phoenix starts.
-                      </span>
+              <TabsContent value="general">
+                <div className="space-y-6">
+                  <label className="block space-y-2 text-sm">
+                    <span>Environment name</span>
+                    <Input required value={alias} onChange={(e) => setAlias(e.target.value)} />
+                    <span className="block text-xs text-muted-foreground">
+                      Display name on this client.
                     </span>
-                    <Switch checked={autoConnect} onCheckedChange={setAutoConnect} />
                   </label>
-                )}
+                  <div className="space-y-1 text-sm">
+                    <span>Location</span>
+                    <p className="text-muted-foreground">
+                      {environment.entry.target._tag === "PrimaryConnectionTarget"
+                        ? "This machine"
+                        : "Remote machine"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Determined by its connection.</p>
+                  </div>
+                  <fieldset>
+                    <legend className="mb-2 text-sm">Environment icon</legend>
+                    <div className="flex gap-3">
+                      {Object.entries(ENVIRONMENT_ICONS).map(([kind, Icon]) => (
+                        <label
+                          key={kind}
+                          className="flex flex-1 cursor-pointer flex-col items-center gap-2 rounded-lg border p-3 has-[:checked]:border-foreground has-[:checked]:bg-muted has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+                        >
+                          <input
+                            type="radio"
+                            name="environment-icon"
+                            value={kind}
+                            checked={icon === kind}
+                            onChange={() => setIcon(kind as EnvironmentIconKind)}
+                            className="sr-only"
+                          />
+                          <Icon className="size-5" strokeWidth={1.5} />
+                          <span className="text-sm capitalize">{kind}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Shown in the sidebar and page title.
+                    </p>
+                  </fieldset>
+                  <label className="block space-y-2 text-sm">
+                    <span>Working directory</span>
+                    <Input
+                      value={directory}
+                      disabled={!canConfigure}
+                      onChange={(e) => setDirectory(e.target.value)}
+                      placeholder="~/"
+                    />
+                    <span className="block text-xs text-muted-foreground">
+                      Starting folder when adding projects on this environment. Requires Operate
+                      tasks permission.
+                    </span>
+                  </label>
+                  {canSetAutoConnect && (
+                    <label className="flex items-center justify-between gap-4">
+                      <span>
+                        <span className="block text-sm">Reconnect automatically</span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          Restore this environment when Phoenix starts.
+                        </span>
+                      </span>
+                      <Switch checked={autoConnect} onCheckedChange={setAutoConnect} />
+                    </label>
+                  )}
+                </div>
               </TabsContent>
               <TabsContent value="access">
                 <p className="mb-5 text-xs text-muted-foreground">
@@ -246,7 +254,7 @@ export function EditEnvironmentDialog({
               )}
             </DialogPanel>
           </Tabs>
-          <DialogFooter className="shrink-0 border-t">
+          <DialogFooter className="shrink-0">
             <span className="mr-auto text-xs text-muted-foreground">
               Changes apply across all tabs.
             </span>

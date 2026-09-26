@@ -13,7 +13,7 @@ const MESSAGE_ID = MessageId.make("receipt-message");
 const REQUESTED_AT = "2026-01-01T00:00:00.000Z";
 const RELEASING_AT = "2026-01-01T00:00:30.000Z";
 
-const sqliteLayer = NodeSqliteClient.layerMemory();
+const sqliteLayer = NodeSqliteClient.layer({ filename: ":memory:" });
 const layer = it.layer(
   Layer.merge(sqliteLayer, ProjectionTurnRepositoryLive.pipe(Layer.provide(sqliteLayer))),
 );

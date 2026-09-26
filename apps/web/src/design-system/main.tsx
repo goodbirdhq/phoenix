@@ -53,72 +53,81 @@ function Gallery() {
                 States <Badge>3</Badge>
               </TabsTrigger>
             </TabsList>
-            <TabsContent value="overview" className="space-y-6">
-              <div className="grid gap-6 sm:grid-cols-3">
-                <Metric prominent label="API cost" value="$76.00" description="Illustrative data" />
-                <Metric prominent label="Tokens" value="12.4M" />
-                <Metric prominent label="Sessions created" value="76" />
+            <TabsContent value="overview">
+              <div className="space-y-6">
+                <div className="grid gap-6 sm:grid-cols-3">
+                  <Metric
+                    prominent
+                    label="API cost"
+                    value="$76.00"
+                    description="Illustrative data"
+                  />
+                  <Metric prominent label="Tokens" value="12.4M" />
+                  <Metric prominent label="Sessions created" value="76" />
+                </div>
+                <LineAreaChart
+                  label="Example sessions created"
+                  periods={periods}
+                  series={series}
+                  format={String}
+                  formatPeriod={String}
+                />
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Environment</TableHead>
+                      <TableHead>Installed version</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <TableRow>
+                      <TableCell>Development</TableCell>
+                      <TableCell>Example version</TableCell>
+                      <TableCell>
+                        <Badge variant="success">Connected</Badge>
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>Build server</TableCell>
+                      <TableCell>Example version</TableCell>
+                      <TableCell>
+                        <Badge variant="warning">Update available</Badge>
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
               </div>
-              <LineAreaChart
-                label="Example sessions created"
-                periods={periods}
-                series={series}
-                format={String}
-                formatPeriod={String}
-              />
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Environment</TableHead>
-                    <TableHead>Installed version</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  <TableRow>
-                    <TableCell>Development</TableCell>
-                    <TableCell>Example version</TableCell>
-                    <TableCell>
-                      <Badge variant="success">Connected</Badge>
-                    </TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell>Build server</TableCell>
-                    <TableCell>Example version</TableCell>
-                    <TableCell>
-                      <Badge variant="warning">Update available</Badge>
-                    </TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
             </TabsContent>
-            <TabsContent value="states" className="space-y-6">
-              <ConcealedValue value="person@example.com" />
-              <div className="flex flex-wrap gap-2">
-                <Button>Primary action</Button>
-                <Button variant="outline">Secondary action</Button>
-                <Button variant="ghost">Quiet action</Button>
-                <Button disabled>Unavailable</Button>
+            <TabsContent value="states">
+              <div className="space-y-6">
+                <ConcealedValue value="person@example.com" />
+                <div className="flex flex-wrap gap-2">
+                  <Button>Primary action</Button>
+                  <Button variant="outline">Secondary action</Button>
+                  <Button variant="ghost">Quiet action</Button>
+                  <Button disabled>Unavailable</Button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="success">Connected</Badge>
+                  <Badge variant="warning">Update available</Badge>
+                  <Badge variant="error">Limit reached</Badge>
+                </div>
+                <LineAreaChart
+                  label="No recorded activity"
+                  periods={periods}
+                  series={[
+                    {
+                      id: "empty",
+                      label: "No activity",
+                      color: "var(--primary)",
+                      values: periods.map(() => 0),
+                    },
+                  ]}
+                  format={String}
+                  formatPeriod={String}
+                />
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant="success">Connected</Badge>
-                <Badge variant="warning">Update available</Badge>
-                <Badge variant="error">Limit reached</Badge>
-              </div>
-              <LineAreaChart
-                label="No recorded activity"
-                periods={periods}
-                series={[
-                  {
-                    id: "empty",
-                    label: "No activity",
-                    color: "var(--primary)",
-                    values: periods.map(() => 0),
-                  },
-                ]}
-                format={String}
-                formatPeriod={String}
-              />
             </TabsContent>
           </Tabs>
         </WorkspacePageContainer>

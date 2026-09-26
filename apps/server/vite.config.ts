@@ -23,7 +23,9 @@ import {
 
 export { shouldBundleCliDependency };
 
-const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
+const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version)
+  ? "nightly"
+  : "latest";
 
 // The revision this bundle was built from, so `phoenix --version` can name the
 // commit an install is actually running. CI passes it explicitly; a local build
@@ -62,7 +64,7 @@ export default mergeConfig(
       },
     },
     pack: {
-      entry: ["src/bin.ts", "src/claudeHistoryWorker.ts"],
+      entry: ["src/bin.ts", "src/claude-history-worker.ts"],
       outDir: "dist",
       sourcemap: true,
       clean: true,
@@ -71,8 +73,8 @@ export default mergeConfig(
         // (declared deps are external by default, which is what this change is
         // undoing). `neverBundle` forces the native packages out: returning
         // false from `alwaysBundle` only means "no opinion", so a transitive
-        // dependency would still be bundled — which silently inlined
-        // msgpackr-extract and its loader, losing native acceleration.
+        // dependency would still be bundled — which silently inlined native
+        // loaders such as node-gyp-build, losing native acceleration.
         alwaysBundle: shouldBundleCliDependency,
         neverBundle: (id: string) => isExternalCliDependency(id),
         onlyBundle: false,

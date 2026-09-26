@@ -106,7 +106,7 @@ const snapshotSignature = (availability: ProviderAvailability): string =>
         window.windowDurationMins ?? "",
       ].join(":"),
     )
-    .toSorted()
+    .sort()
     .join("|");
 
 export function subscriptionLimitWindowLabel(window: ProviderAvailabilityWindow): string {
@@ -168,13 +168,13 @@ export function deriveSubscriptionLimits(
 
   const limits = [...groups.entries()]
     .map(([key, members]) => {
-      const newest = members.toSorted(
+      const newest = [...members].sort(
         (left, right) =>
           availabilityObservedAt(right.availability) - availabilityObservedAt(left.availability),
       )[0]!;
       const account = newest.availability.account;
       const name = account?.displayName ?? newest.displayName;
-      const instanceLabels = [...new Set(members.map((member) => member.displayName))].toSorted();
+      const instanceLabels = [...new Set(members.map((member) => member.displayName))].sort();
       const accentColors = new Set(
         members.flatMap((member) => (member.accentColor ? [member.accentColor] : [])),
       );
@@ -197,7 +197,7 @@ export function deriveSubscriptionLimits(
         isCurrentAvailabilityUnknown: newest.availability.status === "unknown",
       } satisfies SubscriptionLimit;
     })
-    .toSorted(
+    .sort(
       (left, right) => left.name.localeCompare(right.name) || left.key.localeCompare(right.key),
     );
 

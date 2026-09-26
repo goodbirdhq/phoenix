@@ -1132,6 +1132,9 @@ export const make = Effect.gen(function* () {
                   baseBranch: input.baseRef ?? repoBranch,
                   ...(input.gitRef !== undefined ? { checkoutRef: input.gitRef } : {}),
                   ...(input.checkoutPr !== undefined ? { checkoutPr: input.checkoutPr } : {}),
+                  // An explicitly requested worktree must not silently fall
+                  // back to the project root (e.g. a base with no commit).
+                  ...(input.isolation === "worktree" ? { requireWorktree: true } : {}),
                   // Without a fresh branch name, `git worktree add` would try
                   // to check out the base branch a second time and fail.
                   branch:

@@ -1,17 +1,16 @@
+import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import Constants from "expo-constants";
 import { useNavigation } from "@react-navigation/native";
-import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { SymbolView } from "../../components/AppSymbol";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Platform, Pressable, ScrollView, View } from "react-native";
+import { deriveProjectGroupLabel } from "@t3tools/client-runtime/state/project-grouping";
+import { type ComponentProps, useState } from "react";
+import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { reportAtomCommandResult } from "@t3tools/client-runtime/state/runtime";
-import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
-import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
+import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { NativeHeaderToolbar } from "../../native/StackHeader";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { serverEnvironment } from "../../state/server";
@@ -23,17 +22,16 @@ import {
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
 } from "@t3tools/contracts";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
-import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
-import {
-  type AppUpdateCheckState,
-  isAppUpdateCheckAvailable,
-  registerHiddenUpdateTap,
-  runAppUpdateCheck,
-} from "../updates/app-updates";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import { SettingsScreen } from "./components/SettingsScreen";
+import {
+  AndroidSettingsEnvironmentFilter,
+  SettingsEnvironmentFilterHeader,
+} from "./components/SettingsEnvironmentFilterHeader";
+import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { SessionOrchestrationSettingsRows } from "./SessionOrchestrationSettingsRows";
 import {
   GENERAL_INSIGHT_SETTINGS_ROWS,
@@ -44,36 +42,29 @@ import { planAutoSettleSettingsSync, type AutoSettleSettings } from "./autoSettl
 
 export function SettingsRouteScreen() {
   const navigation = useNavigation();
+  const { layout } = useAdaptiveWorkspaceLayout();
 
   return (
     <>
-      <WorkspaceSidebarToolbar />
-      {Platform.OS === "android" ? (
-        <>
-          {/* Android renders its own in-screen header instead of the native bar. */}
-          <NativeStackScreenOptions options={{ headerShown: false }} />
-          <AndroidScreenHeader title="Settings" onBack={() => navigation.goBack()} />
-        </>
-      ) : (
-        <NativeStackScreenOptions
-          options={{
-            unstable_headerRightItems:
-              Platform.OS === "ios"
-                ? () => [
-                    withNativeGlassHeaderItem({
-                      accessibilityLabel: "Close settings",
-                      icon: { name: "xmark", type: "sfSymbol" } as const,
-                      identifier: "settings-close",
-                      label: "",
-                      onPress: () => navigation.goBack(),
-                      type: "button",
-                    }),
-                  ]
-                : undefined,
-          }}
+      {Platform.OS === "ios" && layout.usesSplitView ? (
+        <WorkspaceSidebarToolbar
+          afterSidebarButton={
+            <NativeHeaderToolbar.Button
+              accessibilityLabel="Go back"
+              icon="chevron.left"
+              onPress={() => navigation.goBack()}
+            />
+          }
         />
+      ) : null}
+      <SettingsEnvironmentFilterHeader closeSettings />
+      {Platform.OS === "android" ? (
+        <SettingsScreen title="Settings" trailing={<AndroidSettingsEnvironmentFilter />}>
+          <LocalSettingsRouteScreen />
+        </SettingsScreen>
+      ) : (
+        <LocalSettingsRouteScreen />
       )}
-      <LocalSettingsRouteScreen />
     </>
   );
 }
@@ -90,16 +81,17 @@ function LocalSettingsRouteScreen() {
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
         className="flex-1"
-        contentContainerClassName="gap-6 px-5 pt-4"
+        contentContainerClassName="gap-4 px-5 pt-4"
         contentContainerStyle={{
           paddingBottom: Math.max(insets.bottom, 18) + 18,
         }}
       >
-        <SettingsSection title="Configuration">
+        <SettingsSection title="Connections">
           <SettingsRow
             icon="desktopcomputer"
             label="Environments"
             value={`${environmentCount}`}
+            valuePosition="trailing"
             target="SettingsEnvironments"
           />
         </SettingsSection>
@@ -121,15 +113,9 @@ function LocalSettingsRouteScreen() {
 
         <GeneralSettingsSection />
 
-        <SettingsSection title="Appearance">
-          <SettingsRow icon="paintbrush" label="Appearance" target="SettingsAppearance" />
-        </SettingsSection>
+        <SettingsIndexSections />
 
         <LegacySettingsSection />
-
-        <ArchivedThreadsSettingsSection />
-
-        <AppSettingsSection />
       </ScrollView>
     </View>
   );
@@ -161,22 +147,16 @@ function UnavailableCapabilityRow(props: {
 
 function GeneralSettingsSection() {
   const schedulesValue = useScheduleSettingsValue();
-  const threadListV2Enabled = useThreadListV2Enabled();
   const preferences = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
 
   return (
     <SettingsSection title="General">
-      <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
       <SettingsSwitchRow
         icon="arrow.up"
         label="Attention ordering"
-        subtitle={
-          threadListV2Enabled
-            ? "Prioritize decisions, failures and unread results. Turn off for Manual ordering and drag arrangement."
-            : "Turn off Legacy thread list to use attention ordering."
-        }
-        disabled={!AsyncResult.isSuccess(preferences) || !threadListV2Enabled}
+        subtitle="Prioritize decisions, failures and unread results. Turn off for Manual ordering and drag arrangement."
+        disabled={!AsyncResult.isSuccess(preferences)}
         value={
           AsyncResult.isSuccess(preferences) &&
           preferences.value.sidebarAttentionFirstEnabled !== false
@@ -314,6 +294,80 @@ function AutoSettleSettingsRows() {
   );
 }
 
+function SettingsIndexSections() {
+  const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
+  const noServerTargets = selectedTargets.length === 0;
+  const selectedProject = projectGroups.find((group) => group.key === selectedProjectKey);
+  const scopedProjectMembers =
+    selectedProject?.members
+      .map((member) => member.project)
+      .filter((project) =>
+        selectedTargets.some((target) => target.environmentId === project.environmentId),
+      ) ?? [];
+  const projectLabel =
+    scopedProjectMembers.length > 0
+      ? deriveProjectGroupLabel({
+          representative: scopedProjectMembers[0]!,
+          members: scopedProjectMembers,
+        })
+      : (selectedProject?.label ?? "Unavailable project");
+  return (
+    <>
+      <SettingsSection title="Interface">
+        <SettingsRow icon="paintbrush" label="Appearance" target="SettingsAppearance" />
+        {Platform.OS === "ios" ? (
+          <SettingsRow icon="keyboard" label="Keyboard" target="SettingsKeyboard" />
+        ) : null}
+      </SettingsSection>
+
+      <SettingsSection title="Projects & threads">
+        {selectedProjectKey !== null ? (
+          <SettingsRow
+            icon="folder"
+            label="Overview"
+            value={projectLabel}
+            target="SettingsProjectOverview"
+          />
+        ) : null}
+        <SettingsRow icon="folder" label="Organization" target="SettingsOrganization" />
+        <SettingsRow icon="text.bubble" label="Thread behavior" target="SettingsThreads" />
+        <SettingsRow icon="archivebox" label="Archived Threads" target="SettingsArchive" />
+      </SettingsSection>
+
+      <SettingsSection title="Server settings">
+        <SettingsRow
+          icon="text.bubble"
+          label="New threads"
+          target="SettingsEnvironmentNewThreads"
+          disabled={noServerTargets}
+        />
+        <SettingsRow
+          icon="arrow.triangle.branch"
+          label="Source control"
+          target="SettingsEnvironmentSourceControl"
+          disabled={noServerTargets}
+        />
+        <SettingsRow
+          icon="text.alignleft"
+          label="Agent behavior"
+          target="SettingsEnvironmentAgentBehavior"
+          disabled={noServerTargets}
+        />
+        <SettingsRow
+          icon="arrow.clockwise"
+          label="Maintenance"
+          target="SettingsEnvironmentMaintenance"
+          disabled={noServerTargets}
+        />
+      </SettingsSection>
+
+      <SettingsSection title="App">
+        <SettingsRow icon="info.circle" label="About Phoenix" target="SettingsAbout" />
+      </SettingsSection>
+    </>
+  );
+}
+
 /**
  * Device-local legacy toggles. Mobile has no client-settings sync, so this is
  * the counterpart of web's Settings → General → Legacy features backed by
@@ -322,19 +376,12 @@ function AutoSettleSettingsRows() {
 function LegacySettingsSection() {
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const preferences = useAtomValue(mobilePreferencesAtom);
-  const threadListV2Enabled = useThreadListV2Enabled();
   const planModeEnabled =
     AsyncResult.isSuccess(preferences) && preferences.value.planModeEnabled === true;
 
   return (
     <View className="gap-3">
       <SettingsSection title="Legacy">
-        <SettingsSwitchRow
-          icon="sidebar.left"
-          label="Legacy Thread List"
-          value={!threadListV2Enabled}
-          onValueChange={(value) => savePreferences({ legacyThreadListEnabled: value })}
-        />
         <SettingsSwitchRow
           icon="hammer"
           label="Plan Mode"
@@ -347,126 +394,5 @@ function LegacySettingsSection() {
         control; otherwise every task runs in Build mode.
       </Text>
     </View>
-  );
-}
-
-function AppSettingsSection() {
-  const [updateState, setUpdateState] = useState<AppUpdateCheckState>("idle");
-  const updateInFlight = useRef(false);
-  const hiddenUpdateTapCount = useRef(0);
-
-  const version = Constants.expoConfig?.version ?? "0.0.0";
-  // Fall back to "production" to match resolveAppVariant in app.config.ts, so a
-  // missing variant never mislabels a production build as development.
-  const variant = (Constants.expoConfig?.extra?.appVariant as string | undefined) ?? "production";
-  const variantLabel = variant === "production" ? "" : capitalize(variant);
-  const versionLabel = variantLabel ? `${version} · ${variantLabel}` : version;
-  const updateCheckAvailable = isAppUpdateCheckAvailable();
-  const busy =
-    updateState === "checking" || updateState === "downloading" || updateState === "restarting";
-
-  // "Up to date" is a transient acknowledgement, not a state worth persisting —
-  // return the version row to its normal, deliberately quiet state.
-  useEffect(() => {
-    if (updateState !== "current") return;
-    const timer = setTimeout(() => setUpdateState("idle"), 3000);
-    return () => clearTimeout(timer);
-  }, [updateState]);
-
-  const checkForUpdate = useCallback(async () => {
-    // `disabled={busy}` only takes effect on the next render, so two taps in the
-    // same frame would both get through. The ref closes that window.
-    if (updateInFlight.current) return;
-    updateInFlight.current = true;
-    try {
-      // The user asked for this restart by tapping the version row, so it may
-      // apply immediately instead of prompting.
-      await runAppUpdateCheck({
-        applyMode: "immediate",
-        onFailure: (message) => Alert.alert("Update failed", message),
-        onStateChange: setUpdateState,
-      });
-    } finally {
-      updateInFlight.current = false;
-    }
-  }, []);
-
-  const handleVersionPress = useCallback(() => {
-    if (!updateCheckAvailable || updateInFlight.current) return;
-    const tap = registerHiddenUpdateTap(hiddenUpdateTapCount.current);
-    hiddenUpdateTapCount.current = tap.nextCount;
-    if (tap.shouldCheck) {
-      void checkForUpdate();
-    }
-  }, [checkForUpdate, updateCheckAvailable]);
-
-  const statusLabel =
-    updateState === "checking"
-      ? "Checking…"
-      : updateState === "downloading"
-        ? "Downloading…"
-        : // "ready" appears only when this check joined an in-flight background-mode
-          // check; that download installs at the next backgrounding.
-          updateState === "ready"
-          ? "Update ready"
-          : updateState === "restarting"
-            ? "Restarting…"
-            : updateState === "current"
-              ? "Up to date"
-              : null;
-
-  const versionRow = (
-    <View className="flex-row items-center gap-4 p-4">
-      <SymbolView
-        name="info.circle"
-        size={22}
-        tintColorClassName={"accent-icon"}
-        type="monochrome"
-        weight="regular"
-      />
-      <Text className="flex-1 text-lg text-foreground">Version</Text>
-      <View className="items-end">
-        <Text className="text-lg text-foreground-muted">{versionLabel}</Text>
-        {statusLabel ? (
-          <Text className="text-xs text-foreground-muted/70">{statusLabel}</Text>
-        ) : null}
-      </View>
-    </View>
-  );
-
-  return (
-    <SettingsSection title="App">
-      <SettingsRow icon="internaldrive" label="Client Storage" target="SettingsClientStorage" />
-      <SettingsRow
-        icon="doc.on.doc"
-        label="Open source licenses"
-        target="SettingsOpenSourceLicenses"
-      />
-      <SettingsRow icon="doc.text" label="Legal" fullScreenTarget="SettingsLegal" />
-      {updateCheckAvailable ? (
-        <Pressable
-          accessibilityLabel={`Version ${versionLabel}`}
-          accessibilityRole="text"
-          disabled={busy}
-          onPress={handleVersionPress}
-        >
-          {versionRow}
-        </Pressable>
-      ) : (
-        versionRow
-      )}
-    </SettingsSection>
-  );
-}
-
-function capitalize(value: string): string {
-  return value.length > 0 ? value.charAt(0).toUpperCase() + value.slice(1) : value;
-}
-
-function ArchivedThreadsSettingsSection() {
-  return (
-    <SettingsSection title="Threads">
-      <SettingsRow icon="archivebox" label="Archived Threads" target="SettingsArchive" />
-    </SettingsSection>
   );
 }

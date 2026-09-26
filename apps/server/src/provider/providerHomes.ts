@@ -94,12 +94,6 @@ export interface ProviderInstanceHome {
   readonly instanceIds: readonly string[];
   /** Resolved and absolute; `~` expanded against this server's home. */
   readonly homePath: string;
-  /**
-   * Whether the instance names its own home rather than inheriting the OS one.
-   * An overridden home *is* the provider's config dir, so its layout differs —
-   * see {@link claudeProjectsDirCandidates}.
-   */
-  readonly overridden: boolean;
 }
 
 /**
@@ -107,14 +101,19 @@ export interface ProviderInstanceHome {
  * duplicates — two instances may legitimately share one home, and a caller
  * that scans it twice would double count.
  *
+ * The instance's `homePath` wins, then the `CLAUDE_CONFIG_DIR` its process
+ * would inherit (its own environment over the server's), then `~/.claude` —
+ * the same order the driver launches Claude with.
+ *
  * An instance whose stored config cannot be decoded is skipped rather than
  * failing the read: the registry already surfaces that instance as
  * unavailable, and one broken entry must not blank out every other account.
  */
 export const claudeInstanceHomes = Effect.fn("providerHomes.claudeInstanceHomes")(function* (
   settings: ServerSettings,
+  baseEnvironment: NodeJS.ProcessEnv = process.env,
 ): Effect.fn.Return<ReadonlyArray<ProviderInstanceHome>, never, Path.Path> {
-  const homes: (Omit<ProviderInstanceHome, "instanceIds"> & { instanceIds: string[] })[] = [];
+  const homes: { instanceIds: string[]; homePath: string }[] = [];
   for (const entry of providerInstanceConfigsForDriver(settings, CLAUDE_DRIVER)) {
     const decoded = decodeClaudeSettings(entry.config ?? {});
     if (!Exit.isSuccess(decoded)) {
@@ -123,17 +122,16 @@ export const claudeInstanceHomes = Effect.fn("providerHomes.claudeInstanceHomes"
       });
       continue;
     }
-    const homePath = yield* resolveClaudeHomePath(decoded.value);
+    const homePath = yield* resolveClaudeHomePath(
+      decoded.value,
+      mergeProviderInstanceEnvironment(entry.environment, baseEnvironment),
+    );
     const existing = homes.find((home) => home.homePath === homePath);
     if (existing) {
       existing.instanceIds.push(entry.instanceId);
       continue;
     }
-    homes.push({
-      instanceIds: [entry.instanceId],
-      homePath,
-      overridden: decoded.value.homePath.trim().length > 0,
-    });
+    homes.push({ instanceIds: [entry.instanceId], homePath });
   }
   return homes;
 });
@@ -142,11 +140,16 @@ export const claudeInstanceHomes = Effect.fn("providerHomes.claudeInstanceHomes"
  * Resolved shared `CODEX_HOME` of every configured Codex instance, without
  * duplicates. The shared home is the one that holds `sessions/`: an auth
  * overlay gives an instance its own credentials, not its own transcripts.
+ *
+ * An instance with neither a home nor an overlay runs Codex under the
+ * `CODEX_HOME` it inherits; an overlay exports its own, so an inherited one
+ * never applies there.
  */
 export const codexInstanceHomes = Effect.fn("providerHomes.codexInstanceHomes")(function* (
   settings: ServerSettings,
+  baseEnvironment: NodeJS.ProcessEnv = process.env,
 ): Effect.fn.Return<ReadonlyArray<ProviderInstanceHome>, never, Path.Path> {
-  const homes: (Omit<ProviderInstanceHome, "instanceIds"> & { instanceIds: string[] })[] = [];
+  const homes: { instanceIds: string[]; homePath: string }[] = [];
   for (const entry of providerInstanceConfigsForDriver(settings, CODEX_DRIVER)) {
     const decoded = decodeCodexSettings(entry.config ?? {});
     if (!Exit.isSuccess(decoded)) {
@@ -155,70 +158,79 @@ export const codexInstanceHomes = Effect.fn("providerHomes.codexInstanceHomes")(
       });
       continue;
     }
-    const layout = yield* resolveCodexHomeLayout(decoded.value);
+    const config = decoded.value;
+    const inheritedHome = mergeProviderInstanceEnvironment(
+      entry.environment,
+      baseEnvironment,
+    ).CODEX_HOME?.trim();
+    const layout = yield* resolveCodexHomeLayout(
+      !config.homePath.trim() && !config.shadowHomePath.trim() && inheritedHome
+        ? { ...config, homePath: inheritedHome }
+        : config,
+    );
     const existing = homes.find((home) => home.homePath === layout.sharedHomePath);
     if (existing) {
       existing.instanceIds.push(entry.instanceId);
       continue;
     }
-    homes.push({
-      instanceIds: [entry.instanceId],
-      homePath: layout.sharedHomePath,
-      overridden: decoded.value.homePath.trim().length > 0,
-    });
+    homes.push({ instanceIds: [entry.instanceId], homePath: layout.sharedHomePath });
   }
   return homes;
 });
 
-export interface OpenCodeInstanceDatabase {
+export interface OpenCodeInstanceStore {
   readonly instanceIds: readonly string[];
-  readonly databasePath: string;
+  /** OpenCode's data directory, which holds its databases and older JSON history. */
+  readonly dataDir: string;
+  /** The one database an `OPENCODE_DB` override selects; otherwise every channel database. */
+  readonly databasePath: string | undefined;
 }
 
 /**
- * Resolves the SQLite store used by every configured OpenCode instance.
+ * Resolves the history store used by every configured OpenCode instance.
  *
  * OpenCode follows XDG for its data directory and lets `OPENCODE_DB` select a
  * different file. A relative override is resolved below the OpenCode data
  * directory, matching OpenCode itself. In-memory stores have no history a
  * separate Phoenix process can read, so they are omitted.
  */
-export const opencodeInstanceDatabases = Effect.fn("providerHomes.opencodeInstanceDatabases")(
-  function* (
-    settings: ServerSettings,
-    baseEnvironment: NodeJS.ProcessEnv = process.env,
-  ): Effect.fn.Return<ReadonlyArray<OpenCodeInstanceDatabase>, never, Path.Path> {
-    const path = yield* Path.Path;
-    const platform = yield* HostProcessPlatform;
-    const databases: { instanceIds: string[]; databasePath: string }[] = [];
+export const opencodeInstanceStores = Effect.fn("providerHomes.opencodeInstanceStores")(function* (
+  settings: ServerSettings,
+  baseEnvironment: NodeJS.ProcessEnv = process.env,
+): Effect.fn.Return<ReadonlyArray<OpenCodeInstanceStore>, never, Path.Path> {
+  const path = yield* Path.Path;
+  const platform = yield* HostProcessPlatform;
+  const stores: { instanceIds: string[]; dataDir: string; databasePath: string | undefined }[] = [];
 
-    for (const entry of providerInstanceConfigsForDriver(settings, OPENCODE_DRIVER)) {
-      const environment = mergeProviderInstanceEnvironment(entry.environment, baseEnvironment);
+  for (const entry of providerInstanceConfigsForDriver(settings, OPENCODE_DRIVER)) {
+    const environment = mergeProviderInstanceEnvironment(entry.environment, baseEnvironment);
 
-      const configuredDataHome = environment.XDG_DATA_HOME?.trim();
-      const effectiveHome =
-        (platform === "win32" ? environment.USERPROFILE : environment.HOME)?.trim() ||
-        NodeOS.homedir();
-      const dataHome = configuredDataHome || path.join(effectiveHome, ".local", "share");
-      const openCodeDataDir = path.join(dataHome, "opencode");
-      const configuredDatabase = environment.OPENCODE_DB?.trim();
-      if (configuredDatabase === ":memory:") continue;
-      const databasePath =
-        configuredDatabase && path.isAbsolute(configuredDatabase)
-          ? configuredDatabase
-          : path.join(openCodeDataDir, configuredDatabase || "opencode.db");
+    const configuredDataHome = environment.XDG_DATA_HOME?.trim();
+    const effectiveHome =
+      (platform === "win32" ? environment.USERPROFILE : environment.HOME)?.trim() ||
+      NodeOS.homedir();
+    // The XDG spec says a relative data home is invalid and must be ignored.
+    const dataHome =
+      configuredDataHome && path.isAbsolute(configuredDataHome)
+        ? configuredDataHome
+        : path.join(effectiveHome, ".local", "share");
+    const dataDir = path.join(dataHome, "opencode");
+    const configuredDatabase = environment.OPENCODE_DB?.trim();
+    if (configuredDatabase === ":memory:") continue;
+    const databasePath = configuredDatabase ? path.resolve(dataDir, configuredDatabase) : undefined;
 
-      const existing = databases.find((database) => database.databasePath === databasePath);
-      if (existing) {
-        existing.instanceIds.push(entry.instanceId);
-        continue;
-      }
-      databases.push({ instanceIds: [entry.instanceId], databasePath });
+    const existing = stores.find(
+      (store) => store.dataDir === dataDir && store.databasePath === databasePath,
+    );
+    if (existing) {
+      existing.instanceIds.push(entry.instanceId);
+      continue;
     }
+    stores.push({ instanceIds: [entry.instanceId], dataDir, databasePath });
+  }
 
-    return databases;
-  },
-);
+  return stores;
+});
 
 /** Grok history roots follow each configured instance's process environment. */
 export const grokInstanceHomes = Effect.fn("providerHomes.grokInstanceHomes")(function* (
@@ -227,7 +239,7 @@ export const grokInstanceHomes = Effect.fn("providerHomes.grokInstanceHomes")(fu
 ): Effect.fn.Return<ReadonlyArray<ProviderInstanceHome>, never, Path.Path> {
   const path = yield* Path.Path;
   const platform = yield* HostProcessPlatform;
-  const homes: (Omit<ProviderInstanceHome, "instanceIds"> & { instanceIds: string[] })[] = [];
+  const homes: { instanceIds: string[]; homePath: string }[] = [];
   for (const entry of providerInstanceConfigsForDriver(settings, ProviderDriverKind.make("grok"))) {
     const environment = mergeProviderInstanceEnvironment(entry.environment, baseEnvironment);
     const configuredHome = environment.GROK_HOME?.trim();
@@ -242,26 +254,25 @@ export const grokInstanceHomes = Effect.fn("providerHomes.grokInstanceHomes")(fu
       existing.instanceIds.push(entry.instanceId);
       continue;
     }
-    homes.push({ instanceIds: [entry.instanceId], homePath, overridden: Boolean(configuredHome) });
+    homes.push({ instanceIds: [entry.instanceId], homePath });
   }
   return homes;
 });
 
 /**
- * The directories a Claude home may keep session transcripts and workflow
- * scripts under, in probe order.
+ * The directories a Claude home keeps session transcripts and workflow
+ * scripts under.
  *
- * An overridden `CLAUDE_CONFIG_DIR` *is* the config dir, so transcripts sit
- * directly beneath it; a default install nests them under `~/.claude`. The
- * bare `<home>/projects` layout is offered only for an overridden home: on a
- * default one that path is just a directory in the user's home, and treating
- * it as provider state would have Phoenix reading files that are none of its
- * business.
+ * A resolved Claude home is always the config dir itself (`~/.claude` by
+ * default), so transcripts sit directly beneath it. A `.claude/projects`
+ * nested inside a configured home is not where Claude writes, and reading it
+ * would count files that are none of this account's business.
  */
 export const claudeProjectsDirCandidates = Effect.fn("providerHomes.claudeProjectsDirCandidates")(
-  function* (home: ProviderInstanceHome): Effect.fn.Return<readonly string[], never, Path.Path> {
+  function* (
+    home: Pick<ProviderInstanceHome, "homePath">,
+  ): Effect.fn.Return<readonly string[], never, Path.Path> {
     const path = yield* Path.Path;
-    const nested = path.join(home.homePath, ".claude", "projects");
-    return home.overridden ? [nested, path.join(home.homePath, "projects")] : [nested];
+    return [path.join(home.homePath, "projects")];
   },
 );

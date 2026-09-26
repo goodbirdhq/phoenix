@@ -7,6 +7,7 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Textarea } from "../ui/textarea";
 import {
   Dialog,
@@ -119,23 +120,21 @@ export function PullRequestEditDialog({
                 }
               />
             </label>
-            <div className="flex gap-6 border-b border-border" aria-label="Description editor">
-              {[
-                { label: "Write", value: false, Icon: PencilIcon },
-                { label: "Preview", value: true, Icon: EyeIcon },
-              ].map(({ label, value, Icon }) => (
-                <Button
-                  key={label}
-                  variant="ghost"
-                  aria-pressed={preview === value}
-                  onClick={() => setPreview(value)}
-                  className={`h-10 gap-2 rounded-none border-b-2 px-0 ${preview === value ? "border-foreground font-semibold" : "border-transparent text-muted-foreground"}`}
-                >
-                  <Icon className="size-4" />
-                  {label}
-                </Button>
-              ))}
-            </div>
+            <Tabs
+              value={preview ? "preview" : "write"}
+              onValueChange={(value) => setPreview(value === "preview")}
+            >
+              <TabsList aria-label="Description editor">
+                <TabsTrigger value="write">
+                  <PencilIcon className="size-4" />
+                  Write
+                </TabsTrigger>
+                <TabsTrigger value="preview">
+                  <EyeIcon className="size-4" />
+                  Preview
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
             {preview ? (
               <div className="min-h-40 rounded-lg border border-border p-3">
                 <PullRequestMarkdown

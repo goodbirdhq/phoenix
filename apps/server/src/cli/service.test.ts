@@ -121,25 +121,52 @@ const newerServiceStatus = { ...status, current: false, installedVersion: "999.0
 
 function makeTestService(serviceStatus: BootService.BootServiceStatus) {
   const installOptions: Array<Parameters<BootService.BootService["Service"]["install"]>[0]> = [];
+  const restarts: Array<true> = [];
   const service = BootService.BootService.of({
     status: Effect.succeed(serviceStatus),
+    restart: Effect.sync(() => {
+      restarts.push(true);
+      return serviceStatus.installed;
+    }),
     install: (options) =>
       Effect.sync(() => {
         installOptions.push(options);
         return {
-          nodePath: "/test/node",
-          launcherPath: "/test/service-launcher.mjs",
-          baseDir: "/test/t3",
+          program: ["/test/node", "/test/phoenix/runtime/service-launcher.mjs"],
+          baseDir: "/test/phoenix",
           unitPath: serviceStatus.unitPath,
           logPath: serviceStatus.logPath,
         };
       }),
     uninstall: Effect.succeed(false),
   });
-  return { service, installOptions };
+  return { service, installOptions, restarts };
 }
 
 it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands", (it) => {
+  it.effect("restart restarts the installed service", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "phoenix-service-cli-test-" });
+      const { service, installOptions, restarts } = makeTestService(status);
+      vi.spyOn(BootService, "layer").mockReturnValue(
+        Layer.succeed(BootService.BootService, service),
+      );
+
+      yield* Command.runWith(serviceCommand, { version: packageJson.version })([
+        "restart",
+        "--base-dir",
+        baseDir,
+      ]).pipe(
+        Effect.provideService(HostProcessEnvironment, {}),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+      );
+
+      expect(restarts).toEqual([true]);
+      expect(installOptions).toEqual([]);
+    }),
+  );
+
   it.effect.each(["install", "update"] as const)(
     "%s refuses a downgrade before changing the service",
     (command) =>

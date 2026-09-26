@@ -19,7 +19,6 @@ import {
 } from "../../state/usage";
 import {
   SidebarContent,
-  SidebarGroup,
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
@@ -197,7 +196,7 @@ export function UsageSidebarNavView({
           <Button
             size="icon"
             variant="outline"
-            className="size-8 border-sky-600/20 bg-sky-600/10 text-sky-600 [&_svg]:text-sky-600"
+            className="size-8"
             aria-label="Add provider account"
             onClick={() => setAddingTo(connectedEnvironments[0]!.environmentId)}
           >
@@ -210,7 +209,7 @@ export function UsageSidebarNavView({
                 <Button
                   size="icon"
                   variant="outline"
-                  className="size-8 border-sky-600/20 bg-sky-600/10 text-sky-600 [&_svg]:text-sky-600"
+                  className="size-8"
                   aria-label="Add provider account"
                   disabled={connectedEnvironments.length === 0}
                 />
@@ -232,34 +231,37 @@ export function UsageSidebarNavView({
         )}
       </div>
       <SidebarContent>
-        <SidebarGroup className="gap-1.5 px-2.5 py-3">
+        <div className="relative flex w-full min-w-0 flex-col gap-1.5 px-2.5 py-3">
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
+                size="lg"
                 isActive={!selected}
                 onClick={() => select()}
-                className="h-auto gap-3 p-3 text-sidebar-foreground data-[active=true]:bg-sidebar-border"
+                className="h-auto"
               >
-                <LayoutGridIcon
-                  className="size-5"
-                  strokeWidth={1.5}
-                  style={{ color: "var(--sidebar-foreground)" }}
-                />
-                <span className="flex flex-col gap-[3px]">
-                  <span className="text-base leading-5 font-medium">All accounts</span>
-                  <span className="text-xs leading-4 font-normal text-sidebar-muted-foreground">
-                    {accounts.length} {accounts.length === 1 ? "account" : "accounts"} ·{" "}
-                    {environments.length}{" "}
-                    {environments.length === 1 ? "environment" : "environments"}
+                <span className="flex min-w-0 flex-1 items-center gap-3 p-1 text-sidebar-foreground">
+                  <LayoutGridIcon
+                    className="size-5 shrink-0"
+                    strokeWidth={1.5}
+                    style={{ color: "var(--sidebar-foreground)" }}
+                  />
+                  <span className="flex min-w-0 flex-col gap-0.75">
+                    <span className="text-base leading-5 font-medium">All accounts</span>
+                    <span className="text-xs leading-4 font-normal text-sidebar-muted-foreground">
+                      {accounts.length} {accounts.length === 1 ? "account" : "accounts"} ·{" "}
+                      {environments.length}{" "}
+                      {environments.length === 1 ? "environment" : "environments"}
+                    </span>
                   </span>
                 </span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
-          <div className="px-3 pt-[18px] pb-[6px] text-[11px] leading-[14px] tracking-[0.06em] text-sidebar-muted-foreground">
+          <div className="px-3 pt-4.5 pb-1.5 text-2xs leading-3.5 tracking-wider text-sidebar-muted-foreground">
             PROVIDER ACCOUNTS
           </div>
-          <SidebarMenu className="gap-1.5">
+          <SidebarMenu>
             {visibleAccounts.map((account) => {
               const kind = usageProviderKind(account.driver);
               const { mark: Mark, color, label } = PROVIDER_PRESENTATION[kind];
@@ -340,93 +342,96 @@ export function UsageSidebarNavView({
                     aria-label={`${account.name || label}${cost == null ? "" : ` · ${costLabel}`}${status ? ` · ${status}` : ""}${quota.bars.map((bar) => ` · ${bar.label} ${Math.round(bar.usedPercent)}% used`).join("")}`}
                     aria-busy={pending}
                     style={{ minHeight: kind === "codex" || kind === "claude" ? 90 : 69 }}
-                    className="h-auto flex-col items-stretch gap-[9px] p-3 text-sidebar-foreground data-[active=true]:bg-sidebar-border"
+                    size="lg"
+                    className="h-auto items-stretch"
                   >
-                    <span className="flex min-w-0 items-center gap-3">
-                      <Mark className="size-5 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate text-sm leading-5 font-medium">
-                        {account.name || label}
+                    <span className="flex min-w-0 flex-1 flex-col gap-2.25 p-1 text-sidebar-foreground">
+                      <span className="flex min-w-0 items-center gap-3">
+                        <Mark className="size-5 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate text-sm leading-5 font-medium">
+                          {account.name || label}
+                        </span>
+                        {status && displayedBars.length >= 2 && (
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <span
+                                  aria-label={status}
+                                  tabIndex={0}
+                                  className="shrink-0 text-sidebar-muted-foreground"
+                                />
+                              }
+                            >
+                              <InfoIcon className="size-3" />
+                            </TooltipTrigger>
+                            <TooltipPopup>{status}</TooltipPopup>
+                          </Tooltip>
+                        )}
+                        <span
+                          className="w-16 shrink-0 text-right text-xs leading-4 font-normal tabular-nums text-sidebar-muted-foreground"
+                          aria-label={`API cost estimate for the selected period and environment: ${costLabel}`}
+                        >
+                          {cost == null && historyPending ? (
+                            <span className="ml-auto block h-2 w-12 rounded-sm bg-sidebar-border" />
+                          ) : cost == null ? (
+                            "—"
+                          ) : allCostUnpriced ? (
+                            "Unpriced"
+                          ) : hasIncompleteCost ? (
+                            `${formatUsd(cost.costUsd)} +?`
+                          ) : (
+                            formatUsd(cost.costUsd)
+                          )}
+                        </span>
                       </span>
-                      {status && displayedBars.length >= 2 && (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
+                      <span className="flex flex-col gap-1.25 pl-8 whitespace-normal">
+                        {displayedBars.map((bar) => (
+                          <span className="flex items-center gap-2" key={bar.label}>
+                            <span className="w-[83px] shrink-0 text-2xs leading-4 font-normal text-sidebar-muted-foreground">
+                              {bar.label}
+                            </span>
+                            <span
+                              className="h-1 min-w-0 flex-1 overflow-hidden rounded-xs bg-sidebar-border"
+                              role="progressbar"
+                              aria-label={`${account.name} · ${bar.label}`}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={pending ? undefined : bar.usedPercent}
+                              aria-valuetext={
+                                pending
+                                  ? "Loading limit"
+                                  : `${Math.round(bar.usedPercent)}% used${limit?.isCurrentAvailabilityUnknown || limit?.availability.stale ? " (last known)" : ""}`
+                              }
+                            >
                               <span
-                                aria-label={status}
-                                tabIndex={0}
-                                className="shrink-0 text-sidebar-muted-foreground"
+                                className="block h-full rounded-xs"
+                                style={{
+                                  width: pending ? "0%" : `round(${bar.usedPercent}%, 1px)`,
+                                  backgroundColor: bar.spark ? "#0284C7" : color,
+                                }}
                               />
+                            </span>
+                            <span className="w-7 shrink-0 text-right text-2xs leading-4 font-normal tabular-nums text-sidebar-muted-foreground">
+                              {pending ? (
+                                <span className="block h-2 w-7 rounded-sm bg-sidebar-border" />
+                              ) : (
+                                `${Math.round(bar.usedPercent)}%`
+                              )}
+                            </span>
+                          </span>
+                        ))}
+                        {status && displayedBars.length < 2 && (
+                          <span
+                            className={
+                              quota.warning && !offline && !refreshing
+                                ? "text-2xs leading-4 font-normal text-warning-foreground"
+                                : "text-2xs leading-4 font-normal text-sidebar-muted-foreground"
                             }
                           >
-                            <InfoIcon className="size-3" />
-                          </TooltipTrigger>
-                          <TooltipPopup>{status}</TooltipPopup>
-                        </Tooltip>
-                      )}
-                      <span
-                        className="w-16 shrink-0 text-right text-xs leading-4 font-normal tabular-nums text-sidebar-muted-foreground"
-                        aria-label={`API cost estimate for the selected period and environment: ${costLabel}`}
-                      >
-                        {cost == null && historyPending ? (
-                          <span className="ml-auto block h-2 w-12 rounded-sm bg-sidebar-border" />
-                        ) : cost == null ? (
-                          "—"
-                        ) : allCostUnpriced ? (
-                          "Unpriced"
-                        ) : hasIncompleteCost ? (
-                          `${formatUsd(cost.costUsd)} +?`
-                        ) : (
-                          formatUsd(cost.costUsd)
+                            {status}
+                          </span>
                         )}
                       </span>
-                    </span>
-                    <span className="flex flex-col gap-[5px] pl-8 whitespace-normal">
-                      {displayedBars.map((bar) => (
-                        <span className="flex items-center gap-2" key={bar.label}>
-                          <span className="w-[83px] shrink-0 text-[11px] leading-4 font-normal text-sidebar-muted-foreground">
-                            {bar.label}
-                          </span>
-                          <span
-                            className="h-1 min-w-0 flex-1 overflow-hidden rounded-[3px] bg-sidebar-border"
-                            role="progressbar"
-                            aria-label={`${account.name} · ${bar.label}`}
-                            aria-valuemin={0}
-                            aria-valuemax={100}
-                            aria-valuenow={pending ? undefined : bar.usedPercent}
-                            aria-valuetext={
-                              pending
-                                ? "Loading limit"
-                                : `${Math.round(bar.usedPercent)}% used${limit?.isCurrentAvailabilityUnknown || limit?.availability.stale ? " (last known)" : ""}`
-                            }
-                          >
-                            <span
-                              className="block h-full rounded-[3px]"
-                              style={{
-                                width: pending ? "0%" : `round(${bar.usedPercent}%, 1px)`,
-                                backgroundColor: bar.spark ? "#0284C7" : color,
-                              }}
-                            />
-                          </span>
-                          <span className="w-7 shrink-0 text-right text-[11px] leading-4 font-normal tabular-nums text-sidebar-muted-foreground">
-                            {pending ? (
-                              <span className="block h-2 w-7 rounded-sm bg-sidebar-border" />
-                            ) : (
-                              `${Math.round(bar.usedPercent)}%`
-                            )}
-                          </span>
-                        </span>
-                      ))}
-                      {status && displayedBars.length < 2 && (
-                        <span
-                          className={
-                            quota.warning && !offline && !refreshing
-                              ? "text-[11px] leading-4 font-normal text-amber-700 dark:text-amber-500"
-                              : "text-[11px] leading-4 font-normal text-sidebar-muted-foreground"
-                          }
-                        >
-                          {status}
-                        </span>
-                      )}
                     </span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -452,7 +457,7 @@ export function UsageSidebarNavView({
               )}
             </p>
           )}
-        </SidebarGroup>
+        </div>
       </SidebarContent>
       {footer}
       {addingTo && (

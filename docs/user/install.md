@@ -11,7 +11,7 @@ native desktop app includes its server runtime.
 You need an installed, authenticated provider before starting a thread. You can
 launch Phoenix and configure providers afterwards.
 
-## Run without installing
+## Command line
 
 ```bash
 phoenix
@@ -68,6 +68,12 @@ Install Phoenix from the
 The phone connects to a server on another machine. Follow
 [remote access](./remote-access.md) to pair with it over HTTP or Tailscale.
 
+If the app crashes during launch, open Settings → Diagnostics on the next launch
+that succeeds. It lists startup crashes from the last 7 days with the error and
+component stack that store crash reports leave out. Copy the report and paste it
+into a GitHub issue. Error messages can quote values from the app, so read it over
+before sharing.
+
 ## Providers
 
 Phoenix drives provider CLIs; it does not ship them. Open **Settings → Providers** in the web or
@@ -91,6 +97,12 @@ Cursor's executable is `cursor-agent`, although its login command is
 
 Cursor is the one to watch: install Cursor CLI, which provides the `cursor-agent` binary that
 Phoenix looks for, but authenticate with `agent login`, not `cursor-agent login`.
+
+Phoenix warns when a provider version has known compatibility problems with your
+release. Check **Settings → Providers** on that environment for the recommended
+version or range. When its package manager supports installing a specific version,
+you can install the recommendation there. Otherwise use the provider's installer
+on the environment's machine. An unlisted version is unverified.
 
 When a provider CLI is behind its latest release, its provider card shows the
 available version. **Update now** appears only when Phoenix can tell which

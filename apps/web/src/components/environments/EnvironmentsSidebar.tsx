@@ -165,9 +165,9 @@ export function EnvironmentsSidebar() {
           </MenuPopup>
         </Menu>
         <Button
-          variant="ghost"
+          variant="outline"
           size="icon"
-          className="size-8 border-sky-500/30 bg-sky-500/10 text-sky-600 hover:bg-sky-500/15"
+          className="size-8"
           aria-label="Add environment"
           onClick={() => void navigate({ to: "/environments", search: { ...route, add: true } })}
         >
@@ -204,7 +204,7 @@ export function EnvironmentsSidebar() {
                     environmentId={env.environmentId}
                     className="size-[18px] shrink-0 text-muted-foreground"
                   />
-                  <span className="environment-inter truncate text-sm font-medium">
+                  <span data-environment-inter="" className="truncate text-sm font-medium">
                     {appearance[env.environmentId]?.alias || env.label}
                   </span>
                 </span>
@@ -213,10 +213,10 @@ export function EnvironmentsSidebar() {
                     className={cn(
                       "size-1.5 rounded-full",
                       env.connection.phase === "connected"
-                        ? "bg-emerald-500"
+                        ? "bg-success"
                         : env.connection.phase === "error"
-                          ? "bg-red-500"
-                          : "bg-zinc-400",
+                          ? "bg-destructive"
+                          : "bg-muted-foreground/60",
                     )}
                   />
                   {env.connection.phase === "available"
@@ -232,18 +232,20 @@ export function EnvironmentsSidebar() {
                 </span>
               </button>
               <Menu>
-                <MenuTrigger
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Actions for ${appearance[env.environmentId]?.alias || env.label}`}
-                      className="absolute top-2.5 right-2 size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[popup-open]:opacity-100"
-                    />
-                  }
-                >
-                  <MoreHorizontalIcon className="size-4" />
-                </MenuTrigger>
+                <div className="absolute top-2.5 right-2 flex opacity-0 group-hover:opacity-100 has-focus-visible:opacity-100 has-data-popup-open:opacity-100">
+                  <MenuTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Actions for ${appearance[env.environmentId]?.alias || env.label}`}
+                        className="size-6"
+                      />
+                    }
+                  >
+                    <MoreHorizontalIcon className="size-4" />
+                  </MenuTrigger>
+                </div>
                 <MenuPopup>
                   <MenuItem
                     onClick={() =>
@@ -336,7 +338,7 @@ export function EnvironmentsSidebar() {
           if (!open && !busy) setRemoving(null);
         }}
       >
-        <DialogPopup className="usage-surface environment-surface rounded-[14px] sm:max-w-[620px]">
+        <DialogPopup data-usage-surface="" data-environment-surface="" className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>
               Remove {removing && (appearance[removing.environmentId]?.alias || removing.label)}?

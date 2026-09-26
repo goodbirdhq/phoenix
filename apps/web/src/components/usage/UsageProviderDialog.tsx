@@ -189,180 +189,189 @@ export function UsageProviderDialog({
     onClose();
   };
   return (
-    <DialogPopup className="usage-surface w-[620px] max-w-[calc(100vw-32px)] rounded-[14px] p-0">
+    <DialogPopup data-usage-surface="" className="w-[620px] max-w-[calc(100vw-32px)]">
       <div className="flex h-[649px] max-h-[calc(100dvh-50px)] flex-col">
-        <DialogHeader className="items-center px-7 pt-7 text-center">
-          {Mark && <Mark className="size-6" />}
-          <DialogTitle>Edit {definition?.label ?? "provider"} provider</DialogTitle>
-          <DialogDescription>
-            Manage this provider instance on {environment?.label ?? "the selected environment"}.
-          </DialogDescription>
-        </DialogHeader>
+        {/* The wrapper adds the design's extra inset on top of the header's own padding. */}
+        <div className="px-1 pt-1">
+          <DialogHeader className="items-center text-center">
+            {Mark && <Mark className="size-6" />}
+            <DialogTitle>Edit {definition?.label ?? "provider"} provider</DialogTitle>
+            <DialogDescription>
+              Manage this provider instance on {environment?.label ?? "the selected environment"}.
+            </DialogDescription>
+          </DialogHeader>
+        </div>
         <Tabs defaultValue="general" className="flex min-h-0 flex-1 flex-col">
-          <TabsList className="shrink-0 gap-5 px-7">
-            <TabsTrigger value="general">
-              <SettingsIcon className="size-3.5" />
-              General
-            </TabsTrigger>
-            <TabsTrigger value="environment">
-              <BracesIcon className="size-3.5" />
-              Environment variables
-            </TabsTrigger>
-            <TabsTrigger value="configuration">
-              <SlidersHorizontalIcon className="size-3.5" />
-              Configuration
-            </TabsTrigger>
-            <TabsTrigger value="models">
-              <BoxIcon className="size-3.5" />
-              Models
-            </TabsTrigger>
-          </TabsList>
+          <div className="shrink-0 px-7">
+            <TabsList>
+              <TabsTrigger value="general">
+                <SettingsIcon className="size-3.5" />
+                General
+              </TabsTrigger>
+              <TabsTrigger value="environment">
+                <BracesIcon className="size-3.5" />
+                Environment variables
+              </TabsTrigger>
+              <TabsTrigger value="configuration">
+                <SlidersHorizontalIcon className="size-3.5" />
+                Configuration
+              </TabsTrigger>
+              <TabsTrigger value="models">
+                <BoxIcon className="size-3.5" />
+                Models
+              </TabsTrigger>
+            </TabsList>
+          </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-7 pb-5">
-            <TabsContent value="general" className="space-y-5">
-              <div className="grid grid-cols-2 gap-4">
-                <label className="space-y-2 text-xs">
-                  Display name
-                  <Input
-                    placeholder={definition?.label}
-                    value={draft.displayName ?? ""}
-                    onChange={(event) => setDraft({ ...draft, displayName: event.target.value })}
-                  />
-                </label>
-                <label className="space-y-2 text-xs">
-                  Instance ID
-                  <Input value={instanceId} disabled />
-                  <span className="text-[11px] text-muted-foreground">
-                    Routing identity cannot change.
-                  </span>
-                </label>
-              </div>
-              <div className="space-y-2">
-                <div className="text-xs">Accent colour</div>
-                <div className="flex gap-2">
-                  {COLORS.map((color) => (
-                    <button
-                      key={color}
-                      aria-label={`Accent ${color}`}
-                      aria-pressed={draft.accentColor === color}
-                      onClick={() => setDraft({ ...draft, accentColor: color })}
-                      className="size-5 rounded-full ring-offset-2 aria-pressed:ring-2 aria-pressed:ring-ring"
-                      style={{ backgroundColor: color }}
+            <TabsContent value="general">
+              <div className="space-y-5">
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="space-y-2 text-xs">
+                    Display name
+                    <Input
+                      placeholder={definition?.label}
+                      value={draft.displayName ?? ""}
+                      onChange={(event) => setDraft({ ...draft, displayName: event.target.value })}
                     />
-                  ))}
+                  </label>
+                  <label className="space-y-2 text-xs">
+                    Instance ID
+                    <Input value={instanceId} disabled />
+                    <span className="text-2xs text-muted-foreground">
+                      Routing identity cannot change.
+                    </span>
+                  </label>
                 </div>
-              </div>
-              <label className="block space-y-2 text-xs">
-                Failover group
-                <Input
-                  placeholder="Ungrouped — never switch automatically"
-                  value={failoverGroup}
-                  onChange={(event) => setFailoverGroup(event.target.value)}
-                />
-                <span className="text-[11px] text-muted-foreground">
-                  Only instances using the same provider can share a group.
-                </span>
-              </label>
-              <div className="flex items-center justify-between rounded-lg border bg-muted/30 p-3">
-                <div>
-                  <div className="text-xs font-medium">Provider enabled</div>
-                  <div className="text-[11px] text-muted-foreground">
-                    Available for new sessions and model selection.
+                <div className="space-y-2">
+                  <div className="text-xs">Accent colour</div>
+                  <div className="flex gap-2">
+                    {COLORS.map((color) => (
+                      <button
+                        key={color}
+                        aria-label={`Accent ${color}`}
+                        aria-pressed={draft.accentColor === color}
+                        onClick={() => setDraft({ ...draft, accentColor: color })}
+                        className="size-5 rounded-full ring-offset-2 aria-pressed:ring-2 aria-pressed:ring-ring"
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
                   </div>
                 </div>
-                <Switch
-                  aria-label="Provider enabled"
-                  checked={resolveProviderInstanceEnabled(draft)}
-                  onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
-                />
+                <label className="block space-y-2 text-xs">
+                  Failover group
+                  <Input
+                    placeholder="Ungrouped — never switch automatically"
+                    value={failoverGroup}
+                    onChange={(event) => setFailoverGroup(event.target.value)}
+                  />
+                  <span className="text-2xs text-muted-foreground">
+                    Only instances using the same provider can share a group.
+                  </span>
+                </label>
+                <div className="flex items-center justify-between rounded-lg border bg-muted/30 p-3">
+                  <div>
+                    <div className="text-xs font-medium">Provider enabled</div>
+                    <div className="text-2xs text-muted-foreground">
+                      Available for new sessions and model selection.
+                    </div>
+                  </div>
+                  <Switch
+                    aria-label="Provider enabled"
+                    checked={resolveProviderInstanceEnabled(draft)}
+                    onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
+                  />
+                </div>
               </div>
             </TabsContent>
-            <TabsContent value="environment" className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-medium">Environment variables</h3>
-                  <p className="text-[11px] text-muted-foreground">
-                    Pass API keys, URLs and per-instance CLI settings.
-                  </p>
+            <TabsContent value="environment">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-medium">Environment variables</h3>
+                    <p className="text-2xs text-muted-foreground">
+                      Pass API keys, URLs and per-instance CLI settings.
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      setVariables([
+                        ...variables,
+                        { rowId: nextVariableId.current++, name: "", value: "", sensitive: true },
+                      ])
+                    }
+                  >
+                    <PlusIcon />
+                    Add variable
+                  </Button>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    setVariables([
-                      ...variables,
-                      { rowId: nextVariableId.current++, name: "", value: "", sensitive: true },
-                    ])
-                  }
-                >
-                  <PlusIcon />
-                  Add variable
-                </Button>
+                {variables.map((variable, index) => (
+                  <div
+                    key={variable.rowId}
+                    className="grid grid-cols-[1fr_1.3fr_28px_28px] items-center gap-2"
+                  >
+                    <Input
+                      aria-label={`Variable ${index + 1} name`}
+                      value={variable.name}
+                      onChange={(event) =>
+                        setVariables(
+                          variables.map((entry) =>
+                            entry.rowId === variable.rowId
+                              ? { ...entry, name: event.target.value }
+                              : entry,
+                          ),
+                        )
+                      }
+                    />
+                    <Input
+                      aria-label={`Variable ${index + 1} value`}
+                      type={variable.sensitive ? "password" : "text"}
+                      placeholder={variable.valueRedacted ? "Stored secret · unchanged" : "Value"}
+                      value={variable.valueRedacted ? "" : variable.value}
+                      onChange={(event) =>
+                        setVariables(
+                          variables.map((entry) =>
+                            entry.rowId === variable.rowId
+                              ? { ...entry, value: event.target.value, valueRedacted: false }
+                              : entry,
+                          ),
+                        )
+                      }
+                    />
+                    <button
+                      aria-label={`Toggle secret ${index + 1}`}
+                      aria-pressed={variable.sensitive}
+                      onClick={() =>
+                        setVariables(
+                          variables.map((entry) =>
+                            entry.rowId === variable.rowId
+                              ? { ...entry, sensitive: !entry.sensitive }
+                              : entry,
+                          ),
+                        )
+                      }
+                    >
+                      {variable.sensitive ? (
+                        <EyeOffIcon className="size-4" />
+                      ) : (
+                        <EyeIcon className="size-4" />
+                      )}
+                    </button>
+                    <button
+                      aria-label={`Remove variable ${index + 1}`}
+                      onClick={() =>
+                        setVariables(variables.filter((entry) => entry.rowId !== variable.rowId))
+                      }
+                    >
+                      <TrashIcon className="size-4" />
+                    </button>
+                  </div>
+                ))}
+                <p className="text-2xs text-muted-foreground">
+                  Sensitive values are stored securely and redacted when read back.
+                </p>
               </div>
-              {variables.map((variable, index) => (
-                <div
-                  key={variable.rowId}
-                  className="grid grid-cols-[1fr_1.3fr_28px_28px] items-center gap-2"
-                >
-                  <Input
-                    aria-label={`Variable ${index + 1} name`}
-                    value={variable.name}
-                    onChange={(event) =>
-                      setVariables(
-                        variables.map((entry) =>
-                          entry.rowId === variable.rowId
-                            ? { ...entry, name: event.target.value }
-                            : entry,
-                        ),
-                      )
-                    }
-                  />
-                  <Input
-                    aria-label={`Variable ${index + 1} value`}
-                    type={variable.sensitive ? "password" : "text"}
-                    placeholder={variable.valueRedacted ? "Stored secret · unchanged" : "Value"}
-                    value={variable.valueRedacted ? "" : variable.value}
-                    onChange={(event) =>
-                      setVariables(
-                        variables.map((entry) =>
-                          entry.rowId === variable.rowId
-                            ? { ...entry, value: event.target.value, valueRedacted: false }
-                            : entry,
-                        ),
-                      )
-                    }
-                  />
-                  <button
-                    aria-label={`Toggle secret ${index + 1}`}
-                    aria-pressed={variable.sensitive}
-                    onClick={() =>
-                      setVariables(
-                        variables.map((entry) =>
-                          entry.rowId === variable.rowId
-                            ? { ...entry, sensitive: !entry.sensitive }
-                            : entry,
-                        ),
-                      )
-                    }
-                  >
-                    {variable.sensitive ? (
-                      <EyeOffIcon className="size-4" />
-                    ) : (
-                      <EyeIcon className="size-4" />
-                    )}
-                  </button>
-                  <button
-                    aria-label={`Remove variable ${index + 1}`}
-                    onClick={() =>
-                      setVariables(variables.filter((entry) => entry.rowId !== variable.rowId))
-                    }
-                  >
-                    <TrashIcon className="size-4" />
-                  </button>
-                </div>
-              ))}
-              <p className="text-[11px] text-muted-foreground">
-                Sensitive values are stored securely and redacted when read back.
-              </p>
             </TabsContent>
             <TabsContent value="configuration">
               {definition ? (
@@ -377,109 +386,114 @@ export function UsageProviderDialog({
                 <p className="text-sm">This provider uses settings from a newer runtime.</p>
               )}
             </TabsContent>
-            <TabsContent value="models" className="space-y-3">
-              <div>
-                <h3 className="text-sm font-medium">Models</h3>
-                <p className="text-[11px] text-muted-foreground">
-                  Choose favourites, visibility and model order.
-                </p>
-              </div>
-              {models.map((model, index) => (
-                <div key={model.slug} className="flex items-center gap-2 border-b py-2 text-xs">
-                  <span className="min-w-0 flex-1 truncate">{model.name}</span>
-                  <button
-                    aria-label={`Favourite ${model.name}`}
-                    aria-pressed={favorites.includes(model.slug)}
-                    onClick={() => setFavorites(toggle(favorites, model.slug))}
-                  >
-                    <StarIcon
-                      className="size-3.5"
-                      fill={favorites.includes(model.slug) ? "currentColor" : "none"}
-                    />
-                  </button>
-                  <button
-                    aria-label={`Move ${model.name} up`}
-                    disabled={index === 0}
-                    onClick={() => {
-                      const next = models.map((m) => m.slug);
-                      [next[index - 1], next[index]] = [next[index]!, next[index - 1]!];
-                      setOrder(next);
-                    }}
-                  >
-                    <ArrowUpIcon className="size-3.5" />
-                  </button>
-                  <button
-                    aria-label={`Move ${model.name} down`}
-                    disabled={index === models.length - 1}
-                    onClick={() => {
-                      const next = models.map((m) => m.slug);
-                      [next[index + 1], next[index]] = [next[index]!, next[index + 1]!];
-                      setOrder(next);
-                    }}
-                  >
-                    <ArrowDownIcon className="size-3.5" />
-                  </button>
-                  <button
-                    aria-label={`${hidden.includes(model.slug) ? "Show" : "Hide"} ${model.name}`}
-                    onClick={() => setHidden(toggle(hidden, model.slug))}
-                  >
-                    {hidden.includes(model.slug) ? (
-                      <EyeOffIcon className="size-3.5" />
-                    ) : (
-                      <EyeIcon className="size-3.5" />
-                    )}
-                  </button>
-                  {model.isCustom && (
-                    <button
-                      aria-label={`Remove ${model.name}`}
-                      onClick={() =>
-                        setDraft({
-                          ...draft,
-                          config: {
-                            ...config,
-                            customModels: customModels.filter((entry) => entry.slug !== model.slug),
-                          },
-                        })
-                      }
-                    >
-                      <TrashIcon className="size-3.5" />
-                    </button>
-                  )}
+            <TabsContent value="models">
+              <div className="space-y-3">
+                <div>
+                  <h3 className="text-sm font-medium">Models</h3>
+                  <p className="text-2xs text-muted-foreground">
+                    Choose favourites, visibility and model order.
+                  </p>
                 </div>
-              ))}
-              <div className="flex gap-2">
-                <Input
-                  aria-label="Custom model ID"
-                  placeholder="Custom model ID"
-                  value={customModel}
-                  onChange={(event) => setCustomModel(event.target.value)}
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={
-                    !customModel.trim() || models.some((model) => model.slug === customModel.trim())
-                  }
-                  onClick={() => {
-                    setDraft({
-                      ...draft,
-                      config: {
-                        ...config,
-                        customModels: [
-                          ...customModels,
-                          {
-                            slug: customModel.trim(),
-                            name: customModel.trim(),
-                            capabilities: null,
-                          },
-                        ],
-                      },
-                    });
-                    setCustomModel("");
-                  }}
-                >
-                  Add model
-                </Button>
+                {models.map((model, index) => (
+                  <div key={model.slug} className="flex items-center gap-2 border-b py-2 text-xs">
+                    <span className="min-w-0 flex-1 truncate">{model.name}</span>
+                    <button
+                      aria-label={`Favourite ${model.name}`}
+                      aria-pressed={favorites.includes(model.slug)}
+                      onClick={() => setFavorites(toggle(favorites, model.slug))}
+                    >
+                      <StarIcon
+                        className="size-3.5"
+                        fill={favorites.includes(model.slug) ? "currentColor" : "none"}
+                      />
+                    </button>
+                    <button
+                      aria-label={`Move ${model.name} up`}
+                      disabled={index === 0}
+                      onClick={() => {
+                        const next = models.map((m) => m.slug);
+                        [next[index - 1], next[index]] = [next[index]!, next[index - 1]!];
+                        setOrder(next);
+                      }}
+                    >
+                      <ArrowUpIcon className="size-3.5" />
+                    </button>
+                    <button
+                      aria-label={`Move ${model.name} down`}
+                      disabled={index === models.length - 1}
+                      onClick={() => {
+                        const next = models.map((m) => m.slug);
+                        [next[index + 1], next[index]] = [next[index]!, next[index + 1]!];
+                        setOrder(next);
+                      }}
+                    >
+                      <ArrowDownIcon className="size-3.5" />
+                    </button>
+                    <button
+                      aria-label={`${hidden.includes(model.slug) ? "Show" : "Hide"} ${model.name}`}
+                      onClick={() => setHidden(toggle(hidden, model.slug))}
+                    >
+                      {hidden.includes(model.slug) ? (
+                        <EyeOffIcon className="size-3.5" />
+                      ) : (
+                        <EyeIcon className="size-3.5" />
+                      )}
+                    </button>
+                    {model.isCustom && (
+                      <button
+                        aria-label={`Remove ${model.name}`}
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            config: {
+                              ...config,
+                              customModels: customModels.filter(
+                                (entry) => entry.slug !== model.slug,
+                              ),
+                            },
+                          })
+                        }
+                      >
+                        <TrashIcon className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <div className="flex gap-2">
+                  <Input
+                    aria-label="Custom model ID"
+                    placeholder="Custom model ID"
+                    value={customModel}
+                    onChange={(event) => setCustomModel(event.target.value)}
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      !customModel.trim() ||
+                      models.some((model) => model.slug === customModel.trim())
+                    }
+                    onClick={() => {
+                      setDraft({
+                        ...draft,
+                        config: {
+                          ...config,
+                          customModels: [
+                            ...customModels,
+                            {
+                              slug: customModel.trim(),
+                              name: customModel.trim(),
+                              capabilities: null,
+                            },
+                          ],
+                        },
+                      });
+                      setCustomModel("");
+                    }}
+                  >
+                    Add model
+                  </Button>
+                </div>
               </div>
             </TabsContent>
           </div>
@@ -487,21 +501,23 @@ export function UsageProviderDialog({
         <div role="status" className="min-h-6 px-7 text-xs text-destructive">
           {error}
         </div>
-        <DialogFooter variant="bare" className="h-16 shrink-0 items-center border-t px-7">
-          <span className="mr-auto text-[11px] text-muted-foreground">
-            Unsaved changes apply across all tabs.
-          </span>
-          <Button size="sm" variant="outline" disabled={saving} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            disabled={saving || !saved || environment?.connection.phase !== "connected"}
-            onClick={() => void save()}
-          >
-            {saving ? "Saving…" : "Save changes"}
-          </Button>
-        </DialogFooter>
+        <div className="shrink-0 border-t border-border px-1">
+          <DialogFooter variant="bare" className="h-16 items-center">
+            <span className="mr-auto text-2xs text-muted-foreground">
+              Unsaved changes apply across all tabs.
+            </span>
+            <Button size="sm" variant="outline" disabled={saving} onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={saving || !saved || environment?.connection.phase !== "connected"}
+              onClick={() => void save()}
+            >
+              {saving ? "Saving…" : "Save changes"}
+            </Button>
+          </DialogFooter>
+        </div>
       </div>
     </DialogPopup>
   );

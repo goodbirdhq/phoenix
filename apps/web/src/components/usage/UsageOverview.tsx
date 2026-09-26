@@ -57,18 +57,18 @@ export function UsageTotals({
     <section
       aria-label="Usage totals"
       aria-busy={pending}
-      className="grid min-h-[113px] grid-cols-1 gap-8 border-b border-border pb-[22px] sm:grid-cols-[1fr_1fr_0.7fr]"
+      className="grid min-h-[113px] grid-cols-1 gap-8 border-b border-border pb-5.5 sm:grid-cols-[1fr_1fr_0.7fr]"
     >
       {metrics.map(({ label, value, detail, Icon }) => (
-        <div key={label} className="flex min-w-0 flex-col gap-[7px]">
-          <span className="flex items-center gap-[7px] text-[13px] leading-4 text-muted-foreground">
+        <div key={label} className="flex min-w-0 flex-col gap-1.75">
+          <span className="flex items-center gap-1.75 text-xs leading-4 text-muted-foreground">
             <Icon className="size-3.5" />
             {label}
           </span>
-          <div className="h-11 text-[36px] leading-[44px] font-semibold tracking-[-0.035em] tabular-nums">
+          <div className="h-11 text-4xl leading-11 font-semibold tracking-tight tabular-nums">
             {pending ? <div className="my-1 h-9 w-36 rounded bg-border" /> : value}
           </div>
-          <span className="text-[11px] leading-4 text-muted-foreground">
+          <span className="text-2xs leading-4 text-muted-foreground">
             {pending ? <span className="block h-3 w-44 rounded-sm bg-border" /> : detail}
           </span>
         </div>
@@ -153,7 +153,7 @@ export function UsageOverview({
             <h2 className="text-sm leading-5 font-semibold">
               {periods[0]?.includes("T") ? "Hourly" : "Daily"} usage{models ? " by model" : ""}
             </h2>
-            <p className="text-[11px] leading-4 text-muted-foreground">
+            <p className="text-2xs leading-4 text-muted-foreground">
               {periods.length
                 ? `${formatPeriod(periods[0]!, timeZone)} – ${formatPeriod(periods.at(-1)!, timeZone)}`
                 : "Selected period"}
@@ -163,7 +163,7 @@ export function UsageOverview({
             <UsageMetricToggle metric={metric} onChange={onMetricChange} />
             {allAccounts && !models && (
               <>
-                <span className="text-[11px] text-muted-foreground">Group by</span>
+                <span className="text-2xs text-muted-foreground">Group by</span>
                 <ToggleGroup
                   aria-label="Chart breakdown"
                   variant="segmented"
@@ -224,7 +224,7 @@ export function UsageOverview({
               <col className="w-[16%]" />
             </colgroup>
             <thead>
-              <tr className="h-[31px] border-b text-left text-[11px] text-muted-foreground">
+              <tr className="h-[31px] border-b text-left text-2xs text-muted-foreground">
                 <th className="font-medium">
                   {models ? "Model" : grouping === "account" ? "By account" : "By provider"}
                 </th>
@@ -271,7 +271,7 @@ export function UsageOverview({
                             {grouping === "provider" ? label : row.label}
                           </span>
                           {grouping === "provider" && (
-                            <span className="text-[10px] text-muted-foreground">
+                            <span className="text-3xs text-muted-foreground">
                               {(() => {
                                 const count = accounts.filter(
                                   (account) =>

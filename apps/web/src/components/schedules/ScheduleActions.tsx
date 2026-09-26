@@ -125,7 +125,7 @@ export function ScheduleActions({
     return row.state === "enabled" || row.state === "paused" ? (
       <Button
         variant="outline"
-        className="schedule-control"
+        data-schedule-control=""
         disabled={busy || !permission.allowed}
         onClick={() => void mutate(row.state === "paused" ? "schedule.resume" : "schedule.pause")}
       >
@@ -136,7 +136,7 @@ export function ScheduleActions({
         {row.state === "failed" && (
           <Button
             variant="outline"
-            className="schedule-control"
+            data-schedule-control=""
             disabled={busy || !permission.allowed}
             onClick={() => void mutate("schedule.run-now")}
           >
@@ -145,7 +145,7 @@ export function ScheduleActions({
         )}
         <Button
           variant="outline"
-          className="schedule-control"
+          data-schedule-control=""
           disabled={busy || !permission.allowed}
           onClick={() => openEditor(false)}
         >
@@ -161,9 +161,9 @@ export function ScheduleActions({
         }
       >
         <Button
-          variant="outline"
-          size={compact ? "icon" : "default"}
-          className={compact ? "size-6 border-0 bg-transparent shadow-none" : "schedule-control"}
+          variant={compact ? "ghost" : "outline"}
+          size={compact ? "icon-xs" : "default"}
+          data-schedule-control={compact ? undefined : ""}
           aria-label={`Run ${row.name} now`}
           disabled={busy || !permission.allowed}
           onClick={() => void mutate("schedule.run-now")}
@@ -173,7 +173,7 @@ export function ScheduleActions({
         {!compact && (
           <Button
             variant="outline"
-            className="schedule-control"
+            data-schedule-control=""
             disabled={busy || !permission.allowed}
             onClick={() => openEditor(false)}
           >
@@ -184,11 +184,9 @@ export function ScheduleActions({
           <MenuTrigger
             render={
               <Button
-                variant="outline"
-                size={compact ? "icon" : "default"}
-                className={
-                  compact ? "size-6 border-0 bg-transparent shadow-none" : "schedule-control gap-1"
-                }
+                variant={compact ? "ghost" : "outline"}
+                size={compact ? "icon-xs" : "default"}
+                data-schedule-control={compact ? undefined : ""}
                 aria-label={`More actions for ${row.name}`}
               />
             }
@@ -196,9 +194,9 @@ export function ScheduleActions({
             {compact ? (
               <MoreHorizontalIcon className="size-4" />
             ) : (
-              <>
+              <span className="flex items-center gap-1">
                 More <ChevronDownIcon className="size-2.5" />
-              </>
+              </span>
             )}
           </MenuTrigger>
           <MenuPopup align="end" className="w-56">
@@ -252,7 +250,11 @@ export function ScheduleActions({
           if (!busy) setDeleting(open);
         }}
       >
-        <AlertDialogPopup className="schedule-surface schedule-delete rounded-[14px] sm:max-w-[430px]">
+        <AlertDialogPopup
+          data-schedule-surface=""
+          data-schedule-delete=""
+          className="sm:max-w-[430px]"
+        >
           <AlertDialogHeader>
             <span className="mb-3 flex size-[38px] items-center justify-center rounded-lg bg-destructive/5 text-destructive">
               <Trash2Icon className="size-4" />

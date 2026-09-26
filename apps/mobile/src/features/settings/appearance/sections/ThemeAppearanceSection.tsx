@@ -18,7 +18,6 @@ import {
 import { getMobileUniwindThemeName } from "../../../../lib/mobileThemeRuntime";
 import { cn } from "../../../../lib/cn";
 import { useAppearancePreferences } from "../AppearancePreferencesProvider";
-
 import { SettingsSection } from "../../components/SettingsSection";
 import { SettingsSwitchRow } from "../../components/SettingsSwitchRow";
 
@@ -154,7 +153,7 @@ function ThemeCard(props: {
   );
 
   return (
-    <View className="min-w-36 flex-1 basis-[47%] gap-3 rounded-[24px] border border-border bg-card px-2 py-4">
+    <View className="min-w-36 flex-1 basis-[47%] gap-3 rounded-[24px] border border-border bg-grouped-card px-2 py-4">
       <Pressable
         accessibilityHint="Sets both light and dark appearances"
         accessibilityLabel={`${props.label} theme`}
@@ -262,7 +261,9 @@ function ModeCard(props: {
       accessibilityState={{ checked: props.selected, disabled: props.disabled }}
       className={cn(
         "min-w-0 flex-1 gap-2 rounded-[24px] p-2 active:scale-[0.97]",
-        props.selected ? "border-2 border-primary bg-subtle" : "border border-border bg-card",
+        props.selected
+          ? "border-2 border-primary bg-subtle"
+          : "border border-border bg-grouped-card",
       )}
       disabled={props.disabled}
       onPress={props.onPress}
@@ -293,25 +294,13 @@ export function ThemeAppearanceSection() {
     setThemeMode,
     themeIds,
     themeMode,
+    systemColorsAvailable,
     materialYouStyleLayoutEnabled,
     setMaterialYouStyleLayoutEnabled,
-    systemColorsAvailable,
   } = useAppearancePreferences();
 
   return (
     <View className="gap-6">
-      {Platform.OS === "android" ? (
-        <SettingsSection card title="Android">
-          <SettingsSwitchRow
-            disabled={!isReady}
-            icon="square.grid.2x2"
-            label="Material You Layout"
-            onValueChange={setMaterialYouStyleLayoutEnabled}
-            subtitle="Use Material You surfaces, shapes, and component styling."
-            value={materialYouStyleLayoutEnabled}
-          />
-        </SettingsSection>
-      ) : null}
       <View className="gap-2">
         <SectionLabel>Color scheme</SectionLabel>
         <View accessibilityRole="radiogroup" className="flex-row gap-2">
@@ -348,6 +337,19 @@ export function ThemeAppearanceSection() {
           ))}
         </View>
       </View>
+
+      {Platform.OS === "android" ? (
+        <SettingsSection title="Android">
+          <SettingsSwitchRow
+            disabled={!isReady}
+            icon="square.grid.2x2"
+            label="Material You Layout"
+            onValueChange={setMaterialYouStyleLayoutEnabled}
+            subtitle="Use Material You surfaces, shapes, and component styling."
+            value={materialYouStyleLayoutEnabled}
+          />
+        </SettingsSection>
+      ) : null}
     </View>
   );
 }

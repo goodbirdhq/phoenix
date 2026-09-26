@@ -123,12 +123,12 @@ const SessionRow = memo(function SessionRow({
       <span className="col-start-2 row-start-1 flex min-w-0 items-baseline gap-2">
         <span className="min-w-0 truncate text-sm font-medium">{entry.title}</span>
         {entry.lifecycle !== "active" ? (
-          <span className="shrink-0 rounded-sm border border-border/60 px-1 font-mono text-[.65rem] text-muted-foreground">
+          <span className="shrink-0 rounded-sm border border-border/60 px-1 font-mono text-3xs text-muted-foreground">
             {entry.lifecycle}
           </span>
         ) : null}
       </span>
-      <span className="col-start-3 row-start-1 flex min-w-14 items-center justify-end gap-1 text-right font-mono text-[.7rem] text-muted-foreground/80">
+      <span className="col-start-3 row-start-1 flex min-w-14 items-center justify-end gap-1 text-right font-mono text-2xs text-muted-foreground/80">
         <span className="tabular-nums">{formatRelativeTimeLabel(entry.lastActivityAt)}</span>
         <ChevronRight
           aria-hidden
@@ -147,7 +147,7 @@ const SessionRow = memo(function SessionRow({
       >
         {activityText(entry)}
       </span>
-      <span className="col-start-2 col-end-4 row-start-3 flex min-w-0 items-center gap-1.5 font-mono text-[.7rem] text-muted-foreground/70">
+      <span className="col-start-2 col-end-4 row-start-3 flex min-w-0 items-center gap-1.5 font-mono text-2xs text-muted-foreground/70">
         <span className="min-w-0 truncate">{metadata.join(" · ")}</span>
         {entry.branch ? (
           <>
@@ -175,7 +175,7 @@ function SessionSection({
   if (entries.length === 0) return null;
   return (
     <section>
-      <div className="flex items-center gap-2 px-1.5 pt-1 pb-0.5 text-[.65rem] font-medium tracking-wider text-muted-foreground uppercase">
+      <div className="flex items-center gap-2 px-1.5 pt-1 pb-0.5 text-3xs font-medium tracking-wider text-muted-foreground uppercase">
         <span>{title}</span>
         <span className="font-normal text-muted-foreground/70 normal-case">{count}</span>
       </div>
@@ -242,7 +242,7 @@ export function SessionsPanel({
           />
         </div>
       </ScrollArea>
-      <footer className="flex items-center justify-between border-t border-border/60 px-3 py-1.5 font-mono text-[.7rem] text-muted-foreground">
+      <footer className="flex items-center justify-between border-t border-border/60 px-3 py-1.5 font-mono text-2xs text-muted-foreground">
         <span className="flex items-center gap-2">
           {model.needsAttentionCount > 0 ? (
             <span className="text-warning-foreground">● {model.needsAttentionCount} needs you</span>

@@ -1250,7 +1250,7 @@ layer("ScheduleService", (it) => {
 
   it.effect("fails visibly when the target Project is deleted before the due time", () =>
     Effect.gen(function* () {
-      const projects = yield* ProjectionProjectRepository;
+      const sql = yield* SqlClient.SqlClient;
       const schedules = yield* ScheduleService;
       const launches = yield* RecordedLaunches;
       yield* seedProject;
@@ -1267,7 +1267,7 @@ layer("ScheduleService", (it) => {
         execution,
         state: "enabled",
       });
-      yield* projects.deleteById({ projectId });
+      yield* sql`DELETE FROM projection_projects WHERE project_id = ${projectId}`;
       yield* TestClock.adjust(Duration.minutes(5));
       yield* schedules.drainDue;
 

@@ -151,7 +151,7 @@ export function SchedulesSidebar() {
           >
             <ListFilterIcon className="size-4" />
             {count > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 rounded-full bg-foreground px-1 text-[9px] text-background">
+              <span className="absolute -top-0.5 -right-0.5 rounded-full bg-foreground px-1 text-3xs text-background">
                 {count}
               </span>
             )}
@@ -207,7 +207,7 @@ export function SchedulesSidebar() {
         </Menu>
         <Button
           size="icon"
-          className="size-8 bg-sky-600 text-white hover:bg-sky-700"
+          className="size-8"
           aria-label="Create schedule"
           onClick={() => {
             void navigate({ to: "/schedules", search: { create: randomUUID() } });
@@ -217,7 +217,7 @@ export function SchedulesSidebar() {
           <PlusIcon className="size-[18px]" />
         </Button>
       </div>
-      <SidebarContent className="schedule-sidebar">
+      <SidebarContent data-schedule-sidebar="">
         <div className="flex flex-col gap-0.5 px-2.5 py-2">
           {!isReady && (
             <p role="status" className="p-3 text-sm text-muted-foreground">
@@ -402,7 +402,7 @@ function ScheduleSidebarRow({
     <div
       className={cn(
         "group/schedule relative rounded-lg border border-transparent",
-        selected ? "border-sidebar-border bg-background" : "hover:bg-sidebar-accent",
+        selected ? "border-sidebar-border bg-background" : "hover:bg-sidebar-row-hover",
       )}
     >
       <Tooltip open={preview} onOpenChange={setPreview}>
@@ -448,7 +448,7 @@ function ScheduleSidebarRow({
             </span>
             <span
               className={cn(
-                "flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground",
+                "flex min-w-0 items-center gap-1 text-2xs text-muted-foreground",
                 row.state === "failed" && "text-destructive",
               )}
             >
@@ -468,7 +468,7 @@ function ScheduleSidebarRow({
               </span>
             </span>
           </span>
-          <span className="flex w-[46px] shrink-0 self-stretch flex-col items-end text-right text-[11px] leading-4 text-muted-foreground">
+          <span className="flex w-[46px] shrink-0 self-stretch flex-col items-end text-right text-2xs leading-4 text-muted-foreground">
             <span>
               {!row.online
                 ? "Offline"
@@ -508,20 +508,25 @@ function ScheduleSidebarRow({
             )}
           </span>
         </TooltipTrigger>
-        <TooltipPopup side="right" className="w-80 space-y-3 p-5">
-          <p className="font-medium">{row.name}</p>
-          <p className="text-xs text-muted-foreground">
-            {project?.title ?? "Missing project"} · {row.environmentLabel} · {title(row.state)}
-          </p>
-          <p className="line-clamp-5 whitespace-pre-wrap text-sm">
-            {detail.data?.prompt ?? detail.error ?? "Loading prompt…"}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {describeScheduleCadence(row.timing, row.timeZone)} · {row.timeZone}
-          </p>
+        <TooltipPopup side="right" className="w-80">
+          <div className="space-y-3 p-5">
+            <p className="font-medium">{row.name}</p>
+            <p className="text-xs text-muted-foreground">
+              {project?.title ?? "Missing project"} · {row.environmentLabel} · {title(row.state)}
+            </p>
+            <p className="line-clamp-5 whitespace-pre-wrap text-sm">
+              {detail.data?.prompt ?? detail.error ?? "Loading prompt…"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {describeScheduleCadence(row.timing, row.timeZone)} · {row.timeZone}
+            </p>
+          </div>
         </TooltipPopup>
       </Tooltip>
-      <div className="schedule-row-actions absolute right-1 bottom-1 hidden group-hover/schedule:block group-focus-within/schedule:block">
+      <div
+        data-schedule-row-actions=""
+        className="absolute right-1 bottom-1 hidden group-hover/schedule:block group-focus-within/schedule:block"
+      >
         <ScheduleActions row={row} compact />
       </div>
     </div>

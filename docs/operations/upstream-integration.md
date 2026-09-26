@@ -132,6 +132,9 @@ Walk the overlapping-file queue after textual conflicts are gone. Pay particular
   real build or submission even when no workflow file conflicts.
 - Duplicate implementations of the same feature. Decide precedence and fallback behavior rather
   than shipping two accidental defaults.
+- `T3CODE_BASE_VERSION` in `apps/server/src/provider/providerCompatibility.ts`. Provider
+  compatibility policies key on upstream release numbers, not Phoenix's, so set it to the upstream
+  head's `apps/server/package.json` version on every sync.
 
 Search the staged delta for newly introduced upstream product identifiers, then classify each hit as
 runtime identity, deliberate source identity, test data, or attribution. The branding policy's source

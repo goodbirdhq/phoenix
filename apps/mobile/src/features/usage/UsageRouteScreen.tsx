@@ -1,5 +1,4 @@
 import { scopeAccountHistory } from "@t3tools/client-runtime/usage/account-history";
-import { SegmentedControl } from "../../components/SegmentedControl";
 import { UsageReport } from "./UsageReport";
 import {
   usageChartSeries,
@@ -7,7 +6,7 @@ import {
 } from "@t3tools/client-runtime/usage/chart-series";
 import { usageReportSeries } from "@t3tools/client-runtime/usage/report-chart-series";
 import { findUsageAccount, usageAccountMemberKey } from "@t3tools/client-runtime/usage/accounts";
-import { useNavigation } from "@react-navigation/native";
+import { type RouteProp, useIsFocused, useNavigation, useRoute } from "@react-navigation/native";
 import {
   deriveSubscriptionLimits,
   providerLimitSourceName,
@@ -35,14 +34,17 @@ import {
 } from "@t3tools/shared/usageFormat";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, RefreshControl, ScrollView, View } from "react-native";
+import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
+import { SegmentedControl } from "../../components/SegmentedControl";
 import { AppText as Text } from "../../components/AppText";
-import { cn } from "../../lib/cn";
-import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { cn } from "../../lib/cn";
+import { SettingsScreen } from "../settings/components/SettingsScreen";
+import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsSection } from "../settings/components/SettingsSection";
 import { LineAreaChart } from "../../components/charts/LineAreaChart";
 import type { UsageChartMetric } from "@t3tools/client-runtime/usage/chart-series";
@@ -53,12 +55,6 @@ import { UsageLimitsSection } from "./UsageLimitsPooled";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { PROVIDER_LABEL, useProviderColors } from "./usageProviders";
-
-type UsageTab = "usage" | "limits";
-const TAB_OPTIONS = [
-  { value: "usage", label: "Usage" },
-  { value: "limits", label: "Limits" },
-] as const satisfies readonly { value: UsageTab; label: string }[];
 
 // Labels are abbreviated to share a row with the metric toggle; screen
 // readers get the full phrase.
@@ -75,6 +71,7 @@ const METRIC_OPTIONS = [
 ] as const satisfies readonly { value: UsageChartMetric; label: string }[];
 
 const CHART_HEIGHT = 180;
+const CURSOR_KEYCHAIN_COPY = "Requires access to your Cursor login in macOS Keychain.";
 
 function UsageCoverageNotice(props: {
   readonly environments: readonly EnvironmentUsageStatus[];
@@ -99,17 +96,29 @@ function UsageCoverageNotice(props: {
  * pull to refresh, each refreshing its own data.
  */
 export function UsageRouteScreen() {
+  const route = useRoute<RouteProp<{ Usage: { tab?: string } | undefined }, "Usage">>();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  // Overview is the default; Limits stays a tap away, unless a widget or other
+  // explicit navigation link asks for it by name.
+  const [selection, setSelection] = useState(() => ({
+    params: route.params,
+    tab: route.params?.tab === "limits" ? "limits" : "overview",
+  }));
+  if (selection.params !== route.params) {
+    setSelection({
+      params: route.params,
+      tab: route.params?.tab === "limits" ? "limits" : "overview",
+    });
+  }
+  const { tab } = selection;
+  const setTab = (tab: string) => setSelection({ params: route.params, tab });
   const [windowSelection, setWindowSelection] = useState(() => ({
     days: 30,
     window: makeWindow(30),
   }));
   const [accountKey, setAccountKey] = useState<string | null>(null);
   const [environmentId, setEnvironmentId] = useState<string | null>(null);
-  // Overview is the default; Limits (live subscription quotas) stays a tap away.
-  const [mainTab, setMainTab] = useState<UsageTab>("usage");
-  const [tab, setTab] = useState("overview");
   const [grouping, setGrouping] = useState<UsageChartGrouping>("provider");
   const [threadByProvider, setThreadByProvider] = useState(false);
   const [revealed, setRevealed] = useState(false);
@@ -146,7 +155,8 @@ export function UsageRouteScreen() {
     accountScopedEnvironmentIds,
     accountKey,
   );
-  const limits = useRefreshLimits(selectedEnvironmentIds);
+  const isFocused = useIsFocused();
+  const limits = useRefreshLimits(selectedEnvironmentIds, isFocused && tab === "limits");
   const selectedAccount = findUsageAccount(accounts, accountKey);
   const hasMappedHistory = useMemo(
     () =>
@@ -202,6 +212,29 @@ export function UsageRouteScreen() {
       limit.availability.windows.some((window) => window.resetsAt !== undefined),
     ),
   );
+  const cursorAccessEnvironments = selectedEnvironments.filter(
+    (environment) => environment.needsCursorKeychainAccess,
+  );
+  const refreshAfterCursorEnable = () => {
+    void refresh();
+    void limits.refreshAfterEnable();
+  };
+  const sourceMessages = [
+    ...new Set(
+      selectedEnvironments.flatMap(
+        (environment) =>
+          environment.summary?.sources.flatMap((source) =>
+            source.message &&
+            !source.action &&
+            (source.status === "partial" ||
+              source.status === "failed" ||
+              source.fingerprint.provider === "cursor")
+              ? [source.message]
+              : [],
+          ) ?? [],
+      ),
+    ),
+  ];
 
   const days = useMemo(
     () => enumerateDays(window.sinceDay, window.untilDay),
@@ -379,17 +412,7 @@ export function UsageRouteScreen() {
   }, [navigation, environmentFilter]);
 
   return (
-    <View collapsable={false} className="flex-1 bg-sheet">
-      {Platform.OS === "android" ? (
-        <>
-          <NativeStackScreenOptions options={{ headerShown: false }} />
-          <AndroidScreenHeader
-            title="Usage"
-            onBack={() => navigation.goBack()}
-            trailing={environmentFilter}
-          />
-        </>
-      ) : null}
+    <SettingsScreen title="Usage" trailing={environmentFilter}>
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -494,190 +517,296 @@ export function UsageRouteScreen() {
           selected={tab}
           onSelect={setTab}
         />
-        {showingLimits ? (
-          <UsageLimitsSection
-            now={limits.now}
-            failedLabels={limits.failedLabels}
-            selectedEnvironmentIds={selectedEnvironmentIds}
-          />
-        ) : (
-          <>
-            <SegmentedControl
-              options={WINDOW_OPTIONS.map((option) => ({
-                value: option.value,
-                label: option.label,
-              }))}
-              selected={windowDays}
-              onSelect={selectWindow}
+        <Animated.View
+          key={tab}
+          entering={FadeIn.duration(160).reduceMotion(ReduceMotion.System)}
+          className="gap-6"
+        >
+          {showingLimits ? (
+            <UsageLimitsSection
+              now={limits.now}
+              failedLabels={limits.failedLabels}
+              selectedEnvironmentIds={selectedEnvironmentIds}
+              cursorPrompt={
+                cursorAccessEnvironments.length > 0 ? (
+                  <CursorEnableLimits
+                    environments={cursorAccessEnvironments}
+                    onEnabled={refreshAfterCursorEnable}
+                  />
+                ) : null
+              }
             />
-
-            <UsageCoverageNotice
-              environments={environments}
-              merged={merged}
-              isPartial={isPartial}
-            />
-
-            {selectedAccount && tab === "overview" && (
-              <SubscriptionLimitsSection
-                limits={subscriptionLimits}
-                isPending={isProviderAvailabilityPending}
-                hasError={hasProviderAvailabilityError}
-                nowMs={resetClockMs}
+          ) : (
+            <>
+              <SegmentedControl
+                options={WINDOW_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                }))}
+                selected={windowDays}
+                onSelect={selectWindow}
               />
-            )}
 
-            {isPending ||
-            (Boolean(accountKey) && !selectedAccount && isProviderAvailabilityPending) ? (
-              <Text className="py-16 text-center text-base text-foreground-muted">
-                Scanning provider transcripts…
-              </Text>
-            ) : environments.length === 0 ? (
-              <Text className="py-16 text-center text-base text-foreground-muted">
-                Connect an environment to see usage.
-              </Text>
-            ) : !hasMappedHistory && tab !== "environments" ? (
-              <Text className="py-8 text-sm text-foreground-muted">
-                No history can currently be assigned to this account in the selected environments.
-                Shared or unmapped history is available in All accounts.
-              </Text>
-            ) : (
-              <>
-                {tab === "environments" && selectedAccount ? (
-                  selectedAccount.memberships
-                    .filter(
-                      (member) => environmentId === null || member.environmentId === environmentId,
-                    )
-                    .map((member) => (
-                      <View
-                        key={usageAccountMemberKey(member)}
-                        className="gap-1 border-b border-border pb-3"
-                      >
-                        <Text className="font-t3-medium text-foreground">
-                          {member.environmentLabel}
+              <UsageCoverageNotice
+                environments={environments}
+                merged={merged}
+                isPartial={isPartial}
+              />
+
+              {merged.duplicateSources.length > 0 ? (
+                <Text className="text-sm text-foreground-muted">
+                  Counted once across environments sharing a transcript directory:{" "}
+                  {merged.duplicateSources.join(", ")}
+                </Text>
+              ) : null}
+
+              {selectedAccount && tab === "overview" && (
+                <SubscriptionLimitsSection
+                  limits={subscriptionLimits}
+                  isPending={isProviderAvailabilityPending}
+                  hasError={hasProviderAvailabilityError}
+                  nowMs={resetClockMs}
+                />
+              )}
+
+              {isPending ||
+              (Boolean(accountKey) && !selectedAccount && isProviderAvailabilityPending) ? (
+                <Text className="py-16 text-center text-base text-foreground-muted">
+                  Scanning provider transcripts…
+                </Text>
+              ) : environments.length === 0 ? (
+                <Text className="py-16 text-center text-base text-foreground-muted">
+                  Connect an environment to see usage.
+                </Text>
+              ) : !hasMappedHistory && tab !== "environments" ? (
+                <Text className="py-8 text-sm text-foreground-muted">
+                  No history can currently be assigned to this account in the selected environments.
+                  Shared or unmapped history is available in All accounts.
+                </Text>
+              ) : (
+                <>
+                  {sourceMessages.map((message) => (
+                    <Text key={message} className="text-sm text-foreground-muted">
+                      {message}
+                    </Text>
+                  ))}
+                  {tab === "environments" && selectedAccount ? (
+                    selectedAccount.memberships
+                      .filter(
+                        (member) =>
+                          environmentId === null || member.environmentId === environmentId,
+                      )
+                      .map((member) => (
+                        <View
+                          key={usageAccountMemberKey(member)}
+                          className="gap-1 border-b border-border pb-3"
+                        >
+                          <Text className="font-t3-medium text-foreground">
+                            {member.environmentLabel}
+                          </Text>
+                          <Text className="text-sm text-foreground-muted">
+                            {member.provider.version ?? "Version not reported"}
+                            {member.provider.versionAdvisory?.status === "behind_latest"
+                              ? " · Update available"
+                              : ""}
+                          </Text>
+                          <Text className="text-xs text-foreground-muted">
+                            {member.isConnected === false
+                              ? "Offline"
+                              : !member.provider.enabled
+                                ? "Disabled"
+                                : !member.provider.installed
+                                  ? "Not installed"
+                                  : member.provider.auth.status === "authenticated"
+                                    ? "Signed in"
+                                    : member.provider.auth.status === "unauthenticated"
+                                      ? "Signed out"
+                                      : "Unknown"}{" "}
+                            · {formatDateTimeShort(member.provider.checkedAt, window.timeZone)}
+                          </Text>
+                        </View>
+                      ))
+                  ) : (
+                    <>
+                      <View className="gap-1">
+                        <Text className="text-3xl font-t3-medium tabular-nums text-foreground">
+                          {metric === "cost"
+                            ? formatUsd(merged.costUsd)
+                            : formatTokens(merged.totalTokens)}
                         </Text>
                         <Text className="text-sm text-foreground-muted">
-                          {member.provider.version ?? "Version not reported"}
-                          {member.provider.versionAdvisory?.status === "behind_latest"
-                            ? " · Update available"
-                            : ""}
-                        </Text>
-                        <Text className="text-xs text-foreground-muted">
-                          {member.isConnected === false
-                            ? "Offline"
-                            : !member.provider.enabled
-                              ? "Disabled"
-                              : !member.provider.installed
-                                ? "Not installed"
-                                : member.provider.auth.status === "authenticated"
-                                  ? "Signed in"
-                                  : member.provider.auth.status === "unauthenticated"
-                                    ? "Signed out"
-                                    : "Unknown"}{" "}
-                          · {formatDateTimeShort(member.provider.checkedAt, window.timeZone)}
+                          {metric === "cost" ? "Estimated API cost" : "Processed tokens"} · selected
+                          period
                         </Text>
                       </View>
-                    ))
-                ) : (
-                  <>
-                    <View className="gap-1">
-                      <Text className="text-3xl font-t3-medium tabular-nums text-foreground">
-                        {metric === "cost"
-                          ? formatUsd(merged.costUsd)
-                          : formatTokens(merged.totalTokens)}
-                      </Text>
-                      <Text className="text-sm text-foreground-muted">
-                        {metric === "cost" ? "Estimated API cost" : "Processed tokens"} · selected
-                        period
-                      </Text>
-                    </View>
-                    <SegmentedControl
-                      options={[
-                        { value: "cost", label: "API cost" },
-                        { value: "tokens", label: "Tokens" },
-                      ]}
-                      selected={metric}
-                      onSelect={setMetric}
-                    />
-                    {tab === "overview" && (
                       <SegmentedControl
                         options={[
-                          { value: "provider", label: "Provider" },
-                          { value: "account", label: "Account" },
-                          { value: "environment", label: "Environment" },
+                          { value: "cost", label: "API cost" },
+                          { value: "tokens", label: "Tokens" },
                         ]}
-                        selected={grouping}
-                        onSelect={setGrouping}
+                        selected={metric}
+                        onSelect={setMetric}
                       />
-                    )}
-                    {tab === "threads" && (
-                      <>
-                        <Text className="text-base font-t3-medium text-foreground">
-                          Sessions created
+                      {tab === "overview" && (
+                        <SegmentedControl
+                          options={[
+                            { value: "provider", label: "Provider" },
+                            { value: "account", label: "Account" },
+                            { value: "environment", label: "Environment" },
+                          ]}
+                          selected={grouping}
+                          onSelect={setGrouping}
+                        />
+                      )}
+                      {tab === "threads" && (
+                        <>
+                          <Text className="text-base font-t3-medium text-foreground">
+                            Sessions created
+                          </Text>
+                          {!selectedAccount && (
+                            <SegmentedControl
+                              options={[
+                                { value: "total", label: "Total" },
+                                { value: "provider", label: "By provider" },
+                              ]}
+                              selected={threadByProvider ? "provider" : "total"}
+                              onSelect={(value) => setThreadByProvider(value === "provider")}
+                            />
+                          )}
+                        </>
+                      )}
+                      <LineAreaChart
+                        periods={chartDays}
+                        label={
+                          tab === "threads"
+                            ? "Sessions created"
+                            : metric === "cost"
+                              ? "API cost"
+                              : "Tokens"
+                        }
+                        height={CHART_HEIGHT}
+                        series={chartRows}
+                      />
+                      <View className="flex-row justify-between">
+                        <Text className="text-xs text-foreground-muted">
+                          {chartDays[0]?.slice(0, 16).replace("T", " ")}
                         </Text>
-                        {!selectedAccount && (
-                          <SegmentedControl
-                            options={[
-                              { value: "total", label: "Total" },
-                              { value: "provider", label: "By provider" },
-                            ]}
-                            selected={threadByProvider ? "provider" : "total"}
-                            onSelect={(value) => setThreadByProvider(value === "provider")}
+                        <Text className="text-xs text-foreground-muted">
+                          {chartDays.at(-1)?.slice(0, 16).replace("T", " ")}
+                        </Text>
+                      </View>
+                      {tab === "threads" && (
+                        <Text className="text-xs text-foreground-muted">
+                          Phoenix threads created, including those without token usage.
+                          {merged.threadCreationReporting === 0
+                            ? " Creation history is not available from these environments."
+                            : ""}
+                        </Text>
+                      )}
+                      <View className="flex-row flex-wrap gap-3">
+                        {chartRows.map((row) => (
+                          <Text key={row.id} className="text-xs text-foreground-muted">
+                            {row.label}
+                          </Text>
+                        ))}
+                      </View>
+                      {tab === "overview" && (
+                        <>
+                          <ProviderSection
+                            merged={merged}
+                            metric={metric}
+                            cursorAccessEnvironments={cursorAccessEnvironments}
+                            showCursorEnvironment={selectedEnvironments.length > 1}
+                            onCursorEnabled={refreshAfterCursorEnable}
                           />
-                        )}
-                      </>
-                    )}
-                    <LineAreaChart
-                      periods={chartDays}
-                      label={
-                        tab === "threads"
-                          ? "Sessions created"
-                          : metric === "cost"
-                            ? "API cost"
-                            : "Tokens"
-                      }
-                      height={CHART_HEIGHT}
-                      series={chartRows}
-                    />
-                    <View className="flex-row justify-between">
-                      <Text className="text-xs text-foreground-muted">
-                        {chartDays[0]?.slice(0, 16).replace("T", " ")}
-                      </Text>
-                      <Text className="text-xs text-foreground-muted">
-                        {chartDays.at(-1)?.slice(0, 16).replace("T", " ")}
-                      </Text>
-                    </View>
-                    {tab === "threads" && (
-                      <Text className="text-xs text-foreground-muted">
-                        Phoenix threads created, including those without token usage.
-                        {merged.threadCreationReporting === 0
-                          ? " Creation history is not available from these environments."
-                          : ""}
-                      </Text>
-                    )}
-                    <View className="flex-row flex-wrap gap-3">
-                      {chartRows.map((row) => (
-                        <Text key={row.id} className="text-xs text-foreground-muted">
-                          {row.label}
-                        </Text>
-                      ))}
-                    </View>
-                    {tab === "overview" && (
-                      <>
-                        <ProviderSection merged={merged} metric={metric} />
-                        <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
-                      </>
-                    )}
-                    {tab === "models" && <ModelsSection merged={merged} />}
-                    {(tab === "projects" || tab === "threads") && (
-                      <UsageReport key={tab} mode={tab} merged={merged} />
-                    )}
-                  </>
-                )}
-              </>
-            )}
-          </>
-        )}
+                          <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
+                        </>
+                      )}
+                      {tab === "models" && <ModelsSection merged={merged} />}
+                      {(tab === "projects" || tab === "threads") && (
+                        <UsageReport key={tab} mode={tab} merged={merged} />
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </Animated.View>
       </ScrollView>
+    </SettingsScreen>
+  );
+}
+
+function CursorEnableAction({
+  environmentId,
+  label,
+  onEnabled,
+  buttonText = "Enable",
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly onEnabled: () => void;
+  readonly buttonText?: string;
+}) {
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
+    label: "enable Cursor account usage",
+  });
+  const [pending, setPending] = useState(false);
+  const enable = async () => {
+    setPending(true);
+    try {
+      const result = await updateSettings({
+        environmentId,
+        input: { patch: { cursorKeychainUsageEnabled: true } },
+      });
+      if (result._tag === "Success") onEnabled();
+    } finally {
+      setPending(false);
+    }
+  };
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Enable Cursor usage from ${label}`}
+      accessibilityHint={CURSOR_KEYCHAIN_COPY}
+      disabled={pending}
+      onPress={() => void enable()}
+      className="rounded-full bg-primary px-4 py-2"
+    >
+      <Text className="text-sm font-medium text-primary-foreground">{buttonText}</Text>
+    </Pressable>
+  );
+}
+
+function CursorEnableRow({
+  environmentId,
+  label,
+  showEnvironment,
+  bordered,
+  onEnabled,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly showEnvironment: boolean;
+  readonly bordered: boolean;
+  readonly onEnabled: () => void;
+}) {
+  const colors = useProviderColors();
+  return (
+    <View
+      className={cn(
+        "flex-row items-center justify-between gap-3 p-4",
+        bordered && "border-t border-border-subtle",
+      )}
+    >
+      <View className="min-w-0 flex-1 flex-row items-center gap-2">
+        <View className="size-2.5 rounded-full" style={{ backgroundColor: colors.cursor }} />
+        <Text className="shrink text-lg text-foreground">
+          Cursor{showEnvironment ? ` · ${label}` : ""}
+        </Text>
+      </View>
+      <CursorEnableAction environmentId={environmentId} label={label} onEnabled={onEnabled} />
     </View>
   );
 }
@@ -694,6 +823,37 @@ function useMinuteClock(active: boolean): number {
   return nowMs;
 }
 
+function CursorEnableLimits({
+  environments,
+  onEnabled,
+}: {
+  readonly environments: readonly EnvironmentUsageStatus[];
+  readonly onEnabled: () => void;
+}) {
+  return (
+    <View className="gap-3">
+      <View className="flex-row items-center gap-2 px-1">
+        <ProviderIcon provider="cursor" size={18} />
+        <Text className="text-base font-t3-medium text-foreground">Cursor</Text>
+      </View>
+      <View className="items-start gap-3 rounded-[24px] border-continuous bg-card p-4">
+        <Text className="text-xs text-foreground-muted">{CURSOR_KEYCHAIN_COPY}</Text>
+        <View className="flex-row flex-wrap gap-2">
+          {environments.map((environment) => (
+            <CursorEnableAction
+              key={environment.environmentId}
+              environmentId={environment.environmentId}
+              label={environment.label}
+              buttonText={environments.length > 1 ? `Enable on ${environment.label}` : "Enable"}
+              onEnabled={onEnabled}
+            />
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function SubscriptionLimitsSection(props: {
   readonly limits: readonly SubscriptionLimit[];
   readonly isPending: boolean;
@@ -701,7 +861,7 @@ function SubscriptionLimitsSection(props: {
   readonly nowMs: number;
 }) {
   return (
-    <SettingsSection title="Subscription limits" card>
+    <SettingsSection title="Subscription limits">
       <View className="gap-1 px-4 pt-4">
         <Text className="text-sm text-foreground-muted">
           Provider-reported limits for connected providers. Phoenix combines readings only when a
@@ -832,20 +992,53 @@ function SubscriptionLimitsSection(props: {
 function ProviderSection(props: {
   readonly merged: MergedUsage;
   readonly metric: UsageChartMetric;
+  readonly cursorAccessEnvironments: readonly EnvironmentUsageStatus[];
+  readonly showCursorEnvironment: boolean;
+  readonly onCursorEnabled: () => void;
 }) {
   const { merged, metric } = props;
   const colors = useProviderColors();
-  if (merged.providers.length === 0) return null;
+  if (merged.providers.length === 0 && props.cursorAccessEnvironments.length === 0) return null;
 
   // Ranked by whatever the toggle is showing, so the rows always descend.
   // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023 method.
   const ordered = [...merged.providers].sort((a, b) =>
     metric === "cost" ? b.costUsd - a.costUsd : b.totalTokens - a.totalTokens,
   );
+  const rows: Array<
+    | { readonly kind: "usage"; readonly provider: (typeof ordered)[number] }
+    | { readonly kind: "enable"; readonly environment: EnvironmentUsageStatus }
+  > = ordered.map((provider) => ({ kind: "usage", provider }));
+  const cursorInsertAt =
+    Math.max(
+      ordered.findIndex((provider) => provider.provider === "codex"),
+      ordered.findIndex((provider) => provider.provider === "claude"),
+    ) + 1;
+  rows.splice(
+    cursorInsertAt,
+    0,
+    ...props.cursorAccessEnvironments.map((environment) => ({
+      kind: "enable" as const,
+      environment,
+    })),
+  );
 
   return (
-    <SettingsSection title="Providers" card>
-      {ordered.map((provider, index) => {
+    <SettingsSection title="Providers">
+      {rows.map((row, index) => {
+        if (row.kind === "enable") {
+          return (
+            <CursorEnableRow
+              key={`enable:${row.environment.environmentId}`}
+              environmentId={row.environment.environmentId}
+              label={row.environment.label}
+              showEnvironment={props.showCursorEnvironment}
+              bordered={index > 0}
+              onEnabled={props.onCursorEnabled}
+            />
+          );
+        }
+        const provider = row.provider;
         const share = metric === "cost" ? provider.costShare : provider.tokenShare;
         return (
           <View
@@ -895,7 +1088,7 @@ function TotalsSection(props: { readonly merged: MergedUsage; readonly isPast24H
   const cachedShare = observedInput === 0 ? 0 : merged.cachedInputTokens / observedInput;
 
   return (
-    <SettingsSection title="Totals" card>
+    <SettingsSection title="Totals">
       <View className="flex-row flex-wrap">
         <MetricCell
           label="Processed tokens"
@@ -956,7 +1149,7 @@ function ModelsSection(props: { readonly merged: MergedUsage }) {
   if (merged.models.length === 0) return null;
 
   return (
-    <SettingsSection title="By model" card>
+    <SettingsSection title="By model">
       {merged.models.map((model, index) => (
         <View
           key={`${model.provider}:${model.model}`}

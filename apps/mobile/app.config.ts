@@ -10,9 +10,17 @@ Object.assign(process.env, repoEnv);
 
 const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
 const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
+const RUNTIME_VERSION_POLICIES = [
+  "appVersion",
+  "fingerprint",
+  "nativeVersion",
+  "sdkVersion",
+] as const;
+const requestedRuntimeVersionPolicy = RUNTIME_VERSION_POLICIES.find(
+  (policy) => policy === process.env.MOBILE_VERSION_POLICY,
+);
 const runtimeVersionPolicy =
-  process.env.MOBILE_VERSION_POLICY ??
-  (APP_VARIANT === "development" ? "appVersion" : "fingerprint");
+  requestedRuntimeVersionPolicy ?? (APP_VARIANT === "development" ? "appVersion" : "fingerprint");
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
@@ -125,6 +133,45 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
     // frequent-updates entitlement iOS throttles the update budget sooner.
     frequentUpdates: true,
     widgets: [
+      {
+        name: "SubscriptionUsage",
+        displayName: "Subscription usage",
+        description: "Subscription quotas from your connected Phoenix environments.",
+        configuration: {
+          title: "Subscription usage",
+          description:
+            "Both shows Session and Weekly when available. The Lock Screen shows the tightest selected limit.",
+          parameters: {
+            codexPeriod: {
+              title: "Codex limits",
+              type: "enum",
+              default: "auto",
+              values: [
+                { name: "Both", value: "auto" },
+                { name: "Session", value: "session" },
+                { name: "Weekly", value: "weekly" },
+              ],
+            },
+            claudePeriod: {
+              title: "Claude limits",
+              type: "enum",
+              default: "auto",
+              values: [
+                { name: "Both", value: "auto" },
+                { name: "Session", value: "session" },
+                { name: "Weekly", value: "weekly" },
+              ],
+            },
+          },
+        },
+        supportedFamilies: [
+          "systemSmall",
+          "systemMedium",
+          "systemLarge",
+          "systemExtraLarge",
+          "accessoryRectangular",
+        ],
+      },
       {
         name: "AgentActivity",
         displayName: "Agent Activity",
@@ -370,6 +417,7 @@ const config: ExpoConfig = {
     "./plugins/withIosSceneLifecycle.cjs",
     "./plugins/withAndroidCleartextTraffic.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
+    "./plugins/withAndroidInputBackground.cjs",
     "./plugins/withAndroidModernPopupMenu.cjs",
     "./plugins/withAndroidModernAlertDialog.cjs",
     "./plugins/withAndroidPredictiveBackCompat.cjs",

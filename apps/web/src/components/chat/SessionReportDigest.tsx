@@ -151,11 +151,16 @@ export function SessionReportDigest({
           key={flashKey}
           aria-label={`Open child report inbox: ${countLabel}${needsAttentionLabel ? `, ${needsAttentionLabel}` : ""}`}
           aria-description="Opening this inbox does not mark reports as read."
-          className={cn(
-            "chat-composer-glass relative flex size-8 items-center justify-center rounded-full border border-border/60 text-muted-foreground shadow-sm transition-colors hover:border-border hover:bg-accent/45 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            shownFailedCount > 0 && "border-destructive/50 text-destructive",
-            phase === "leaving" ? "session-inbox-icon-exit" : "session-inbox-icon-enter",
-          )}
+          render={
+            <button
+              type="button"
+              className={cn(
+                "relative flex size-8 items-center justify-center rounded-full border border-border/60 text-muted-foreground shadow-sm transition-colors hover:border-border hover:bg-accent/45 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                shownFailedCount > 0 && "border-destructive/50 text-destructive",
+                phase === "leaving" ? "session-inbox-icon-exit" : "session-inbox-icon-enter",
+              )}
+            />
+          }
         >
           {shownFailedCount > 0 ? (
             <CircleAlertIcon aria-hidden className="size-4" />
@@ -166,7 +171,7 @@ export function SessionReportDigest({
             <span
               aria-hidden
               className={cn(
-                "-top-1 -right-1 absolute flex min-w-4 items-center justify-center rounded-full px-1 font-medium text-[10px] leading-4 tabular-nums",
+                "-top-1 -right-1 absolute flex min-w-4 items-center justify-center rounded-full px-1 font-medium text-3xs leading-4 tabular-nums",
                 shownFailedCount > 0
                   ? "bg-destructive text-destructive-foreground"
                   : "bg-foreground text-background",
@@ -189,9 +194,8 @@ export function SessionReportDigest({
         side="top"
         align="end"
         className="w-[min(34rem,calc(100vw-2rem))]"
-        viewportClassName="max-h-[min(28rem,calc(100vh-10rem))]"
       >
-        <div className="space-y-1">
+        <div className="max-h-[min(28rem,calc(100vh-10rem))] space-y-1 overflow-y-auto">
           <div className="flex items-start gap-2 px-1 pb-2">
             <InboxIcon aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
@@ -201,7 +205,7 @@ export function SessionReportDigest({
           </div>
           {pendingChats.length > 0 ? (
             <div className="space-y-1 pb-1">
-              <p className="px-1 text-[.65rem] font-medium tracking-wider text-muted-foreground uppercase">
+              <p className="px-1 text-3xs font-medium tracking-wider text-muted-foreground uppercase">
                 Waiting for the agent
               </p>
               <ul className="space-y-1" aria-label="Messages waiting for the agent">

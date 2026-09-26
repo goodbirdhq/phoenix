@@ -82,12 +82,13 @@
     U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 /* Match Paper's mixed typography: system text with Inter for icon-bearing labels and titles. */
-.usage-surface.environment-surface {
+.usage-surface.environment-surface,
+[data-usage-surface][data-environment-surface] {
   font-family: system-ui, sans-serif;
   font-synthesis: none;
 }
 
-.environment-inter {
+[data-environment-inter] {
   font-family: "Environment Inter", "Inter Variable", system-ui, sans-serif;
 }
 
@@ -109,18 +110,19 @@
   padding: 20px 0;
 }
 
-html:not(.dark):not([data-theme-id]) .environment-surface {
+html:not(.dark):not([data-theme-id]) .environment-surface,
+html:not(.dark):not([data-theme-id]) [data-environment-surface] {
   --primary: #0284c7;
   --primary-foreground: #fff;
   --input: var(--border);
 }
-.environment-table {
+[data-environment-table] {
   min-width: 1032px;
   table-layout: fixed;
   font-size: 13px;
   line-height: 19px;
 }
-.environment-table th {
+[data-environment-table] th {
   height: 31px;
   padding: 0;
   color: var(--muted-foreground);
@@ -128,15 +130,15 @@ html:not(.dark):not([data-theme-id]) .environment-surface {
   font-weight: 400;
   line-height: 18px;
 }
-.environment-table td {
+[data-environment-table] td {
   height: 47px;
   padding: 4px 0;
   white-space: normal;
 }
-.environment-table tbody tr:last-child {
+[data-environment-table] tbody tr:last-child {
   border-bottom: 1px solid var(--border);
 }
-.environment-table [data-slot="button"][data-environment-action] {
+[data-environment-table] [data-slot="button"][data-environment-action] {
   height: 32px;
   padding: 0;
   border: 0;
@@ -145,10 +147,12 @@ html:not(.dark):not([data-theme-id]) .environment-surface {
   font-size: 13px;
 }
 
-.environment-surface h2 {
+.environment-surface h2,
+[data-environment-surface] h2 {
   line-height: 22px;
 }
-.environment-surface [data-environment-control]:not([data-environment-action]) {
+.environment-surface [data-environment-control]:not([data-environment-action]),
+[data-environment-surface] [data-environment-control]:not([data-environment-action]) {
   height: 36px;
   padding-inline: 12px;
   border-radius: 8px;
@@ -156,6 +160,7 @@ html:not(.dark):not([data-theme-id]) .environment-surface {
   line-height: 19px;
   box-shadow: none;
 }
-.environment-surface [data-environment-control]::before {
+.environment-surface [data-environment-control]::before,
+[data-environment-surface] [data-environment-control]::before {
   box-shadow: none;
 }

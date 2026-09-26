@@ -61,6 +61,7 @@ interface BucketIdentity {
   readonly provider: UsageRecord["provider"];
   readonly model: string;
   readonly sourceId: string | undefined;
+  readonly sourcePath: string | undefined;
 }
 
 interface MutableBucket {
@@ -144,7 +145,7 @@ export class UsageAggregator {
    * can derive per-window facts (distinct sessions, for one) from the records
    * that landed rather than everything the mtime prefilter happened to admit.
    */
-  add(record: UsageRecord, sourceId?: string): boolean {
+  add(record: UsageRecord, sourceId?: string, sourcePath?: string): boolean {
     // Claude's local notices are not model calls, including records read from old scan caches.
     if (
       record.provider === "claude" &&
@@ -187,12 +188,20 @@ export class UsageAggregator {
           ).toISOString();
     // The source is part of the cell identity, not decoration: a client that
     // drops one duplicated directory has to be able to drop exactly the
-    // records that came from it.
-    const key = `${sourceId ?? ""}\u0000${day}\u0000${hourStart}\u0000${record.provider}\u0000${record.model}`;
+    // records that came from it. `sourceId` and `sourcePath` name the same
+    // source; both travel so clients of either vocabulary can match it.
+    const key = `${sourceId ?? ""}\u0000${sourcePath ?? ""}\u0000${day}\u0000${hourStart}\u0000${record.provider}\u0000${record.model}`;
     let bucket = this.#buckets.get(key);
     if (bucket === undefined) {
       bucket = {
-        identity: { day, hourStart, provider: record.provider, model: record.model, sourceId },
+        identity: {
+          day,
+          hourStart,
+          provider: record.provider,
+          model: record.model,
+          sourceId,
+          sourcePath,
+        },
         totals: EMPTY_TOTALS,
         costUsd: 0,
         cacheSavingsUsd: 0,
@@ -204,13 +213,8 @@ export class UsageAggregator {
       this.#buckets.set(key, bucket);
     }
 
-    const priced = priceUsage(
-      this.#options.rates,
-      record.model,
-      record.totals,
-      record.reportedCostUsd,
-      this.#options.priceOverrides,
-    );
+    const priced = priceUsage(this.#options.rates, record, this.#options.priceOverrides);
+    const savedUsd = cacheSavingsUsd(this.#options.rates, record, this.#options.priceOverrides);
 
     if (this.#options.includeSessions && sourceId && record.sessionId) {
       const sessionKey = JSON.stringify([sourceId, record.provider, record.sessionId]);
@@ -247,9 +251,7 @@ export class UsageAggregator {
         model: record.model,
         totals: addTotals(previous?.totals ?? EMPTY_TOTALS, record.totals),
         costUsd: (previous?.costUsd ?? 0) + priced.costUsd,
-        cacheSavingsUsd:
-          (previous?.cacheSavingsUsd ?? 0) +
-          cacheSavingsUsd(this.#options.rates, record.model, record.totals),
+        cacheSavingsUsd: (previous?.cacheSavingsUsd ?? 0) + savedUsd,
         records: (previous?.records ?? 0) + 1,
         unpricedRecords:
           (previous?.unpricedRecords ?? 0) + (priced.costSource === "unpriced" ? 1 : 0),
@@ -258,12 +260,7 @@ export class UsageAggregator {
 
     bucket.totals = addTotals(bucket.totals, record.totals);
     bucket.costUsd += priced.costUsd;
-    bucket.cacheSavingsUsd += cacheSavingsUsd(
-      this.#options.rates,
-      record.model,
-      record.totals,
-      this.#options.priceOverrides,
-    );
+    bucket.cacheSavingsUsd += savedUsd;
     bucket.records += 1;
     if (priced.costSource === "unpriced") bucket.unpricedRecords += 1;
     if (priced.costSource === "providerReported") bucket.providerReportedRecords += 1;
@@ -274,13 +271,14 @@ export class UsageAggregator {
   finish(): AggregateResult {
     const buckets: UsageBucket[] = [];
     for (const bucket of this.#buckets.values()) {
-      const { day, hourStart, provider, model, sourceId } = bucket.identity;
+      const { day, hourStart, provider, model, sourceId, sourcePath } = bucket.identity;
       buckets.push({
         day: day as UsageDay,
         ...(hourStart === "" ? {} : { hourStart }),
         provider,
         ...(sourceId === undefined ? {} : { sourceId }),
         model,
+        ...(sourcePath === undefined ? {} : { sourcePath }),
         totals: bucket.totals,
         costUsd: bucket.costUsd,
         cacheSavingsUsd: bucket.cacheSavingsUsd,
@@ -298,7 +296,8 @@ export class UsageAggregator {
         (a.hourStart ?? "").localeCompare(b.hourStart ?? "") ||
         a.provider.localeCompare(b.provider) ||
         a.model.localeCompare(b.model) ||
-        (a.sourceId ?? "").localeCompare(b.sourceId ?? ""),
+        (a.sourceId ?? "").localeCompare(b.sourceId ?? "") ||
+        (a.sourcePath ?? "").localeCompare(b.sourcePath ?? ""),
     );
 
     return {

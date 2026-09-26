@@ -1,8 +1,13 @@
-.schedule-surface,
-.schedule-sidebar {
+/* Schedules restyles ui parts through data attributes because app code cannot pass
+   appearance classes to components/ui exports. */
+[data-schedule-surface],
+[data-schedule-sidebar] {
   font-family: -apple-system, BlinkMacSystemFont, "Environment Inter", sans-serif;
 }
-.schedule-surface .schedule-control {
+[data-slot="sidebar-inset"][data-schedule-surface] {
+  color: var(--foreground);
+}
+[data-schedule-surface] [data-schedule-control] {
   height: 38px;
   padding-inline: 12px;
   border-radius: 8px;
@@ -11,36 +16,37 @@
   box-shadow: none;
   font-weight: 400;
 }
-.schedule-history {
+[data-schedule-history] {
   min-width: 680px;
   table-layout: fixed;
   font-size: 13px;
   line-height: 22px;
 }
-.schedule-history th {
+[data-schedule-history] th {
   height: 35px;
   padding: 0;
   color: var(--muted-foreground);
   font-size: 12px;
   font-weight: 400;
 }
-.schedule-history td {
+[data-schedule-history] td {
   padding: 20px 0;
   font-size: 13px;
   white-space: normal;
   overflow-wrap: anywhere;
 }
-.schedule-history tbody tr:last-child {
+[data-schedule-history] tbody tr:last-child {
   border-bottom: 1px solid var(--border);
 }
-.schedule-history td:first-child {
+[data-schedule-history] td:first-child {
   font-size: 14px;
 }
-.schedule-editor select {
+[data-schedule-editor] select {
   height: 40px;
   border-radius: 8px;
+  font-size: 13px;
 }
-html:not(.dark):not([data-theme-id]) .schedule-surface {
+html:not(.dark):not([data-theme-id]) [data-schedule-surface] {
   --primary: #0284c7;
   --primary-foreground: #fff;
   --input: var(--border);
@@ -50,27 +56,27 @@ html:not(.dark):not([data-theme-id]) .schedule-surface {
   --muted: #f4f4f5;
 }
 
-.schedule-editor input:not([type="checkbox"]),
-.schedule-editor textarea {
+[data-schedule-editor] input:not([type="checkbox"]),
+[data-schedule-editor] textarea {
   font-size: 13px;
   line-height: 22px;
   box-shadow: none;
 }
 
-.schedule-heading {
+[data-schedule-heading] > header {
   align-items: center;
 }
-.schedule-heading h1 {
+[data-schedule-heading] h1 {
   gap: 8px;
   letter-spacing: normal;
 }
-.schedule-heading h1 + div,
-.schedule-surface .text-xs {
+[data-schedule-heading] h1 + div,
+[data-schedule-surface] .text-xs {
   font-size: 12px;
   line-height: 22px;
 }
 
-.schedule-history-link {
+[data-schedule-history-link] {
   height: 22px;
   padding: 0;
   font-size: 12px;
@@ -78,7 +84,7 @@ html:not(.dark):not([data-theme-id]) .schedule-surface {
   font-weight: 400;
 }
 
-.schedule-history button {
+[data-schedule-history] button {
   height: 22px;
   padding: 0;
   font-size: 13px;
@@ -86,90 +92,116 @@ html:not(.dark):not([data-theme-id]) .schedule-surface {
   font-weight: 400;
 }
 
-.schedule-editor [data-slot="input-control"] {
+[data-schedule-sections] {
+  gap: 24px;
+}
+[data-schedule-sections] [role="tab"][data-active] {
+  font-weight: 600;
+}
+
+[data-schedule-editor] [data-slot="input-control"] {
   box-shadow: none;
 }
-.schedule-editor [data-slot="input-control"]::before {
+[data-schedule-editor] [data-slot="input-control"]::before {
   box-shadow: none;
 }
-.schedule-editor input:not([type="checkbox"]) {
+[data-schedule-editor] input:not([type="checkbox"]) {
   height: 38px;
 }
-.schedule-editor [role="tablist"] {
+[data-schedule-editor] [data-schedule-segmented] {
   height: 46px;
+  gap: 4px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--muted);
 }
-.schedule-editor [role="tab"] {
+[data-schedule-editor] [data-schedule-segmented] [role="tab"] {
   height: 38px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--radius-md);
 }
-.schedule-editor [data-slot="select-trigger"] {
+[data-schedule-editor] [data-schedule-segmented] [role="tab"][data-active] {
+  background: var(--background);
+}
+[data-schedule-editor] [data-slot="select-trigger"] {
   height: 40px;
   font-size: 13px;
+  box-shadow: none;
 }
 
-.schedule-editor [data-slot="textarea-control"] {
+[data-schedule-editor] [data-slot="textarea-control"] {
   min-height: 76px;
   padding: 0;
   box-shadow: none;
 }
-.schedule-editor [data-slot="textarea-control"]::before {
+[data-schedule-editor] [data-slot="textarea-control"]::before {
   box-shadow: none;
 }
-.schedule-editor textarea {
+[data-schedule-editor] textarea {
   min-height: 74px;
   padding: 12px 16px;
 }
 
-html:not(.dark):not([data-theme-id]) .schedule-surface .text-muted-foreground:not([data-active]) {
+html:not(.dark):not([data-theme-id])
+  [data-schedule-surface]
+  .text-muted-foreground:not([data-active]) {
   color: #71717b;
 }
 
-.schedule-delete {
+[data-schedule-delete] {
   display: flex;
   flex-direction: column;
   gap: 16px;
   padding: 22px;
   box-shadow: 0 12px 30px #18181b24;
 }
-.schedule-delete [data-slot="alert-dialog-header"] {
+@media (width >= 40rem) {
+  [data-schedule-delete] {
+    border-radius: 14px;
+  }
+}
+[data-schedule-delete] [data-slot="alert-dialog-header"] {
   gap: 4px;
   padding: 0;
   text-align: left;
 }
-.schedule-delete [data-slot="alert-dialog-title"] {
+[data-schedule-delete] [data-slot="alert-dialog-title"] {
   font-size: 16px;
   line-height: 22px;
 }
-.schedule-delete [data-slot="alert-dialog-description"] {
+[data-schedule-delete] [data-slot="alert-dialog-description"] {
   font-size: 12px;
   line-height: 18px;
 }
-.schedule-delete [data-slot="alert-dialog-footer"] {
+[data-schedule-delete] [data-slot="alert-dialog-footer"] {
   padding: 0;
 }
-.schedule-delete button {
+[data-schedule-delete] button {
   min-height: 32px;
   font-size: 13px;
   line-height: 20px;
   font-weight: 400;
 }
 
-.schedule-failure {
+[data-schedule-failure] {
   color: var(--color-destructive);
   border-color: currentColor;
   background: color-mix(in srgb, currentColor 5%, transparent);
 }
 
-html:not(.dark):not([data-theme-id]) .schedule-prompt {
+html:not(.dark):not([data-theme-id]) [data-schedule-prompt] {
   background: #fafafa;
 }
-html:not(.dark):not([data-theme-id]) .schedule-failure {
+html:not(.dark):not([data-theme-id]) [data-schedule-failure] {
   background: #fef2f2;
 }
-html:not(.dark):not([data-theme-id]) .schedule-surface .text-destructive,
-html:not(.dark):not([data-theme-id]) .schedule-failure {
+html:not(.dark):not([data-theme-id]) [data-schedule-surface] .text-destructive,
+html:not(.dark):not([data-theme-id]) [data-schedule-failure] {
   color: #b91c1c;
 }
-.schedule-sidebar .schedule-row-actions button {
+[data-schedule-sidebar] [data-schedule-row-actions] button {
   width: 24px;
   height: 24px;
   min-height: 24px;

@@ -10,12 +10,19 @@ const state = vi.hoisted(() => ({
   pricesProps: null as null | { initialSelectedEnvironmentIds: unknown; usage: unknown },
 }));
 
-vi.mock("@tanstack/react-router", () => ({ useSearch: () => ({ account: state.account }) }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
+vi.mock("@tanstack/react-router", () => ({
+  useSearch: () => ({ account: state.account }),
+  useNavigate: () => vi.fn(),
+  useCanGoBack: () => false,
+}));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => new Map() }));
 vi.mock("../../state/presentation", () => ({
   environmentPresentations: { presentationsAtom: null },
 }));
-vi.mock("../../state/server", () => ({ serverEnvironment: {} }));
+vi.mock("../../state/server", () => ({
+  serverEnvironment: {},
+  primaryServerKeybindingsAtom: null,
+}));
 vi.mock("../../state/session", () => ({ environmentSession: {} }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../../env", () => ({ isElectron: false }));
@@ -27,6 +34,7 @@ const envStatus = {
   isPending: false,
   error: null,
   summary: null,
+  needsCursorKeychainAccess: false,
 };
 vi.mock("../../state/usage", () => ({
   useUsage: () => ({
@@ -105,6 +113,7 @@ import { UsagePage } from "./UsagePage";
 let renderer: ReactTestRenderer;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("window", new EventTarget());
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-11T12:00:00Z"));
   state.account = null;
   state.accounts = [];

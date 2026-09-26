@@ -12,6 +12,7 @@ const rates: RateTable = new Map([
       outputCostPerToken: 5e-5,
       cacheReadCostPerToken: 1e-6,
       cacheCreationCostPerToken: 1.25e-5,
+      fastMultiplier: 1,
     },
   ],
 ]);
@@ -31,6 +32,7 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
       reasoningTokens: 0,
     },
     reportedCostUsd: null,
+    fast: false,
     dedupeKey: null,
     ...overrides,
   };
@@ -246,11 +248,16 @@ describe("UsageAggregator", () => {
       untilDay: "2026-08-31",
       rates,
     });
-    aggregator.add(record({ dedupeKey: "msg_a:" }), "0");
-    aggregator.add(record({ dedupeKey: "msg_b:" }), "1");
+    aggregator.add(record({ dedupeKey: "msg_a:" }), "0", "/homes/a/projects");
+    aggregator.add(record({ dedupeKey: "msg_b:" }), "1", "/homes/b/projects");
     const buckets = aggregator.finish().buckets;
 
     expect(buckets.map((bucket) => bucket.sourceId)).toEqual(["0", "1"]);
+    // Clients that match on the path instead of the id see the same split.
+    expect(buckets.map((bucket) => bucket.sourcePath)).toEqual([
+      "/homes/a/projects",
+      "/homes/b/projects",
+    ]);
     expect(buckets.every((bucket) => bucket.records === 1)).toBe(true);
   });
 

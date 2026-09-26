@@ -102,7 +102,7 @@ export function modelUsageLimitWindows(
   if (!hasConfirmedAvailability(availability)) return [];
   return availability.windows
     .filter((window) => window.usedPercent >= 100 && windowConstrainsModel(window, model))
-    .toSorted((left, right) => right.usedPercent - left.usedPercent);
+    .sort((left, right) => right.usedPercent - left.usedPercent);
 }
 
 /**
@@ -154,7 +154,7 @@ export function rankMigrationTargets(input: {
         },
       ];
     })
-    .toSorted((left, right) => {
+    .sort((left, right) => {
       const leftSameDriver = left.driverKind === input.originDriverKind;
       const rightSameDriver = right.driverKind === input.originDriverKind;
       if (leftSameDriver !== rightSameDriver) return leftSameDriver ? -1 : 1;
@@ -203,7 +203,7 @@ export function usageLimitMigrationEpisodeKey(input: {
   if (input.boundInstanceId === null) return null;
   const resetsAt = modelUsageLimitWindows(input.boundInstanceAvailability, input.boundModel)
     .flatMap((window) => (window.resetsAt ? [window.resetsAt] : []))
-    .toSorted()[0];
+    .sort()[0];
   return [input.threadId, input.boundInstanceId, resetsAt ?? "unknown"].join("\u0000");
 }
 

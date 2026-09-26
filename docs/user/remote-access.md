@@ -46,7 +46,8 @@ another link to share.
 
 Auto balance is off by default. On web and desktop, enable it in
 **Settings → Connections → Load balancing** to automatically choose a machine for
-new threads in projects grouped across connected environments.
+new threads in projects grouped across connected environments. The section
+appears once two or more machines are switched on.
 Each machine starts at **Normal**. Choose **Prefer** to favor it when it has CPU and
 memory available, **Less often** to reduce its share, or **Manual only** to exclude
 it from automatic selection. These are preferences, not fixed traffic percentages.
@@ -199,12 +200,8 @@ initializes from an interactive shell profile will not be picked up.
 If launch fails with `node: command not found`, a port-scan failure, or a message that the remote Node version does not satisfy the required range, SSH into the host and check the same non-interactive shell path Phoenix uses:
 
 ```bash
-ssh user@example.com 'sh -lc "command -v node && node --version"'
+ssh user@example.com 'sh -lc "command -v claude codex"'
 ```
-
-Configure your version manager for non-interactive shells if this differs from
-your normal terminal. With nvm, setting a compatible default, such as
-`nvm alias default 24`, can resolve the problem.
 
 If SSH reconnecting fails after an app update, retry the launch once. Removing
 the connection stops a server that Phoenix launched; a server that was already
@@ -257,6 +254,17 @@ For version warnings, follow [Keeping Phoenix in Sync](./updating.md).
 Saved connections from the retired managed service may still appear in your client
 with an unsupported-connection message. Pair directly with the environment's
 reachable HTTP or HTTPS address to reconnect.
+
+## Using the Desktop App as a Remote Only
+
+If a computer should only drive work running elsewhere, turn off its local environment. In the
+desktop app, open **Settings → Connections** and switch off **Local
+environment**. Phoenix restarts without a local server: no local agents or terminals run, WSL
+backends stay off, and other devices can no longer connect to this computer. Your projects,
+history, and saved connections are kept, and you keep working through pairing or SSH.
+
+Switch **Local environment** back on in the same place to restart with your previous local
+settings.
 
 ## Hosted Web App Pairing
 

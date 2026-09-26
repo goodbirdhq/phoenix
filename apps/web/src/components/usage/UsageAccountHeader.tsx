@@ -124,7 +124,10 @@ export function UsageAccountHeader({
 
 function ProviderDialogLoading() {
   return (
-    <DialogPopup className="usage-surface h-[651px] w-[620px] max-h-[calc(100dvh-48px)] max-w-[calc(100vw-32px)] rounded-[14px]">
+    <DialogPopup
+      data-usage-surface=""
+      className="h-[651px] w-[620px] max-h-[calc(100dvh-48px)] max-w-[calc(100vw-32px)]"
+    >
       <DialogTitle>Provider settings</DialogTitle>
       <p role="status">Loading provider settings…</p>
     </DialogPopup>

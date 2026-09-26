@@ -9,10 +9,11 @@ import {
   MessageId,
   NonNegativeInt,
   OrchestrationCheckpointFile,
+  OrchestrationCheckpointStatus,
   OrchestrationProposedPlanId,
   OrchestrationReadModel,
   OrchestrationThreadSearchSource,
-  OrchestrationShellSnapshot,
+  type OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
   ProjectScript,
@@ -33,6 +34,7 @@ import {
   ModelSelection,
   ProjectId,
   ThreadLinkedPullRequest,
+  ThreadTitleState,
   ThreadId,
   ThreadPullRequestSnapshot,
   ThreadPullRequestStack,
@@ -56,7 +58,6 @@ import {
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
 import { decodeStructuredReportFields } from "../../persistence/decodeStructuredReportFields.ts";
-import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
@@ -82,11 +83,11 @@ import {
   type ProjectionSnapshotCounts,
   type ProjectionThreadCheckpointContext,
   type ProjectionThreadDetailQuery,
+  type ProjectionThreadPullRequests,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
 
 const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
-const decodeShellSnapshot = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);
 const decodeThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const decodeImportedTranscriptsPayload = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -163,6 +164,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     latestReportAt: Schema.NullOr(IsoDateTime),
     hasPendingTurnStart: Schema.Number,
     modelSelection: Schema.fromJsonString(ModelSelection),
+    titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
@@ -180,17 +182,23 @@ const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession.mapFields(
   Struct.assign({ interruptedToolCall: Schema.BooleanFromBit }),
 );
 const ProjectionThreadRuntimeContextDbRowSchema = Schema.Struct({
+  titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
   id: ThreadId,
   projectId: ProjectId,
   title: Schema.String,
   modelSelection: Schema.fromJsonString(ModelSelection),
   session: Schema.NullOr(ProjectionThreadSessionDbRowSchema),
 });
-const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
-  Struct.assign({
-    files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
-  }),
-);
+const ProjectionCheckpointDbRowSchema = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  checkpointTurnCount: NonNegativeInt,
+  checkpointRef: CheckpointRef,
+  status: OrchestrationCheckpointStatus,
+  files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
+  assistantMessageId: Schema.NullOr(MessageId),
+  completedAt: IsoDateTime,
+});
 const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   threadId: ProjectionThread.fields.threadId,
   turnId: TurnId,
@@ -222,6 +230,7 @@ const EventReplayStatsRowSchema = Schema.Struct({
   eventCount: Schema.Number,
   payloadBytes: Schema.Number,
 });
+const ActiveThreadRowsRequest = Schema.Struct({ unsettledOnly: Schema.Boolean });
 const ProjectionThreadSearchRequest = Schema.Struct({
   pattern: Schema.String,
   limit: Schema.Int,
@@ -635,6 +644,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           project_id AS "projectId",
           title,
+          title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
@@ -662,6 +672,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_at AS "pinnedAt",
           pin_order_key AS "pinOrderKey",
           active_order_key AS "activeOrderKey",
+          auto_settle_disabled_at AS "autoSettleDisabledAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -675,15 +686,22 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // Background sweeps skip settled threads, the same check PR discovery makes.
+  const unsettledThreadsFilter = (unsettledOnly: boolean) =>
+    unsettledOnly
+      ? sql`AND threads.settled_at IS NULL AND threads.settled_override IS NOT 'settled'`
+      : sql``;
+
   const listActiveThreadRows = SqlSchema.findAll({
-    Request: Schema.Void,
+    Request: ActiveThreadRowsRequest,
     Result: ProjectionThreadDbRowSchema,
-    execute: () =>
+    execute: (request) =>
       sql`
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
           title,
+          title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
@@ -692,9 +710,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           spawned_by_thread_id AS "spawnedByThreadId",
           report_delivery AS "reportDelivery",
           (SELECT MAX(report.created_at) FROM projection_thread_reports AS report
-           WHERE report.thread_id = projection_threads.thread_id) AS "latestReportAt",
+           WHERE report.thread_id = threads.thread_id) AS "latestReportAt",
           EXISTS(SELECT 1 FROM projection_turns AS pending
-                 WHERE pending.thread_id = projection_threads.thread_id
+                 WHERE pending.thread_id = threads.thread_id
                    AND pending.pending_message_id IS NOT NULL
                    AND pending.state IN ('pending', 'queued', 'interrupting', 'releasing')) AS "hasPendingTurnStart",
           linked_pull_request_json AS "linkedPullRequest",
@@ -711,6 +729,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_at AS "pinnedAt",
           pin_order_key AS "pinOrderKey",
           active_order_key AS "activeOrderKey",
+          auto_settle_disabled_at AS "autoSettleDisabledAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -719,12 +738,43 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           awaiting_parent_reply_since AS "awaitingParentReplySince",
           deleted_at AS "deletedAt"
-        FROM projection_threads
+        FROM projection_threads threads
         WHERE deleted_at IS NULL
           AND archived_at IS NULL
+          ${unsettledThreadsFilter(request.unsettledOnly)}
         ORDER BY project_id ASC, created_at ASC, thread_id ASC
       `,
   });
+
+  const listDeletedWorktreeRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({
+      id: ThreadId,
+      projectId: ProjectId,
+      branch: Schema.String,
+      worktreePath: Schema.String,
+      workspaceRoot: Schema.String,
+      deletedAt: IsoDateTime,
+    }),
+    execute: () => sql`
+      SELECT t.thread_id AS "id", t.project_id AS "projectId", t.branch,
+        t.worktree_path AS "worktreePath", p.workspace_root AS "workspaceRoot",
+        t.deleted_at AS "deletedAt"
+      FROM projection_threads t
+      JOIN projection_projects p ON p.project_id = t.project_id
+      WHERE t.deleted_at IS NOT NULL AND t.worktree_path IS NOT NULL AND t.branch IS NOT NULL
+      ORDER BY t.deleted_at DESC, t.thread_id ASC
+    `,
+  });
+  const getDeletedWorktreeThreads: ProjectionSnapshotQueryShape["getDeletedWorktreeThreads"] = () =>
+    listDeletedWorktreeRows(undefined).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getDeletedWorktreeThreads:query",
+          "ProjectionSnapshotQuery.getDeletedWorktreeThreads:decodeRows",
+        ),
+      ),
+    );
 
   const listArchivedThreadRows = SqlSchema.findAll({
     Request: Schema.Void,
@@ -735,6 +785,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           project_id AS "projectId",
           title,
+          title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
@@ -762,6 +813,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_at AS "pinnedAt",
           pin_order_key AS "pinOrderKey",
           active_order_key AS "activeOrderKey",
+          auto_settle_disabled_at AS "autoSettleDisabledAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -868,9 +920,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const listActiveThreadPullRequestRows = SqlSchema.findAll({
-    Request: Schema.Void,
+    Request: ActiveThreadRowsRequest,
     Result: ProjectionThreadPullRequestDbRowSchema,
-    execute: () =>
+    execute: (request) =>
       sql`
         SELECT
           links.thread_id AS "threadId",
@@ -887,7 +939,43 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ON threads.thread_id = links.thread_id
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NULL
+          ${unsettledThreadsFilter(request.unsettledOnly)}
         ORDER BY links.thread_id ASC, links.linked_at ASC, links.number ASC
+      `,
+  });
+
+  // One row per link, in the shell snapshot's thread order and link order.
+  const listActiveThreadPullRequestSyncRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadPullRequestDbRowSchema.mapFields(
+      Struct.assign({
+        projectId: ProjectionThread.fields.projectId,
+        settledOverride: ProjectionThread.fields.settledOverride,
+        settledAt: ProjectionThread.fields.settledAt,
+      }),
+    ),
+    execute: () =>
+      sql`
+        SELECT
+          links.thread_id AS "threadId",
+          threads.project_id AS "projectId",
+          threads.settled_override AS "settledOverride",
+          threads.settled_at AS "settledAt",
+          links.host,
+          links.repository,
+          links.number,
+          links.url,
+          links.source,
+          links.linked_at AS "linkedAt",
+          links.snapshot_json AS "snapshot",
+          links.stack_json AS "stack"
+        FROM projection_thread_pull_requests links
+        INNER JOIN projection_threads threads
+          ON threads.thread_id = links.thread_id
+        WHERE threads.deleted_at IS NULL
+          AND threads.archived_at IS NULL
+        ORDER BY threads.project_id ASC, threads.created_at ASC, threads.thread_id ASC,
+          links.linked_at ASC, links.number ASC
       `,
   });
 
@@ -971,9 +1059,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const listActiveThreadSessionRows = SqlSchema.findAll({
-    Request: Schema.Void,
+    Request: ActiveThreadRowsRequest,
     Result: ProjectionThreadSessionDbRowSchema,
-    execute: () =>
+    execute: (request) =>
       sql`
         SELECT
           sessions.thread_id AS "threadId",
@@ -1001,6 +1089,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ON threads.thread_id = sessions.thread_id
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NULL
+          ${unsettledThreadsFilter(request.unsettledOnly)}
         ORDER BY sessions.thread_id ASC
       `,
   });
@@ -1122,9 +1211,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const listActiveLatestTurnRows = SqlSchema.findAll({
-    Request: Schema.Void,
+    Request: ActiveThreadRowsRequest,
     Result: ProjectionLatestTurnDbRowSchema,
-    execute: () =>
+    execute: (request) =>
       sql`
         SELECT
           turns.thread_id AS "threadId",
@@ -1143,6 +1232,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NULL
           AND threads.latest_turn_id IS NOT NULL
+          ${unsettledThreadsFilter(request.unsettledOnly)}
         ORDER BY turns.thread_id ASC
       `,
   });
@@ -1250,6 +1340,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             AND threads.archived_at IS NULL
             AND projects.deleted_at IS NULL
             AND messages.is_streaming = 0
+            -- Only these two roles are searchable, and the CASE above depends
+            -- on it: reasoning is deliberately excluded so a thinking trace
+            -- cannot surface in the command palette, and widening this filter
+            -- would label it 'assistant' rather than adding a source.
             AND (
               messages.role = 'user'
               OR (
@@ -1401,6 +1495,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           project_id AS "projectId",
           title,
+          title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
@@ -1428,6 +1523,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_at AS "pinnedAt",
           pin_order_key AS "pinOrderKey",
           active_order_key AS "activeOrderKey",
+          auto_settle_disabled_at AS "autoSettleDisabledAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -1453,6 +1549,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           threads.thread_id AS id,
           threads.project_id AS "projectId",
           threads.title,
+          threads.title_state_json AS "titleState",
           threads.model_selection_json AS "modelSelection",
           sessions.thread_id AS "threadId",
           sessions.status,
@@ -1485,6 +1582,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             id: row.id,
             projectId: row.projectId,
             title: row.title,
+            titleState: row.titleState,
             modelSelection: row.modelSelection,
             session: row.threadId === null ? null : row,
           })),
@@ -1812,6 +1910,40 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         toPersistenceSqlOrDecodeError(
           "ProjectionSnapshotQuery.getUserInputActivity:query",
           "ProjectionSnapshotQuery.getUserInputActivity:decodeRow",
+        ),
+      ),
+    );
+
+  const listActivityRowsByKind = SqlSchema.findAll({
+    Request: Schema.Struct({ kind: Schema.String }),
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ kind }) => sql`
+      SELECT
+        a.activity_id AS "activityId",
+        a.thread_id AS "threadId",
+        a.turn_id AS "turnId",
+        a.tone,
+        a.kind,
+        a.summary,
+        a.payload_json AS "payload",
+        a.sequence,
+        a.created_at AS "createdAt"
+      FROM projection_thread_activities a
+      JOIN projection_threads t ON t.thread_id = a.thread_id
+      WHERE a.kind = ${kind}
+        AND t.deleted_at IS NULL
+        AND t.archived_at IS NULL
+      ORDER BY a.created_at ASC, a.activity_id ASC
+    `,
+  });
+
+  const listActivitiesByKind: ProjectionSnapshotQueryShape["listActivitiesByKind"] = (kind) =>
+    listActivityRowsByKind({ kind }).pipe(
+      Effect.map((rows) => rows.map(mapThreadActivityRow)),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listActivitiesByKind:query",
+          "ProjectionSnapshotQuery.listActivitiesByKind:decodeRow",
         ),
       ),
     );
@@ -2698,7 +2830,9 @@ pending_approval_requests AS (
                 pinnedAt: row.pinnedAt,
                 pinOrderKey: row.pinOrderKey ?? null,
                 activeOrderKey: row.activeOrderKey ?? null,
+                autoSettleDisabledAt: row.autoSettleDisabledAt ?? null,
                 titleRegeneration: mapTitleRegeneration(row),
+                titleState: row.titleState,
                 awaitingParentReplySince: row.awaitingParentReplySince,
                 deletedAt: row.deletedAt,
                 messages: messagesByThread.get(row.threadId) ?? [],
@@ -2990,7 +3124,9 @@ pending_approval_requests AS (
                   pinnedAt: row.pinnedAt,
                   pinOrderKey: row.pinOrderKey ?? null,
                   activeOrderKey: row.activeOrderKey ?? null,
+                  autoSettleDisabledAt: row.autoSettleDisabledAt ?? null,
                   titleRegeneration: mapTitleRegeneration(row),
+                  titleState: row.titleState,
                   awaitingParentReplySince: row.awaitingParentReplySince,
                   deletedAt: row.deletedAt,
                   messages: [],
@@ -3019,8 +3155,9 @@ pending_approval_requests AS (
         }),
       );
 
-  const getShellSnapshot: ProjectionSnapshotQueryShape["getShellSnapshot"] = () =>
-    sql
+  const getShellSnapshot: ProjectionSnapshotQueryShape["getShellSnapshot"] = (options) => {
+    const unsettledOnly = options?.unsettledOnly === true;
+    return sql
       .withTransaction(
         Effect.all([
           listProjectRows(undefined).pipe(
@@ -3031,7 +3168,7 @@ pending_approval_requests AS (
               ),
             ),
           ),
-          listActiveThreadRows(undefined).pipe(
+          listActiveThreadRows({ unsettledOnly }).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
                 "ProjectionSnapshotQuery.getShellSnapshot:listThreads:query",
@@ -3039,7 +3176,7 @@ pending_approval_requests AS (
               ),
             ),
           ),
-          listActiveThreadSessionRows(undefined).pipe(
+          listActiveThreadSessionRows({ unsettledOnly }).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
                 "ProjectionSnapshotQuery.getShellSnapshot:listThreadSessions:query",
@@ -3047,7 +3184,7 @@ pending_approval_requests AS (
               ),
             ),
           ),
-          listActiveThreadPullRequestRows(undefined).pipe(
+          listActiveThreadPullRequestRows({ unsettledOnly }).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
                 "ProjectionSnapshotQuery.getShellSnapshot:listThreadPullRequests:query",
@@ -3055,7 +3192,7 @@ pending_approval_requests AS (
               ),
             ),
           ),
-          listActiveLatestTurnRows(undefined).pipe(
+          listActiveLatestTurnRows({ unsettledOnly }).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
                 "ProjectionSnapshotQuery.getShellSnapshot:listLatestTurns:query",
@@ -3110,7 +3247,10 @@ pending_approval_requests AS (
               );
               const pullRequestsByThread = groupPullRequestRowsByThread(pullRequestRows);
 
-              const snapshot = {
+              // Built from schema-decoded rows, so no second decode here. The HTTP
+              // and RPC layers encode it against OrchestrationShellSnapshot on the
+              // way out, like the per-item shells from getThreadShellById.
+              return {
                 snapshotSequence: computeSnapshotSequence(stateRows),
                 projects: Arr.filterMap(projectRows, (row) =>
                   row.deletedAt === null
@@ -3150,7 +3290,9 @@ pending_approval_requests AS (
                         pinnedAt: row.pinnedAt,
                         pinOrderKey: row.pinOrderKey ?? null,
                         activeOrderKey: row.activeOrderKey ?? null,
+                        autoSettleDisabledAt: row.autoSettleDisabledAt ?? null,
                         titleRegeneration: mapTitleRegeneration(row),
+                        titleState: row.titleState,
                         session: sessionByThread.get(row.threadId) ?? null,
                         latestUserMessageAt: row.latestUserMessageAt,
                         hasPendingApprovals: row.pendingApprovalCount > 0,
@@ -3167,15 +3309,7 @@ pending_approval_requests AS (
                     : Result.failVoid,
                 ),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
-              };
-
-              return yield* decodeShellSnapshot(snapshot).pipe(
-                Effect.mapError(
-                  toPersistenceDecodeError(
-                    "ProjectionSnapshotQuery.getShellSnapshot:decodeShellSnapshot",
-                  ),
-                ),
-              );
+              } satisfies OrchestrationShellSnapshot;
             }),
         ),
         Effect.mapError((error) => {
@@ -3184,6 +3318,36 @@ pending_approval_requests AS (
           }
           return toPersistenceSqlError("ProjectionSnapshotQuery.getShellSnapshot:query")(error);
         }),
+      );
+  };
+
+  const listThreadsWithPullRequests: ProjectionSnapshotQueryShape["listThreadsWithPullRequests"] =
+    () =>
+      listActiveThreadPullRequestSyncRows(undefined).pipe(
+        Effect.map((rows) => {
+          const threads = new Map<
+            ThreadId,
+            ProjectionThreadPullRequests & { readonly pullRequests: Array<ThreadPullRequestLink> }
+          >();
+          for (const row of rows) {
+            const thread = threads.get(row.threadId) ?? {
+              id: row.threadId,
+              projectId: row.projectId,
+              settledOverride: row.settledOverride,
+              settledAt: row.settledAt,
+              pullRequests: [],
+            };
+            thread.pullRequests.push(mapPullRequestRow(row));
+            threads.set(row.threadId, thread);
+          }
+          return [...threads.values()];
+        }),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.listThreadsWithPullRequests:query",
+            "ProjectionSnapshotQuery.listThreadsWithPullRequests:decodeRows",
+          ),
+        ),
       );
 
   const getArchivedShellSnapshot: ProjectionSnapshotQueryShape["getArchivedShellSnapshot"] = () =>
@@ -3279,7 +3443,7 @@ pending_approval_requests AS (
                 sessionRows.map((row) => [row.threadId, mapSessionRow(row)] as const),
               );
 
-              const snapshot = {
+              return {
                 snapshotSequence: computeSnapshotSequence(stateRows),
                 projects: Arr.filterMap(projectRows, (row) =>
                   row.deletedAt === null && activeProjectIds.has(row.projectId)
@@ -3317,7 +3481,9 @@ pending_approval_requests AS (
                   pinnedAt: row.pinnedAt,
                   pinOrderKey: row.pinOrderKey ?? null,
                   activeOrderKey: row.activeOrderKey ?? null,
+                  autoSettleDisabledAt: row.autoSettleDisabledAt ?? null,
                   titleRegeneration: mapTitleRegeneration(row),
+                  titleState: row.titleState,
                   session: sessionByThread.get(row.threadId) ?? null,
                   latestUserMessageAt: row.latestUserMessageAt,
                   hasPendingApprovals: row.pendingApprovalCount > 0,
@@ -3332,15 +3498,7 @@ pending_approval_requests AS (
                   planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
                 })),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
-              };
-
-              return yield* decodeShellSnapshot(snapshot).pipe(
-                Effect.mapError(
-                  toPersistenceDecodeError(
-                    "ProjectionSnapshotQuery.getArchivedShellSnapshot:decodeShellSnapshot",
-                  ),
-                ),
-              );
+              } satisfies OrchestrationShellSnapshot;
             }),
         ),
         Effect.mapError((error) => {
@@ -3677,7 +3835,9 @@ pending_approval_requests AS (
         pinnedAt: threadRow.value.pinnedAt,
         pinOrderKey: threadRow.value.pinOrderKey ?? null,
         activeOrderKey: threadRow.value.activeOrderKey ?? null,
+        autoSettleDisabledAt: threadRow.value.autoSettleDisabledAt ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
+        titleState: threadRow.value.titleState,
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
         latestUserMessageAt: threadRow.value.latestUserMessageAt,
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
@@ -3707,6 +3867,7 @@ pending_approval_requests AS (
         id: row.id,
         projectId: row.projectId,
         title: row.title,
+        titleState: row.titleState,
         modelSelection: row.modelSelection,
         session: row.session === null ? null : mapSessionRow(row.session),
       }));
@@ -4003,7 +4164,9 @@ pending_approval_requests AS (
         pinnedAt: threadRow.value.pinnedAt,
         pinOrderKey: threadRow.value.pinOrderKey ?? null,
         activeOrderKey: threadRow.value.activeOrderKey ?? null,
+        autoSettleDisabledAt: threadRow.value.autoSettleDisabledAt ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
+        titleState: threadRow.value.titleState,
         awaitingParentReplySince: threadRow.value.awaitingParentReplySince,
         deletedAt: null,
         messages: messageRows.map((row) => {
@@ -4272,9 +4435,12 @@ pending_approval_requests AS (
     getThreadMessageById,
     getCommandReadModel,
     getUserInputActivity,
+    listActivitiesByKind,
     getSnapshot,
     getShellSnapshot,
+    listThreadsWithPullRequests,
     getArchivedShellSnapshot,
+    getDeletedWorktreeThreads,
     searchThreads,
     getSnapshotSequence,
     getCounts,

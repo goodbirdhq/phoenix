@@ -36,7 +36,7 @@ function QuotaBar({
 }) {
   const label = labelOverride ?? subscriptionLimitWindowLabel(window);
   return (
-    <div className="min-w-0 space-y-[9px]">
+    <div className="min-w-0 space-y-2.25">
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-sm font-medium">{label}</span>
         <span
@@ -108,12 +108,12 @@ export function UsageQuotas({
 
   return (
     <section
-      className="flex h-[286px] flex-col gap-5 overflow-y-auto rounded-[10px] border border-border bg-muted/30 p-5"
+      className="flex h-[286px] flex-col gap-5 overflow-y-auto rounded-lg border border-border bg-muted/30 p-5"
       aria-label="Usage limits"
     >
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2.5">
-          <h2 className="text-[15px] leading-[18px] font-semibold">Usage limits</h2>
+          <h2 className="text-base leading-4.5 font-semibold">Usage limits</h2>
           <span className="text-xs text-muted-foreground">
             {isPending || isRefreshing
               ? "Checking…"
@@ -310,13 +310,13 @@ export function UsageQuotaSummary({
       aria-busy={checking}
     >
       <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
-        <div className="flex flex-col gap-[3px]">
+        <div className="flex flex-col gap-0.75">
           <div className="text-sm leading-5 font-semibold">Usage limits</div>
-          <div className="text-[11px] leading-4 text-muted-foreground">
+          <div className="text-2xs leading-4 text-muted-foreground">
             {checking ? "Checking usage…" : "Percent used · last reported"}
           </div>
         </div>
-        <span className="text-xs leading-[18px] text-muted-foreground">All environments</span>
+        <span className="text-xs leading-4.5 text-muted-foreground">All environments</span>
       </div>
       {rows.map(({ account, reading }) => {
         const kind = usageProviderKind(account.driver);
@@ -346,15 +346,15 @@ export function UsageQuotaSummary({
         return (
           <div
             key={account.key}
-            className="flex flex-col gap-[5px] border-b border-border/50 px-3 py-2 last:border-b-0"
+            className="flex flex-col gap-1.25 border-b border-border/50 px-3 py-2 last:border-b-0"
             style={{ minHeight: kind === "codex" || kind === "claude" ? 85 : 56 }}
           >
             <div className="flex items-center gap-2">
               <Mark className="size-[18px] shrink-0" />
-              <span className="min-w-0 flex-1 truncate text-[13px] leading-[18px] font-medium">
+              <span className="min-w-0 flex-1 truncate text-sm leading-4.5 font-medium">
                 {account.name}
               </span>
-              <span className="flex w-9 shrink-0 justify-end text-[13px] leading-[18px] tabular-nums">
+              <span className="flex w-9 shrink-0 justify-end text-sm leading-4.5 tabular-nums">
                 {pending ? (
                   <QuotaSkeleton width="36px" height={18} />
                 ) : blocked ? null : main ? (
@@ -364,16 +364,16 @@ export function UsageQuotaSummary({
                 )}
               </span>
             </div>
-            <div className="flex flex-col gap-1 pl-[26px] text-[11px] leading-4 text-muted-foreground">
+            <div className="flex flex-col gap-1 pl-6.5 text-2xs leading-4 text-muted-foreground">
               {blocked ? (
                 <span className="text-destructive">
                   Session limit reached · {resetLabel(blocked)}
                 </span>
               ) : hasBars ? (
                 <>
-                  <div className="h-[5px] overflow-hidden rounded-[3px] bg-border">
+                  <div className="h-[5px] overflow-hidden rounded-xs bg-border">
                     <div
-                      className="h-full rounded-[3px]"
+                      className="h-full rounded-xs"
                       style={{
                         width: pending ? "0%" : `${main?.usedPercent ?? 0}%`,
                         backgroundColor: color,
@@ -401,9 +401,9 @@ export function UsageQuotaSummary({
                   {kind === "codex" && (spark || pending) && (
                     <div className="flex items-center gap-2">
                       <span className="w-[34px] shrink-0">Spark</span>
-                      <span className="h-[3px] flex-1 rounded-[3px] bg-border">
+                      <span className="h-[3px] flex-1 rounded-xs bg-border">
                         <span
-                          className="block h-full rounded-[3px] bg-sky-600"
+                          className="block h-full rounded-xs bg-info"
                           style={{ width: pending ? "0%" : `${spark?.usedPercent ?? 0}%` }}
                         />
                       </span>
@@ -421,7 +421,7 @@ export function UsageQuotaSummary({
                       {pending ? (
                         <QuotaSkeleton width="225px" />
                       ) : session && session.usedPercent >= 90 ? (
-                        <span className={unknown ? "" : "text-amber-700 dark:text-amber-500"}>
+                        <span className={unknown ? "" : "text-warning-foreground"}>
                           Session {Math.round(session.usedPercent)}% used · {resetLabel(session)}
                         </span>
                       ) : null}
@@ -469,7 +469,7 @@ function QuotaSkeleton({
 }) {
   return (
     <span aria-hidden className="flex shrink-0 items-center" style={{ width, height }}>
-      <span className="h-2 w-full rounded-[3px] bg-border" />
+      <span className="h-2 w-full rounded-xs bg-border" />
     </span>
   );
 }

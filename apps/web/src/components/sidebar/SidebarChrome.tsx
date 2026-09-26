@@ -15,7 +15,6 @@ import {
   KeyboardIcon,
   PaletteIcon,
   Settings2Icon,
-  GitPullRequestIcon,
   ServerIcon,
   SettingsIcon,
 } from "lucide-react";
@@ -34,14 +33,11 @@ import { useWebEnvironmentSchedules } from "../../state/schedules";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
-  resolveSidebarStageFocusRingOffsetClass,
   SidebarStageBackdrop,
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
 import { Badge } from "../ui/badge";
 import {
-  SidebarFooter,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -50,8 +46,10 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
+import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdateMenuItem } from "./SidebarUpdatePill";
+import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -75,9 +73,10 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       : null;
 
   return (
-    <SidebarHeader
+    // The titlebar row, not a padded SidebarHeader: it aligns to the window controls.
+    <div
       className={cn(
-        "@container/sidebar-header relative shrink-0 flex-row items-center px-3 pb-0 md:px-0",
+        "@container/sidebar-header relative flex shrink-0 flex-row items-center gap-2 px-3 pb-0 md:px-0",
         legacy || compact
           ? "h-[var(--workspace-topbar-height)] pt-0"
           : "h-[calc(var(--workspace-topbar-height)+14px)] pt-3.5",
@@ -86,17 +85,14 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     >
       {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
       <SidebarTrigger
-        className={cn(
-          "relative z-10 md:hidden",
-          backdropVariant &&
-            "focus-visible:ring-white/90 [&_svg]:stroke-white/90! [&_svg]:opacity-100! [&_svg]:hover:stroke-white! [:hover,[data-pressed]]:bg-white/15",
-          backdropVariant && resolveSidebarStageFocusRingOffsetClass(backdropVariant),
-        )}
+        // Over the stage artwork: the media viewer's control-on-imagery treatment.
+        variant={backdropVariant ? "media-navigation" : "ghost"}
+        className="relative top-auto z-10 translate-y-0 md:hidden"
       />
       <SidebarBrand onBackdrop={backdropVariant !== null} legacy={legacy} />
       {pillLabel ? (
         <Badge
-          className="relative z-10 ml-1 hidden rounded-full px-1.5 text-muted-foreground @[15rem]/sidebar-header:inline-flex"
+          className="relative z-10 ml-1 hidden @[15rem]/sidebar-header:inline-flex"
           data-environment-identification="pill"
           size="sm"
           variant="secondary"
@@ -104,7 +100,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           {pillLabel}
         </Badge>
       ) : null}
-    </SidebarHeader>
+    </div>
   );
 });
 
@@ -113,7 +109,7 @@ function SidebarBrand({ onBackdrop, legacy }: { onBackdrop: boolean; legacy: boo
     <Link
       aria-label="Go to threads"
       className={cn(
-        "relative z-10 hidden h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex",
+        "relative z-10 hidden h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex",
         legacy
           ? "ml-[var(--workspace-titlebar-content-left)]"
           : "ml-[calc(var(--workspace-titlebar-content-left)+22px)]",
@@ -132,6 +128,11 @@ function SidebarBrand({ onBackdrop, legacy }: { onBackdrop: boolean; legacy: boo
     </Link>
   );
 }
+
+// Footer tab buttons are Phoenix's own look (icon tabs with an expanded active
+// pill), so they are plain buttons rather than restyled SidebarMenuButtons.
+const SIDEBAR_FOOTER_BUTTON_CLASS_NAME =
+  "relative inline-flex h-9 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-hidden ring-ring transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 [&>svg]:shrink-0";
 
 function SidebarUtilityItem({
   icon,
@@ -155,7 +156,8 @@ function SidebarUtilityItem({
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton
+            <button
+              type="button"
               aria-label={
                 badge
                   ? `${label}, ${badge} unacknowledged ${badge === 1 ? "failure" : "failures"}`
@@ -166,9 +168,10 @@ function SidebarUtilityItem({
               aria-current={active ? "page" : undefined}
               onClick={onClick}
               className={cn(
-                "relative h-9 w-9 @max-[316px]/sidebar-footer:w-7! @max-[316px]/sidebar-footer:px-0 group-data-[wide-label=true]/footer:w-8 justify-center rounded-[8px] p-0 text-sidebar-muted-foreground [&>svg]:size-4 [&>svg]:text-current",
+                SIDEBAR_FOOTER_BUTTON_CLASS_NAME,
+                "w-9 @max-[316px]/sidebar-footer:w-7! @max-[316px]/sidebar-footer:px-0 group-data-[wide-label=true]/footer:w-8 [&>svg]:size-4",
                 active &&
-                  "w-auto group-data-[wide-label=true]/footer:w-auto max-w-full gap-1.5 bg-zinc-200 hover:bg-zinc-200 px-3 text-xs font-semibold text-zinc-800 dark:bg-zinc-800 dark:hover:bg-zinc-800 dark:text-zinc-100 [&>svg]:size-[18px]",
+                  "w-auto group-data-[wide-label=true]/footer:w-auto max-w-full gap-1.5 bg-sidebar-control-surface px-3 text-xs font-semibold text-sidebar-foreground hover:bg-sidebar-control-surface [&>svg]:size-4.5",
               )}
             >
               {icon}
@@ -183,25 +186,16 @@ function SidebarUtilityItem({
               ) : null}
               {badge ? (
                 <span
-                  className="absolute right-0 top-0 flex min-h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[9px] font-semibold leading-none text-white"
+                  className="absolute right-0 top-0 flex min-h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-4xs font-semibold leading-none text-white"
                   aria-label={`${badge} unacknowledged failures`}
                 >
                   {badge > 99 ? "99+" : badge}
                 </span>
               ) : null}
-            </SidebarMenuButton>
+            </button>
           }
         />
-        <TooltipPopup
-          side="top"
-          className={
-            tooltipContent
-              ? "rounded-[10px] [&_[data-slot=tooltip-viewport]]:p-0 [--viewport-inline-padding:0px]"
-              : undefined
-          }
-        >
-          {tooltipContent ?? label}
-        </TooltipPopup>
+        <TooltipPopup side="top">{tooltipContent ?? label}</TooltipPopup>
       </Tooltip>
     </SidebarMenuItem>
   );
@@ -230,25 +224,24 @@ function SidebarSettingsMenu({ onNavigate }: { onNavigate: () => void }) {
       <Menu>
         <MenuTrigger
           render={
-            <SidebarMenuButton
-              size="icon"
+            <button
+              type="button"
               aria-label={updateAvailable ? "Settings, update available" : "Settings"}
-              className="relative size-9 @max-[316px]/sidebar-footer:w-7! rounded-[8px] text-sidebar-muted-foreground [&>svg]:text-current data-popup-open:bg-zinc-200 dark:data-popup-open:bg-zinc-800"
+              className={cn(
+                SIDEBAR_FOOTER_BUTTON_CLASS_NAME,
+                "size-9 @max-[316px]/sidebar-footer:w-7! data-popup-open:bg-sidebar-control-surface",
+              )}
             />
           }
         >
           <SettingsIcon className="size-4" />
           {updateAvailable ? (
-            <span className="absolute right-1 top-[3px] size-[7px] rounded-full border border-sidebar bg-sky-600" />
+            <span className="absolute right-1 top-[3px] size-1.75 rounded-full border border-sidebar bg-info" />
           ) : null}
         </MenuTrigger>
-        <MenuPopup
-          side="top"
-          align="end"
-          className="w-[272px] rounded-[8px] border border-border bg-popover shadow-md backdrop-filter-none [--glass-opacity:100%]"
-        >
+        <MenuPopup side="top" align="end" variant="solid" className="w-68">
           <MenuItem
-            className="h-8 rounded-[4px] text-sm"
+            className="h-8"
             onClick={() => {
               onNavigate();
               void navigate({ to: "/settings" });
@@ -263,7 +256,7 @@ function SidebarSettingsMenu({ onNavigate }: { onNavigate: () => void }) {
           {items.map(({ to, label, Icon }) => (
             <MenuItem
               key={to}
-              className="h-8 rounded-[4px] text-sm"
+              className="h-8"
               onClick={() => {
                 onNavigate();
                 void navigate({ to });
@@ -377,14 +370,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         currentFooterPage === "pull-requests" ||
         currentFooterPage === "schedules"
       }
-      className="@container/sidebar-footer group/footer flex-row items-center justify-between gap-1"
+      className="@container/sidebar-footer group/footer flex-row items-center justify-between"
     >
       {currentFooterPage === "settings" ? (
         <SidebarMenuItem className="min-w-0 flex-1">
-          <SidebarMenuButton
-            onClick={handleBackClick}
-            className="h-9 rounded-[8px] text-xs font-medium"
-          >
+          <SidebarMenuButton onClick={handleBackClick} className="h-9">
             <ArrowLeftIcon />
             <span>Back</span>
           </SidebarMenuButton>
@@ -402,7 +392,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           />
           {pullRequestsSupported ? (
             <SidebarUtilityItem
-              icon={<GitPullRequestIcon />}
+              icon={<PullRequestGlyph.pullRequest />}
               label="Pull Requests"
               active={currentFooterPage === "pull-requests"}
               onClick={handlePullRequestsClick}
@@ -438,10 +428,12 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
-    <SidebarFooter className="border-t-0 px-[11px] py-2.5">
+    // A plain footer rather than SidebarFooter: Phoenix's tab row keeps its own insets.
+    <div data-sidebar="footer" className="flex flex-col gap-2 px-2.75 py-2.5">
+      <SidebarThreadUndoNotice />
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />
-    </SidebarFooter>
+    </div>
   );
 });

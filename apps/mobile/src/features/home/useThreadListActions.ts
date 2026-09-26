@@ -4,9 +4,13 @@ import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/threa
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
-import { Alert } from "react-native";
+import { Alert, Platform } from "react-native";
 
-import { showConfirmDialog, type ConfirmDialogRequest } from "../../components/ConfirmDialogHost";
+import {
+  showConfirmDialog,
+  showTextInputDialog,
+  type ConfirmDialogRequest,
+} from "../../components/ConfirmDialogHost";
 import { withThreadDismissal } from "./thread-dismissal";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThreadSnapshots";
@@ -31,6 +35,7 @@ import {
   threadDropLifecycle,
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
+import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 
 /** Version skew: never send settle/unsettle to a server that predates them
     (capability defaults false on decode for older servers). */
@@ -59,6 +64,15 @@ function environmentSupportsPinReorder(environmentId: EnvironmentThreadShell["en
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadPinReorder === true
+  );
+}
+
+function environmentSupportsAutoSettleOptOut(
+  environmentId: EnvironmentThreadShell["environmentId"],
+) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadAutoSettleOptOut === true
   );
 }
 
@@ -231,6 +245,9 @@ export function useThreadListActions() {
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
   const unpinMutation = useAtomCommand(threadEnvironment.unpin, { reportFailure: false });
+  const setAutoSettleMutation = useAtomCommand(threadEnvironment.setAutoSettle, {
+    reportFailure: false,
+  });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -427,6 +444,35 @@ export function useThreadListActions() {
     },
     [unpinMutation],
   );
+  /** Sets per-thread automatic settlement on or off. */
+  const setThreadAutoSettle = useCallback(
+    async (thread: EnvironmentThreadShell, enabled: boolean) => {
+      if (!environmentSupportsAutoSettleOptOut(thread.environmentId)) {
+        Alert.alert(
+          "Could not update auto-settle",
+          "This environment's server does not support turning auto-settle off per thread yet. Update the server to use it.",
+        );
+        return false;
+      }
+      selectionHaptic();
+      const result = await setAutoSettleMutation({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id, enabled },
+      });
+      if (result._tag === "Failure") {
+        const error = Cause.squash(result.cause);
+        Alert.alert(
+          "Could not update auto-settle",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The auto-settle setting could not be changed.",
+        );
+        return false;
+      }
+      return true;
+    },
+    [setAutoSettleMutation],
+  );
   const regenerateThreadTitle = useCallback(
     async (thread: EnvironmentThreadShell, options?: ThreadActionOptions) => {
       const key = scopedThreadKey(thread.environmentId, thread.id);
@@ -467,6 +513,50 @@ export function useThreadListActions() {
       } finally {
         titleRegenerationInFlightThreadKeys.current.delete(key);
       }
+    },
+    [updateThreadMetadata],
+  );
+  const renameThread = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      const commit = (title: string) => {
+        const resolution = resolveThreadTitleRename({ title, originalTitle: thread.title });
+        if (resolution.action === "reject-empty") {
+          Alert.alert("Could not rename thread", "Thread title cannot be empty.");
+          return;
+        }
+        if (resolution.action === "noop") return;
+        selectionHaptic();
+        void updateThreadMetadata({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, title: resolution.title },
+        }).then((result) => {
+          if (result._tag === "Success") return;
+          const error = Cause.squash(result.cause);
+          Alert.alert(
+            "Could not rename thread",
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : "The thread could not be renamed.",
+          );
+        });
+      };
+
+      if (Platform.OS === "ios") {
+        Alert.prompt(
+          "Rename thread",
+          undefined,
+          (title) => commit(title ?? ""),
+          "plain-text",
+          thread.title,
+        );
+        return;
+      }
+      showTextInputDialog({
+        title: "Rename thread",
+        initialValue: thread.title,
+        confirmText: "Rename",
+        onConfirm: commit,
+      });
     },
     [updateThreadMetadata],
   );
@@ -732,7 +822,9 @@ export function useThreadListActions() {
     pinThread,
     unpinThread,
     movePinnedThread,
+    setThreadAutoSettle,
     moveThread,
+    renameThread,
     regenerateThreadTitle,
   };
 }

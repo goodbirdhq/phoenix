@@ -11,10 +11,13 @@ import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 
-// Bounded so a pathologically slow endpoint cannot block the (cheaper) socket
-// fallback for long. The cached thread renders while this runs, so the wait only
-// delays the transition to live data on the first open, not the initial paint.
-const DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS = 6_000;
+// Long enough for a slow but alive server to finish. On a cold open a timeout
+// makes the socket ask the same server for the same snapshot again, and older
+// turn pages have no fallback, so a short deadline only drops work. The socket
+// fallback is for setups where /api fails but /ws works, such as a proxy that
+// blocks /api. A dead server drops the socket session, which interrupts a
+// cold-open load. Older turn pages wait for this deadline.
+const DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS = 20_000;
 
 /**
  * Load a thread's detail snapshot over HTTP instead of embedding it in the
@@ -31,6 +34,12 @@ export interface ThreadSnapshotWindow {
   readonly beforeCursor?: string;
 }
 
+/** Capabilities the connected server advertised that shape the snapshot response. */
+export interface ThreadSnapshotRequestOptions {
+  readonly acceptsNonImageAttachments?: boolean;
+  readonly reasoningMessages?: boolean;
+}
+
 export const fetchEnvironmentThreadSnapshot = Effect.fn(
   "clientRuntime.state.fetchEnvironmentThreadSnapshot",
 )(function* (input: {
@@ -39,6 +48,7 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
   readonly timeoutMs?: number;
   readonly window?: ThreadSnapshotWindow;
   readonly acceptsNonImageAttachments?: boolean;
+  readonly reasoningMessages?: boolean;
 }) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
@@ -51,6 +61,7 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
       client.threadSnapshot({
         params: { threadId: input.threadId },
         payload: {
+          ...(input.reasoningMessages === true ? { reasoningMessages: "true" as const } : {}),
           ...(input.window !== undefined ? { turnLimit: input.window.turnLimit } : {}),
           ...(input.window?.beforeCursor !== undefined
             ? { beforeCursor: input.window.beforeCursor }
@@ -79,7 +90,7 @@ export class ThreadSnapshotLoader extends Context.Service<
       prepared: PreparedConnection,
       threadId: ThreadId,
       window?: ThreadSnapshotWindow,
-      acceptsNonImageAttachments?: boolean,
+      options?: ThreadSnapshotRequestOptions,
     ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>>;
   }
 >()("@t3tools/client-runtime/state/threadSnapshotHttp/ThreadSnapshotLoader") {}
@@ -97,13 +108,16 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
         prepared: PreparedConnection,
         threadId: ThreadId,
         window?: ThreadSnapshotWindow,
-        acceptsNonImageAttachments?: boolean,
+        options?: ThreadSnapshotRequestOptions,
       ) =>
         fetchEnvironmentThreadSnapshot({
           prepared,
           threadId,
+          ...(options?.reasoningMessages === true ? { reasoningMessages: true } : {}),
           ...(window !== undefined ? { window } : {}),
-          ...(acceptsNonImageAttachments === true ? { acceptsNonImageAttachments: true } : {}),
+          ...(options?.acceptsNonImageAttachments === true
+            ? { acceptsNonImageAttachments: true }
+            : {}),
         }).pipe(
           Effect.map(Option.some<OrchestrationThreadDetailSnapshot>),
           Effect.provideService(HttpClient.HttpClient, httpClient),

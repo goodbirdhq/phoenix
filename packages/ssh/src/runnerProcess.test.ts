@@ -23,7 +23,7 @@ const decodeStarted = Schema.decodeUnknownSync(Schema.fromJsonString(Started));
 describe.skipIf(HostProcessPlatform.defaultValue() === "win32")(
   "remote runner process ownership",
   () => {
-    it.live("keeps the server PID and graceful shutdown through an explicit Phoenix script", () =>
+    it.live("keeps the server PID and graceful shutdown through the node-script runner", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -99,7 +99,7 @@ server.listen(Number(process.env.T3_TEST_PORT ?? 0), "127.0.0.1", () => {
                 ),
               ),
             );
-            // A failed PID assertion must still close the owned fixture server, including an npm child.
+            // A failed PID assertion must still close the owned fixture server.
             yield* Effect.addFinalizer(() =>
               Effect.gen(function* () {
                 if (yield* child.isRunning) {
@@ -325,9 +325,9 @@ if (mode === "etarget" || mode === "failed-with-path") {
             },
             stdin: Stream.make(
               new TextEncoder().encode(
-                buildRemoteT3RunnerScript({
-                  ...(mode === "node-override" ? { nodeScriptPath: cliPath } : {}),
-                }),
+                buildRemoteT3RunnerScript(
+                  mode === "node-override" ? { nodeScriptPath: cliPath } : {},
+                ),
               ),
             ),
           }),

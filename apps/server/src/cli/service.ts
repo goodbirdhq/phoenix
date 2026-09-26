@@ -2,8 +2,7 @@ import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Terminal from "effect/Terminal";
-import { Command, Flag, GlobalFlag } from "effect/unstable/cli";
-import { Prompt } from "effect/unstable/cli";
+import { Command, Flag, GlobalFlag, Prompt } from "effect/unstable/cli";
 
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
@@ -116,7 +115,7 @@ const runServiceCommand = Effect.fn("cli.service.run")(function* <A, E>(
 
 const serviceReconcileFlags = {
   ...projectLocationFlags,
-  allowDowngrade: Flag.boolean("allow-downgrade").pipe(
+  allowDowngrade: Flag.Boolean("allow-downgrade").pipe(
     Flag.withDescription("Allow replacing a newer installed service with this older CLI version."),
     Flag.withDefault(false),
   ),
@@ -158,6 +157,27 @@ const serviceUpdateCommand = Command.make("update", serviceReconcileFlags).pipe(
         }
         yield* Console.log(
           `${result.previouslyInstalled ? "Updated" : "Installed"} Phoenix service with phoenix@${packageJson.version}.\nLogs: ${result.plan.logPath}`,
+        );
+      }),
+    ),
+  ),
+);
+
+const serviceRestartCommand = Command.make("restart", projectLocationFlags).pipe(
+  Command.withDescription(
+    "Restart the background service on the version it is installed with, without reinstalling it.",
+  ),
+  Command.withHandler((flags) =>
+    runServiceCommand(
+      flags,
+      Effect.gen(function* () {
+        const service = yield* BootService.BootService;
+        const status = yield* service.status;
+        const restarted = yield* service.restart;
+        yield* Console.log(
+          restarted
+            ? `Restarted the Phoenix service${status.installedVersion === undefined ? "" : ` on phoenix@${status.installedVersion}`}.`
+            : "Phoenix service is not installed for this Phoenix home.",
         );
       }),
     ),
@@ -222,7 +242,7 @@ export const offerServiceDuringOnboarding = Effect.gen(function* () {
   // enable-linger equivalent on macOS. Do not promise more than that.
   const platform = yield* HostProcessPlatform;
   const wanted = yield* Prompt.run(
-    Prompt.confirm({
+    Prompt.Confirm({
       message: installed
         ? "The installed Phoenix service needs an update or repair. Update it now?"
         : platform === "darwin"
@@ -270,6 +290,7 @@ export const serviceCommand = Command.make("service").pipe(
   Command.withDescription("Manage the Phoenix background service."),
   Command.withSubcommands([
     serviceInstallCommand,
+    serviceRestartCommand,
     serviceUninstallCommand,
     serviceUpdateCommand,
     serviceStatusCommand,

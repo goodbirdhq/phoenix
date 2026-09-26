@@ -7,7 +7,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const encodeCursor = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-it.layer(NodeSqliteClient.layerMemory())("061_UsageSessionLinks", (it) => {
+it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("061_UsageSessionLinks", (it) => {
   it.effect(
     "backfills explicit supported native identities, excluding malformed and unidentified rows",
     () =>

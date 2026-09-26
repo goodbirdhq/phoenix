@@ -4,6 +4,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { LinkIcon, PlusIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { isLocalEnvironmentDisabled } from "../localEnvironment";
+import { isElectron } from "../env";
 import { NoProjectsHero } from "../components/NoProjectsHero";
 import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
@@ -87,16 +89,17 @@ function IndexDraftLanding() {
 
 function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+      {isElectron ? <WorkspacePageHeader electron /> : null}
       <Empty className="flex-1">
         <EmptyHeader className="max-w-md">
-          <EmptyTitle className="text-foreground text-xl">Couldn’t start a new thread</EmptyTitle>
-          <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
+          <EmptyTitle>Couldn’t start a new thread</EmptyTitle>
+          <EmptyDescription>
             The project is still available. Try opening the draft again.
           </EmptyDescription>
           <div className="mt-5 flex justify-center">
             <Button size="sm" onClick={onRetry}>
-              <RefreshIcon className="size-4" />
+              <RefreshIcon size="md" />
               Try again
             </Button>
           </div>
@@ -111,10 +114,14 @@ export const Route = createFileRoute("/_chat/")({
 });
 
 function HostedStaticOnboardingState() {
+  const description = isLocalEnvironmentDisabled()
+    ? "The local environment is turned off. Connect a remote environment, or turn the local environment back on in Connections."
+    : "Open Connections and add that machine using its pairing link. This browser must be able to reach it directly, including over your LAN or tailnet.";
+
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
-        <WorkspacePageHeader className="border-b border-border">
+        <WorkspacePageHeader electron={isElectron} className="border-b border-border">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-foreground md:text-muted-foreground/60">
               {APP_DISPLAY_NAME}
@@ -128,17 +135,12 @@ function HostedStaticOnboardingState() {
               <div className="mx-auto mb-5 flex size-11 items-center justify-center rounded-xl border border-border/70 bg-background/70 text-muted-foreground">
                 <LinkIcon className="size-5" />
               </div>
-              <EmptyTitle className="text-foreground text-xl">
-                Connect to a computer running Phoenix
-              </EmptyTitle>
-              <EmptyDescription className="mt-2 text-sm leading-relaxed text-muted-foreground/78">
+              <EmptyTitle>Connect to a computer running Phoenix</EmptyTitle>
+              <EmptyDescription>
                 This browser connects to Phoenix running on your computer or a server. Start the
                 Phoenix desktop app or command-line server on that machine and keep it running.
               </EmptyDescription>
-              <EmptyDescription className="mt-2 text-sm leading-relaxed text-muted-foreground/78">
-                Open Connections and add that machine using its pairing link. This browser must be
-                able to reach it directly, including over your LAN or tailnet.
-              </EmptyDescription>
+              <EmptyDescription>{description}</EmptyDescription>
               <div className="mt-6 flex justify-center">
                 <Button render={<Link to="/settings/connections" />} size="sm">
                   <PlusIcon className="size-4" />

@@ -12,9 +12,19 @@ export interface UsageRecord {
   readonly provider: UsageProviderKind;
   readonly timestampMs: number;
   readonly model: string;
+  /**
+   * Rate-table key when the provider's display name carries tiers the table
+   * does not know, such as Cursor's `claude-opus-5-5-high`. Defaults to `model`.
+   */
+  readonly rateModel?: string;
   readonly sessionId: string;
   readonly totals: UsageTokenTotals;
   readonly reportedCostUsd: number | null;
+  /**
+   * Whether the request ran in fast mode, which bills at a model-specific
+   * multiple of the standard rate. Only Claude Code records this.
+   */
+  readonly fast: boolean;
   /**
    * Key for cross-file de-duplication, or `null` when the record is inherently
    * unique and needs no dedup.
@@ -58,80 +68,6 @@ export function totalTokens(totals: UsageTokenTotals): number {
     totals.cacheCreationTokens +
     totals.outputTokens
   );
-}
-
-/* -------------------------------------------------------------------------- */
-/* OpenCode                                                                   */
-/* -------------------------------------------------------------------------- */
-
-/** The columns needed from OpenCode's SQLite `message` table. */
-export interface OpenCodeMessageRow {
-  readonly id: unknown;
-  readonly sessionId: unknown;
-  readonly timestampMs: unknown;
-  readonly data: unknown;
-}
-
-/**
- * Parses one OpenCode assistant message.
- *
- * OpenCode stores cached input and reasoning as additive token axes. Phoenix's
- * usage contract exposes reasoning as a subset of output, so reasoning is
- * folded into `outputTokens` while remaining available as its own breakdown.
- */
-export function parseOpenCodeMessage(row: OpenCodeMessageRow): UsageRecord | null {
-  if (typeof row.data !== "string") return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(row.data);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const message = parsed as Record<string, unknown>;
-  if (message["role"] !== "assistant") return null;
-
-  const providerId = typeof message["providerID"] === "string" ? message["providerID"] : "";
-  const modelId = typeof message["modelID"] === "string" ? message["modelID"] : "";
-  if (providerId.length === 0 || modelId.length === 0) return null;
-  if (typeof row.timestampMs !== "number" || !Number.isFinite(row.timestampMs)) return null;
-
-  const tokens = message["tokens"];
-  if (typeof tokens !== "object" || tokens === null) return null;
-  const tokenRecord = tokens as Record<string, unknown>;
-  const cache = tokenRecord["cache"];
-  const cacheRecord =
-    typeof cache === "object" && cache !== null ? (cache as Record<string, unknown>) : {};
-  const visibleOutputTokens = int(tokenRecord["output"]);
-  const reasoningTokens = int(tokenRecord["reasoning"]);
-  const totals: UsageTokenTotals = {
-    uncachedInputTokens: int(tokenRecord["input"]),
-    cachedInputTokens: int(cacheRecord["read"]),
-    cacheCreationTokens: int(cacheRecord["write"]),
-    outputTokens: visibleOutputTokens + reasoningTokens,
-    reasoningTokens,
-  };
-
-  const cost = message["cost"];
-  const messageId = typeof row.id === "string" ? row.id : "";
-  const time = message["time"];
-  const completed =
-    typeof time === "object" && time !== null
-      ? (time as Record<string, unknown>)["completed"]
-      : undefined;
-  const completedAt =
-    typeof completed === "number" && Number.isFinite(completed)
-      ? Math.trunc(completed)
-      : Math.trunc(row.timestampMs);
-  return {
-    provider: "opencode",
-    timestampMs: completedAt,
-    model: `${providerId}/${modelId}`,
-    sessionId: typeof row.sessionId === "string" ? row.sessionId : "",
-    totals,
-    reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? cost : null,
-    dedupeKey: messageId.length === 0 ? null : `opencode:${messageId}`,
-  };
 }
 
 /**
@@ -219,6 +155,7 @@ export function parseClaudeLine(line: string): UsageRecord | null {
       reasoningTokens: 0,
     },
     reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
+    fast: usageRecord["speed"] === "fast",
     dedupeKey,
   };
 }
@@ -378,6 +315,7 @@ export function parseCodexLine(line: string, state: CodexScanState): UsageRecord
     totals,
     // Codex does not report cost in the rollout.
     reportedCostUsd: null,
+    fast: false,
     // Events surviving the fork-copy suppression above are unique to this
     // rollout, so they need no global dedup.
     dedupeKey: null,
@@ -507,6 +445,7 @@ export function parseGrokLine(line: string): readonly UsageRecord[] {
         sessionId,
         totals: grokTotalsToUsage(topLevel),
         reportedCostUsd: grokCostTicksToUsd(topLevel.costUsdTicks),
+        fast: false,
         // No prompt id means we cannot tell two same-second updates apart.
         dedupeKey: promptId === null ? null : `${sessionId}:${promptId}:grok`,
       },
@@ -553,6 +492,7 @@ export function parseGrokLine(line: string): readonly UsageRecord[] {
       sessionId,
       totals,
       reportedCostUsd,
+      fast: false,
       dedupeKey: promptId === null ? null : `${sessionId}:${promptId}:${entry.model}`,
     });
   }

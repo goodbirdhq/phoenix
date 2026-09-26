@@ -6,6 +6,7 @@ import * as Socket from "effect/unstable/socket/Socket";
 import { remoteHttpClientLayer } from "@t3tools/client-runtime/rpc";
 import * as PrimaryEnvironmentHttpClient from "../environments/primary/httpClient";
 import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
+import * as ClientTracer from "../observability/clientTracer";
 import { browserCryptoLayer } from "./effectCrypto";
 
 const httpClientLayer = remoteHttpClientLayer((input, init) => globalThis.fetch(input, init));
@@ -13,7 +14,8 @@ const httpClientLayer = remoteHttpClientLayer((input, init) => globalThis.fetch(
 type RuntimeLayerSource =
   | typeof browserCryptoLayer
   | typeof httpClientLayer
-  | typeof Socket.layerWebSocketConstructorGlobal;
+  | typeof Socket.layerWebSocketConstructorGlobal
+  | typeof ClientTracer.layer;
 
 const primaryHttpRuntime = ManagedRuntime.make(
   PrimaryEnvironmentHttpClient.layer.pipe(Layer.provide(primaryEnvironmentHttpLayer)),
@@ -40,9 +42,10 @@ const runtimeLayer = Layer.mergeAll(
   browserCryptoLayer,
   httpClientLayer,
   Socket.layerWebSocketConstructorGlobal,
+  ClientTracer.layer,
 );
 
-const runtime: ManagedRuntime.ManagedRuntime<
+export const runtime: ManagedRuntime.ManagedRuntime<
   Layer.Success<RuntimeLayerSource>,
   Layer.Error<RuntimeLayerSource>
 > = ManagedRuntime.make(runtimeLayer);

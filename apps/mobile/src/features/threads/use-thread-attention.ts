@@ -16,8 +16,7 @@ export function useThreadAttentionPreferences() {
     // Attention is the default for a new install. Only an explicit false is
     // Manual ordering; keeping the key optional makes existing saved false
     // choices stable while letting unset preferences adopt the new default.
-    preferences.value.sidebarAttentionFirstEnabled !== false &&
-    preferences.value.legacyThreadListEnabled !== true;
+    preferences.value.sidebarAttentionFirstEnabled !== false;
   return {
     loaded,
     attentionFirstEnabled,
