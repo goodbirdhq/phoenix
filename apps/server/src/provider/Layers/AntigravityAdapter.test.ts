@@ -589,6 +589,49 @@ it.layer(layer)("AntigravityAdapter", (it) => {
     }),
   );
 
+  it.effect("leaves an open question to the user when a steer arrives", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      yield* h.adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      const first = yield* h.adapter
+        .sendTurn({ threadId, input: "Ask a question" })
+        .pipe(Effect.forkChild);
+      yield* h.nextPrompt;
+      const question = yield* h
+        .invokePermission({
+          sessionId: nativeSessionId,
+          toolCall: { toolCallId: "interaction_steer", title: "Continue?" },
+          options: [{ optionId: "yes", name: "Yes", kind: "allow_once" }],
+        })
+        .pipe(Effect.forkChild);
+      const opened = yield* h.waitForEvent((event) => event.type === "user-input.requested");
+      const marker = h.calls.length;
+      const steer = yield* h.adapter
+        .sendTurn({ threadId, input: "Also check the tests" })
+        .pipe(Effect.forkChild);
+      // Let the steer run as far as it can on its own.
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+      expect(h.calls.slice(marker)).toEqual([]);
+      expect(question.pollUnsafe()).toBeUndefined();
+
+      yield* h.adapter.respondToUserInput(threadId, ApprovalRequestId.make(opened.requestId!), {
+        interaction_steer: "yes",
+      });
+      expect(yield* Fiber.join(question)).toEqual({
+        outcome: { outcome: "selected", optionId: "yes" },
+      });
+      expect(yield* h.nextCancellation).toBe(1);
+      const replacement = yield* h.nextPrompt;
+      expect(replacement.content[0]).toEqual({ type: "text", text: "Also check the tests" });
+      yield* Deferred.succeed(replacement.result, { stopReason: "end_turn" });
+      yield* Effect.all([Fiber.join(first), Fiber.join(steer)]);
+    }),
+  );
+
   it.effect("waits for native cancellation before a steer changes the model", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness({ holdCancel: true });
