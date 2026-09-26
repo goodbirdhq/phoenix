@@ -997,6 +997,16 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         ]);
       }
 
+      // A starting session has no turn to join, so a steer waits for it.
+      const starting = yield* decideOrchestrationCommand({
+        command: makeCommand("steer"),
+        readModel: makeReadModel(null, null, makeSession("starting")),
+      });
+      expect((Array.isArray(starting) ? starting : [starting]).map((event) => event.type)).toEqual([
+        "thread.message-sent",
+        "thread.turn-start-queued",
+      ]);
+
       const released = yield* decideOrchestrationCommand({
         command: {
           type: "thread.turn.start.queued",

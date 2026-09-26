@@ -1662,14 +1662,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // A steer on a turn blocked by an approval or a blocking question would make
       // providers cancel the request (Antigravity does), so it waits in the queue
       // like web's composer does. Async questions leave the agent working.
+      // A starting session has no turn to join yet, so a steer would race the
+      // first turn's admission; it waits in the queue like web's composer does.
       const steerBlocked =
         command.deliveryMode === "steer" &&
-        Array.from(openRequests(targetThread).values()).some(
-          (activity) =>
-            activity.kind !== "user-input.requested" ||
-            !Predicate.isObject(activity.payload) ||
-            activity.payload.responseMode !== "message",
-        );
+        (targetThread.session?.status === "starting" ||
+          Array.from(openRequests(targetThread).values()).some(
+            (activity) =>
+              activity.kind !== "user-input.requested" ||
+              !Predicate.isObject(activity.payload) ||
+              activity.payload.responseMode !== "message",
+          ));
       const deliveryMode = steerBlocked ? "queue" : (command.deliveryMode ?? "queue");
       // Graceful-stop notices and explicit steers reach the provider as an in-turn steer so
       // the running turn sees them before it ends; ordinary messages stay queued.
