@@ -2163,13 +2163,16 @@ describe("buildThreadListV2ListItems row-state stamps", () => {
       const parentRow = itemsByThreadKey(atStart).get(parentKey)!;
       expect(parentRow.type === "v2-thread" && parentRow.timeLabel).toBe("3d");
       // A working child two minutes old keeps its own age, not the parent's.
-      expect(parentRow.type === "v2-thread" && parentRow.agentTimeLabels?.get(childKey)).toBe("2m");
+      expect(
+        parentRow.type === "v2-thread" && parentRow.agentRowStamps?.get(childKey)?.timeLabel,
+      ).toBe("2m");
 
       vi.setSystemTime(BASE_MS + MINUTE_MS);
       const atNextMinute = buildTickList([parent, child], BASE_MS + MINUTE_MS, []);
       const parentRowNext = itemsByThreadKey(atNextMinute).get(parentKey)!;
       expect(
-        parentRowNext.type === "v2-thread" && parentRowNext.agentTimeLabels?.get(childKey),
+        parentRowNext.type === "v2-thread" &&
+          parentRowNext.agentRowStamps?.get(childKey)?.timeLabel,
       ).toBe("3m");
       // The parent's own "3d" did not move, so only the child's label can
       // carry the tick to the expanded child row.
@@ -2178,6 +2181,46 @@ describe("buildThreadListV2ListItems row-state stamps", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("gives each spawned child its own queued-message state, not the parent's", () => {
+    const parent = makeThread({ id: ThreadId.make("queue-parent"), title: "queue parent" });
+    const child = makeThread({
+      id: ThreadId.make("queue-child"),
+      title: "queue child",
+      spawnedByThreadId: parent.id,
+    });
+    const parentKey = `v2-thread:${environmentId}:queue-parent`;
+    const childKey = `${environmentId}:queue-child`;
+    const build = (queued: ReadonlyArray<string>) =>
+      itemsByThreadKey(
+        buildTickList([parent, child], BASE_MS, [], {
+          queuedThreadKeys: new Set(queued),
+          snoozeEnvironmentIds: allEnvironments,
+        }),
+      ).get(parentKey)!;
+
+    // The parent's outbox leaves the expanded child's queued icon off...
+    const parentQueued = build([`${environmentId}:queue-parent`]);
+    expect(parentQueued.type === "v2-thread" && parentQueued.hasQueuedMessages).toBe(true);
+    expect(
+      parentQueued.type === "v2-thread" &&
+        parentQueued.agentRowStamps?.get(childKey)?.hasQueuedMessages,
+    ).toBe(false);
+    // ...and the child's own outbox turns it on without touching the parent.
+    const childQueued = build([childKey]);
+    expect(childQueued.type === "v2-thread" && childQueued.hasQueuedMessages).toBe(false);
+    expect(
+      childQueued.type === "v2-thread" &&
+        childQueued.agentRowStamps?.get(childKey)?.hasQueuedMessages,
+    ).toBe(true);
+    // Only the child's stamp moved, so the parent row must still re-render.
+    expect(threadListV2ListItemsAreEqual(build([]), childQueued)).toBe(false);
+    // The child's snooze menu clock is its own too.
+    expect(
+      childQueued.type === "v2-thread" &&
+        childQueued.agentRowStamps?.get(childKey)?.snoozePresetMinute,
+    ).toBe(NOW);
   });
 
   it("stamps the shelf loading-disabled state so recycled headers refresh", () => {

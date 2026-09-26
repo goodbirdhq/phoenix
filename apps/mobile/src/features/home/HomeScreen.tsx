@@ -769,7 +769,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onNewThreadOnBranch={props.onNewThreadOnBranch}
           thread={thread}
           agentThreads={item.agentThreads}
-          agentTimeLabels={item.agentTimeLabels}
+          agentRowStamps={item.agentRowStamps}
           variant={item.item.variant}
           hasQueuedMessages={item.hasQueuedMessages}
           snoozed={item.item.snoozed}

@@ -238,14 +238,20 @@ export interface ThreadListV2Layout {
   readonly nextSnoozeWakeAt: string | null;
 }
 
+/** The per-row stamps an expanded child row needs from its own list item. */
+export type ThreadListV2AgentRowStamp = Pick<
+  ThreadListV2ThreadListItem,
+  "timeLabel" | "hasQueuedMessages" | "snoozePresetMinute"
+>;
+
 export interface ThreadListV2ThreadListItem {
   readonly type: "v2-thread";
   readonly agentThreads?: ReadonlyArray<EnvironmentThreadShell>;
-  /** Each descendant's own time label, keyed `environmentId:threadId`, from
-      the same clock as `timeLabel`. Expanded child rows read theirs here, so
-      a young child under an old parent shows its own age and the minute
-      tick reaches it through the parent row's equality. */
-  readonly agentTimeLabels?: ReadonlyMap<string, string>;
+  /** Each descendant's own row stamps, keyed `environmentId:threadId`, from
+      the same build as this row's. Expanded child rows read theirs here
+      instead of inheriting the parent's, and a change to any of them
+      reaches the child through the parent row's equality. */
+  readonly agentRowStamps?: ReadonlyMap<string, ThreadListV2AgentRowStamp>;
   readonly key: string;
   readonly item: ThreadListV2Item;
   /** Precomputed so recycled-list equality can see a minute-tick change. */
@@ -414,7 +420,7 @@ export function threadListV2ListItemsAreEqual(
         previous.agentThreads?.length === item.agentThreads?.length &&
         (previous.agentThreads?.every((thread, index) => thread === item.agentThreads?.[index]) ??
           true) &&
-        timeLabelsAreEqual(previous.agentTimeLabels, item.agentTimeLabels) &&
+        agentRowStampsAreEqual(previous.agentRowStamps, item.agentRowStamps) &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&
@@ -446,13 +452,22 @@ export function threadListV2ListItemsAreEqual(
   }
 }
 
-function timeLabelsAreEqual(
-  previous: ReadonlyMap<string, string> | undefined,
-  next: ReadonlyMap<string, string> | undefined,
+function agentRowStampsAreEqual(
+  previous: ReadonlyMap<string, ThreadListV2AgentRowStamp> | undefined,
+  next: ReadonlyMap<string, ThreadListV2AgentRowStamp> | undefined,
 ): boolean {
   if (previous === next) return true;
   if (previous === undefined || next === undefined || previous.size !== next.size) return false;
-  for (const [key, label] of previous) if (next.get(key) !== label) return false;
+  for (const [key, stamp] of previous) {
+    const other = next.get(key);
+    if (
+      other?.timeLabel !== stamp.timeLabel ||
+      other.hasQueuedMessages !== stamp.hasQueuedMessages ||
+      other.snoozePresetMinute !== stamp.snoozePresetMinute
+    ) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -602,11 +617,19 @@ export function buildThreadListV2ListItems(input: {
       return {
         ...row,
         agentThreads,
-        agentTimeLabels: agentThreads
+        agentRowStamps: agentThreads
           ? new Map(
               agentThreads.map((thread) => {
                 const key = `${thread.environmentId}:${thread.id}`;
-                return [key, rowsByKey.get(key)?.timeLabel ?? ""] as const;
+                const own = rowsByKey.get(key);
+                return [
+                  key,
+                  {
+                    timeLabel: own?.timeLabel ?? "",
+                    hasQueuedMessages: own?.hasQueuedMessages === true,
+                    snoozePresetMinute: own?.snoozePresetMinute,
+                  },
+                ] as const;
               }),
             )
           : undefined,

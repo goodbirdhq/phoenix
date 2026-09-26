@@ -68,6 +68,7 @@ import {
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
+  type ThreadListV2AgentRowStamp,
   type ThreadListV2Status,
 } from "./threadListV2";
 import { useProject, useEnvironmentServerConfig } from "../../state/entities";
@@ -409,9 +410,9 @@ interface ThreadListV2RowProps {
   readonly parentProjectId?: EnvironmentThreadShell["projectId"];
   readonly selectedThreadKey?: string;
   readonly agentThreads?: ReadonlyArray<EnvironmentThreadShell>;
-  /** Root row's per-descendant time labels (see ThreadListV2ThreadListItem),
+  /** Root row's per-descendant stamps (see ThreadListV2ThreadListItem),
       handed down unchanged so every nesting level reads its own entry. */
-  readonly agentTimeLabels?: ReadonlyMap<string, string>;
+  readonly agentRowStamps?: ReadonlyMap<string, ThreadListV2AgentRowStamp>;
   readonly thread: EnvironmentThreadShell;
   readonly variant: "card" | "slim";
   /** A message for this thread is waiting in the outbox. */
@@ -1311,6 +1312,7 @@ function NestedThreadRow({
   node: ReturnType<typeof buildThreadAgentGroupHierarchy>[number];
 }) {
   const thread = node.thread;
+  const stamp = parentProps.agentRowStamps?.get(`${thread.environmentId}:${thread.id}`);
   const project = useProject({ environmentId: thread.environmentId, projectId: thread.projectId });
   const config = useEnvironmentServerConfig(thread.environmentId);
   const descendants = useMemo(() => {
@@ -1340,7 +1342,9 @@ function NestedThreadRow({
       pinned={thread.pinnedAt != null}
       snoozed={false}
       snoozeWakeLabelText={undefined}
-      timeLabel={parentProps.agentTimeLabels?.get(`${thread.environmentId}:${thread.id}`) ?? ""}
+      timeLabel={stamp?.timeLabel ?? ""}
+      hasQueuedMessages={stamp?.hasQueuedMessages === true}
+      snoozePresetMinute={stamp?.snoozePresetMinute ?? ""}
       canMoveUp={false}
       canMoveDown={false}
       searchMatch={undefined}
