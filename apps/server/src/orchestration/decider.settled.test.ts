@@ -967,6 +967,23 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         "thread.turn-start-requested",
       ]);
 
+      // A parent's send_to_session steer joins the child's running turn the same way.
+      const parentSteer = yield* decideOrchestrationCommand({
+        command: {
+          ...makeCommand("steer"),
+          commandId: CommandId.make("cmd-parent-steer"),
+          message: {
+            ...makeCommand("steer").message,
+            messageId: MessageId.make("message-parent-steer"),
+            origin: { kind: "session" as const, threadId: ThreadId.make("parent-thread") },
+          },
+        },
+        readModel: makeReadModel(null, null, runningSession),
+      });
+      expect(
+        (Array.isArray(parentSteer) ? parentSteer : [parentSteer]).map((event) => event.type),
+      ).toEqual(["thread.message-sent", "thread.turn-start-requested"]);
+
       const released = yield* decideOrchestrationCommand({
         command: {
           type: "thread.turn.start.queued",

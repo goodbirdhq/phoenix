@@ -1169,7 +1169,7 @@ export const make = Effect.gen(function* () {
   const sendToSession = Effect.fn("SessionsToolkit.sendToSession")(function* (input: {
     readonly threadId: ThreadId;
     readonly message: string;
-    readonly mode?: "queue" | "interrupt" | undefined;
+    readonly mode?: "queue" | "interrupt" | "steer" | undefined;
   }) {
     const scope = yield* requireSessionsCapability;
     const child = yield* requireSpawnedChild(scope.threadId, input.threadId);
