@@ -152,7 +152,6 @@ function GeneralSettingsSection() {
         onValueChange={(value) => savePreferences({ sidebarAttentionFirstEnabled: value })}
       />
       <SessionOrchestrationSettingsRows />
-      <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
       {GENERAL_INSIGHT_SETTINGS_ROWS.map((row) => (
         <SettingsRow
           key={row.target}

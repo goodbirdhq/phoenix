@@ -370,8 +370,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.deepStrictEqual(
       resolveDesktopRuntimeDependencies(
         {
-          "@clerk/electron": "catalog:",
-          "@clerk/electron-passkeys": "catalog:",
           "@crowecawcaw/xa11y": "0.13.0",
           "@effect/platform-node": "catalog:",
           "@napi-rs/keyring": "^1.3.0",
@@ -385,14 +383,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           "playwright-core": "1.60.0",
         },
         {
-          "@clerk/electron": "0.0.37",
-          "@clerk/electron-passkeys": "0.0.3",
           "@effect/platform-node": "4.0.0-beta.59",
           effect: "4.0.0-beta.59",
         },
       ),
       {
-        "@clerk/electron-passkeys": "0.0.3",
         "@crowecawcaw/xa11y": "0.13.0",
         "@napi-rs/keyring": "^1.3.0",
         "ffi-rs": "1.3.2",

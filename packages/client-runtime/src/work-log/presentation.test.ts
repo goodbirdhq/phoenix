@@ -207,6 +207,8 @@ describe("summarizeToolGroup", () => {
 
 describe("resolveWorkEntryToolPresentation", () => {
   it.each([
+    "mcp__phoenix__preview_click",
+    "phoenix · preview_click completed",
     "mcp__t3-code__preview_click",
     "mcp__t3_code__preview_click",
     "mcp__t3code__preview_click",
