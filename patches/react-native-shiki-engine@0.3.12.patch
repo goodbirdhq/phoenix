@@ -1,0 +1,12 @@
+diff --git a/android/build.gradle b/android/build.gradle
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -128,5 +128,7 @@ dependencies {
+   //noinspection GradleDynamicVersion
+   implementation "com.facebook.react:react-native:+"
+   implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+-  implementation "com.facebook.fbjni:fbjni:+"
++  // Match React Native 0.86's fbjni and NDK 27 C++ runtime. fbjni 0.8 needs
++  // __cxa_init_primary_exception from NDK 28 and crashes with the app's libc++.
++  implementation "com.facebook.fbjni:fbjni:0.7.0"
+ }

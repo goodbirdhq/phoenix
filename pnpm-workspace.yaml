@@ -153,6 +153,8 @@ patchedDependencies:
   # Preserve the final layout frame. Backport of [#10171](https://github.com/software-mansion/react-native-reanimated/pull/10171).
   react-native-reanimated@4.5.5: patches/react-native-reanimated@4.5.5.patch
   react-native-screens@4.26.2: patches/react-native-screens@4.26.2.patch
+  # Match React Native 0.86's NDK 27 runtime; fbjni 0.8 requires NDK 28's libc++.
+  react-native-shiki-engine@0.3.12: patches/react-native-shiki-engine@0.3.12.patch
   uniwind@1.11.0: patches/uniwind@1.11.0.patch
 
 peerDependencyRules:
