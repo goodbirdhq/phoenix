@@ -23,6 +23,7 @@ on:
         options:
           - build
           - update
+          - status
       profile:
         description: "Store build profile (v2-preview supports build mode only)"
         required: true
@@ -46,6 +47,10 @@ on:
         type: string
       message:
         description: "OTA update message (mode=update only)"
+        required: false
+        type: string
+      build_id:
+        description: "Existing EAS build ID to retrieve (mode=status only)"
         required: false
         type: string
 
@@ -241,3 +246,39 @@ jobs:
             --platform ${{ inputs.platform }} \
             --message "$UPDATE_MESSAGE" \
             --non-interactive
+
+      - id: fetch_apk
+        name: Check and download Android APK
+        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'status'
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          BUILD_ID: ${{ inputs.build_id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$BUILD_ID" ]]; then
+            echo "build_id is required in status mode" >&2
+            exit 1
+          fi
+          eas build:view "$BUILD_ID" --json > "$RUNNER_TEMP/eas-build.json"
+          jq '{id, status, appVersion, buildProfile, gitCommitHash, platform}' "$RUNNER_TEMP/eas-build.json"
+          status="$(jq -r '.status' "$RUNNER_TEMP/eas-build.json")"
+          echo "EAS status: $status" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$status" != "FINISHED" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          build_url="$(jq -er '.artifacts.buildUrl | select(type == "string" and length > 0)' "$RUNNER_TEMP/eas-build.json")"
+          curl --fail --location --silent --show-error --retry 3 "$build_url" -o "$RUNNER_TEMP/phoenix-android-v0.1.17.apk"
+          unzip -tq "$RUNNER_TEMP/phoenix-android-v0.1.17.apk" >/dev/null
+          sha256sum "$RUNNER_TEMP/phoenix-android-v0.1.17.apk" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Android APK
+        if: steps.fetch_apk.outputs.ready == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: phoenix-android-v0.1.17-apk
+          path: ${{ runner.temp }}/phoenix-android-v0.1.17.apk
+          if-no-files-found: error
+          retention-days: 7
