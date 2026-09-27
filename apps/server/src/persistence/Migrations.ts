@@ -86,6 +86,11 @@ import Migration0066 from "./Migrations/066_ProjectionThreadBranchPullRequest.ts
 import Migration0067 from "./Migrations/067_ProjectionThreadsActiveOrderKey.ts";
 import Migration0068 from "./Migrations/068_ProjectionThreadPullRequests.ts";
 import Migration0069 from "./Migrations/069_ProjectionThreadMessageContext.ts";
+// Upstream migrations 52-54 renumbered to 70-72 (2026-09-26 sync) after Phoenix's 69.
+import Migration0070 from "./Migrations/070_ProjectionThreadTitleState.ts";
+import Migration0071 from "./Migrations/071_PullRequestFilesViewed.ts";
+import Migration0072 from "./Migrations/072_ProjectionThreadsAutoSettleDisabledAt.ts";
+import Migration0073 from "./Migrations/073_UsageSessionLinksAcpProviders.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -167,6 +172,10 @@ const migrationEntries = [
   [67, "ProjectionThreadsActiveOrderKey", Migration0067],
   [68, "ProjectionThreadPullRequests", Migration0068],
   [69, "ProjectionThreadMessageContext", Migration0069],
+  [70, "ProjectionThreadTitleState", Migration0070],
+  [71, "PullRequestFilesViewed", Migration0071],
+  [72, "ProjectionThreadsAutoSettleDisabledAt", Migration0072],
+  [73, "UsageSessionLinksAcpProviders", Migration0073],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

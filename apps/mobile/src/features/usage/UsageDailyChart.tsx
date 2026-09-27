@@ -14,8 +14,7 @@ export interface UsageDailyChartProps {
 }
 
 /**
- * Stacked daily bars drawn with plain views. Android and any platform without
- * Swift Charts land here; iOS resolves `UsageDailyChart.ios.tsx` instead.
+ * Stacked daily bars drawn with plain views on every platform.
  */
 export function UsageDailyChart({ days, daily, metric, height }: UsageDailyChartProps) {
   const colors = useProviderColors();

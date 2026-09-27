@@ -101,8 +101,6 @@ export function createSidebarSortingStrategy(input: {
   settledVisibleCount?: number;
   routeThreadKey?: string | null;
   snoozedThreadCount?: number;
-  cardHeight?: number;
-  slimHeight?: number;
   /** Space each pinned boundary opens for its label while dragging. The
    * markers stay zero height at rest, so nothing is reserved until pickup. */
   boundaryLabelHeight?: number;
@@ -124,8 +122,6 @@ export function createSidebarSortingStrategy(input: {
       snoozed: [],
       settled: [],
     };
-    let cardHeight = input.cardHeight;
-    let slimHeight = input.slimHeight;
     let headerScale: number | undefined;
     for (const [index, item] of items.entries()) {
       if (item.kind === "marker") {
@@ -135,16 +131,13 @@ export function createSidebarSortingStrategy(input: {
         }
         continue;
       }
-      if (item.section === "pinned" || item.section === "active")
-        cardHeight ??= rects[index]?.height;
-      else slimHeight ??= rects[index]?.height;
       if (item.key !== active.key) groups[item.section].push(item);
     }
-    // Cards are 4.875rem + 0.25rem padding; slim rows/placeholders are h-9.
-    const scale =
-      slimHeight !== undefined ? slimHeight / 36 : (headerScale ?? (cardHeight ?? 82) / 82);
-    cardHeight ??= 82 * scale;
-    slimHeight ??= 36 * scale;
+    // Every section shares one row height (66px plus 7px padding), so the
+    // lifted row measures the slot it opens anywhere. Placeholders are h-9.
+    const rowHeight = rects[activeIndex]?.height ?? 73;
+    const scale = headerScale ?? rowHeight / 73;
+    const placeholderHeight = 36 * scale;
     const labelHeight = (input.boundaryLabelHeight ?? 0) * scale;
     const group = groups[target.section];
     const order =
@@ -190,27 +183,45 @@ export function createSidebarSortingStrategy(input: {
     }
     marker("settled-header");
     section("settled");
+    const heights = projected.map((item) => {
+      const index = indices.get(sidebarListItemId(item));
+      const measured = index === undefined ? undefined : rects[index]?.height;
+      if (item.kind === "thread") return measured ?? rowHeight;
+      if (item.marker === "pinned-header" || item.marker === "pinned-divider") return labelHeight;
+      if (item.marker.endsWith("placeholder")) return placeholderHeight;
+      return measured ?? 32 * scale;
+    });
+    const firstShelf = items.findIndex(
+      (item) =>
+        item.kind === "marker" &&
+        (item.marker === "snoozed-header" || item.marker === "settled-header"),
+    );
+    const shelfRect = rects[firstShelf];
+    const beforeShelf = rects[firstShelf - 1];
+    const lastRect = rects.at(-1);
+    // Consume the shelf's auto margin as drag labels and resized rows need
+    // room, keeping the combined shelves at their measured bottom.
+    let shelfSpace =
+      shelfRect && beforeShelf && lastRect && shelfRect.top > beforeShelf.bottom + 1
+        ? Math.max(
+            0,
+            lastRect.bottom - rects[0].top - heights.reduce((sum, height) => sum + height + 1, -1),
+          )
+        : 0;
     const result = items.map(() => hidden);
     let top = rects[0].top;
-    for (const item of projected) {
+    for (const [projectedIndex, item] of projected.entries()) {
+      if (
+        item.kind === "marker" &&
+        (item.marker === "snoozed-header" || item.marker === "settled-header")
+      ) {
+        top += shelfSpace;
+        shelfSpace = 0;
+      }
       const index = indices.get(sidebarListItemId(item));
       const rect = index === undefined ? undefined : rects[index];
       if (index !== undefined && rect) result[index] = { ...stationary, y: top - rect.top };
-      const fallback =
-        item.kind === "thread" && (item.section === "pinned" || item.section === "active")
-          ? cardHeight
-          : slimHeight;
-      const moved = item.kind === "thread" && item.key === active.key;
-      const height =
-        item.kind === "marker" &&
-        (item.marker === "pinned-header" || item.marker === "pinned-divider")
-          ? labelHeight
-          : item.kind === "marker" && item.marker.endsWith("placeholder")
-            ? slimHeight
-            : moved
-              ? fallback
-              : (rect?.height ?? fallback);
-      top += height + 1;
+      top += heights[projectedIndex]! + 1;
     }
     result[activeIndex] = stationary;
     return result;

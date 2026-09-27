@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { projectEvent } from "./projector.ts";
+import { isThreadDetailEvent } from "../ws.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const SETTLED_AT = "2025-12-30T00:00:00.000Z";
@@ -888,7 +889,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         ...makeSession("running"),
         activeTurnId: TurnId.make("turn-active"),
       };
-      const makeCommand = (deliveryMode: "queue" | "interrupt") =>
+      const makeCommand = (deliveryMode: "queue" | "interrupt" | "steer") =>
         ({
           type: "thread.turn.start" as const,
           commandId: CommandId.make(`cmd-${deliveryMode}`),
@@ -913,6 +914,11 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         "thread.message-sent",
         "thread.turn-start-queued",
       ]);
+      // Open threads hold their client queue behind server deliveries, so the
+      // queue lifecycle must reach the thread detail stream.
+      for (const event of Array.isArray(queued) ? queued : [queued]) {
+        expect(isThreadDetailEvent({ ...event, sequence: 1 } as OrchestrationEvent)).toBe(true);
+      }
 
       const interrupted = yield* decideOrchestrationCommand({
         command: makeCommand("interrupt"),
@@ -950,6 +956,55 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       if (graceNoticeEvents[1]?.type === "thread.turn-start-requested") {
         expect(graceNoticeEvents[1].payload.graceStopNotice).toBe(true);
       }
+
+      // Steer and Send now hand the message to the running turn, like a grace notice.
+      const steered = yield* decideOrchestrationCommand({
+        command: makeCommand("steer"),
+        readModel: makeReadModel(null, null, runningSession),
+      });
+      expect((Array.isArray(steered) ? steered : [steered]).map((event) => event.type)).toEqual([
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
+      // A steer never lands on an unanswered approval or blocking question; it
+      // waits in the queue. An async question leaves the agent working.
+      const blocker = (kind: string, requestId: string, payload: Record<string, unknown> = {}) =>
+        ({
+          id: EventId.make(`activity-${requestId}`),
+          tone: "approval" as const,
+          kind,
+          summary: kind,
+          payload: { requestId, ...payload },
+          turnId: null,
+          createdAt: NOW,
+        }) as OrchestrationThread["activities"][number];
+      for (const [activity, expected] of [
+        [blocker("approval.requested", "req-approval"), "thread.turn-start-queued"],
+        [blocker("user-input.requested", "req-question"), "thread.turn-start-queued"],
+        [
+          blocker("user-input.requested", "req-async", { responseMode: "message" }),
+          "thread.turn-start-requested",
+        ],
+      ] as const) {
+        const events = yield* decideOrchestrationCommand({
+          command: makeCommand("steer"),
+          readModel: makeReadModel(null, null, runningSession, [activity]),
+        });
+        expect((Array.isArray(events) ? events : [events]).map((event) => event.type)).toEqual([
+          "thread.message-sent",
+          expected,
+        ]);
+      }
+
+      // A starting session has no turn to join, so a steer waits for it.
+      const starting = yield* decideOrchestrationCommand({
+        command: makeCommand("steer"),
+        readModel: makeReadModel(null, null, makeSession("starting")),
+      });
+      expect((Array.isArray(starting) ? starting : [starting]).map((event) => event.type)).toEqual([
+        "thread.message-sent",
+        "thread.turn-start-queued",
+      ]);
 
       const released = yield* decideOrchestrationCommand({
         command: {

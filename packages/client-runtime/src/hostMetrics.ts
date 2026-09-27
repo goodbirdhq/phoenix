@@ -67,7 +67,7 @@ export function sustainedCpuWarning(
       const sampledAtMs = DateTime.toEpochMillis(sample.sampledAt);
       return sampledAtMs >= windowStartMs - CPU_WARNING_MAX_SAMPLE_GAP_MS && sampledAtMs <= nowMs;
     })
-    .toSorted(
+    .sort(
       (left, right) =>
         DateTime.toEpochMillis(left.sampledAt) - DateTime.toEpochMillis(right.sampledAt),
     );
@@ -102,7 +102,7 @@ export function mergeHostMetricSamples(
   for (const sample of [...history, ...live]) {
     byTime.set(DateTime.toEpochMillis(sample.sampledAt), sample);
   }
-  const ordered = [...byTime.values()].toSorted(
+  const ordered = [...byTime.values()].sort(
     (left, right) =>
       DateTime.toEpochMillis(left.sampledAt) - DateTime.toEpochMillis(right.sampledAt),
   );

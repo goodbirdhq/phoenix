@@ -129,6 +129,37 @@ describe("resolveSessionCheckout", () => {
     }),
   );
 });
+describe("send_to_session steer (handler)", () => {
+  it.effect("asks the decider to join the child's running turn, attributed to the parent", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<OrchestrationCommand> = [];
+      yield* runHandler(
+        (handlers) =>
+          handlers.send_to_session({
+            threadId: childThreadId,
+            message: "Also check the tests",
+            mode: "steer",
+          }),
+        {
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command);
+              return { sequence: 1 };
+            }),
+          enqueueCommand: (effect) => effect,
+        },
+      );
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0]).toMatchObject({
+        type: "thread.turn.start",
+        threadId: childThreadId,
+        deliveryMode: "steer",
+        message: { origin: { kind: "session", threadId: parentThreadId } },
+      });
+    }),
+  );
+});
+
 describe("send_to_session delivery acknowledgement", () => {
   it.effect("maps persisted acknowledgement branches to delivery status", () =>
     Effect.gen(function* () {
@@ -918,7 +949,9 @@ const runHandler = <A, E, R>(
         Layer.mock(GitWorkflowService.GitWorkflowService)({}),
         // Only settle_session's cleanup path touches these two; a read-only
         // tool that reaches them is a bug, so the mocks stay empty.
-        Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({}),
+        Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+          resolveLink: () => undefined,
+        }),
         GitRepositoryLock.layer.pipe(Layer.provide(NodeServices.layer)),
         // Not exercised by ping_session/read_session (only read_report/post_report
         // touch it); unused methods die if called.

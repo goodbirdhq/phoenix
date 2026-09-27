@@ -5,8 +5,9 @@ import { HostProcessArguments } from "@t3tools/shared/hostProcess";
 import packageJson from "../../package.json" with { type: "json" };
 
 /**
- * Render a command for the installed or source-built Phoenix binary. Phoenix is
- * not published to npm, so package-runner suggestions could execute an unrelated
+ * Render a command for the installed or source-built Phoenix binary. The npm
+ * package is scoped (@goodbirdhq/phoenix) while the binary is `phoenix`, so a
+ * package-runner suggestion like `npx phoenix` would execute an unrelated
  * package and must never be emitted.
  */
 export function formatCliCommand(input: {

@@ -65,9 +65,14 @@ agent session ── MCP tool call ──> apps/server/src/mcp/toolkits/sessions
   idle children start immediately. `interrupt` uses the same queue after requesting the existing
   provider interrupt, so replacement waits for the provider's boundary instead of racing it. A
   bounded fallback cancels the replacement, stops the still-running session, and notifies the
-  parent if no boundary arrives. Stopped/error sessions cancel queued messages instead of
-  resurrecting the child; restart and periodic recovery only release stale persisted sessions
-  after confirming there is no live provider binding.
+  parent if no boundary arrives. `steer` skips the queue (overtaking older queued messages) and
+  joins the running turn through the same decider path as a human steer and the graceful-stop
+  notice; it still queues while the child is starting or blocked on an approval or blocking
+  question. Providers land it differently: Claude and OpenCode inject mid-turn, Grok and
+  Antigravity cancel the current step and re-prompt, Cursor delivers after the current step, and
+  Codex runs it as a follow-up turn. Stopped/error sessions cancel queued messages instead of resurrecting the child;
+  restart and periodic recovery only release stale persisted sessions after confirming there is
+  no live provider binding.
 - **Persistence** — migrations 041 (`projection_threads.spawned_by_thread_id`), 042
   (`projection_thread_reports`), 043 (structured report fields), 044 (session stop audit), 045
   (`projection_thread_reports.origin`), 046 (`projection_thread_reports.abstract`), and 048

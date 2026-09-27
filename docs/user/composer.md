@@ -11,11 +11,20 @@ On mobile, an empty composer shows an interrupt button while the agent is workin
 or an attachment replaces it with the send button. This applies to both compact and expanded
 composers.
 
+Pasting 32 KiB or more of text adds that fragment as a text-file attachment so
+the agent can inspect it without filling the model context. A smaller paste also
+becomes an attachment when inserting it would exceed the message limit. On a
+hardware keyboard, use `Cmd+Shift+V` on Apple devices or `Ctrl+Shift+V` elsewhere
+to keep a large paste editable in the composer instead.
+
 ## Attach files
 
-Attach up to eight files per message. Images can be up to 10 MB; other files can
-be up to 50 MB, subject to the environment's upload support and limit. Files upload directly to
-the environment, where your agent can read, copy, or edit them by their file path.
+Attach up to 100 files per message. Each image can be up to 10 MiB, with at most
+80 MiB of images in one message. Other files, including videos, can be up to
+50 MiB each, subject to the environment's upload support and limit. Files upload
+directly to the environment, where your agent can read, copy, or edit them by
+their file path. Provider and model limits still apply, including images already
+in the conversation.
 
 Attachments upload as soon as you add them while connected to a server that supports uploads.
 The send button becomes available after every upload finishes. Failed uploads can be retried or
@@ -24,7 +33,8 @@ the photo library from either the compact or expanded composer. When the connect
 file uploads, **+** opens a menu beside the button with **Photo Library** and **Choose Files**.
 Videos use the server's file upload limit. You can also share photos, videos, and files into
 Phoenix from other apps through the system share sheet. Select a received file on mobile
-to preview it or open the system share options.
+to preview it or open the system share options. A video attachment gives the agent a file path;
+it does not enable native video input.
 
 Tap an image or PDF before or after sending to open it. On iOS, images zoom from their thumbnail
 into the native viewer. Pinch or double-tap to zoom, and swipe down or tap Close to return.
@@ -43,11 +53,32 @@ message can send. Retry or remove a failed upload. On web and desktop, reloading
 before an upload finishes requires you to attach that file again.
 
 You can drag or paste images into the web or desktop composer. HEIC and HEIF
-photos are converted to JPEG there and when selected from the iOS photo library;
-the image limit applies after conversion. On mobile, you can also send files to
-Phoenix through another app's system share sheet.
+photos are converted to JPEG there and when selected from the mobile photo
+library; photos over the image limit are also resized to fit. On mobile, you can
+also send files to Phoenix through another app's system share sheet.
 
 See [images and videos](#images-and-videos-in-messages) for previewing and saving media.
+
+## Send while the agent is working
+
+On web and desktop, a message sent during a running turn waits at the end of the conversation as a
+dashed bubble. It goes out on its own when the agent finishes its next tool
+call, or when the turn ends, even while you have another thread open. Use the arrow under the bubble to send it right
+away, or the X to move it back into the composer. Stop returns every queued
+message to the composer.
+
+In **Settings → General → Follow-up behavior**, choose **Queue** to keep this
+behavior or **Steer** to send new messages immediately. This setting applies to
+the current client. Messages already queued keep their place.
+
+Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to send
+the oldest queued message now. Change `thread.steerQueuedMessage` in
+**Settings → Keybindings** to use another shortcut. It leaves the current draft
+in the composer and waits if the agent needs an approval or an answer.
+
+On mobile, a message sent during a running turn goes to the agent right away,
+like **Steer**. It waits instead while the agent needs an approval or an answer, and
+servers from before this option queue it until the turn ends.
 
 ## Queue messages offline on mobile
 
@@ -115,7 +146,10 @@ into a normal draft.
 On web and desktop, choose **Edit from here** beneath a sent message to rewind
 the conversation to before that message. Choose **Revert and keep changes** to
 leave workspace files as they are, or **Revert files too** to restore them as well.
-The selected prompt and its attachments return to the composer for editing and
+File restore is only offered for threads running in a worktree, and it is
+refused when another thread or agent session also uses that directory, since
+restoring would erase their changes. A thread that works in the project directory
+rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
 resending. Any unsent draft stays above the restored prompt.
 
 This removes the selected message and later conversation from the active thread
@@ -158,7 +192,8 @@ recording started, ready for you to review and edit before sending.
 The first use can download Apple's speech model and needs a network connection. Later transcription
 works offline for that language. A recording can be up to five minutes long. Canceling voice input,
 leaving the screen, or an audio interruption discards the new recording and keeps the existing draft
-and attachments. Transcription runs on your device. Phoenix deletes the local audio file after
+and attachments. While recording, the screen stays awake; it can sleep normally once recording
+stops. Transcription runs on your device. Phoenix deletes the local audio file after
 transcription or cancellation. It sends only the normal message text when you submit the draft.
 
 ## Commands and skills

@@ -85,6 +85,9 @@ const desktopEnvironmentLayer = Layer.unwrap(
   }),
 );
 
+// Phoenix publishes no self-contained runtime archives, so production remotes
+// get only the Node engine range and packages/ssh refuses to provision them.
+// Development points the remote at a source checkout instead.
 const resolveDesktopSshCliRunner = (
   environment: DesktopEnvironment.DesktopEnvironment["Service"],
 ): RemoteT3RunnerOptions => {
@@ -215,6 +218,7 @@ const desktopApplicationRuntimeLayer = desktopApplicationLayer.pipe(
 // userData resolution can yield and let Electron emit ready.
 const desktopRuntimeLayer = desktopApplicationRuntimeLayer.pipe(
   Layer.provideMerge(DesktopPreReadyPlatform.layer),
+  Layer.provideMerge(NodeServices.layer),
 );
 
 DesktopApp.program.pipe(Effect.provide(desktopRuntimeLayer), NodeRuntime.runMain);

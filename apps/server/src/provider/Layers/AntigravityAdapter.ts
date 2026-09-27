@@ -43,6 +43,7 @@ import {
   ProviderAdapterRequestError,
   ProviderAdapterSessionClosedError,
   ProviderAdapterSessionNotFoundError,
+  ProviderAdapterTurnStoppedError,
   ProviderAdapterValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
@@ -208,6 +209,8 @@ interface SessionContext {
   activeTurnId: TurnId | undefined;
   promptFiber: Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError> | undefined;
   generation: number;
+  /** Counts Stops, so a steer that waited through one does not restart work. */
+  interrupts: number;
   stopped: boolean;
   closed: boolean;
   disconnected: boolean;
@@ -786,12 +789,12 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
             stopOwned,
             Effect.gen(function* () {
               const mcp = McpProviderSession.readMcpProviderSession(input.threadId);
-              // The attachments dir grant lets the agent read pasted files at
-              // the paths ProviderService injects into the turn text. It is a
-              // leaf directory holding only uploads.
+              // The attachments dir grant lets the agent read path-only uploads
+              // at the paths ProviderService injects into the turn text. It is
+              // a leaf directory holding only uploads.
               const runtime = yield* options.makeRuntime({
                 cwd,
-                clientInfo: { name: "t3-code", version: "0.0.0" },
+                clientInfo: { name: "phoenix", version: "0.0.0" },
                 clientFileSystem: true,
                 ...(mcp?.agentDeviceEnvironment
                   ? { agentDeviceEnvironment: mcp.agentDeviceEnvironment }
@@ -802,7 +805,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                   ? [
                       {
                         type: "http",
-                        name: "t3-code",
+                        name: "phoenix",
                         url: mcp.endpoint,
                         headers: [{ name: "Authorization", value: mcp.authorizationHeader }],
                       },
@@ -844,7 +847,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
               const model = yield* applyAntigravityAcpModelSelection({
                 runtime,
                 model: input.modelSelection?.model,
-                defaultModel: yield* options.defaultModel ?? Effect.succeed(undefined),
+                defaultModel: yield* options.defaultModel ?? Effect.undefined,
                 mapError: (cause) => cause,
               });
               yield* runtime.setMode(antigravityPermissionMode(input.runtimeMode));
@@ -878,6 +881,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                 turns: [],
                 session,
                 activeTurnId: undefined,
+                interrupts: 0,
                 promptFiber: undefined,
                 generation: 0,
                 stopped: false,
@@ -989,6 +993,21 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
       Effect.provideService(Path.Path, path),
       Effect.mapError((cause) => mapAntigravityError(input.threadId, "session/prompt", cause)),
     );
+    // A steer re-prompts, and re-prompting cancels open approvals and questions.
+    // Those belong to the user, so a steer waits until they are answered.
+    const awaitUserRequests = Effect.gen(function* () {
+      const unresolved = () => [
+        ...[...context.approvals.values()].flatMap(({ response }) =>
+          Deferred.isDoneUnsafe(response) ? [] : [Deferred.await(response)],
+        ),
+        ...[...context.questions.values()].flatMap(({ response }) =>
+          Deferred.isDoneUnsafe(response) ? [] : [Deferred.await(response)],
+        ),
+      ];
+      for (let open = unresolved(); open.length > 0; open = unresolved()) {
+        yield* Effect.all(open, { discard: true });
+      }
+    });
     let intent: TurnIntent | undefined;
     // The caller holds promptLock while it changes or settles the active turn.
     const finishTurn = (turn: TurnIntent, payload: TurnCompletedPayload) =>
@@ -1027,6 +1046,27 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
       }).pipe(Effect.uninterruptible);
 
     return yield* Effect.gen(function* () {
+      // Waiting outside promptLock keeps Stop responsive while the user decides.
+      const joinedTurnId = context.promptFiber ? context.activeTurnId : undefined;
+      const interruptsAtSend = context.interrupts;
+      // Stopping the session or the turn this steer was joining releases a
+      // waiting steer; it must not start work again, and reports it was not sent.
+      const requireDeliverable = Effect.gen(function* () {
+        if (context.stopped) {
+          return yield* new ProviderAdapterSessionClosedError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+          });
+        }
+        if (joinedTurnId !== undefined && context.interrupts !== interruptsAtSend) {
+          return yield* new ProviderAdapterTurnStoppedError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+          });
+        }
+      });
+      if (joinedTurnId !== undefined) yield* awaitUserRequests;
+      yield* requireDeliverable;
       const launch = yield* context.promptLock.withPermit(
         Effect.gen(function* () {
           yield* requireSession(input.threadId);
@@ -1035,7 +1075,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
           const model = resolveAntigravityModel({
             configOptions,
             model: requestedModel,
-            defaultModel: yield* options.defaultModel ?? Effect.succeed(undefined),
+            defaultModel: yield* options.defaultModel ?? Effect.undefined,
           });
           const availableModels = antigravityModelOptions(configOptions);
           if (model && !availableModels.some((option) => option.value === model)) {
@@ -1043,6 +1083,11 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
               `Antigravity model '${model}' is unavailable for this Google account. Select an available model.`,
             );
           }
+          // Covers a request opened, or a Stop, while this steer took the lock.
+          // Checked before any turn state changes; a steer that joins the
+          // active turn does not yield again before cancelling the old prompt.
+          if (context.promptFiber) yield* awaitUserRequests;
+          yield* requireDeliverable;
           const turnId = context.activeTurnId ?? TurnId.make(yield* randomId);
           const steering = context.activeTurnId !== undefined;
           const turn: TurnIntent = { turnId, generation: ++context.generation, settled: false };
@@ -1165,14 +1210,40 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
   const interruptTurn: Adapter["interruptTurn"] = (threadId) =>
     Effect.gen(function* () {
       const context = yield* requireSession(threadId);
+      // A command that outlived its turn keeps running in the agent, and
+      // session/cancel only stops a prompt. The agent kills its background
+      // commands when its session closes, so Stop with nothing else running
+      // ends the session, as Claude's does. The next turn resumes it.
+      let idleWithCommands = false;
+      // Answer open requests as cancelled before the lock: a steer waiting on
+      // them holds promptLock until they resolve.
+      context.interrupts += 1;
+      yield* cancelRequests(context);
       yield* context.promptLock
         .withPermit(
           Effect.gen(function* () {
+            // Decided under the prompt lock so a turn cannot start in between.
+            if (!context.promptFiber && [...context.commands.values()].some((c) => c.promoted)) {
+              context.stopped = true;
+              idleWithCommands = true;
+              return;
+            }
             yield* cancelRequests(context);
             yield* context.runtime.cancel;
           }),
         )
-        .pipe(Effect.mapError((cause) => mapAntigravityError(threadId, "session/cancel", cause)));
+        .pipe(
+          Effect.mapError((cause) => mapAntigravityError(threadId, "session/cancel", cause)),
+          // Once marked stopped the session must close, even if this call is
+          // interrupted, or it is left unreachable with its commands running.
+          Effect.ensuring(
+            Effect.suspend(() =>
+              idleWithCommands
+                ? withThreadLock(threadId, stopContext(context)).pipe(Effect.ignore)
+                : Effect.void,
+            ),
+          ),
+        );
     });
 
   const respondToRequest: Adapter["respondToRequest"] = (threadId, requestId, decision) =>

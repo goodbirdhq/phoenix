@@ -49,6 +49,7 @@ import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
+  ProviderAdapterTurnStoppedError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
@@ -73,6 +74,10 @@ import {
   normalizeGrokReasoningEffort,
   resolveGrokAcpBaseModelId,
 } from "../acp/GrokAcpSupport.ts";
+import {
+  buildGrokBackgroundTaskEvents,
+  type GrokBackgroundTaskRecord,
+} from "../acp/XAiBackgroundTasks.ts";
 import {
   extractGrokPlanMarkdownFromToolCallData,
   extractXAiAskUserQuestions,
@@ -177,6 +182,8 @@ interface GrokSessionContext {
   pendingSeedPrompt: string | undefined;
   currentReasoningEffort: string | undefined;
   stopped: boolean;
+  /** Live monitor/shell identities and their originating turns. */
+  readonly backgroundTasks: Map<string, GrokBackgroundTaskRecord>;
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -197,6 +204,27 @@ function settlePendingUserInputsAsCancelled(
     (pending) => Deferred.succeed(pending.resolution, { _tag: "cancelled" }).pipe(Effect.ignore),
     { discard: true },
   );
+}
+
+/**
+ * A steer cancels the in-flight prompt, which abandons open approvals and
+ * questions. Those belong to the user, so a steer waits until they are
+ * answered. Stop settles them before taking the thread lock, so it never waits.
+ */
+function awaitUserRequests(ctx: GrokSessionContext): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const unresolved = () => [
+      ...[...ctx.pendingApprovals.values()].flatMap(({ decision }) =>
+        Deferred.isDoneUnsafe(decision) ? [] : [Deferred.await(decision)],
+      ),
+      ...[...ctx.pendingUserInputs.values()].flatMap(({ resolution }) =>
+        Deferred.isDoneUnsafe(resolution) ? [] : [Deferred.await(resolution)],
+      ),
+    ];
+    for (let open = unresolved(); open.length > 0; open = unresolved()) {
+      yield* Effect.all(open, { discard: true });
+    }
+  });
 }
 
 function appendPromptResultToTurn(
@@ -467,13 +495,15 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             | "AssistantItemCompleted"
             | "PlanUpdated"
             | "ToolCallUpdated"
-            | "ContentDelta";
+            | "ContentDelta"
+            | "ThoughtDelta";
         }
       >,
     ) {
       if (
         ctx.livenessTurnId !== turnId ||
-        (event._tag === "ContentDelta" && event.text.length === 0)
+        ((event._tag === "ContentDelta" || event._tag === "ThoughtDelta") &&
+          event.text.length === 0)
       ) {
         return;
       }
@@ -774,46 +804,45 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       );
     });
 
-    const runTurnLivenessWatchdog = Effect.fn("GrokAdapter.runTurnLivenessWatchdog")(
-      function* (ctx: GrokSessionContext) {
-        while (true) {
-          if (ctx.stopped) {
-            return;
-          }
-          const turnId = ctx.livenessTurnId;
-          if (
-            turnId === undefined ||
-            ctx.interruptedTurnIds.has(turnId) ||
-            !isLiveTurn(ctx, turnId) ||
-            hasLivenessPause(ctx)
-          ) {
-            yield* Queue.take(ctx.livenessSignals);
-            continue;
-          }
-
-          const lastActivityAtNanos = ctx.lastTurnActivityAtNanos;
-          if (lastActivityAtNanos === undefined) {
-            yield* Queue.take(ctx.livenessSignals);
-            continue;
-          }
-          const nowNanos = yield* Clock.monotonicTimeNanos;
-          const remainingNanos = livenessTimeoutFor(ctx).nanos - (nowNanos - lastActivityAtNanos);
-          if (remainingNanos <= 0n) {
-            yield* settleStalledTurn(ctx, turnId);
-            continue;
-          }
-
-          const wakeReason = yield* Effect.raceFirst(
-            Effect.sleep(Duration.nanos(remainingNanos)).pipe(Effect.as("timeout" as const)),
-            Queue.take(ctx.livenessSignals).pipe(Effect.as("activity" as const)),
-          );
-          if (wakeReason === "timeout") {
-            yield* settleStalledTurn(ctx, turnId);
-          }
+    const runTurnLivenessWatchdog = Effect.fn("GrokAdapter.runTurnLivenessWatchdog")(function* (
+      ctx: GrokSessionContext,
+    ) {
+      while (true) {
+        if (ctx.stopped) {
+          return;
         }
-      },
-      Effect.catch(() => Effect.void),
-    );
+        const turnId = ctx.livenessTurnId;
+        if (
+          turnId === undefined ||
+          ctx.interruptedTurnIds.has(turnId) ||
+          !isLiveTurn(ctx, turnId) ||
+          hasLivenessPause(ctx)
+        ) {
+          yield* Queue.take(ctx.livenessSignals);
+          continue;
+        }
+
+        const lastActivityAtNanos = ctx.lastTurnActivityAtNanos;
+        if (lastActivityAtNanos === undefined) {
+          yield* Queue.take(ctx.livenessSignals);
+          continue;
+        }
+        const nowNanos = yield* Clock.monotonicTimeNanos;
+        const remainingNanos = livenessTimeoutFor(ctx).nanos - (nowNanos - lastActivityAtNanos);
+        if (remainingNanos <= 0n) {
+          yield* settleStalledTurn(ctx, turnId);
+          continue;
+        }
+
+        const wakeReason = yield* Effect.raceFirst(
+          Effect.sleep(Duration.nanos(remainingNanos)).pipe(Effect.as("timeout" as const)),
+          Queue.take(ctx.livenessSignals).pipe(Effect.as("activity" as const)),
+        );
+        if (wakeReason === "timeout") {
+          yield* settleStalledTurn(ctx, turnId);
+        }
+      }
+    }, Effect.ignore());
 
     const logNative = (threadId: ThreadId, method: string, payload: unknown) =>
       Effect.gen(function* () {
@@ -1321,6 +1350,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 ? normalizeGrokReasoningEffort(requestedStartReasoningEffort)
                 : currentStartReasoningEffort,
             stopped: false,
+            backgroundTasks: new Map(),
           };
 
           const nf = yield* Stream.runDrain(
@@ -1343,6 +1373,24 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 }
 
                 const notificationTurnId = resolveNotificationTurnId(ctx);
+                if (event._tag === "ToolCallUpdated" && !ctx.stopped) {
+                  for (const taskEvent of buildGrokBackgroundTaskEvents({
+                    tasks: ctx.backgroundTasks,
+                    toolCallId: event.toolCall.toolCallId,
+                    rawInput: event.toolCall.data.rawInput,
+                    rawOutput: event.toolCall.data.rawOutput,
+                    toolCallStatus: event.toolCall.status,
+                    turnId: notificationTurnId,
+                  })) {
+                    yield* offerRuntimeEvent({
+                      ...taskEvent,
+                      ...(yield* makeEventStamp()),
+                      provider: PROVIDER,
+                      threadId: ctx.threadId,
+                    });
+                  }
+                }
+
                 if (
                   notificationTurnId === undefined ||
                   ctx.interruptedTurnIds.has(notificationTurnId)
@@ -1354,7 +1402,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   event._tag === "AssistantItemCompleted" ||
                   event._tag === "PlanUpdated" ||
                   event._tag === "ToolCallUpdated" ||
-                  event._tag === "ContentDelta"
+                  event._tag === "ContentDelta" ||
+                  event._tag === "ThoughtDelta"
                 ) {
                   yield* recordTurnActivity(ctx, notificationTurnId, event);
                 }
@@ -1430,6 +1479,19 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                     }
                     return;
                   }
+                  case "ThoughtDelta":
+                    yield* offerRuntimeEvent(
+                      makeAcpContentDeltaEvent({
+                        stamp,
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: notificationTurnId,
+                        streamKind: "reasoning_text",
+                        text: event.text,
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
                   case "ContentDelta":
                     yield* offerRuntimeEvent(
                       makeAcpContentDeltaEvent({
@@ -1492,6 +1554,28 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
 
     const sendTurn: GrokAdapterShape["sendTurn"] = (input, onAccepted) =>
       Effect.gen(function* () {
+        if (/^\/always-approve(?:\s|$)/i.test(input.input?.trim() ?? "")) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/prompt",
+            detail:
+              "Change permissions with Phoenix's permission selector instead of /always-approve.",
+          });
+        }
+        // Waiting before the thread lock keeps Stop and other thread work moving.
+        const current = sessions.get(input.threadId);
+        const joinedTurnId =
+          current && current.promptsInFlight > 0 ? current.activeTurnId : undefined;
+        if (current && joinedTurnId !== undefined) {
+          yield* awaitUserRequests(current);
+          // Stop ended the turn this steer was joining; it must not start work again.
+          if (current.interruptedTurnIds.has(joinedTurnId)) {
+            return yield* new ProviderAdapterTurnStoppedError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+            });
+          }
+        }
         const prepared = yield* withThreadLock(
           input.threadId,
           Effect.gen(function* () {
@@ -1572,12 +1656,15 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                     } satisfies EffectAcpSchema.ContentBlock;
                   }),
               );
+              const isNativeCommand = text !== undefined && /^\/[^\s/]+(?:\s|$)/.test(text);
               // A seeded session leads with the prior conversation so the
-              // agent continues the thread instead of meeting it cold.
-              const seedPromptParts: Array<EffectAcpSchema.ContentBlock> = ctx.pendingSeedPrompt
-                ? [{ type: "text" as const, text: ctx.pendingSeedPrompt }]
-                : [];
-              ctx.pendingSeedPrompt = undefined;
+              // agent continues the thread instead of meeting it cold. A native
+              // command must stay the whole prompt, so the seed waits.
+              const seedPromptParts: Array<EffectAcpSchema.ContentBlock> =
+                ctx.pendingSeedPrompt && !isNativeCommand
+                  ? [{ type: "text" as const, text: ctx.pendingSeedPrompt }]
+                  : [];
+              if (!isNativeCommand) ctx.pendingSeedPrompt = undefined;
               const promptParts: Array<EffectAcpSchema.ContentBlock> = [
                 ...seedPromptParts,
                 ...(text ? [{ type: "text" as const, text }] : []),
@@ -1610,11 +1697,14 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               const displayModel = currentModelId
                 ? resolveGrokAcpBaseModelId(currentModelId)
                 : undefined;
-              const runtimeInstructions = buildRuntimeInstructions({
-                harness: "Grok",
-                model: displayModel,
-                reasoningEffort: normalizeGrokReasoningEffort(requestedTurnReasoningEffort),
-              });
+              // ACP slash commands must receive only their own arguments.
+              const runtimeInstructions = isNativeCommand
+                ? undefined
+                : buildRuntimeInstructions({
+                    harness: "Grok",
+                    model: displayModel,
+                    reasoningEffort: normalizeGrokReasoningEffort(requestedTurnReasoningEffort),
+                  });
               for (let yieldAttempt = 0; yieldAttempt < 8; yieldAttempt += 1) {
                 yield* Effect.yieldNow;
               }
@@ -1660,8 +1750,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 // ready. A failed steer must not skip the live prompt, which
                 // settles without a terminal event when emitTurnCompletion is
                 // false.
-                yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-                yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
+                yield* awaitUserRequests(ctx);
                 ctx.discardBeforeEpoch = promptEpoch;
               }
 
@@ -1714,6 +1803,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 return { _tag: "Skipped" as const, interrupted };
               }
               if (prepared.steeringTurnId !== undefined) {
+                // Covers a request opened after this steer was prepared.
+                yield* awaitUserRequests(liveCtx);
                 yield* Effect.ignore(
                   liveCtx.acp.cancel.pipe(
                     Effect.mapError((error) =>
@@ -1731,7 +1822,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   {
                     prompt: [
                       ...prepared.promptParts,
-                      { type: "text", text: prepared.runtimeInstructions },
+                      ...(prepared.runtimeInstructions
+                        ? [{ type: "text" as const, text: prepared.runtimeInstructions }]
+                        : []),
                     ],
                   },
                   { dispatched },
@@ -1771,6 +1864,12 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               ),
             );
             yield* Ref.set(promptSettled, true);
+            if (promptStart.interrupted && prepared.steeringTurnId !== undefined) {
+              return yield* new ProviderAdapterTurnStoppedError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+              });
+            }
             const liveCtx = sessions.get(input.threadId);
             return {
               threadId: input.threadId,
@@ -1985,7 +2084,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   errorMessage: errorMessage ?? "Grok prompt request failed.",
                 }),
               );
-            }).pipe(Effect.catch(() => Effect.void)),
+            }).pipe(Effect.ignore),
           ),
         );
       });
@@ -2017,6 +2116,13 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         });
         if (observed._tag === "Ignore") {
           return;
+        }
+        // Stop answers open requests as cancelled before taking the thread
+        // lock, which releases a steer that is waiting on them.
+        const stopping = sessions.get(threadId);
+        if (stopping) {
+          yield* settlePendingApprovalsAsCancelled(stopping.pendingApprovals);
+          yield* settlePendingUserInputsAsCancelled(stopping.pendingUserInputs);
         }
 
         yield* withThreadLock(
@@ -2134,13 +2240,21 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       });
 
     const stopSession: GrokAdapterShape["stopSession"] = (threadId) =>
-      withThreadLock(
-        threadId,
-        Effect.gen(function* () {
-          const ctx = yield* requireSession(threadId);
-          yield* stopSessionInternal(ctx);
-        }),
-      );
+      Effect.gen(function* () {
+        // Release a steer waiting on open requests before taking the lock.
+        const stopping = sessions.get(threadId);
+        if (stopping) {
+          yield* settlePendingApprovalsAsCancelled(stopping.pendingApprovals);
+          yield* settlePendingUserInputsAsCancelled(stopping.pendingUserInputs);
+        }
+        yield* withThreadLock(
+          threadId,
+          Effect.gen(function* () {
+            const ctx = yield* requireSession(threadId);
+            yield* stopSessionInternal(ctx);
+          }),
+        );
+      });
 
     const listSessions: GrokAdapterShape["listSessions"] = () =>
       Effect.sync(() => Array.from(sessions.values(), (c) => ({ ...c.session })));

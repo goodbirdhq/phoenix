@@ -695,8 +695,14 @@ function dropSupersededToolUpdatedActivities(
   });
 }
 
+/**
+ * What the subscribing client can decode. Omitted fields mean "current client":
+ * older clients opt out explicitly (`false`) so snapshots and events are
+ * downgraded for them instead of failing their decoders.
+ */
 export type ThreadStreamClientCapabilities = {
   readonly acceptsNonImageAttachments?: boolean;
+  readonly reasoningMessages?: boolean;
 };
 
 function projectAttachmentsForClient<
@@ -721,9 +727,12 @@ export function projectThreadDetailSnapshot(
     ...snapshot,
     thread: {
       ...snapshot.thread,
-      messages: snapshot.thread.messages.map((message) =>
-        projectAttachmentsForClient(message, capabilities),
-      ),
+      messages: snapshot.thread.messages.map((message) => {
+        const projected = projectAttachmentsForClient(message, capabilities);
+        return capabilities?.reasoningMessages === false && projected.role === "reasoning"
+          ? { ...projected, role: "system" as const }
+          : projected;
+      }),
       activities: dropSupersededToolUpdatedActivities(
         dropStaleContextWindowActivities(snapshot.thread.activities),
       ).map(projectActivityPayload),
@@ -736,9 +745,15 @@ export function projectActivityEvent(
   capabilities?: ThreadStreamClientCapabilities,
 ): OrchestrationEvent {
   if (event.type === "thread.message-sent") {
+    const payload = projectAttachmentsForClient(event.payload, capabilities);
+    // Preserve sequence watermarks and message identities for clients whose role
+    // decoder predates reasoning. Filtering would strand their history pages.
     return {
       ...event,
-      payload: projectAttachmentsForClient(event.payload, capabilities),
+      payload:
+        capabilities?.reasoningMessages === false && payload.role === "reasoning"
+          ? { ...payload, role: "system" }
+          : payload,
     };
   }
   if (event.type !== "thread.activity-appended") {

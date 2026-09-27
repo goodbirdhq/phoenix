@@ -23,16 +23,12 @@ import {
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
-  resolveThreadRowClassName,
   resolveSidebarThreadStatus,
   resolveThreadStatusPill,
-  resolveWorkingStartedAt,
   searchSidebarThreads,
-  formatWorkingDurationLabel,
   shouldClearThreadSelectionOnMouseDown,
   shouldRecedeSidebarThread,
   sortLogicalProjectsForSidebar,
-  sortSettledThreadsForSidebar,
   resolveSidebarDropTarget,
   pinOrderKeyBetween,
   planPinnedReorder,
@@ -47,6 +43,7 @@ import {
   shouldCreateNewThreadInCurrentProject,
   buildSidebarThreadHierarchy,
   SIDEBAR_HIERARCHY_MAX_INDENT_DEPTH,
+  shouldNavigateAfterThreadPark,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
   type SidebarListItem,
   type SidebarListMarker,
@@ -54,6 +51,8 @@ import {
   resolveSidebarDropVerb,
   resolveSidebarAttentionFirstAfterActiveReorder,
 } from "./Sidebar.logic";
+import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
   EnvironmentId,
   OrchestrationLatestTurn,
@@ -414,6 +413,18 @@ describe("shouldRecedeSidebarThread", () => {
 
     expect(shouldRecedeSidebarThread({ ...input, isActive: true })).toBe(false);
     expect(shouldRecedeSidebarThread({ ...input, isSelected: true })).toBe(false);
+  });
+
+  it.each([false, true])("keeps input-required threads prominent with unread=%s", (isUnread) => {
+    expect(
+      shouldRecedeSidebarThread({
+        status: "input",
+        isUnread,
+        isWoke: false,
+        isActive: false,
+        isSelected: false,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -823,11 +834,23 @@ describe("resolveSidebarThreadStatus", () => {
 });
 
 describe("searchSidebarThreads", () => {
+  const searchThread = (id: string, title: string, project: string) => ({
+    environmentId: localEnvironmentId,
+    id: ThreadId.make(id),
+    title,
+    project,
+  });
   const threads = [
-    { id: "thread-1", title: "Fix workspace search", project: "Alpha" },
-    { id: "thread-2", title: "Review providers", project: "Workspace" },
-    { id: "thread-3", title: "WORKTREE cleanup", project: "Beta" },
+    searchThread("thread-1", "Fix workspace search", "Alpha"),
+    searchThread("thread-2", "Review providers", "Workspace"),
+    searchThread("thread-3", "WORKTREE cleanup", "Beta"),
   ];
+  const contentKeys = (...ids: ReadonlyArray<string>) =>
+    new Set(
+      ids.map((id) =>
+        threadSearchMatchKey({ environmentId: localEnvironmentId, threadId: ThreadId.make(id) }),
+      ),
+    );
 
   it("matches thread titles case-insensitively and preserves their order", () => {
     expect(searchSidebarThreads(threads, "work")).toEqual([threads[0], threads[2]]);
@@ -840,6 +863,28 @@ describe("searchSidebarThreads", () => {
   it("returns no results for an empty query", () => {
     expect(searchSidebarThreads(threads, "   ")).toEqual([]);
   });
+
+  it("appends content-only matches after every title match", () => {
+    expect(searchSidebarThreads(threads, "work", contentKeys("thread-2"))).toEqual([
+      threads[0],
+      threads[2],
+      threads[1],
+    ]);
+  });
+
+  it("lists a thread matching both title and content once", () => {
+    expect(searchSidebarThreads(threads, "work", contentKeys("thread-1"))).toEqual([
+      threads[0],
+      threads[2],
+    ]);
+  });
+
+  it("ignores content matches for threads outside the sidebar collection", () => {
+    expect(searchSidebarThreads(threads, "work", contentKeys("thread-missing"))).toEqual([
+      threads[0],
+      threads[2],
+    ]);
+  });
 });
 
 describe("filterSidebarProjectScopeItems", () => {
@@ -848,30 +893,26 @@ describe("filterSidebarProjectScopeItems", () => {
     { value: "alpha", label: "Alpha workspace" },
     { value: "beta", label: "Beta tools" },
   ] as const;
-  const filter = (activeScopeKey: string | null, query: string) =>
+  const filter = (query: string) =>
     filterSidebarProjectScopeItems({
       items,
-      activeScopeKey,
       query,
       matches: (item, candidate) =>
         item.label.toLocaleLowerCase().includes(candidate.toLocaleLowerCase()),
     });
 
-  it("omits the reset row when the sidebar is already unscoped", () => {
-    expect(filter(null, "")).toEqual(items.slice(1));
+  it("shows the default row first while the query is empty", () => {
+    expect(filter("")).toEqual(items);
+    expect(filter("   ")).toEqual(items);
   });
 
-  it("shows the reset row first while a project scope is active", () => {
-    expect(filter("alpha", "")).toEqual(items);
-  });
-
-  it("hides the reset row while filtering an active scope", () => {
-    expect(filter("alpha", "all")).toEqual([]);
+  it("hides the default row while filtering", () => {
+    expect(filter("all")).toEqual([]);
   });
 
   it("returns matching projects in source order and supports no-match results", () => {
-    expect(filter(null, "WORK")).toEqual([items[1]]);
-    expect(filter(null, "missing")).toEqual([]);
+    expect(filter("WORK")).toEqual([items[1]]);
+    expect(filter("missing")).toEqual([]);
   });
 });
 
@@ -1836,12 +1877,12 @@ describe("applySidebarThreadDrop", () => {
     };
     const existing = { ...newer, settledOverride: "settled" as const, settledAt: newer.createdAt };
     expect(preview).toEqual({ ...final, settledAt: now });
-    expect(sortSettledThreadsForSidebar([existing, preview]).map((row) => row.id)).toEqual([
+    expect(sortSettledThreads([existing, preview]).map((row) => row.id)).toEqual([
       "dragged",
       "newer",
     ]);
-    expect(sortSettledThreadsForSidebar([existing, preview]).map((row) => row.id)).toEqual(
-      sortSettledThreadsForSidebar([existing, final]).map((row) => row.id),
+    expect(sortSettledThreads([existing, preview]).map((row) => row.id)).toEqual(
+      sortSettledThreads([existing, final]).map((row) => row.id),
     );
   });
 
@@ -1856,7 +1897,7 @@ describe("applySidebarThreadDrop", () => {
     const final = { ...source, snoozedAt: null, snoozedUntil: null };
     const existing = { ...newer, settledOverride: "settled" as const, settledAt: newer.createdAt };
     expect(preview).toEqual(final);
-    expect(sortSettledThreadsForSidebar([existing, preview]).map((row) => row.id)).toEqual([
+    expect(sortSettledThreads([existing, preview]).map((row) => row.id)).toEqual([
       "newer",
       "dragged",
     ]);
@@ -1966,141 +2007,6 @@ describe("sortPinnedThreadsForSidebar", () => {
   });
 });
 
-describe("sortSettledThreadsForSidebar", () => {
-  const settled = (input: {
-    id: string;
-    settledAt?: string | null;
-    latestUserMessageAt?: string | null;
-    latestTurn?: OrchestrationLatestTurn | null;
-    updatedAt?: string;
-  }) => ({
-    id: input.id,
-    settledAt: input.settledAt ?? null,
-    latestUserMessageAt: input.latestUserMessageAt ?? null,
-    latestTurn: input.latestTurn ?? null,
-    updatedAt: input.updatedAt ?? "2026-03-09T09:00:00.000Z",
-  });
-
-  it("orders by settle time, most recently settled first", () => {
-    const sorted = sortSettledThreadsForSidebar([
-      settled({
-        id: "settled-first",
-        settledAt: "2026-03-09T10:00:00.000Z",
-        // Created/active later than the other thread: settle time must win.
-        latestUserMessageAt: "2026-03-09T09:59:00.000Z",
-      }),
-      settled({
-        id: "settled-last",
-        settledAt: "2026-03-09T12:00:00.000Z",
-        latestUserMessageAt: "2026-03-09T08:00:00.000Z",
-      }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual(["settled-last", "settled-first"]);
-  });
-
-  it("falls back to last activity for auto-settled threads without a settledAt stamp", () => {
-    const sorted = sortSettledThreadsForSidebar([
-      settled({ id: "auto-old", latestUserMessageAt: "2026-03-09T08:00:00.000Z" }),
-      settled({ id: "explicit", settledAt: "2026-03-09T10:00:00.000Z" }),
-      settled({ id: "auto-recent", latestUserMessageAt: "2026-03-09T11:00:00.000Z" }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual(["auto-recent", "explicit", "auto-old"]);
-  });
-
-  it("counts a turn completion as activity for auto-settled threads", () => {
-    // The message came in before the other thread's, but its turn finished
-    // after: completion time is the real "work ended" moment.
-    const sorted = sortSettledThreadsForSidebar([
-      settled({ id: "message-only", latestUserMessageAt: "2026-03-09T10:04:00.000Z" }),
-      settled({
-        id: "completed-later",
-        latestUserMessageAt: "2026-03-09T10:00:00.000Z",
-        latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:30:00.000Z" }),
-      }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual(["completed-later", "message-only"]);
-  });
-
-  it("breaks timestamp ties by id so the order is stable", () => {
-    const sorted = sortSettledThreadsForSidebar([
-      settled({ id: "b", settledAt: "2026-03-09T10:00:00.000Z" }),
-      settled({ id: "a", settledAt: "2026-03-09T10:00:00.000Z" }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
-  });
-});
-
-describe("resolveWorkingStartedAt", () => {
-  const session = {
-    threadId: ThreadId.make("thread-1"),
-    status: "running" as const,
-    providerName: "Codex",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-    runtimeMode: DEFAULT_RUNTIME_MODE,
-    activeTurnId: "turn-1" as never,
-    lastError: null,
-    updatedAt: "2026-03-09T10:02:00.000Z",
-  };
-
-  it("uses the running turn's start time", () => {
-    expect(
-      resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn({ completedAt: null }),
-        session,
-      }),
-    ).toBe("2026-03-09T10:00:00.000Z");
-  });
-
-  it("uses the request time while a turn awaits adoption", () => {
-    expect(
-      resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn({ startedAt: null, completedAt: null }),
-        session,
-      }),
-    ).toBe("2026-03-09T10:00:00.000Z");
-  });
-
-  it("falls back to the session transition when the latest turn already completed", () => {
-    expect(
-      resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn(),
-        session,
-      }),
-    ).toBe("2026-03-09T10:02:00.000Z");
-  });
-
-  it("skips a malformed startedAt instead of returning it", () => {
-    expect(
-      resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn({ startedAt: "not-a-date", completedAt: null }),
-        session,
-      }),
-    ).toBe("2026-03-09T10:00:00.000Z");
-  });
-
-  it("returns null with neither a running turn nor a session", () => {
-    expect(resolveWorkingStartedAt({ latestTurn: null, session: null })).toBeNull();
-  });
-});
-
-describe("formatWorkingDurationLabel", () => {
-  it("formats seconds, minutes, and hours", () => {
-    expect(formatWorkingDurationLabel(0)).toBe("0s");
-    expect(formatWorkingDurationLabel(42_000)).toBe("42s");
-    expect(formatWorkingDurationLabel(5 * 60_000)).toBe("5m");
-    expect(formatWorkingDurationLabel(90 * 60_000)).toBe("1h 30m");
-  });
-
-  it("clamps negative and non-finite elapsed values to zero", () => {
-    expect(formatWorkingDurationLabel(-5_000)).toBe("0s");
-    expect(formatWorkingDurationLabel(Number.NaN)).toBe("0s");
-  });
-});
-
 describe("resolveThreadStatusPill", () => {
   const baseThread = {
     hasActionableProposedPlan: false,
@@ -2201,28 +2107,6 @@ describe("resolveThreadStatusPill", () => {
         },
       }),
     ).toMatchObject({ label: "Completed", pulse: false });
-  });
-});
-
-describe("resolveThreadRowClassName", () => {
-  it("uses the active sidebar surface when a thread is both selected and active", () => {
-    const className = resolveThreadRowClassName({ isActive: true, isSelected: true });
-    expect(className).toContain("bg-sidebar-row-active");
-    expect(className).toContain("text-sidebar-foreground");
-    expect(className).not.toContain("bg-primary");
-  });
-
-  it("uses selected hover colors for selected threads", () => {
-    const className = resolveThreadRowClassName({ isActive: false, isSelected: true });
-    expect(className).toContain("bg-sidebar-row-selected");
-    expect(className).toContain("hover:bg-sidebar-row-active");
-    expect(className).not.toContain("bg-primary");
-  });
-
-  it("uses the active sidebar surface for active-only threads", () => {
-    const className = resolveThreadRowClassName({ isActive: true, isSelected: false });
-    expect(className).toContain("bg-sidebar-row-active");
-    expect(className).toContain("hover:bg-sidebar-row-active");
   });
 });
 
@@ -2544,6 +2428,49 @@ describe("sortProjectsForSidebar", () => {
     ]);
   });
 
+  it.each(["updated_at", "created_at"] as const)(
+    "matches the per-comparison %s order on a shuffled list with ties",
+    (sortOrder) => {
+      const minute = (value: number) => `2026-03-09T10:0${value}:00.000Z`;
+      // (index * 7) % 24 scrambles the input order. Titles repeat, and
+      // projects 16-23 have no threads, so they use their own stamps.
+      const projects = Array.from({ length: 24 }, (_, index) => {
+        const n = (index * 7) % 24;
+        return makeProject({
+          id: ProjectId.make(`project-${n}`),
+          title: n % 2 === 0 ? "Alpha" : "Beta",
+          createdAt: minute(n % 3),
+          updatedAt: n % 5 === 0 ? "invalid" : minute(n % 2),
+        });
+      });
+      const threads = Array.from({ length: 48 }, (_, n) => ({
+        projectId: ProjectId.make(`project-${n % 16}`),
+        createdAt: minute(n % 6),
+        updatedAt: minute(n % 3),
+        latestUserMessageAt: n % 4 === 0 ? null : minute(n % 5),
+      }));
+      // The comparator this sort replaced: it walked each project's threads
+      // on every call.
+      const timestamp = (project: Project) =>
+        getProjectSortTimestamp(
+          project,
+          threads.filter((thread) => thread.projectId === project.id),
+          sortOrder,
+        );
+      const expected = projects.toSorted((left, right) => {
+        const rightTimestamp = timestamp(right);
+        const leftTimestamp = timestamp(left);
+        const byTimestamp =
+          rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
+        return (
+          byTimestamp || left.title.localeCompare(right.title) || left.id.localeCompare(right.id)
+        );
+      });
+
+      expect(sortProjectsForSidebar(projects, threads, sortOrder)).toEqual(expected);
+    },
+  );
+
   it("returns the project timestamp when no threads are present", () => {
     const timestamp = getProjectSortTimestamp(
       makeProject({ updatedAt: "2026-03-09T10:10:00.000Z" }),
@@ -2806,4 +2733,45 @@ describe("resolveSidebarDropVerb", () => {
     expect(resolveSidebarDropVerb("active", null)).toBeNull();
     expect(resolveSidebarDropVerb("active", "snoozed")).toBeNull();
   });
+});
+
+describe("navigation after parking a thread", () => {
+  it.each([
+    ["settle", "settled", null, "thread", true],
+    ["settle", "active", null, "thread", false],
+    ["settle", "settled", null, "other-thread", false],
+    ["snooze", null, "2099-01-01T00:00:00.000Z", "thread", true],
+    ["snooze", null, null, "thread", false],
+    ["snooze", null, "2026-09-12T09:00:00.000Z", "thread", false],
+    ["snooze", null, "2099-01-01T00:00:00.000Z", "thread", false, true],
+    ["snooze", null, "2099-01-01T00:00:00.000Z", "other-thread", false],
+  ] as const)(
+    "%s with state %s / %s on %s navigates: %s",
+    (
+      action,
+      settledOverride,
+      snoozedUntil,
+      currentThreadKey,
+      expected,
+      hasPendingApprovals: boolean = false,
+    ) => {
+      expect(
+        shouldNavigateAfterThreadPark({
+          threadKey: "thread",
+          currentThreadKey,
+          action,
+          now: "2026-09-12T10:00:00.000Z",
+          thread: {
+            settledOverride,
+            snoozedUntil,
+            snoozedAt: null,
+            session: null,
+            latestTurn: null,
+            hasPendingApprovals,
+            hasPendingUserInput: false,
+          },
+        }),
+      ).toBe(expected);
+    },
+  );
 });

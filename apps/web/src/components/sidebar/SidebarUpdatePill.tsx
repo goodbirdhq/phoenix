@@ -98,7 +98,7 @@ function SidebarUpdateArchitectureWarningContent() {
   if (!visible || !description) return null;
 
   return (
-    <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8 text-xs">
+    <Alert variant="warning">
       <TriangleAlertIcon />
       <AlertTitle>Intel build on Apple Silicon</AlertTitle>
       <AlertDescription>{description}</AlertDescription>
@@ -298,7 +298,7 @@ function SidebarUpdateControl() {
   const menuItem = (
     <MenuItem
       id={releaseNotesTriggerId}
-      className="h-8 text-sm"
+      className="h-8"
       disabled={isInteractionDisabled}
       onClick={handleAction}
       closeOnClick={false}
@@ -339,7 +339,7 @@ function SidebarUpdateControl() {
               : "Check for updates"}
       </span>
       {action === "download" || action === "install" ? (
-        <span className="rounded bg-sky-600/10 px-1.5 text-xs leading-5 text-sky-600 dark:text-sky-400">
+        <span className="rounded bg-info/10 px-1.5 text-xs leading-5 text-info-foreground">
           Available
         </span>
       ) : null}
@@ -381,7 +381,6 @@ function SidebarUpdateControl() {
         <PopoverPopup
           align="start"
           aria-label="Nightly update release notes"
-          className="max-w-none text-balance shadow-xl shadow-black/25"
           initialFocus={false}
           onKeyDownCapture={(event) => {
             if (

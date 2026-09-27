@@ -1,15 +1,13 @@
-import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { SymbolView } from "../../components/AppSymbol";
-import { Pressable, View } from "react-native";
+import { Platform, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 
 export function WorkspaceEmptyDetail(props: { readonly onStartNewTask?: () => void }) {
-  const { materialYouStyleLayoutActive } = useAppearancePreferences();
   return (
     <View
       className={
-        materialYouStyleLayoutActive
+        Platform.OS === "android"
           ? "flex-1 items-center justify-center px-10"
           : "flex-1 items-center justify-center bg-screen px-10"
       }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "@effect/vitest";
 import {
   CommandId,
+  DEFAULT_SERVER_SETTINGS,
   EventId,
   GitCommandError,
   MessageId,
@@ -21,6 +22,9 @@ import * as Schema from "effect/Schema";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as TerminalManager from "../terminal/Manager.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
@@ -236,43 +240,67 @@ const bootstrapCommand = {
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
-const bootstrapRecoveryHarness = (activities: ReadonlyArray<OrchestrationThreadActivity>) => {
-  const commands: Array<OrchestrationCommand> = [];
-  const runForThread = vi.fn(() =>
-    Effect.succeed({
-      status: "started" as const,
-      scriptId: "setup",
-      scriptName: "Setup",
-      terminalId: "setup-terminal",
-      cwd: "/repo/.worktrees/schedule",
-    }),
-  );
-  const layer = ThreadTurnBootstrapModule.layer.pipe(
+const makeBootstrapLayer = (input: {
+  readonly commands: Array<OrchestrationCommand>;
+  readonly runForThread: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
+  readonly gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
+  readonly activities?: ReadonlyArray<OrchestrationThreadActivity>;
+}) =>
+  ThreadTurnBootstrapModule.layer.pipe(
     Layer.provideMerge(NodeServices.layer),
     Layer.provide(
       Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
         dispatch: (command) =>
           Effect.sync(() => {
-            commands.push(command);
-            return { sequence: commands.length };
+            input.commands.push(command);
+            return { sequence: input.commands.length };
           }),
       }),
     ),
-    Layer.provide(Layer.mock(GitWorkflowService.GitWorkflowService)({})),
+    Layer.provide(Layer.mock(GitWorkflowService.GitWorkflowService)({ ...input.gitWorkflow })),
     Layer.provide(
       Layer.mock(ThreadDeletionReactor)({
         start: () => Effect.void,
         drainThrough: () => Effect.void,
       }),
     ),
-    Layer.provide(Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({ runForThread })),
+    Layer.provide(
+      Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+        runForThread: input.runForThread,
+      }),
+    ),
     Layer.provide(Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({})),
     Layer.provide(
       Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-        getThreadDetailById: () => Effect.succeed(Option.some(recoveredThread(activities))),
+        getThreadDetailById: () =>
+          Effect.succeed(Option.some(recoveredThread(input.activities ?? []))),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(WorktreeSetupTracker.layer),
+    Layer.provide(Layer.mock(TerminalManager.TerminalManager)({ close: () => Effect.void })),
+    Layer.provide(
+      Layer.mock(ServerSettings.ServerSettingsService)({
+        getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
       }),
     ),
   );
+
+const startedSetupScript = {
+  status: "started" as const,
+  scriptId: "setup",
+  scriptName: "Setup",
+  scriptCommand: "npm install",
+  terminalId: "setup-terminal",
+  cwd: "/repo/.worktrees/schedule",
+  async: true,
+};
+
+const bootstrapRecoveryHarness = (activities: ReadonlyArray<OrchestrationThreadActivity>) => {
+  const commands: Array<OrchestrationCommand> = [];
+  const runForThread = vi.fn(() => Effect.succeed(startedSetupScript));
+  const layer = makeBootstrapLayer({ commands, runForThread, activities });
   return { commands, runForThread, layer };
 };
 
@@ -313,5 +341,115 @@ describe("setup-script bootstrap recovery", () => {
       expect(harness.runForThread).not.toHaveBeenCalled();
       expect(harness.commands.map(({ type }) => type)).toEqual(["thread.delete"]);
     }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("worktree bootstrap checkouts", () => {
+  const worktreeCommand = (
+    prepareWorktree: NonNullable<
+      NonNullable<ThreadTurnBootstrapModule.ThreadTurnStartCommand["bootstrap"]>["prepareWorktree"]
+    >,
+  ): ThreadTurnBootstrapModule.ThreadTurnStartCommand => ({
+    ...bootstrapCommand,
+    bootstrap: {
+      createThread: {
+        projectId: bootstrapProjectId,
+        title: "Spawned",
+        modelSelection: bootstrapCommand.modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      prepareWorktree,
+    },
+  });
+  const noSetupScript = () => Effect.succeed({ status: "no-script" as const });
+
+  it.effect("checks out an explicit PR head instead of the base branch", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const createWorktree = vi.fn(
+      (_input: Parameters<GitWorkflowService.GitWorkflowService["Service"]["createWorktree"]>[0]) =>
+        Effect.succeed({
+          worktree: { refName: "phoenix/review", path: "/repo/.worktrees/review" },
+        }),
+    );
+    const layer = makeBootstrapLayer({
+      commands,
+      runForThread: noSetupScript,
+      gitWorkflow: {
+        isRepository: () => Effect.succeed(true),
+        fetchPullRequestHeadCommit: () => Effect.succeed({ commitSha: "abc1234def" }),
+        createWorktree,
+      },
+    });
+    return Effect.gen(function* () {
+      const bootstrap = yield* ThreadTurnBootstrap;
+      yield* bootstrap.bootstrapTurnStart(
+        worktreeCommand({
+          projectCwd: "/repo",
+          baseBranch: "main",
+          branch: "phoenix/review",
+          checkoutPr: 42,
+          // An explicit checkout never starts from the base branch.
+          startFromOrigin: true,
+        }),
+      );
+      expect(createWorktree.mock.calls[0]?.[0].refName).toBe("abc1234def");
+      expect(commands.map(({ type }) => type)).toContain("thread.turn.start");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("fails an explicit checkout outside a git repository instead of falling back", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const layer = makeBootstrapLayer({
+      commands,
+      runForThread: noSetupScript,
+      gitWorkflow: { isRepository: () => Effect.succeed(false) },
+    });
+    return Effect.gen(function* () {
+      const bootstrap = yield* ThreadTurnBootstrap;
+      const error = yield* bootstrap
+        .bootstrapTurnStart(
+          worktreeCommand({ projectCwd: "/repo", baseBranch: "main", checkoutRef: "v1.2.3" }),
+        )
+        .pipe(Effect.flip);
+      expect(error.bootstrapThreadDisposition).toBe("not-created");
+      expect(commands.some(({ type }) => type === "thread.create")).toBe(false);
+      expect(commands.some(({ type }) => type === "thread.turn.start")).toBe(false);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("reuses a deterministic branch worktree left by an earlier attempt", () => {
+    const commands: Array<OrchestrationCommand> = [];
+    const createWorktree = vi.fn(() => Effect.die("must not create a second worktree"));
+    const layer = makeBootstrapLayer({
+      commands,
+      runForThread: noSetupScript,
+      gitWorkflow: {
+        isRepository: () => Effect.succeed(true),
+        listWorktrees: () =>
+          Effect.succeed([{ path: "/repo/.worktrees/schedule", branch: "refs/heads/phoenix/s" }]),
+        createWorktree,
+      },
+    });
+    return Effect.gen(function* () {
+      const bootstrap = yield* ThreadTurnBootstrap;
+      yield* bootstrap.bootstrapTurnStart(
+        worktreeCommand({
+          projectCwd: "/repo",
+          baseBranch: "main",
+          branch: "phoenix/s",
+          reuseExistingBranchWorktree: true,
+        }),
+      );
+      expect(createWorktree).not.toHaveBeenCalled();
+      const metaUpdate = commands.find((command) => command.type === "thread.meta.update");
+      expect(metaUpdate?.type === "thread.meta.update" && metaUpdate.worktreePath).toBe(
+        "/repo/.worktrees/schedule",
+      );
+      expect(commands.some(({ type }) => type === "thread.turn.start")).toBe(true);
+    }).pipe(Effect.provide(layer));
   });
 });

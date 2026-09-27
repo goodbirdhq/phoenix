@@ -77,7 +77,11 @@ const samples: HostMetricsHistorySample[] = Array.from({ length: 120 }, (_, inde
 
 function Review() {
   return (
-    <div className="usage-surface environment-surface min-h-screen bg-background text-foreground">
+    <div
+      data-usage-surface=""
+      data-environment-surface=""
+      className="min-h-screen bg-background text-foreground"
+    >
       <main className="ml-[344px] w-[1096px]" data-review-frame="overview">
         <nav className="flex h-[52px] items-center gap-3 border-b border-border px-8 text-sm">
           <span>Environments</span>
@@ -92,11 +96,7 @@ function Review() {
             status="Connected"
             connected
             actions={
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px] shadow-none"
-              >
+              <Button size="sm" variant="outline" data-environment-control>
                 Edit environment
               </Button>
             }
@@ -120,11 +120,7 @@ function Review() {
               refreshing={false}
               onRefresh={() => {}}
               processDetails={
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px] shadow-none"
-                >
+                <Button size="sm" variant="outline" data-environment-control>
                   View process details
                 </Button>
               }

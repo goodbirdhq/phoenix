@@ -1,9 +1,17 @@
 # Usage and limits
 
-The desktop and web Usage page combines Codex, Claude Code, OpenCode, and Grok Build activity from your connected
-environments. It reads the providers' local session history and shows API-equivalent token cost,
-processed tokens, cache savings, provider shares, and model breakdowns. Subscription billing is
-separate from the raw token cost shown here. This guide describes the desktop and web interface; the separate mobile app currently retains its Threads report, which groups native sessions by Phoenix conversation.
+Open **Usage** from the sidebar or the command palette, or press `mod+u` on web and
+desktop when the terminal is not focused. Customize `usage.open` in
+**Settings → Keybindings**.
+
+## Understand your usage
+
+**Usage** combines Codex, Claude Code, Grok Build, OpenCode, Antigravity, and Cursor activity from
+your connected environments. It reads the providers' local session history and shows
+API-equivalent token cost, processed tokens, cache savings, provider shares, and model breakdowns.
+Subscription billing is separate from the raw token cost shown here. This guide describes the
+desktop and web interface; the separate mobile app currently retains its Threads report, which
+groups native sessions by Phoenix conversation.
 
 Grok Build totals come from persisted session updates. Interactive turns that never wrote a
 completed-turn record will not appear. Each configured Grok instance’s environment overrides determine which history directory is scanned, so instances using separate directories are included. Shared history directories are scanned once.
@@ -14,6 +22,29 @@ environment to inspect only its totals, chart, and breakdown. Refresh usage resc
 
 Usage opens on **Overview** the first time and remembers your chosen view. **Limits** remains
 available for account allowances and reset times.
+
+OpenCode reads each configured instance's SQLite database and older JSON history, following the
+instance's `XDG_DATA_HOME` or `OPENCODE_DB`. Antigravity reads local conversation databases, including
+Phoenix-managed profiles. Set `ANTIGRAVITY_DATA_DIR` on the server to read a different data directory;
+comma-separated paths read multiple directories.
+
+Cursor reads account usage from Cursor's dashboard API using the CLI login saved on the server.
+This includes headless Phoenix sessions and desktop usage across machines; the same account counts
+once across connected environments. Without an accessible CLI login, Phoenix shows a
+notice instead of incomplete local totals. Phoenix does not estimate missing tokens from conversation text.
+On macOS, choose **Enable Cursor usage** on Usage to allow Phoenix to read your existing CLI login
+from Keychain. You can turn it off in **Settings → Providers → Usage providers**. macOS may ask
+you to allow access on the server Mac.
+
+Usage includes each configured account's history, including disabled accounts. Custom homes follow
+the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME` environment
+variable. Use absolute paths or `~/` paths in the account's environment settings; relative
+environment paths depend on each project's working directory and cannot be reliably discovered
+by Usage. Accounts sharing a history directory count once.
+
+On web and desktop, use the environment dropdown to filter costs, tokens, and limits. All
+environments are selected by default. The dropdown shows which environments are still scanning;
+results appear as each one responds.
 
 Costs distinguish provider-reported usage from model-priced estimates; neither is necessarily
 an invoice or subscription bill. **Unpriced** means usage was recorded without a known cost.
@@ -99,19 +130,35 @@ first, or by the first available window when no account reports a 5-hour limit. 
 account does not report that window. When the provider reports reset times, the card also says
 when the next reset lands and how much it hands back. The hatched
 part of a segment is what that reset restores. Tap a segment or account row for the account's plan,
-where it is signed in, and its reset time. On web, you can hover too. Codex accounts with banked
-reset credits show a ticket count and the **Use reset** action in the account details. On narrow screens, numbered rows below
+where it is signed in, and its reset time. On web, you can hover too. Codex and Claude accounts
+with banked reset credits show a ticket count and the **Use reset** action in the account details.
+Claude resets are not available when the server runs on macOS, where Claude keeps its login in the
+Keychain. On narrow screens, numbered rows below
 the bar show each account's quota, countdown, and credits. Tap a row to open its details.
 
 The same account signed in on more than one environment, or reported by a hub as well, counts once.
 Filter with the environment dropdown to see what a single machine has.
 
-If a window looks stale, refresh Limits to re-check every provider and hub.
+Opening Limits checks the selected connected environments automatically. Each client waits at
+least five minutes between automatic checks of an environment, including after a failed check.
+If a window still looks stale, refresh Limits to re-check every provider and hub.
 
 Pick `/usage-limits` from the composer's command menu, or send it as a message, to check the
 current model's limits without leaving the conversation. The result opens above the composer and
 closes when you dismiss it or send your next message. It uses the same snapshot as **Usage → Limits**, so it does not run the agent or refresh
 anything. The command is offered only for providers that appear under **Usage → Limits**.
+
+OpenCode Go reports its session, weekly, and monthly allowance when OpenCode runs locally in
+the environment. Phoenix cannot report limits for external OpenCode servers because their credentials
+belong to the remote server. Cursor reports
+its monthly allowance, including separate Auto and API usage, using the CLI login or
+`CURSOR_AUTH_TOKEN`. On macOS, this includes the default Keychain login after you enable Cursor
+usage. Keychain login is used for limits only with Cursor's default API endpoint. If you configure
+a custom Cursor endpoint, use an explicit token or file-based CLI login for limits.
+
+Grok reports the remaining subscription allowance and reset time for its current billing period
+after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custom authentication
+or endpoint configurations do not report subscription limits.
 
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
@@ -127,3 +174,19 @@ account and choose **Use reset** to redeem one. No hub plugin is required.
 This connection supplies usage information; configure
 the provider separately to send agent requests through the hub. Remove the hub from the same
 settings section when you no longer need it.
+
+## Subscription usage widget
+
+Add **Subscription usage** from your iOS or Android widget gallery to see remaining Codex and
+Claude quotas. Tap it to open **Usage → Limits**. On iOS, use **Edit Widget** to choose Session,
+Weekly, or both for each provider. Reopen Phoenix to refresh expired readings. The Android widget
+requires Android 12L or later.
+
+## Keyboard shortcuts
+
+On web and desktop, open Usage from the command palette. While on Usage,
+press `C`, `T`, or `L` for Cost, Tokens, or Limits while not typing in a field.
+Use `Ctrl+Shift+1/2/3/4` (`Cmd+Shift+1/2/3/4` on macOS) for the past
+24 hours, 7 days, 30 days, or 90 days. Period shortcuts do nothing on Limits.
+Press `Escape` to return to the previous page. Customize these shortcuts in
+**Settings → Keybindings**.

@@ -35,7 +35,10 @@ vi.mock("../../hooks/useSettings", () => ({
 
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => settingsHooks.update }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: settingsHooks.providers }));
-vi.mock("../../state/session", () => ({ useEnvironmentSessionState: settingsHooks.session }));
+vi.mock("../../state/session", () => ({
+  useEnvironmentSessionState: settingsHooks.session,
+  environmentSession: { preparedConnectionValueAtom: vi.fn() },
+}));
 vi.mock("../../state/server", () => ({
   serverEnvironment: {
     updateSettings: Symbol("updateSettings"),

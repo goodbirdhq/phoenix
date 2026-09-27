@@ -180,7 +180,10 @@ Provider metadata warnings do not prevent starting a child when the provider is 
 
 ## Coordinating messages reliably
 
-A busy session receives queued messages in order after its turn ends. A child asking a blocking
+A busy session receives queued messages in order after its turn ends. A parent can instead steer
+a busy child, which delivers the message now, ahead of anything queued. How the agent takes it in
+depends on the provider: some read it mid-turn, others finish or stop their current step first. A
+steer still waits while the child is starting or needs an approval or an answer. A child asking a blocking
 question should send it once and finish its turn so the parent's answer can arrive. Polling or
 continuing to use tools in the same turn keeps the answer waiting.
 
@@ -191,6 +194,10 @@ work or a failed interrupt requires a restart, Phoenix confirms process exit bef
 An ordinary interrupt does not generate a session death notice. If Phoenix cannot confirm that
 a provider stopped, it keeps queued instructions blocked and sends the parent a failure notice.
 Inspect the session error, resolve the provider problem, and retry Stop before resuming work.
+
+If a parent's message never reaches the child's agent, for example because Stop ended the turn a
+steer was waiting to join, the parent gets a notice naming that message. This is not a session
+error. Read the child's recent work before deciding whether to send the message again.
 
 A delivery receipt confirms that the provider accepted an input for a particular turn. It does not
 prove that the agent understood or completed the instruction. For important approvals, request one

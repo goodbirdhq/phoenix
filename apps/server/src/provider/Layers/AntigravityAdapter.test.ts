@@ -589,6 +589,144 @@ it.layer(layer)("AntigravityAdapter", (it) => {
     }),
   );
 
+  it.effect("leaves an open question to the user when a steer arrives", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      yield* h.adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      const first = yield* h.adapter
+        .sendTurn({ threadId, input: "Ask a question" })
+        .pipe(Effect.forkChild);
+      yield* h.nextPrompt;
+      const question = yield* h
+        .invokePermission({
+          sessionId: nativeSessionId,
+          toolCall: { toolCallId: "interaction_steer", title: "Continue?" },
+          options: [{ optionId: "yes", name: "Yes", kind: "allow_once" }],
+        })
+        .pipe(Effect.forkChild);
+      const opened = yield* h.waitForEvent((event) => event.type === "user-input.requested");
+      const marker = h.calls.length;
+      const steer = yield* h.adapter
+        .sendTurn({ threadId, input: "Also check the tests" })
+        .pipe(Effect.forkChild);
+      // Let the steer run as far as it can on its own.
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+      expect(h.calls.slice(marker)).toEqual([]);
+      expect(question.pollUnsafe()).toBeUndefined();
+
+      yield* h.adapter.respondToUserInput(threadId, ApprovalRequestId.make(opened.requestId!), {
+        interaction_steer: "yes",
+      });
+      expect(yield* Fiber.join(question)).toEqual({
+        outcome: { outcome: "selected", optionId: "yes" },
+      });
+      expect(yield* h.nextCancellation).toBe(1);
+      const replacement = yield* h.nextPrompt;
+      expect(replacement.content[0]).toEqual({ type: "text", text: "Also check the tests" });
+      yield* Deferred.succeed(replacement.result, { stopReason: "end_turn" });
+      yield* Effect.all([Fiber.join(first), Fiber.join(steer)]);
+    }),
+  );
+
+  it.effect("stops a turn whose steer is waiting on the user", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      yield* h.adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      const first = yield* h.adapter
+        .sendTurn({ threadId, input: "Ask a question" })
+        .pipe(Effect.forkChild);
+      yield* h.nextPrompt;
+      const question = yield* h
+        .invokePermission({
+          sessionId: nativeSessionId,
+          toolCall: { toolCallId: "interaction_stop", title: "Continue?" },
+          options: [{ optionId: "yes", name: "Yes", kind: "allow_once" }],
+        })
+        .pipe(Effect.forkChild);
+      yield* h.waitForEvent((event) => event.type === "user-input.requested");
+      const steer = yield* h.adapter
+        .sendTurn({ threadId, input: "Also check the tests" })
+        .pipe(Effect.forkChild);
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+
+      // Stop is not held up by the waiting steer; it answers the question as cancelled.
+      yield* h.adapter.interruptTurn(threadId);
+      expect(yield* Fiber.join(question)).toEqual({ outcome: { outcome: "cancelled" } });
+      yield* Fiber.await(first);
+      // The steer belonged to the stopped turn, so it starts no new work and reports it was not sent.
+      const error = yield* Fiber.join(steer).pipe(Effect.flip);
+      expect(error._tag).toBe("ProviderAdapterTurnStoppedError");
+      expect(h.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:1"]);
+    }),
+  );
+
+  it.effect("fails a waiting steer when the session stops", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      yield* h.adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      yield* h.adapter.sendTurn({ threadId, input: "Ask a question" }).pipe(Effect.forkChild);
+      yield* h.nextPrompt;
+      yield* h
+        .invokePermission({
+          sessionId: nativeSessionId,
+          toolCall: { toolCallId: "interaction_close", title: "Continue?" },
+          options: [{ optionId: "yes", name: "Yes", kind: "allow_once" }],
+        })
+        .pipe(Effect.forkChild);
+      yield* h.waitForEvent((event) => event.type === "user-input.requested");
+      const steer = yield* h.adapter
+        .sendTurn({ threadId, input: "Also check the tests" })
+        .pipe(Effect.forkChild);
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+
+      yield* h.adapter.stopSession(threadId);
+      const error = yield* Fiber.join(steer).pipe(Effect.flip);
+      expect(error._tag).toBe("ProviderAdapterSessionClosedError");
+      expect(h.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:1"]);
+    }),
+  );
+
+  it.effect("does not launch a steer that Stop overtook while it waited for the lock", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ holdDispatch: true });
+      yield* h.adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      // The first prompt holds promptLock until its dispatch is released.
+      const first = yield* h.adapter
+        .sendTurn({ threadId, input: "First prompt" })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(h.dispatchStarted);
+      const steer = yield* h.adapter
+        .sendTurn({ threadId, input: "Also check the tests" })
+        .pipe(Effect.forkChild);
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+      const stop = yield* h.adapter.interruptTurn(threadId).pipe(Effect.forkChild);
+      yield* Effect.repeat(Effect.yieldNow, { times: 50 });
+
+      yield* Deferred.succeed(h.dispatchRelease, undefined);
+      yield* Fiber.join(stop);
+      const error = yield* Fiber.join(steer).pipe(Effect.flip);
+      expect(error._tag).toBe("ProviderAdapterTurnStoppedError");
+      yield* Fiber.await(first);
+      expect(h.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:1"]);
+    }),
+  );
+
   it.effect("waits for native cancellation before a steer changes the model", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness({ holdCancel: true });
@@ -772,6 +910,44 @@ it.layer(layer)("AntigravityAdapter", (it) => {
       const ended = yield* h.waitForEvent((event) => event.type === "task.completed");
       expect(ended.payload.taskId).toBe(started.payload.taskId);
       expect(ended.payload.status).toBe("completed");
+    }),
+  );
+
+  it.effect("stops commands left running after a turn when the idle turn is stopped", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      yield* h.adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      const sending = yield* h.adapter
+        .sendTurn({ threadId, input: "Start a watcher" })
+        .pipe(Effect.forkChild);
+      const prompt = yield* h.nextPrompt;
+      yield* h.emitNative({
+        _tag: "ToolCallUpdated",
+        toolCall: {
+          toolCallId: "watcher-1",
+          kind: "execute",
+          status: "inProgress",
+          command: "tail -f log",
+          data: {},
+        },
+        rawPayload: {},
+      });
+      yield* Deferred.succeed(prompt.result, { stopReason: "end_turn" });
+      yield* Fiber.join(sending);
+      const started = yield* h.waitForEvent((event) => event.type === "task.started");
+
+      // Monitoring's Stop reaches the adapter as a turn interrupt. With no
+      // prompt to cancel, it has to end the session to stop the command.
+      yield* h.adapter.interruptTurn(threadId);
+      const stopped = yield* h.waitForEvent((event) => event.type === "task.completed");
+      expect(stopped.payload).toMatchObject({ taskId: started.payload.taskId, status: "stopped" });
+      yield* h.waitForEvent((event) => event.type === "session.exited");
+      expect(yield* h.adapter.hasSession(threadId)).toBe(false);
+      expect(h.controls.closed).toBe(1);
     }),
   );
 

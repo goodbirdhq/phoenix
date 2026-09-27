@@ -49,11 +49,11 @@ export function EnvironmentOverview({
   return (
     <div className="space-y-6">
       {warnings.length > 0 ? (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/8 px-4 py-3">
+        <div className="rounded-lg border border-warning/30 bg-warning/8 px-4 py-3">
           {warnings.map((warning) => (
             <div
               key={`${warning.resource}:${warning.message}`}
-              className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200"
+              className="flex items-start gap-2 text-sm text-warning-foreground"
             >
               <CircleAlertIcon className="mt-0.5 size-4 shrink-0" />
               <span>{warning.message}</span>
@@ -116,11 +116,14 @@ export function EnvironmentOverview({
       <TrendChart samples={samples} live={live} refreshing={refreshing} onRefresh={onRefresh} />
 
       <section>
-        <h2 className="environment-inter flex items-center gap-2 text-base leading-[22px] font-semibold">
+        <h2
+          data-environment-inter=""
+          className="flex items-center gap-2 text-base leading-5.5 font-semibold"
+        >
           <HardDriveIcon className="size-4 text-muted-foreground" />
           Storage
         </h2>
-        <p className="mt-1 mb-3 text-xs leading-[18px] text-muted-foreground">
+        <p className="mt-1 mb-3 text-xs leading-4.5 text-muted-foreground">
           Capacity on the volumes used by this environment
         </p>
         <div className="grid gap-8 sm:grid-cols-2">
@@ -131,7 +134,7 @@ export function EnvironmentOverview({
       </section>
 
       <section className="space-y-6">
-        <div className="grid grid-cols-2 gap-8 border-y border-border py-[18px] lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-8 border-y border-border py-4.5 lg:grid-cols-4">
           <Fact
             icon={<ClockIcon />}
             label="System uptime"
@@ -161,8 +164,8 @@ export function EnvironmentOverview({
         </div>
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className="text-base leading-[22px] font-semibold">Host and Phoenix</h2>
-            <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+            <h2 className="text-base leading-5.5 font-semibold">Host and Phoenix</h2>
+            <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
               Host metrics cover this machine. Phoenix metrics cover its process tree.
             </p>
           </div>
@@ -206,18 +209,21 @@ function ResourceCard({
 }) {
   return (
     <div className="min-w-0 space-y-2">
-      <div className="environment-inter flex items-center gap-2 text-xs leading-[18px] text-muted-foreground">
+      <div
+        data-environment-inter=""
+        className="flex items-center gap-2 text-xs leading-4.5 text-muted-foreground"
+      >
         {icon} {label}
       </div>
       <div
         className={cn(
-          "text-[30px] leading-9 font-semibold tabular-nums",
-          warning && "text-amber-600 dark:text-amber-300",
+          "text-3xl leading-9 font-semibold tabular-nums",
+          warning && "text-warning-foreground",
         )}
       >
         {value}
       </div>
-      <p className="text-xs leading-[18px] text-muted-foreground">{detail}</p>
+      <p className="text-xs leading-4.5 text-muted-foreground">{detail}</p>
     </div>
   );
 }
@@ -241,11 +247,11 @@ function StorageCard({ storage }: { storage: HostMetricsSnapshot["storage"][numb
       <div className="text-sm leading-5 font-medium">{storageLabel(storage)}</div>
       <div className="mt-2.5 h-[5px] overflow-hidden rounded-full bg-muted">
         <div
-          className={cn("h-full rounded-full", low ? "bg-amber-500" : "bg-foreground")}
+          className={cn("h-full rounded-full", low ? "bg-warning" : "bg-foreground")}
           style={{ width: `${storage.utilizationPercent}%` }}
         />
       </div>
-      <p className="mt-2.5 text-xs leading-[18px] text-muted-foreground">
+      <p className="mt-2.5 text-xs leading-4.5 text-muted-foreground">
         {formatHostMetricBytes(storage.availableBytes)} free of{" "}
         {formatHostMetricBytes(storage.totalBytes)}
       </p>
@@ -283,24 +289,26 @@ function TrendChart({
       .join(" ");
   };
   return (
-    <section className="space-y-[14px]">
+    <section className="space-y-3.5">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="environment-inter flex items-center gap-2 text-base leading-[22px] font-semibold">
+          <h2
+            data-environment-inter=""
+            className="flex items-center gap-2 text-base leading-5.5 font-semibold"
+          >
             <ChartLineIcon className="size-4 text-muted-foreground" />
             Recent pressure
           </h2>
-          <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+          <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
             Up to 15 minutes · History resets when the server restarts
           </p>
         </div>
         <div className="flex items-center gap-5">
-          <span className="text-xs text-emerald-700">● {live ? "Live" : "Latest"}</span>
+          <span className="text-xs text-success-foreground">● {live ? "Live" : "Latest"}</span>
           <Button
             data-environment-control
             size="sm"
             variant="outline"
-            className="h-9 sm:h-9 px-3 text-[13px] sm:text-[13px] shadow-none"
             disabled={refreshing}
             onClick={onRefresh}
           >
@@ -341,13 +349,13 @@ function TrendChart({
           <path
             d={path((sample) => sample.memoryUtilizationPercent)}
             fill="none"
-            className="stroke-sky-600"
+            className="stroke-primary"
             strokeWidth="2"
             vectorEffect="non-scaling-stroke"
           />
         </svg>
       )}
-      <div className="flex justify-between text-xs leading-[18px] text-muted-foreground">
+      <div className="flex justify-between text-xs leading-4.5 text-muted-foreground">
         <span>15 minutes ago</span>
         <span className="flex gap-4">
           <span className="flex items-center gap-1.5">
@@ -355,7 +363,7 @@ function TrendChart({
             CPU
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="h-0.5 w-4 bg-sky-600" />
+            <span className="h-0.5 w-4 bg-primary" />
             Memory
           </span>
           <span>Now</span>
@@ -369,15 +377,13 @@ function Fact({ icon, label, value }: { icon?: ReactNode; label: string; value: 
   return (
     <div className="min-w-0">
       <div
-        className={cn(
-          "flex items-center gap-2 text-xs leading-[18px] text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0",
-          icon && "environment-inter",
-        )}
+        data-environment-inter={icon ? "" : undefined}
+        className="flex items-center gap-2 text-xs leading-4.5 text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0"
       >
         {icon}
         {label}
       </div>
-      <div className={cn("mt-1.5", icon ? "text-sm leading-5" : "text-[13px] leading-[19px]")}>
+      <div className={cn("mt-1.5", icon ? "text-sm leading-5" : "text-sm leading-4.75")}>
         {value}
       </div>
     </div>

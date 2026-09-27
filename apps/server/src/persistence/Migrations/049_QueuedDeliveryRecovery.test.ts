@@ -5,7 +5,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const sqliteLayer = NodeSqliteClient.layerMemory();
+const sqliteLayer = NodeSqliteClient.layer({ filename: ":memory:" });
 const layer = it.layer(sqliteLayer);
 
 layer("049_QueuedDeliveryRecovery", (it) => {

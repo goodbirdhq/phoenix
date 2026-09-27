@@ -48,10 +48,10 @@ export const UsageLimitMigrationPopup = memo(function UsageLimitMigrationPopup(p
     >
       <Button
         aria-label="Dismiss usage limit notice"
-        className="absolute top-2 right-2 text-muted-foreground hover:text-foreground"
+        className="absolute top-2 right-2"
         onClick={props.onDismiss}
         size="icon-xs"
-        variant="ghost"
+        variant="ghost-muted"
       >
         <XIcon aria-hidden className="size-3.5" />
       </Button>
@@ -127,8 +127,8 @@ export const UsageLimitMigrationPopup = memo(function UsageLimitMigrationPopup(p
             <div className="mt-2 border-t pt-2">
               <Button
                 size="xs"
-                variant="ghost"
-                className="-ms-2 text-muted-foreground"
+                variant="ghost-muted"
+                className="-ms-2"
                 disabled={props.isBulkPending || props.bulkDisabledReason !== null}
                 title={props.bulkDisabledReason ?? undefined}
                 onClick={props.onSwitchAll}

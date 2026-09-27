@@ -1,3 +1,4 @@
+import { withWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import * as QueuedDelivery from "../QueuedDelivery.ts";
 import {
   type ChatAttachment,
@@ -30,6 +31,7 @@ import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -42,6 +44,7 @@ import {
   ProviderAdapterRequestError,
   ProviderAdapterProcessError,
   ProviderAdapterSessionNotFoundError,
+  ProviderAdapterTurnStoppedError,
   ProviderAdapterValidationError,
   ProviderWorkspaceMissingError,
 } from "../../provider/Errors.ts";
@@ -57,6 +60,10 @@ import {
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
 import { forkParked, ServerActivation } from "../../serverActivation.ts";
+import {
+  formatThreadTitleContext,
+  type ThreadTitleMessage,
+} from "../../textGeneration/ThreadTitleContext.ts";
 import { canReplaceThreadTitle, DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import {
   resolveSourceControlWriterModelSelection,
@@ -65,9 +72,11 @@ import {
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import * as TerminalManager from "../../terminal/Manager.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterSessionNotFoundError = Schema.is(ProviderAdapterSessionNotFoundError);
+const isProviderAdapterTurnStoppedError = Schema.is(ProviderAdapterTurnStoppedError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
@@ -84,6 +93,7 @@ type ProviderIntentEvent = Extract<
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested"
       | "thread.settled"
+      | "thread.session-set"
       | "thread.migrated";
   }
 >;
@@ -124,125 +134,6 @@ const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 // every later command — exactly during a runaway turn, Stop matters most.
 const PROVIDER_INTERRUPT_TIMEOUT_SECONDS = 10;
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-const MAX_REGENERATION_ATTACHMENTS = 4;
-const MAX_THREAD_TITLE_CONTEXT_CHARS = 8_000;
-const MAX_FIRST_USER_TITLE_CONTEXT_CHARS = 2_000;
-const THREAD_TITLE_CONTEXT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";
-const FIRST_USER_CONTEXT_TRUNCATION_MARKER = "\n[First user message truncated]";
-
-type ThreadTitleMessage = {
-  readonly role: "user" | "assistant" | "system";
-  readonly text: string;
-  readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
-};
-
-function formatThreadTitleSection(message: ThreadTitleMessage): string | undefined {
-  if (message.role === "system") {
-    return undefined;
-  }
-  const text = assistantCitationsToPlainText(message.text).trim();
-  const attachmentSummary = (message.attachments ?? [])
-    .map((attachment) => attachment.name)
-    .join(", ");
-  const contents = [
-    ...(text.length > 0 ? [text] : []),
-    ...(attachmentSummary.length > 0 ? [`[Attachments: ${attachmentSummary}]`] : []),
-  ].join("\n");
-  return contents.length > 0 ? `${message.role.toUpperCase()}:\n${contents}` : undefined;
-}
-
-function limitFirstUserSection(section: string): string {
-  if (section.length <= MAX_FIRST_USER_TITLE_CONTEXT_CHARS) {
-    return section;
-  }
-  return `${section.slice(
-    0,
-    MAX_FIRST_USER_TITLE_CONTEXT_CHARS - FIRST_USER_CONTEXT_TRUNCATION_MARKER.length,
-  )}${FIRST_USER_CONTEXT_TRUNCATION_MARKER}`;
-}
-
-function collectRecentThreadTitleContext(
-  messages: ReadonlyArray<ThreadTitleMessage>,
-  maxChars: number,
-): {
-  readonly context: string;
-  readonly attachments: ReadonlyArray<ChatAttachment>;
-  readonly truncated: boolean;
-} {
-  let context = "";
-  let truncated = false;
-  const retainedAttachments: Array<ChatAttachment> = [];
-
-  for (const message of messages.toReversed()) {
-    const section = formatThreadTitleSection(message);
-    if (section === undefined) {
-      continue;
-    }
-
-    const separator = context.length > 0 ? "\n\n" : "";
-    const available = maxChars - context.length - separator.length;
-    if (section.length > available) {
-      if (available > 0) {
-        context = `${section.slice(-available)}${separator}${context}`;
-        retainedAttachments.unshift(...(message.attachments ?? []));
-      }
-      truncated = true;
-      break;
-    }
-    context = `${section}${separator}${context}`;
-    retainedAttachments.unshift(...(message.attachments ?? []));
-  }
-
-  return { context, attachments: retainedAttachments, truncated };
-}
-
-function formatThreadTitleContext(messages: ReadonlyArray<ThreadTitleMessage>): {
-  readonly message: string;
-  readonly attachments: ReadonlyArray<ChatAttachment>;
-} {
-  const recent = collectRecentThreadTitleContext(messages, MAX_THREAD_TITLE_CONTEXT_CHARS);
-  if (!recent.truncated) {
-    return {
-      message: recent.context,
-      attachments: recent.attachments.slice(-MAX_REGENERATION_ATTACHMENTS),
-    };
-  }
-
-  const firstUserMessage = messages.find(
-    (message) => message.role === "user" && formatThreadTitleSection(message),
-  );
-  const firstUserSection = firstUserMessage
-    ? formatThreadTitleSection(firstUserMessage)
-    : undefined;
-  if (!firstUserMessage || !firstUserSection) {
-    return {
-      message: `${THREAD_TITLE_CONTEXT_TRUNCATION_MARKER}${recent.context}`,
-      attachments: recent.attachments.slice(-MAX_REGENERATION_ATTACHMENTS),
-    };
-  }
-
-  const pinnedSection = limitFirstUserSection(firstUserSection);
-  const recentContextBudget =
-    MAX_THREAD_TITLE_CONTEXT_CHARS -
-    pinnedSection.length -
-    "\n\n".length -
-    THREAD_TITLE_CONTEXT_TRUNCATION_MARKER.length;
-  const retainedRecent = collectRecentThreadTitleContext(messages, recentContextBudget);
-  const pinnedAttachment = firstUserMessage.attachments?.[0];
-  const recentAttachments = retainedRecent.attachments.filter(
-    (attachment) => attachment.id !== pinnedAttachment?.id,
-  );
-
-  return {
-    message: `${pinnedSection}\n\n${THREAD_TITLE_CONTEXT_TRUNCATION_MARKER}${retainedRecent.context}`,
-    attachments: [
-      ...(pinnedAttachment ? [pinnedAttachment] : []),
-      ...recentAttachments.slice(
-        -(MAX_REGENERATION_ATTACHMENTS - (pinnedAttachment === undefined ? 0 : 1)),
-      ),
-    ],
-  };
-}
 
 export function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
@@ -352,9 +243,11 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
     const providerRegistry = yield* ProviderRegistry;
     const gitWorkflow = yield* GitWorkflowService;
     const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
     const textGeneration = yield* TextGeneration;
     const serverSettingsService = yield* ServerSettingsService;
+    const terminalManager = yield* TerminalManager.TerminalManager;
     /** Environment settings with the thread's project overrides applied. */
     const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
       const settings = yield* serverSettingsService.getSettings;
@@ -513,6 +406,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       if (isProviderAdapterRequestError(failReason?.error)) {
         return failReason.error.detail;
       }
+      if (isProviderAdapterProcessError(failReason?.error)) {
+        return failReason.error.detail;
+      }
       if (isProviderAdapterValidationError(failReason?.error)) {
         return failReason.error.issue;
       }
@@ -639,16 +535,24 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       });
       // A directory deleted without `git worktree remove` leaves an admin entry
       // that makes `git worktree add` refuse the path; prune clears it.
+      // Best effort like the rest of this recovery: a settings read failure
+      // falls back to the checkout's t3.json.
+      const submodules = yield* projectSettingsForThread(thread.id).pipe(
+        Effect.map((settings) => settings.worktreeSubmodules),
+        Effect.orElseSucceed(() => null),
+      );
       yield* gitWorkflow.pruneWorktrees({ cwd }).pipe(
-        Effect.andThen(gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath })),
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause)
-            : Effect.logWarning("provider command reactor failed to recreate worktree", {
-                threadId: thread.id,
-                worktreePath,
-                cause: Cause.pretty(cause),
-              }),
+        Effect.andThen(
+          gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath }, { submodules }),
+        ),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("provider command reactor failed to recreate worktree", {
+              threadId: thread.id,
+              worktreePath,
+              cause: Cause.pretty(cause),
+            }),
         ),
       );
     });
@@ -716,6 +620,9 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         // only when the continuation identities match (same CLI home).
         readonly allowMigration?: boolean;
         readonly migrationBrief?: string;
+        // First-turn prompt seed. A manual title that still equals this seed was
+        // written by the client's auto-title, not a user rename.
+        readonly titleSeed?: string;
       },
     ) {
       const thread = yield* resolveThreadShell(threadId);
@@ -900,6 +807,15 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             .refreshWorkspaceSnapshot({ instanceId: desiredInstanceId, cwd: effectiveCwd })
             .pipe(Effect.forkDetach)
         : Effect.void;
+      // OpenCode skips SessionPrompt.ensureTitle when session.create already has
+      // a title. Prompt seeds and "New thread" are not user titles, so omit them
+      // and let the provider generate one. A real rename is source "manual" and
+      // differs from the first-turn prompt seed (the web client writes that seed
+      // through thread.meta.update, which also marks the title manual).
+      const manualTitle = thread.titleState?.source === "manual" ? thread.title.trim() : "";
+      const promptSeed = options?.titleSeed?.trim();
+      const sessionTitle =
+        manualTitle.length > 0 && manualTitle !== promptSeed ? thread.title : undefined;
 
       // A session on a different continuation identity cannot resume natively,
       // so a migrating thread is seeded from Phoenix's own transcript instead.
@@ -943,7 +859,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             ...(preferredProvider ? { provider: preferredProvider } : {}),
             providerInstanceId: desiredInstanceId,
             ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-            ...(thread.title ? { title: thread.title } : {}),
+            ...(sessionTitle ? { title: sessionTitle } : {}),
             modelSelection: desiredModelSelection,
             ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
             ...(input?.seed !== undefined ? { seed: input.seed } : {}),
@@ -1083,6 +999,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       readonly interactionMode?: "default" | "plan";
       readonly queuedDeliveryMessageId?: MessageId | null;
       readonly createdAt: string;
+      readonly titleSeed?: string;
     }) {
       const thread = yield* resolveThreadShell(input.threadId);
       if (!thread) {
@@ -1092,6 +1009,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       }
       yield* ensureSessionForThread(input.threadId, input.createdAt, {
         ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+        ...(input.titleSeed !== undefined ? { titleSeed: input.titleSeed } : {}),
         pendingTurnStart: true,
         ...(input.queuedDeliveryMessageId !== undefined
           ? { queuedDeliveryMessageId: input.queuedDeliveryMessageId }
@@ -1214,6 +1132,8 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         readonly messageText: string;
         readonly attachments?: ReadonlyArray<ChatAttachment>;
         readonly titleSeed?: string;
+        readonly expectedTitle: string;
+        readonly expectedVersion: CommandId | null;
       }) {
         const attachments = input.attachments ?? [];
         yield* Effect.gen(function* () {
@@ -1243,10 +1163,14 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           }
 
           yield* orchestrationEngine.dispatch({
-            type: "thread.meta.update",
+            type: "thread.title.generate.complete",
             commandId: yield* serverCommandId("thread-title-rename"),
             threadId: input.threadId,
-            title: generated.title,
+            title: generated.title === DEFAULT_THREAD_TITLE ? input.expectedTitle : generated.title,
+            expectedTitle: input.expectedTitle,
+            expectedVersion: input.expectedVersion,
+            needsRefinement:
+              generated.needsRefinement === true || generated.title === DEFAULT_THREAD_TITLE,
           });
         }).pipe(
           Effect.catchCause((cause) =>
@@ -1262,6 +1186,29 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         );
       },
     );
+
+    const maybeRefineThreadTitle = Effect.fn("maybeRefineThreadTitle")(function* (
+      threadId: ThreadId,
+    ) {
+      const thread = yield* resolveThreadShell(threadId);
+      if (
+        !thread?.titleState?.needsRefinement ||
+        thread.titleState.source !== "generated" ||
+        thread.titleRegeneration != null ||
+        thread.latestTurn?.state !== "completed" ||
+        thread.session?.status !== "ready"
+      )
+        return;
+      const detail = yield* resolveThreadDetail(threadId);
+      if (!detail || detail.messages.filter((message) => message.role === "user").length !== 1)
+        return;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.title.refine",
+        commandId: yield* serverCommandId("thread-title-refine"),
+        threadId,
+        expectedVersion: thread.titleState.version,
+      });
+    });
 
     const regenerateThreadTitle = Effect.fn("regenerateThreadTitle")(function* (
       event: Extract<ProviderIntentEvent, { type: "thread.meta-updated" }>,
@@ -1333,14 +1280,17 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         ...(input.title !== undefined ? { title: input.title } : {}),
       });
     });
-    const findInterruptedThreadTitleRegenerations = Effect.fn(
-      "findInterruptedThreadTitleRegenerations",
-    )(function* () {
+    const findPendingThreadTitles = Effect.fn("findPendingThreadTitles")(function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      return readModel.threads.flatMap((thread) => {
-        const requestId = thread.titleRegeneration?.requestId;
-        return requestId === undefined ? [] : [{ threadId: thread.id, requestId }];
-      });
+      return {
+        interruptedRegenerations: readModel.threads.flatMap((thread) => {
+          const requestId = thread.titleRegeneration?.requestId;
+          return requestId === undefined ? [] : [{ threadId: thread.id, requestId }];
+        }),
+        refinementThreadIds: readModel.threads
+          .filter((thread) => thread.titleState?.needsRefinement)
+          .map((thread) => thread.id),
+      };
     });
     const clearInterruptedThreadTitleRegenerations = Effect.fn(
       "clearInterruptedThreadTitleRegenerations",
@@ -1382,15 +1332,14 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           return;
         }
         const result = yield* regenerateThreadTitle(event, requestId).pipe(
-          Effect.catchCause((cause) => {
-            if (Cause.hasInterruptsOnly(cause)) {
-              return Effect.failCause(cause);
-            }
-            return Effect.logWarning("provider command reactor failed to regenerate thread title", {
-              threadId: event.payload.threadId,
-              cause: Cause.pretty(cause),
-            }).pipe(Effect.as({ _tag: "Completed", title: undefined } as const));
-          }),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.logWarning("provider command reactor failed to regenerate thread title", {
+                threadId: event.payload.threadId,
+                cause: Cause.pretty(cause),
+              }).pipe(Effect.as({ _tag: "Completed", title: undefined } as const)),
+          ),
         );
         if (result._tag === "Superseded") {
           return;
@@ -1402,34 +1351,26 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           ...(result.title !== undefined ? { title: result.title } : {}),
         };
         yield* dispatchThreadTitleRegenerationCompletion(completion).pipe(
-          Effect.catchCause((cause) => {
-            if (Cause.hasInterruptsOnly(cause)) {
-              return Effect.failCause(cause);
-            }
-            return Effect.logWarning(
-              "provider command reactor retrying title regeneration completion",
-              {
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.logWarning("provider command reactor retrying title regeneration completion", {
                 threadId: event.payload.threadId,
                 cause: Cause.pretty(cause),
-              },
-            ).pipe(Effect.andThen(dispatchThreadTitleRegenerationCompletion(completion)));
-          }),
+              }).pipe(Effect.andThen(dispatchThreadTitleRegenerationCompletion(completion))),
+          ),
         );
       },
       (effect, event) =>
         effect.pipe(
-          Effect.catchCause((cause) => {
-            if (Cause.hasInterruptsOnly(cause)) {
-              return Effect.failCause(cause);
-            }
-            return Effect.logWarning(
-              "provider command reactor failed to complete title regeneration",
-              {
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.logWarning("provider command reactor failed to complete title regeneration", {
                 threadId: event.payload.threadId,
                 cause: Cause.pretty(cause),
-              },
-            );
-          }),
+              }),
+          ),
         ),
     );
     const threadTitleRegenerationWorker = yield* makeDrainableWorker(
@@ -1460,9 +1401,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             ),
             Schedule.jittered,
           ),
-          while: (error) =>
-            error._tag === "PersistenceSqlError" ||
-            error._tag === "OrchestrationListenerCallbackError",
+          while: (error) => error._tag === "PersistenceSqlError",
         }),
       );
     });
@@ -1561,6 +1500,18 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.void;
+        }
+        // A deliberate Stop is not a session error, but the message stays visible in the thread.
+        if (
+          cause.reasons.some(
+            (reason) =>
+              Cause.isFailReason(reason) && isProviderAdapterTurnStoppedError(reason.error),
+          )
+        ) {
+          return appendTurnStartFailure(
+            "Message was not sent",
+            "Stop ended the turn before this message reached the agent. Send it again to continue.",
+          );
         }
         const detail = formatFailureDetail(cause);
         return setThreadSessionErrorOnTurnStartFailure({
@@ -1663,10 +1614,15 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           ...generationInput,
         }).pipe(Effect.forkScoped);
 
-        if (canReplaceThreadTitle(thread.title, event.payload.titleSeed)) {
+        if (
+          thread.titleState?.source !== "manual" &&
+          canReplaceThreadTitle(thread.title, event.payload.titleSeed)
+        ) {
           yield* maybeGenerateThreadTitleForFirstTurn({
             threadId: event.payload.threadId,
             cwd: generationCwd,
+            expectedTitle: thread.title,
+            expectedVersion: thread.titleState?.version ?? null,
             ...generationInput,
           }).pipe(Effect.forkScoped);
         }
@@ -1803,8 +1759,13 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         // New sends acknowledge the adapter result, not an unrelated lifecycle event.
         queuedDeliveryMessageId: null,
         createdAt: event.payload.createdAt,
+        // Later turns must not reuse the current title as titleSeed. Only the
+        // first prompt seed should suppress a not-yet-renamed session title.
+        ...(!hasOtherUserMessages && event.payload.titleSeed !== undefined
+          ? { titleSeed: event.payload.titleSeed }
+          : {}),
       }).pipe(
-        Effect.map(Option.some),
+        Effect.asSome,
         Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
       );
 
@@ -2358,7 +2319,13 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       });
       switch (event.type) {
         case "thread.meta-updated":
-          yield* threadTitleRegenerationWorker.enqueue(event);
+          if (event.payload.regenerateTitle) yield* threadTitleRegenerationWorker.enqueue(event);
+          else if (event.payload.titleState?.needsRefinement)
+            yield* maybeRefineThreadTitle(event.payload.threadId);
+          return;
+        case "thread.session-set":
+          if (event.payload.session.status === "ready")
+            yield* maybeRefineThreadTitle(event.payload.threadId);
           return;
         case "thread.runtime-mode-set": {
           const thread = yield* resolveThreadShell(event.payload.threadId);
@@ -2366,16 +2333,26 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             return;
           }
           const cachedModelSelection = threadModelSelections.get(event.payload.threadId);
-          yield* ensureSessionForThread(
+          const resume = ensureSessionForThread(
             event.payload.threadId,
             event.occurredAt,
             cachedModelSelection !== undefined ? { modelSelection: cachedModelSelection } : {},
           );
+          yield* thread.worktreePath
+            ? withWorkspaceLease(path.resolve(thread.worktreePath), resume)
+            : resume;
           return;
         }
-        case "thread.turn-start-requested":
-          yield* processTurnStartRequested(event);
+        case "thread.turn-start-requested": {
+          const thread = yield* resolveThreadShell(event.payload.threadId);
+          yield* thread?.worktreePath
+            ? withWorkspaceLease(
+                path.resolve(thread.worktreePath),
+                processTurnStartRequested(event),
+              )
+            : processTurnStartRequested(event);
           return;
+        }
         case "thread.turn-interrupt-requested":
           yield* processTurnInterruptRequested(event);
           return;
@@ -2414,11 +2391,14 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           return;
         case "thread.settled": {
           const thread = yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId);
-          if (
-            Option.isNone(thread) ||
-            thread.value.session == null ||
-            thread.value.session.status === "stopped"
-          ) {
+          // A thread re-engaged before this event ran keeps its shells and session.
+          if (Option.isNone(thread) || thread.value.settledOverride !== "settled") {
+            return;
+          }
+          // Idle shells close so they stop holding the worktree. A terminal that
+          // runs a command (a dev server, an editor) stays for the user to close.
+          yield* terminalManager.closeIdle({ threadId: event.payload.threadId });
+          if (thread.value.session == null || thread.value.session.status === "stopped") {
             return;
           }
           yield* orchestrationEngine.dispatch({
@@ -2514,20 +2494,26 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           }),
         ),
       );
-      const interruptedTitleRegenerations = yield* findInterruptedThreadTitleRegenerations().pipe(
+      const pendingTitles = yield* findPendingThreadTitles().pipe(
         Effect.catchCause((cause) => {
           if (Cause.hasInterruptsOnly(cause)) {
             return Effect.interrupt;
           }
           return Effect.logWarning(
-            "provider command reactor failed to find interrupted title regenerations",
-            { cause: Cause.pretty(cause) },
-          ).pipe(Effect.as([]));
+            "provider command reactor failed to find pending thread titles",
+            {
+              failureKind: Cause.hasDies(cause) ? "defect" : "failure",
+              reasonCount: cause.reasons.length,
+            },
+          ).pipe(Effect.as({ interruptedRegenerations: [], refinementThreadIds: [] }));
         }),
       );
       const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
         if (
-          (event.type === "thread.meta-updated" && event.payload.regenerateTitle === true) ||
+          (event.type === "thread.meta-updated" &&
+            (event.payload.regenerateTitle === true ||
+              event.payload.titleState?.needsRefinement === true)) ||
+          (event.type === "thread.session-set" && event.payload.session.status === "ready") ||
           event.type === "thread.runtime-mode-set" ||
           event.type === "thread.turn-start-requested" ||
           event.type === "thread.turn-interrupt-requested" ||
@@ -2545,29 +2531,34 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
       yield* forkParked(Stream.runForEach(domainEvents, processEvent));
 
-      // The domain event stream is hot, so work pending before this reactor
-      // starts cannot be resumed. Correlated completions only clear the request
-      // captured here, leaving any newer request untouched.
-      const clearInterrupted = clearInterruptedThreadTitleRegenerations(
-        interruptedTitleRegenerations,
+      // Earlier events do not replay. Clear interrupted requests by their captured
+      // IDs, then schedule persisted refinements after subscribing to their events.
+      const recoverTitles = clearInterruptedThreadTitleRegenerations(
+        pendingTitles.interruptedRegenerations,
       ).pipe(
+        Effect.andThen(
+          Effect.forEach(pendingTitles.refinementThreadIds, maybeRefineThreadTitle, {
+            discard: true,
+          }),
+        ),
         Effect.catchCause((cause) => {
           if (Cause.hasInterruptsOnly(cause)) {
             return Effect.interrupt;
           }
           return Effect.logWarning(
-            "provider command reactor failed to clear interrupted title regenerations",
+            "provider command reactor failed to recover pending thread titles",
             {
-              cause: Cause.pretty(cause),
+              failureKind: Cause.hasDies(cause) ? "defect" : "failure",
+              reasonCount: cause.reasons.length,
             },
           );
         }),
       );
       const activation = yield* ServerActivation;
       if (activation === undefined) {
-        yield* clearInterrupted;
+        yield* recoverTitles;
       } else {
-        yield* forkParked(clearInterrupted);
+        yield* forkParked(recoverTitles);
       }
     });
 

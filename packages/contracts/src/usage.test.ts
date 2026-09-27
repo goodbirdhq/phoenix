@@ -126,6 +126,23 @@ describe("narrowUsageSummary", () => {
     expect(narrowUsageSummary(summary, 5)).toBe(summary);
   });
 
+  it("drops cursor and antigravity buckets for a deployed v6 caller", () => {
+    const withNewProviders = {
+      ...summary,
+      contractVersion: 7,
+      buckets: [
+        ...summary.buckets,
+        { ...summary.buckets[0]!, provider: "cursor" as const, sourceId: "cursor-source" },
+        { ...summary.buckets[0]!, provider: "antigravity" as const, sourceId: "ag-source" },
+      ],
+    };
+    const narrowed = narrowUsageSummary(withNewProviders, 6);
+
+    expect(narrowed.contractVersion).toBe(6);
+    expect(narrowed.buckets.map((bucket) => bucket.provider)).toEqual(["claude", "opencode"]);
+    expect(narrowUsageSummary(withNewProviders, 7)).toBe(withNewProviders);
+  });
+
   it("keeps current requests decodable by a v4 server", () => {
     expect(() =>
       decodeRequestAsV4Server({

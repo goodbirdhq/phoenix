@@ -43,7 +43,7 @@ function shortestDailyGapMinutes(cron: Cron.Cron): number {
   const hours = fieldValues(cron.hours, 24);
   const times = hours
     .flatMap((hour) => minutes.map((minute) => hour * 60 + minute))
-    .toSorted((left, right) => left - right);
+    .sort((left, right) => left - right);
   if (times.length === 0) return Number.POSITIVE_INFINITY;
   if (times.length === 1) return 24 * 60;
 

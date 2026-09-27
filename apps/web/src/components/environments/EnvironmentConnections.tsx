@@ -83,7 +83,7 @@ export function EnvironmentConnections({
               <CableIcon className="size-4" />
               Connection details
             </h2>
-            <p className="mt-1.5 text-[13px] text-muted-foreground">
+            <p className="mt-1.5 text-xs text-muted-foreground">
               How this client reaches {environment.label}.
             </p>
           </div>
@@ -188,7 +188,7 @@ export function EnvironmentConnections({
         ) : (
           <section className="space-y-2">
             <h2 className="text-base font-semibold">Hosting and network access</h2>
-            <p className="text-[13px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Network access, Tailscale and WSL are configured on the hosting desktop. Open this
               environment on its host to manage those settings.
             </p>
@@ -198,7 +198,7 @@ export function EnvironmentConnections({
         <section data-settings-layout="environment" className="space-y-3">
           <div>
             <h2 className="text-base font-semibold">Editor handoff</h2>
-            <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+            <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
               Choose where files open when you use Open in editor.
             </p>
           </div>
@@ -210,7 +210,7 @@ export function EnvironmentConnections({
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h2 className="text-base font-semibold">Other environments</h2>
-              <p className="mt-1 text-[13px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 Pair another host, or manage a saved connection.
               </p>
             </div>
@@ -289,7 +289,7 @@ export function EnvironmentConnections({
           if (!open && !busy) setRemoving(null);
         }}
       >
-        <DialogPopup className="usage-surface environment-surface rounded-[14px] sm:max-w-[620px]">
+        <DialogPopup data-usage-surface="" data-environment-surface="" className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>
               Remove {removing && (appearance[removing.environmentId]?.alias || removing.label)}?
@@ -299,7 +299,7 @@ export function EnvironmentConnections({
               environment are retained. Pair again to reconnect.
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="border-t">
+          <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={() => setRemoving(null)}>
               Cancel
             </Button>

@@ -195,7 +195,7 @@ export function deriveThreadUsageWarning(input: {
 
   // Most spent first; between equals, the one resetting soonest is the one the
   // person is about to run into.
-  const window = candidates.toSorted((left, right) => {
+  const window = [...candidates].sort((left, right) => {
     if (left.usedPercent !== right.usedPercent) return right.usedPercent - left.usedPercent;
     const leftReset = epochMillis(left.resetsAt) ?? Number.POSITIVE_INFINITY;
     const rightReset = epochMillis(right.resetsAt) ?? Number.POSITIVE_INFINITY;

@@ -29,8 +29,8 @@ import { ServerSettingsService } from "../serverSettings.ts";
 const SCRIPT_BYTE_CAP = 256 * 1024;
 
 /**
- * Candidate roots, before realpath: both layouts of every configured Claude
- * home. Settings that cannot be read degrade to the default home rather than
+ * Candidate roots, before realpath: the projects directory of every
+ * configured Claude home. Settings that cannot be read degrade to the default home rather than
  * taking the feature down — the containment check is what makes a path safe,
  * and a shorter root list only ever refuses more.
  */
@@ -45,7 +45,7 @@ const candidateRoots = Effect.fn("orchestration.workflowScriptRoots")(function* 
   );
   const homes =
     settings === null
-      ? [{ instanceIds: ["claudeAgent"], homePath: NodeOS.homedir(), overridden: false }]
+      ? [{ instanceIds: ["claudeAgent"], homePath: NodePath.join(NodeOS.homedir(), ".claude") }]
       : yield* claudeInstanceHomes(settings);
   const roots: string[] = [];
   for (const home of homes) {
@@ -79,19 +79,18 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
   const requested = input.scriptPath;
 
   if (!NodePath.isAbsolute(requested) || NodePath.extname(requested) !== ".js") {
-    return yield* Effect.fail(
-      new OrchestrationGetWorkflowScriptError({ reason: "invalid-path", scriptPath: requested }),
-    );
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "invalid-path",
+      scriptPath: requested,
+    });
   }
 
   const roots = yield* resolveRoots();
   if (roots.length === 0) {
-    return yield* Effect.fail(
-      new OrchestrationGetWorkflowScriptError({
-        reason: "root-unavailable",
-        scriptPath: requested,
-      }),
-    );
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "root-unavailable",
+      scriptPath: requested,
+    });
   }
 
   // Realpath the FILE itself (not just its directory): a symlink named
@@ -107,14 +106,16 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
   });
 
   if (!roots.some((root) => isContainedBy(resolved, root))) {
-    return yield* Effect.fail(
-      new OrchestrationGetWorkflowScriptError({ reason: "outside-root", scriptPath: resolved }),
-    );
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "outside-root",
+      scriptPath: resolved,
+    });
   }
   if (NodePath.extname(resolved) !== ".js") {
-    return yield* Effect.fail(
-      new OrchestrationGetWorkflowScriptError({ reason: "not-js", scriptPath: resolved }),
-    );
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "not-js",
+      scriptPath: resolved,
+    });
   }
 
   // TOCTOU-safe read (review finding): open FIRST, then verify what was

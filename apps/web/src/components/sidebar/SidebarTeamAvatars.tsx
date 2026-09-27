@@ -30,7 +30,7 @@ export function SessionIcon({
       showBadge={showBadge}
       className="size-4"
       iconClassName="size-4"
-      badgeClassName="right-[-3px] bottom-[-2px] h-[11px] min-w-3 rounded-[5px] px-0.5 text-[7px]"
+      badgeClassName="right-[-3px] bottom-[-2px] h-[11px] min-w-3 rounded-sm px-0.5 text-5xs"
     />
   ) : (
     <BotIcon className="size-4 text-sidebar-muted-foreground" />
@@ -65,7 +65,7 @@ function SessionDetailsRow(props: {
           <TooltipTrigger
             render={<span />}
             className={cn(
-              "truncate text-[13px] leading-[18px]",
+              "truncate text-sm leading-4.5",
               emphasized
                 ? "font-medium text-popover-foreground"
                 : "font-normal text-muted-foreground",
@@ -155,7 +155,7 @@ export function SidebarTeamAvatars(props: {
         );
       })}
       {overflow > 0 ? (
-        <span className="absolute right-0 top-0 flex size-[22px] items-center justify-center rounded-full border-2 border-sidebar bg-muted text-[10px] text-sidebar-muted-foreground">
+        <span className="absolute right-0 top-0 flex size-[22px] items-center justify-center rounded-full border-2 border-sidebar bg-muted text-3xs text-sidebar-muted-foreground">
           +{overflow}
         </span>
       ) : null}
@@ -195,13 +195,7 @@ export function SidebarTeamAvatars(props: {
             {details}
           </TooltipPopup>
         </Tooltip>
-        <PopoverPopup
-          side="right"
-          align="start"
-          tooltipStyle
-          viewportClassName="[--viewport-inline-padding:4px]"
-          className="text-left"
-        >
+        <PopoverPopup side="right" align="start" tooltipStyle className="text-left">
           {details}
         </PopoverPopup>
       </Popover>

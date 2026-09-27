@@ -16,7 +16,6 @@ import {
   CircleXIcon,
   EyeOffIcon,
   FolderGit2Icon,
-  GitPullRequestDraftIcon,
   LayersIcon,
   ListFilterIcon,
   SearchIcon,
@@ -52,6 +51,7 @@ import {
   type PullRequestLabelFacet,
 } from "./pullRequestList.logic";
 import { PullRequestActorAvatar } from "./pullRequestPresentation";
+import { PullRequestGlyph } from "./pullRequestIcons";
 
 export interface PullRequestFilterOption<Value extends string> {
   readonly value: Value;
@@ -144,7 +144,7 @@ export const pullRequestProjectKey = (project: {
 
 const DRAFT_OPTIONS = [
   { value: UNFILTERED_VALUE, label: "All", Icon: LayersIcon },
-  { value: "only", label: "Drafts only", Icon: GitPullRequestDraftIcon },
+  { value: "only", label: "Drafts only", Icon: PullRequestGlyph.draft },
   { value: "hide", label: "Hide drafts", Icon: EyeOffIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
 
@@ -203,9 +203,7 @@ function PullRequestFilterRadioGroup<Value extends string>({
         return (
           <Tooltip key={option.value}>
             <TooltipTrigger render={item} />
-            <TooltipPopup side="top" className="max-w-80">
-              {option.unavailable}
-            </TooltipPopup>
+            <TooltipPopup side="top">{option.unavailable}</TooltipPopup>
           </Tooltip>
         );
       })}
@@ -235,7 +233,7 @@ function PullRequestFilterRadioSubmenu<Value extends string>({
           {current.label}
         </span>
       </MenuSubTrigger>
-      <MenuSubPopup className="min-w-56">
+      <MenuSubPopup>
         <PullRequestFilterRadioGroup
           label={label}
           value={value}
@@ -280,7 +278,7 @@ function PullRequestAuthorFilter({
           {value ?? "Anyone"}
         </span>
       </MenuSubTrigger>
-      <MenuSubPopup className="w-80">
+      <MenuSubPopup>
         <div className="p-1 pb-2">
           <InputGroup>
             <InputGroupAddon>
@@ -349,7 +347,7 @@ function PullRequestLabelFilter({
           {value.length === 0 ? "Any" : `${value.length} selected`}
         </span>
       </MenuSubTrigger>
-      <MenuSubPopup className="w-72">
+      <MenuSubPopup>
         {visible.length === 0 ? (
           <MenuItem disabled>No labels in this view</MenuItem>
         ) : (
@@ -360,7 +358,6 @@ function PullRequestLabelFilter({
             return (
               <MenuCheckboxItem
                 key={key}
-                className="grid-cols-[1rem_minmax(0,1fr)]"
                 checked={checked}
                 onCheckedChange={(next) =>
                   onChange(
@@ -509,7 +506,6 @@ export function PullRequestFiltersMenu({
       <MenuTrigger
         render={
           <Button
-            className={filterCount > 0 ? "[--control-icon-color:currentColor]" : undefined}
             variant={compact ? "ghost" : "outline"}
             size={compact ? "icon-sm" : "default"}
             aria-label="Filter pull requests"
@@ -522,14 +518,14 @@ export function PullRequestFiltersMenu({
           <span
             className={cn(
               "rounded-full bg-primary/10 px-1.5 text-xs text-primary tabular-nums",
-              compact && "absolute -right-1 -top-1 text-[10px]",
+              compact && "absolute -top-1 -right-1 text-3xs",
             )}
           >
             {filterCount}
           </span>
         ) : null}
       </MenuTrigger>
-      <MenuPopup align="end" side="bottom" className="w-56">
+      <MenuPopup align="end" side="bottom">
         <PullRequestFilterRadioSubmenu
           label="State"
           value={state}

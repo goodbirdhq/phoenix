@@ -468,7 +468,7 @@ function ScheduleEditor(props: {
         contentContainerClassName="gap-6 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
-        <SettingsSection title="Definition" card>
+        <SettingsSection title="Definition">
           <Field label="Name" error={validation.errors.name}>
             <TextInput
               accessibilityLabel="Schedule name"
@@ -508,7 +508,7 @@ function ScheduleEditor(props: {
           />
         </SettingsSection>
 
-        <SettingsSection title="Timing" card>
+        <SettingsSection title="Timing">
           <View className="gap-3 p-4">
             <ChoiceRow
               choices={[
@@ -625,7 +625,7 @@ function ScheduleEditor(props: {
           </View>
         </SettingsSection>
 
-        <SettingsSection title="Execution" card>
+        <SettingsSection title="Execution">
           <PickerField
             label="Model"
             value={
@@ -709,7 +709,7 @@ function ScheduleEditor(props: {
         </SettingsSection>
 
         {props.mode !== "edit" ? (
-          <SettingsSection title="Initial state" card>
+          <SettingsSection title="Initial state">
             <View className="flex-row items-center gap-4 p-4">
               <View className="min-w-0 flex-1">
                 <Text className="text-base font-t3-bold text-foreground">Create Paused</Text>

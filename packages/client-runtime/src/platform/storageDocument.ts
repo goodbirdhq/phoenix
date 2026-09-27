@@ -1,3 +1,5 @@
+import { EnvironmentId } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import {
@@ -6,6 +8,7 @@ import {
   ConnectionProfile,
 } from "../connection/catalog.ts";
 import { type ConnectionTarget, PersistedConnectionTarget } from "../connection/model.ts";
+import { StoredGitHubRoutingPermission } from "../connection/githubRoutingPermissions.ts";
 
 export const StoredConnectionCredential = Schema.Struct({
   connectionId: Schema.String,
@@ -20,6 +23,13 @@ export const ConnectionCatalogDocument = Schema.Struct({
   credentials: Schema.Array(StoredConnectionCredential),
   // Legacy managed credentials are decoded only so load-time retirement can discard them.
   remoteDpopTokens: Schema.Array(Schema.Unknown),
+  githubRoutingPermissions: Schema.optionalKey(Schema.Array(StoredGitHubRoutingPermission)),
+  // Saved environments the user switched off. They stay registered with their
+  // credentials and cache but never connect until switched back on. Older
+  // documents predate the key, so decoding defaults it to none.
+  disabledEnvironmentIds: Schema.Array(EnvironmentId).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
 });
 export type ConnectionCatalogDocument = typeof ConnectionCatalogDocument.Type;
 
@@ -29,6 +39,7 @@ export const EMPTY_CONNECTION_CATALOG_DOCUMENT: ConnectionCatalogDocument = Obje
   profiles: [],
   credentials: [],
   remoteDpopTokens: [],
+  disabledEnvironmentIds: [],
 });
 
 export function replaceCatalogValue<A>(
@@ -62,6 +73,7 @@ function connectionIdOf(target: ConnectionTarget): string | null {
 function removeConnectionMetadata(
   document: ConnectionCatalogDocument,
   target: ConnectionTarget,
+  clearDisabledFlag: boolean,
 ): ConnectionCatalogDocument {
   const connectionId = connectionIdOf(target);
   return {
@@ -80,6 +92,11 @@ function removeConnectionMetadata(
         ? document.credentials
         : removeCatalogValue(document.credentials, (value) => value.connectionId, connectionId),
     remoteDpopTokens: [],
+    // Re-registration passes `clearDisabledFlag: false` and must keep the
+    // switched-off flag; only a real removal clears it.
+    disabledEnvironmentIds: clearDisabledFlag
+      ? removeCatalogValue(document.disabledEnvironmentIds, (value) => value, target.environmentId)
+      : document.disabledEnvironmentIds,
   };
 }
 
@@ -91,7 +108,10 @@ export function registerConnectionInCatalog(
   const previous = document.targets.find(
     (candidate) => candidate.environmentId === target.environmentId,
   );
-  const cleaned = previous === undefined ? document : removeConnectionMetadata(document, previous);
+  const cleaned =
+    previous === undefined ? document : removeConnectionMetadata(document, previous, false);
+  // Re-registering (for example editing a label or URL) keeps the disabled
+  // flag; only `setConnectionEnabledInCatalog` or removal changes it.
   const next: ConnectionCatalogDocument = {
     ...cleaned,
     targets: replaceCatalogValue(cleaned.targets, (value) => value.environmentId, target),
@@ -129,7 +149,33 @@ export function removeConnectionFromCatalog(
   document: ConnectionCatalogDocument,
   target: ConnectionTarget,
 ): ConnectionCatalogDocument {
-  return removeConnectionMetadata(document, target);
+  const next = removeConnectionMetadata(document, target, true);
+  return document.githubRoutingPermissions === undefined
+    ? next
+    : {
+        ...next,
+        githubRoutingPermissions: document.githubRoutingPermissions.filter(
+          (permission) => permission.environmentId !== target.environmentId,
+        ),
+      };
+}
+
+/** Flips the disabled flag for a saved environment; unknown ids are ignored. */
+export function setConnectionEnabledInCatalog(
+  document: ConnectionCatalogDocument,
+  environmentId: EnvironmentId,
+  enabled: boolean,
+): ConnectionCatalogDocument {
+  const registered = document.targets.some((target) => target.environmentId === environmentId);
+  const without = removeCatalogValue(
+    document.disabledEnvironmentIds,
+    (value) => value,
+    environmentId,
+  );
+  return {
+    ...document,
+    disabledEnvironmentIds: registered && !enabled ? [...without, environmentId] : without,
+  };
 }
 
 /** Discard retired credentials while retaining saved connections for explicit unsupported presentation. */

@@ -27,15 +27,13 @@ export function EnvironmentTabs({
 }) {
   return (
     <Tabs value={value} onValueChange={onChange}>
-      <TabsList aria-label="Environment sections" className="w-full justify-start gap-6">
+      <TabsList aria-label="Environment sections" className="w-full justify-start">
         {ENVIRONMENT_TABS.map(({ value, label, Icon }) => (
-          <TabsTrigger
-            key={value}
-            value={value}
-            className="gap-[7px] leading-[19px] data-[active]:font-semibold"
-          >
-            <Icon className="size-4" strokeWidth={1.75} />
-            {label}
+          <TabsTrigger key={value} value={value}>
+            <span className="flex items-center gap-1.75 leading-4.75 in-data-active:font-semibold">
+              <Icon className="size-4" strokeWidth={1.75} />
+              {label}
+            </span>
           </TabsTrigger>
         ))}
       </TabsList>

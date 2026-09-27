@@ -1,33 +1,69 @@
-import { Pressable, ScrollView, View } from "react-native";
+import { Platform, Pressable, ScrollView, View } from "react-native";
+import Animated, { Easing, LinearTransition, ReduceMotion } from "react-native-reanimated";
 import { AppText as Text } from "./AppText";
+import { cn } from "../lib/cn";
+import { MaterialSegmentedControl } from "./MaterialSegmentedControl";
+import type { SegmentedControlProps } from "./SegmentedControl.types";
 
-export function SegmentedControl<Value extends number | string>(props: {
-  readonly options: readonly { readonly value: Value; readonly label: string }[];
-  readonly scrollable?: boolean;
-  readonly selected: Value;
-  readonly onSelect: (value: Value) => void;
-}) {
+export type { SegmentedControlProps } from "./SegmentedControl.types";
+
+export function SegmentedControl<Value extends number | string>(
+  props: SegmentedControlProps<Value> & { readonly scrollable?: boolean },
+) {
+  const compact = props.size === "compact";
+  if (Platform.OS === "android") {
+    return <MaterialSegmentedControl {...props} />;
+  }
   const control = (
-    <View className="flex-row overflow-hidden rounded-full border-continuous bg-card">
+    <View
+      accessible={false}
+      className={cn(
+        "flex-row overflow-hidden",
+        "rounded-full border-continuous bg-card",
+        props.scrollable ? undefined : props.className,
+      )}
+    >
+      {props.scrollable ? null : (
+        <Animated.View
+          pointerEvents="none"
+          layout={LinearTransition.duration(200)
+            .easing(Easing.out(Easing.cubic))
+            .reduceMotion(ReduceMotion.System)}
+          className="absolute inset-y-0 rounded-full bg-secondary"
+          style={{
+            width: `${100 / props.options.length}%`,
+            start: `${
+              (Math.max(
+                0,
+                props.options.findIndex((option) => option.value === props.selected),
+              ) *
+                100) /
+              props.options.length
+            }%`,
+          }}
+        />
+      )}
       {props.options.map((option) => {
         const active = option.value === props.selected;
         return (
           <Pressable
             key={String(option.value)}
-            accessibilityRole="button"
+            accessibilityRole={Platform.OS === "ios" ? "button" : (props.role ?? "button")}
+            accessibilityLabel={option.accessibilityLabel ?? option.label}
             accessibilityState={{ selected: active }}
             onPress={() => props.onSelect(option.value)}
             style={props.scrollable ? { flex: 0, paddingHorizontal: 16 } : undefined}
-            className={
-              active
-                ? "flex-1 items-center rounded-full bg-subtle-strong py-2"
-                : "flex-1 items-center py-2"
-            }
+            className={cn(
+              "items-center justify-center rounded-full",
+              props.scrollable ? active && "bg-subtle-strong" : "flex-1",
+              compact ? "h-9" : "h-11",
+            )}
           >
             <Text
-              className={
-                active ? "text-sm font-t3-medium text-foreground" : "text-sm text-foreground-muted"
-              }
+              className={cn(
+                compact ? "text-xs" : "text-sm",
+                active ? "font-t3-medium text-secondary-foreground" : "text-foreground-muted",
+              )}
             >
               {option.label}
             </Text>
@@ -37,7 +73,7 @@ export function SegmentedControl<Value extends number | string>(props: {
     </View>
   );
   return props.scrollable ? (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} className={props.className}>
       {control}
     </ScrollView>
   ) : (

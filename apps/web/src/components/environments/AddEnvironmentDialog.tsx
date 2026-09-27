@@ -137,7 +137,7 @@ export function AddEnvironmentDialog({
         if (!open && !busy) onClose();
       }}
     >
-      <DialogPopup className="usage-surface environment-surface rounded-[14px] sm:max-w-[620px]">
+      <DialogPopup data-usage-surface="" data-environment-surface="" className="sm:max-w-[620px]">
         <form
           className="contents"
           onSubmit={(e) => {
@@ -340,7 +340,7 @@ export function AddEnvironmentDialog({
               )}
             </fieldset>
           </DialogPanel>
-          <DialogFooter className="border-t">
+          <DialogFooter>
             <Button
               type="button"
               variant="outline"

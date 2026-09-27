@@ -25,24 +25,54 @@ import {
 
 it("keeps systemd pinned to the stable launcher rather than a versioned server", () => {
   const unit = BootService.renderBootServiceUnit({
-    nodePath: "/usr/bin/node",
-    launcherPath: "/home/theo/.t3/runtime/service-launcher.mjs",
-    baseDir: "/home/theo/.t3",
-    logPath: "/home/theo/.t3/userdata/logs/boot-service.log",
+    program: ["/usr/bin/node", "/home/theo/.phoenix/runtime/service-launcher.mjs"],
+    baseDir: "/home/theo/.phoenix",
+    logPath: "/home/theo/.phoenix/userdata/logs/boot-service.log",
     unitPath: "/home/theo/.config/systemd/user/phoenix.service",
   });
 
-  expect(unit).toContain("ExecStart=/usr/bin/node /home/theo/.t3/runtime/service-launcher.mjs");
+  expect(unit).toContain(
+    "ExecStart=/usr/bin/node /home/theo/.phoenix/runtime/service-launcher.mjs",
+  );
   expect(unit).toContain("KillMode=mixed");
   expect(unit).not.toContain("versions/1.2.3");
 });
 
+it("reads the served Phoenix home back out of a rendered unit or plist", () => {
+  const plan = (baseDir: string) => ({
+    program: ["/usr/bin/node", `${baseDir}/runtime/service-launcher.mjs`],
+    baseDir,
+    logPath: `${baseDir}/userdata/logs/boot-service.log`,
+    unitPath: "/home/theo/.config/systemd/user/phoenix.service",
+  });
+
+  expect(
+    BootService.bootServiceBaseDirOf(
+      BootService.renderBootServiceUnit(plan("/home/theo/.phoenix")),
+    ),
+  ).toBe("/home/theo/.phoenix");
+  // Spaces and specifiers are quoted and escaped on the way in.
+  expect(
+    BootService.bootServiceBaseDirOf(
+      BootService.renderBootServiceUnit(plan("/home/theo/Phoenix Data/100%")),
+    ),
+  ).toBe("/home/theo/Phoenix Data/100%");
+  expect(
+    BootService.bootServiceBaseDirOf(
+      BootService.renderBootServicePlist(plan("/Users/theo/a&b"), {
+        homeDir: "/Users/theo",
+        environmentPath: "/usr/bin",
+      }),
+    ),
+  ).toBe("/Users/theo/a&b");
+  expect(BootService.bootServiceBaseDirOf("[Service]\nExecStart=/x\n")).toBeUndefined();
+});
+
 it("survives the kernel OOM-killing a greedy agent child", () => {
   const unit = BootService.renderBootServiceUnit({
-    nodePath: "/usr/bin/node",
-    launcherPath: "/home/theo/.t3/runtime/service-launcher.mjs",
-    baseDir: "/home/theo/.t3",
-    logPath: "/home/theo/.t3/userdata/logs/boot-service.log",
+    program: ["/usr/bin/node", "/home/theo/.phoenix/runtime/service-launcher.mjs"],
+    baseDir: "/home/theo/.phoenix",
+    logPath: "/home/theo/.phoenix/userdata/logs/boot-service.log",
     unitPath: "/home/theo/.config/systemd/user/phoenix.service",
   });
 
@@ -50,12 +80,14 @@ it("survives the kernel OOM-killing a greedy agent child", () => {
 });
 
 const macPlan = {
-  nodePath: "/opt/homebrew/bin/node",
-  launcherPath: "/Users/theo/.t3/runtime/service-launcher.mjs",
-  baseDir: "/Users/theo/.t3",
-  logPath: "/Users/theo/.t3/userdata/logs/boot-service.log",
+  program: ["/opt/homebrew/bin/node", "/Users/theo/.phoenix/runtime/service-launcher.mjs"],
+  baseDir: "/Users/theo/.phoenix",
+  logPath: "/Users/theo/.phoenix/userdata/logs/boot-service.log",
   unitPath: "/Users/theo/Library/LaunchAgents/com.goodbird.phoenix.service.plist",
 };
+// The unit runs `<node> <launcher>`; the launcher is the stable copy the install writes.
+const launcherPathOf = (plan: BootService.BootServicePlan) => plan.program.at(-1) ?? "";
+
 const macInstallerPath =
   "/opt/homebrew/bin:/Users/theo/.npm-global/bin:/Users/theo/.nvm/versions/node/v22.16.0/bin:/usr/bin:/bin";
 const macRenderOptions = { homeDir: "/Users/theo", environmentPath: macInstallerPath };
@@ -64,7 +96,7 @@ it("keeps launchd pinned to the stable launcher rather than a versioned server",
   const plist = BootService.renderBootServicePlist(macPlan, macRenderOptions);
 
   expect(plist).toContain("<string>/opt/homebrew/bin/node</string>");
-  expect(plist).toContain("<string>/Users/theo/.t3/runtime/service-launcher.mjs</string>");
+  expect(plist).toContain("<string>/Users/theo/.phoenix/runtime/service-launcher.mjs</string>");
   expect(plist).not.toContain("versions/1.2.3");
 });
 
@@ -87,10 +119,10 @@ it("appends both stdio streams to the boot service log", () => {
   const plist = BootService.renderBootServicePlist(macPlan, macRenderOptions);
 
   expect(plist).toContain(
-    "<key>StandardOutPath</key>\n  <string>/Users/theo/.t3/userdata/logs/boot-service.log</string>",
+    "<key>StandardOutPath</key>\n  <string>/Users/theo/.phoenix/userdata/logs/boot-service.log</string>",
   );
   expect(plist).toContain(
-    "<key>StandardErrorPath</key>\n  <string>/Users/theo/.t3/userdata/logs/boot-service.log</string>",
+    "<key>StandardErrorPath</key>\n  <string>/Users/theo/.phoenix/userdata/logs/boot-service.log</string>",
   );
 });
 
@@ -187,10 +219,10 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       };
     }),
   });
-  const makeService = (environmentPath = installerPath) =>
+  const makeService = (environmentPath = installerPath, serviceBaseDir = baseDir) =>
     BootService.make({
-      baseDir,
-      logsDir: path.join(baseDir, "userdata", "logs"),
+      baseDir: serviceBaseDir,
+      logsDir: path.join(serviceBaseDir, "userdata", "logs"),
       cliVersion: "1.2.3",
       host: {
         execPath: "/usr/bin/node",
@@ -319,7 +351,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         protocol: SERVICE_LAUNCHER_PROTOCOL,
         activeVersion: "1.2.3",
       });
-      expect(yield* fs.readFileString(plan.launcherPath)).toBe("export {};\n");
+      expect(yield* fs.readFileString(launcherPathOf(plan))).toBe("export {};\n");
       expect(yield* service.status).toMatchObject({
         current: true,
         installedVersion: "1.2.3",
@@ -412,7 +444,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       Effect.gen(function* () {
         const { service, fs, statePath, commands, control } = yield* makeHarness(platform);
         const plan = yield* service.install();
-        const launcher = yield* fs.readFileString(plan.launcherPath);
+        const launcher = yield* fs.readFileString(launcherPathOf(plan));
         const unit = yield* fs.readFileString(plan.unitPath);
         control.stateAfterStop = `{"protocol":${SERVICE_LAUNCHER_PROTOCOL + 1},"activeVersion":"1.2.4"}`;
         commands.length = 0;
@@ -425,7 +457,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           targetVersion: "1.2.3",
         });
         expect(yield* fs.readFileString(statePath)).toBe(control.stateAfterStop);
-        expect(yield* fs.readFileString(plan.launcherPath)).toBe(launcher);
+        expect(yield* fs.readFileString(launcherPathOf(plan))).toBe(launcher);
         expect(yield* fs.readFileString(plan.unitPath)).toBe(unit);
         expect(
           commands.filter(
@@ -475,12 +507,68 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
     }),
   );
 
+  it.effect("restart stops and starts an installed service, and is a no-op otherwise", () =>
+    Effect.gen(function* () {
+      const { service, commands } = yield* makeHarness();
+      expect(yield* service.restart).toBe(false);
+      yield* service.install();
+      commands.length = 0;
+
+      expect(yield* service.restart).toBe(true);
+      expect(
+        commands.filter(
+          (command) => command.startsWith("systemctl ") && !command.includes("show-environment"),
+        ),
+      ).toEqual([
+        "systemctl --user stop phoenix.service",
+        "systemctl --user daemon-reload",
+        "systemctl --user enable phoenix.service",
+        "systemctl --user restart phoenix.service",
+      ]);
+    }),
+  );
+
+  it.effect("restart leaves a service that serves another Phoenix home alone", () =>
+    Effect.gen(function* () {
+      const { service, fs, commands, makeService } = yield* makeHarness();
+      yield* service.install();
+      commands.length = 0;
+      const path = yield* Path.Path;
+      const otherHome = yield* fs.makeTempDirectoryScoped({ prefix: "phoenix-other-home-" });
+
+      const other = yield* makeService(undefined, path.join(otherHome, ".phoenix"));
+      expect(yield* other.restart).toBe(false);
+      expect(commands.filter((command) => command.startsWith("systemctl "))).toEqual([]);
+    }),
+  );
+
+  it.effect("restart brings the service back when activation fails", () =>
+    Effect.gen(function* () {
+      const { service, commands, control } = yield* makeHarness();
+      yield* service.install();
+      commands.length = 0;
+      control.failCommand = "systemctl --user daemon-reload";
+
+      const error = yield* service.restart.pipe(Effect.flip);
+      expect(error._tag).toBe("BootServiceCommandError");
+      expect(
+        commands.filter(
+          (command) => command.startsWith("systemctl ") && !command.includes("show-environment"),
+        ),
+      ).toEqual([
+        "systemctl --user stop phoenix.service",
+        "systemctl --user daemon-reload",
+        "systemctl --user restart phoenix.service",
+      ]);
+    }),
+  );
+
   it.effect("copies the launcher from the prepared pinned runtime", () =>
     Effect.gen(function* () {
       const { service, fs } = yield* makeHarness("linux", true);
       const plan = yield* service.install();
 
-      expect(yield* fs.readFileString(plan.launcherPath)).toBe(
+      expect(yield* fs.readFileString(launcherPathOf(plan))).toBe(
         "export const source = 'pinned runtime';\n",
       );
     }),
@@ -568,7 +656,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         protocol: SERVICE_LAUNCHER_PROTOCOL,
         activeVersion: "1.2.3",
       });
-      expect(yield* fs.readFileString(plan.launcherPath)).toBe("export {};\n");
+      expect(yield* fs.readFileString(launcherPathOf(plan))).toBe("export {};\n");
       expect(yield* service.status).toMatchObject({
         current: true,
         installedVersion: "1.2.3",

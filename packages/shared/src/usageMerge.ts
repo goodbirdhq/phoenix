@@ -11,6 +11,7 @@ import {
   type EnvironmentId,
   type UsageBucket,
   type UsageProviderKind,
+  type UsageSource,
   type UsageSourceFingerprint,
   type UsageSummary,
   type UsageSession,
@@ -151,36 +152,140 @@ function fingerprintKey(fingerprint: UsageSourceFingerprint): string {
 }
 
 /**
+ * Resolves which of a summary's sources produced a bucket: by `sourceId`, then
+ * by `sourcePath`, then, for servers that report neither, the provider's only
+ * source. Returns `undefined` when the bucket cannot be attributed, which for
+ * a legacy bucket means its provider has several sources.
+ */
+function bucketSourceResolver(
+  summary: UsageSummary,
+): (bucket: UsageBucket) => UsageSource | undefined {
+  const byId = new Map<string, UsageSource>();
+  const byPath = new Map<string, UsageSource>();
+  const byProvider = new Map<UsageProviderKind, UsageSource[]>();
+  for (const source of summary.sources) {
+    const provider = source.fingerprint.provider;
+    if (source.id !== undefined) byId.set(source.id, source);
+    byPath.set(`${provider}\u0000${source.fingerprint.resolvedHomePath}`, source);
+    byProvider.set(provider, [...(byProvider.get(provider) ?? []), source]);
+  }
+  return (bucket) => {
+    const byBucketId = bucket.sourceId === undefined ? undefined : byId.get(bucket.sourceId);
+    if (byBucketId !== undefined) return byBucketId;
+    if (bucket.sourcePath !== undefined) {
+      return byPath.get(`${bucket.provider}\u0000${bucket.sourcePath}`);
+    }
+    if (bucket.sourceId !== undefined) return undefined;
+    const candidates = byProvider.get(bucket.provider);
+    return candidates?.length === 1 ? candidates[0] : undefined;
+  };
+}
+
+function bucketsForSource(summary: UsageSummary, source: UsageSource): readonly UsageBucket[] {
+  const sourceOf = bucketSourceResolver(summary);
+  return summary.buckets.filter((bucket) => sourceOf(bucket) === source);
+}
+
+function bucketKey(bucket: UsageBucket): string {
+  return JSON.stringify([bucket.day, bucket.hourStart ?? null, bucket.provider, bucket.model]);
+}
+
+/**
  * Decides which environment owns each physical provider history store.
  *
  * Several environments on one machine (worktree servers, for instance) resolve
- * the same provider home and would otherwise double count every token. The
- * first environment in a stable order claims a fingerprint; the rest have that
- * provider's buckets dropped. Environments are sorted by id so the winner does
- * not change between renders.
+ * the same provider home and would otherwise double count every token.
+ * Complete scans claim a fingerprint ahead of partial scans, then the most
+ * recently read scan wins within each status. A newer partial scan can still
+ * contribute cells absent from an older complete scan. Environment ids break
+ * ties so the result is stable when summaries have the same read time.
  */
-function claimSources(environments: readonly EnvironmentUsage[]): {
+interface SourceClaims {
   readonly ownerByFingerprint: ReadonlyMap<string, EnvironmentId>;
+  readonly supplementalBucketsByEnvironment: ReadonlyMap<EnvironmentId, ReadonlySet<UsageBucket>>;
+  readonly sessionsByFingerprint: ReadonlyMap<string, number>;
   readonly duplicates: readonly string[];
-} {
+}
+
+function claimSources(environments: readonly EnvironmentUsage[]): SourceClaims {
   const ownerByFingerprint = new Map<string, EnvironmentId>();
+  const ownerScanByFingerprint = new Map<
+    string,
+    { environment: EnvironmentUsage; source: UsageSource }
+  >();
+  const seenBucketKeysByFingerprint = new Map<string, Set<string>>();
+  const supplementalBucketsByEnvironment = new Map<EnvironmentId, Set<UsageBucket>>();
+  const sessionsByFingerprint = new Map<string, number>();
   const duplicates: string[] = [];
 
-  const ordered = [...environments].sort((a, b) => a.environmentId.localeCompare(b.environmentId));
+  const ordered = [...environments].sort(
+    (a, b) =>
+      (Date.parse(b.summary.readAt) || 0) - (Date.parse(a.summary.readAt) || 0) ||
+      a.environmentId.localeCompare(b.environmentId),
+  );
 
-  for (const environment of ordered) {
-    for (const source of environment.summary.sources) {
-      if (source.status === "missing") continue;
-      const key = fingerprintKey(source.fingerprint);
-      if (ownerByFingerprint.has(key)) {
-        duplicates.push(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
-        continue;
+  // A complete scan takes precedence over a newer partial scan of the same
+  // directory. Partial history still contributes when no complete copy exists.
+  for (const status of ["ok", "partial", "failed"] as const) {
+    for (const environment of ordered) {
+      for (const source of environment.summary.sources) {
+        if (source.status !== status) continue;
+        const key = fingerprintKey(source.fingerprint);
+        if (ownerByFingerprint.has(key)) {
+          duplicates.push(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
+          continue;
+        }
+        ownerByFingerprint.set(key, environment.environmentId);
+        ownerScanByFingerprint.set(key, { environment, source });
+        sessionsByFingerprint.set(key, source.distinctSessions);
       }
-      ownerByFingerprint.set(key, environment.environmentId);
     }
   }
 
-  return { ownerByFingerprint, duplicates };
+  // A newer partial scan may contain usage recorded after an older complete
+  // scan. Keep cells absent from the complete scan. Aggregated cells do not
+  // reveal enough to reconcile overlapping records without double counting.
+  for (const environment of ordered) {
+    for (const source of environment.summary.sources) {
+      if (source.status !== "partial") continue;
+      const key = fingerprintKey(source.fingerprint);
+      const owner = ownerScanByFingerprint.get(key);
+      if (
+        owner?.source.status !== "ok" ||
+        Date.parse(environment.summary.readAt) <= Date.parse(owner.environment.summary.readAt)
+      ) {
+        continue;
+      }
+      let seen = seenBucketKeysByFingerprint.get(key);
+      if (seen === undefined) {
+        seen = new Set(bucketsForSource(owner.environment.summary, owner.source).map(bucketKey));
+        seenBucketKeysByFingerprint.set(key, seen);
+      }
+      const supplemental =
+        supplementalBucketsByEnvironment.get(environment.environmentId) ?? new Set<UsageBucket>();
+      let added = false;
+      for (const bucket of bucketsForSource(environment.summary, source)) {
+        const cell = bucketKey(bucket);
+        if (seen.has(cell)) continue;
+        seen.add(cell);
+        supplemental.add(bucket);
+        added = true;
+      }
+      if (!added) continue;
+      supplementalBucketsByEnvironment.set(environment.environmentId, supplemental);
+      sessionsByFingerprint.set(
+        key,
+        Math.max(sessionsByFingerprint.get(key) ?? 0, source.distinctSessions),
+      );
+    }
+  }
+
+  return {
+    ownerByFingerprint,
+    supplementalBucketsByEnvironment,
+    sessionsByFingerprint,
+    duplicates,
+  };
 }
 
 /**
@@ -196,13 +301,14 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
  */
 function ownedContribution(
   environment: EnvironmentUsage,
-  ownerByFingerprint: ReadonlyMap<string, EnvironmentId>,
+  { ownerByFingerprint, supplementalBucketsByEnvironment, sessionsByFingerprint }: SourceClaims,
 ): {
   readonly buckets: readonly UsageBucket[];
   readonly sessionsByProvider: ReadonlyMap<UsageProviderKind, number>;
   readonly sessionUsage: readonly UsageSession[];
 } {
   const ownedProviders = new Set<UsageProviderKind>();
+  const ownedSources = new Set<UsageSource>();
   const ownedSourceIds = new Set<string>();
   const sessionsByProvider = new Map<UsageProviderKind, number>();
   for (const source of environment.summary.sources) {
@@ -211,21 +317,30 @@ function ownedContribution(
     if (ownerByFingerprint.get(key) === environment.environmentId) {
       const provider = source.fingerprint.provider;
       ownedProviders.add(provider);
+      ownedSources.add(source);
       if (source.id !== undefined) ownedSourceIds.add(source.id);
       // Distinct within a directory. Summing per-bucket session counts instead
       // would count a session once per day and model it spans.
       sessionsByProvider.set(
         provider,
-        (sessionsByProvider.get(provider) ?? 0) + source.distinctSessions,
+        (sessionsByProvider.get(provider) ?? 0) +
+          (sessionsByFingerprint.get(key) ?? source.distinctSessions),
       );
     }
   }
+  const supplementalBuckets = supplementalBucketsByEnvironment.get(environment.environmentId);
+  const sourceOf = bucketSourceResolver(environment.summary);
   return {
-    buckets: environment.summary.buckets.filter((bucket) =>
-      bucket.sourceId === undefined
-        ? ownedProviders.has(bucket.provider)
-        : ownedSourceIds.has(bucket.sourceId),
-    ),
+    buckets: environment.summary.buckets.filter((bucket) => {
+      if (supplementalBuckets?.has(bucket)) return true;
+      const source = sourceOf(bucket);
+      if (source !== undefined) return ownedSources.has(source);
+      return (
+        bucket.sourceId === undefined &&
+        bucket.sourcePath === undefined &&
+        ownedProviders.has(bucket.provider)
+      );
+    }),
     sessionsByProvider,
     sessionUsage: (environment.summary.sessionUsage ?? []).filter((session) =>
       ownedSourceIds.has(session.sourceId),
@@ -363,10 +478,10 @@ export function mergeUsageCostSummary(
   const current = environments.filter((environment) =>
     isCompatibleUsageContractVersion(environment.summary.contractVersion, expectedContractVersion),
   );
-  const { ownerByFingerprint } = claimSources(current);
+  const claims = claimSources(current);
   const totals = { costUsd: 0, records: 0, unpricedRecords: 0 };
   for (const environment of current) {
-    for (const bucket of ownedContribution(environment, ownerByFingerprint).buckets) {
+    for (const bucket of ownedContribution(environment, claims).buckets) {
       totals.costUsd += bucket.costUsd;
       totals.records += bucket.records;
       totals.unpricedRecords += bucket.unpricedRecords;
@@ -402,7 +517,7 @@ export function mergeUsage(
     }
   }
 
-  const { ownerByFingerprint, duplicates } = claimSources(current);
+  const claims = claimSources(current);
   const seenCreationSources = new Set<string>();
   const threadCreations: EnvironmentThreadCreation[] = [];
   for (const environment of [...current].sort((a, b) =>
@@ -473,17 +588,14 @@ export function mergeUsage(
   const sessionDetailUnavailable: EnvironmentId[] = [];
 
   for (const environment of current) {
-    const contribution = ownedContribution(environment, ownerByFingerprint);
+    const contribution = ownedContribution(environment, claims);
     const { buckets, sessionsByProvider } = contribution;
-    const sourcesById = new Map(environment.summary.sources.map((source) => [source.id, source]));
+    const sourceOf = bucketSourceResolver(environment.summary);
     for (const bucket of buckets)
       ownedBuckets.push({
         environmentId: environment.environmentId,
         environmentLabel: environment.label,
-        configuredInstanceIds:
-          bucket.sourceId === undefined
-            ? []
-            : (sourcesById.get(bucket.sourceId)?.configuredInstanceIds ?? []),
+        configuredInstanceIds: sourceOf(bucket)?.configuredInstanceIds ?? [],
         bucket,
       });
     if (environment.summary.sessionUsage === undefined)
@@ -678,7 +790,7 @@ export function mergeUsage(
         records === 0 ? 0 : (records - providerReportedRecords - unpricedRecords) / records,
       cacheSavingsUsd,
     },
-    duplicateSources: duplicates,
+    duplicateSources: claims.duplicates,
     contributingEnvironments,
     staleEnvironments,
   };

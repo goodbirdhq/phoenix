@@ -72,7 +72,7 @@ export function SessionAvatar({
         viewBox="0 0 30 30"
         className={cn(
           "pointer-events-none absolute inset-0 size-full",
-          state?.color ?? "text-sky-600 dark:text-sky-400",
+          state?.color ?? "text-info-foreground",
           status === "working" && "motion-safe:animate-session-working",
         )}
       >
@@ -107,7 +107,7 @@ export function SessionAvatar({
         >
           <state.icon
             aria-hidden
-            className={cn("text-white dark:text-zinc-900", size === 20 ? "size-1.5" : "size-2")}
+            className={cn("text-white dark:text-background", size === 20 ? "size-1.5" : "size-2")}
           />
         </span>
       ) : null}

@@ -1,11 +1,25 @@
-import type { ProviderAvailability, UsageProviderKind } from "@t3tools/contracts";
+import type {
+  ProviderAvailability,
+  ServerProviderUsageWindow,
+  UsageProviderKind,
+} from "@t3tools/contracts";
 import { blockedSessionWindow, lastKnownUsageWindow } from "@t3tools/client-runtime/usage/quotas";
 
 export function sidebarQuotaPresentation(
   provider: UsageProviderKind,
   availability?: ProviderAvailability,
+  /** Provider-snapshot windows for accounts with no availability channel (Cursor's dashboard). */
+  providerWindows: ReadonlyArray<ServerProviderUsageWindow> = [],
 ) {
   const bars: { label: string; usedPercent: number; spark: boolean }[] = [];
+  if ((!availability || availability.source === "unsupported") && providerWindows.length > 0) {
+    // The window closest to its limit is the one worth a glance.
+    const main = providerWindows.reduce((most, window) =>
+      window.usedPercent > most.usedPercent ? window : most,
+    );
+    bars.push({ label: main.label, usedPercent: main.usedPercent, spark: false });
+    return { bars, status: null, warning: false };
+  }
   if (!availability || availability.source === "unsupported")
     return {
       bars,

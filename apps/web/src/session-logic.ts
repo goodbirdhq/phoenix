@@ -128,10 +128,9 @@ export interface WorkLogEntry {
   /** Agent role (subagent_type) for labeled timeline rows. */
   agentRole?: string;
   /**
-   * Present on agent-spawn CTA rows: one per workflow run or per-turn batch
-   * of direct spawns. The row renders as a call-to-action ("Kicked off N
-   * subagents") whose live status is derived from the agent panel model at
-   * render time; clicking opens the Agents panel.
+   * Present on agent-spawn rows: one per workflow run or per-turn batch of
+   * direct spawns. The row ("Kicked off N subagents") derives its live
+   * status and member list from the agent panel model at render time.
    */
   agentSpawn?: {
     /** Workflow coordinator taskId, or null for a direct-spawn batch. */
@@ -213,6 +212,8 @@ export interface TimelineEntriesProjection {
   readonly messages: ReadonlyArray<ChatMessage>;
   readonly proposedPlans: ReadonlyArray<ProposedPlan>;
   readonly workEntries: ReadonlyArray<WorkLogEntry>;
+  readonly turnPlans: ReadonlyArray<TurnPlanEntry>;
+  readonly reports: ReadonlyArray<SessionReport>;
   readonly entries: TimelineEntry[];
 }
 
@@ -680,7 +681,8 @@ export function hasActionableProposedPlan(
  * - tool rows attributed to an owning agent (payload.agentId) are re-homed;
  * - task.progress ticks collapse into one row per taskId;
  * - task.updated is fold input only (status patches are not narrative).
- * Unattributed rows always stay: over-hiding loses the only terminal signal.
+ * Unattributed rows stay unless a linked agent row replaces their launch;
+ * failed launches stay so the only terminal signal cannot disappear.
  */
 /** Agent (non-background) task.started rows seed spawn CTA batches. */
 function isAgentTaskStartedActivity(activity: OrchestrationThreadActivity): boolean {
@@ -709,7 +711,7 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
     activity.kind === "task.completed";
   // Task rows classify by the server stamp: a subagent's own background
   // shell (agentId + "background") is agent-internal, but a nested AGENT
-  // (agentId + "agent") stays visible so its rows can anchor a spawn CTA
+  // (agentId + "agent") stays visible so its rows can anchor a spawn row
   // (review finding: hiding on agentId alone removed nested agents and
   // their anchors). Bypassed agent lifecycle rows also pass — collapse
   // folds every such row into its batch's single CTA row, which is how
@@ -737,12 +739,31 @@ export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  // A launch tool and its task lifecycle describe the same run. Only hide
+  // launch rows once their tool-use id has an agent row to replace them.
+  const agentLaunchToolIds = new Set<string>();
+  for (const activity of ordered) {
+    if (
+      (activity.kind === "task.started" ||
+        activity.kind === "task.progress" ||
+        activity.kind === "task.completed") &&
+      isAgentTaskStartedActivity(activity)
+    ) {
+      const toolUseId = asTrimmedString(asRecord(activity.payload)?.toolUseId);
+      if (toolUseId) agentLaunchToolIds.add(toolUseId);
+    }
+  }
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of foldUserInputActivities(ordered)) {
     if (activity.kind === "session-report.posted" || activity.kind === "session-report.read") {
       continue;
     }
-    if (activity.tone !== "error" && isWorktreeSetupActivity(activity.kind)) continue;
+    if (
+      isWorktreeSetupActivity(activity.kind) &&
+      (activity.tone !== "error" || activity.kind === "worktree-setup")
+    ) {
+      continue;
+    }
     if (activity.kind === "tool.started") continue;
     // Agent task.started rows are CTA seeds: they carry the true spawn turn,
     // which is the batch key (completions of background subagents arrive
@@ -757,7 +778,28 @@ export function deriveWorkLogEntries(
     if (isNoContentRuntimeWarning(activity)) continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
-    entries.push(toDerivedWorkLogEntry(activity));
+    const entry = toDerivedWorkLogEntry(activity);
+    // Native agent launches get their visible row from task.started. Defer
+    // their active tool row so another launch cannot duplicate the batch.
+    if (
+      activity.kind === "tool.updated" &&
+      entry.itemType === "collab_agent_tool_call" &&
+      entry.toolLifecycleStatus === "inProgress" &&
+      entry.tone !== "error"
+    ) {
+      const toolName = asRecord(asRecord(activity.payload)?.data)?.toolName;
+      if (toolName === "Agent" || toolName === "Task") continue;
+    }
+    if (
+      (activity.kind === "tool.updated" || activity.kind === "tool.completed") &&
+      entry.toolCallId &&
+      agentLaunchToolIds.has(entry.toolCallId) &&
+      entry.tone !== "error" &&
+      entry.toolLifecycleStatus !== "failed"
+    ) {
+      continue;
+    }
+    entries.push(entry);
   }
   return collapseDerivedWorkLogEntries(entries);
 }
@@ -994,7 +1036,7 @@ function collapseDerivedWorkLogEntries(
   const collapsed: DerivedWorkLogEntry[] = [];
   // Subagent rows collapse by spawn group, not adjacency: a workflow run (or
   // a turn's batch of direct spawns) is ONE narrative event in the chat — a
-  // CTA row that opens the Agents panel — no matter how many agents it
+  // spawn row in the timeline — no matter how many agents it
   // contains or how their progress rows interleave (quiet-timeline
   // guarantee).
   const spawnRowIndex = new Map<string, number>();
@@ -1664,7 +1706,8 @@ function extractWorkLogRequestKind(
   if (
     payload?.requestKind === "command" ||
     payload?.requestKind === "file-read" ||
-    payload?.requestKind === "file-change"
+    payload?.requestKind === "file-change" ||
+    payload?.requestKind === "permission"
   ) {
     return payload.requestKind;
   }
@@ -1794,12 +1837,30 @@ function timelineEntryFromProposedPlan(proposedPlan: ProposedPlan): TimelineEntr
   };
 }
 
+function timelineEntryFromTurnPlan(turnPlan: TurnPlanEntry): TimelineEntry {
+  return {
+    id: turnPlan.id,
+    kind: "turn-plan",
+    createdAt: turnPlan.createdAt,
+    turnPlan,
+  };
+}
+
 function timelineEntryFromWork(workEntry: WorkLogEntry): TimelineEntry {
   return {
     id: workEntry.id,
     kind: "work",
     createdAt: workEntry.createdAt,
     entry: workEntry,
+  };
+}
+
+function timelineEntryFromReport(report: SessionReport): TimelineEntry {
+  return {
+    id: report.reportId,
+    kind: "session-report",
+    createdAt: report.createdAt,
+    report,
   };
 }
 
@@ -1813,10 +1874,12 @@ function timelineEntrySourceOrder(entry: TimelineEntry): number {
       return 0;
     case "proposed-plan":
       return 1;
-    case "work":
+    case "turn-plan":
       return 2;
-    default:
+    case "work":
       return 3;
+    case "session-report":
+      return 4;
   }
 }
 
@@ -1824,8 +1887,8 @@ function shouldTakePreviousTimelineEntry(previous: TimelineEntry, suffix: Timeli
   const createdAtComparison = compareTimelineEntriesByCreatedAt(previous, suffix);
   if (createdAtComparison !== 0) return createdAtComparison < 0;
   // The original full derivation sorts a source-ordered array with a stable
-  // comparator. On a tie, messages precede plans, plans precede work, and an
-  // older item in the same source array precedes a newly appended item.
+  // comparator. On a tie, sources keep the order of timelineEntrySourceOrder,
+  // and an older item in the same source array precedes a newly appended item.
   return timelineEntrySourceOrder(previous) <= timelineEntrySourceOrder(suffix);
 }
 
@@ -1963,11 +2026,13 @@ export function createMessageAttachmentPreviewProjector() {
   };
 }
 
-/** Text and update time do not change a streaming assistant message's timeline structure. */
+const streamsText = (role: ChatMessage["role"]) => role === "assistant" || role === "reasoning";
+
+/** Text and update time do not change a streaming message's timeline structure. */
 export function isStreamingMessageTextUpdate(previous: ChatMessage, next: ChatMessage): boolean {
   if (
-    previous.role !== "assistant" ||
-    next.role !== "assistant" ||
+    !streamsText(previous.role) ||
+    previous.role !== next.role ||
     !previous.streaming ||
     !next.streaming
   ) {
@@ -1997,22 +2062,31 @@ function replaceStreamingTimelineMessages(
   });
 }
 
-/** Reuse ordered entries across immutable stream updates. Other changes keep the full sort. */
+/** Reuse ordered entries across immutable stream updates. Other changes keep the full sort.
+ *  Phoenix's turn plans and reports trail `previous` so upstream call sites keep their shape. */
 export function deriveTimelineEntriesWithState(
   messages: ReadonlyArray<ChatMessage>,
   proposedPlans: ReadonlyArray<ProposedPlan>,
   workEntries: ReadonlyArray<WorkLogEntry>,
   previous: TimelineEntriesProjection | null = null,
+  turnPlans: ReadonlyArray<TurnPlanEntry> = [],
+  reports: ReadonlyArray<SessionReport> = [],
 ): TimelineEntriesProjection {
   if (
     previous !== null &&
     previous.proposedPlans.length === proposedPlans.length &&
     previous.workEntries.length === workEntries.length &&
+    previous.turnPlans.length === turnPlans.length &&
+    previous.reports.length === reports.length &&
     hasExactArrayPrefix(previous.proposedPlans, proposedPlans) &&
-    hasExactArrayPrefix(previous.workEntries, workEntries)
+    hasExactArrayPrefix(previous.workEntries, workEntries) &&
+    hasExactArrayPrefix(previous.turnPlans, turnPlans) &&
+    hasExactArrayPrefix(previous.reports, reports)
   ) {
     const entries = replaceStreamingTimelineMessages(messages, previous);
-    if (entries !== null) return { messages, proposedPlans, workEntries, entries };
+    if (entries !== null) {
+      return { messages, proposedPlans, workEntries, turnPlans, reports, entries };
+    }
   }
   const foldedAnswerMessageIds = new Set(
     workEntries.flatMap((entry) =>
@@ -2026,7 +2100,9 @@ export function deriveTimelineEntriesWithState(
     !previous.entries.some((entry) => entry.kind === "message" && !showMessage(entry.message)) &&
     hasExactArrayPrefix(previous.messages, messages) &&
     hasExactArrayPrefix(previous.proposedPlans, proposedPlans) &&
-    hasExactArrayPrefix(previous.workEntries, workEntries);
+    hasExactArrayPrefix(previous.workEntries, workEntries) &&
+    hasExactArrayPrefix(previous.turnPlans, turnPlans) &&
+    hasExactArrayPrefix(previous.reports, reports);
 
   if (canAppend) {
     const messageRows = messages
@@ -2036,28 +2112,44 @@ export function deriveTimelineEntriesWithState(
     const proposedPlanRows = proposedPlans
       .slice(previous.proposedPlans.length)
       .map(timelineEntryFromProposedPlan);
+    const turnPlanRows = turnPlans.slice(previous.turnPlans.length).map(timelineEntryFromTurnPlan);
     const workRows = workEntries.slice(previous.workEntries.length).map(timelineEntryFromWork);
-    const suffix = [...messageRows, ...proposedPlanRows, ...workRows].toSorted(
-      compareTimelineEntriesByCreatedAt,
-    );
+    const reportRows = reports.slice(previous.reports.length).map(timelineEntryFromReport);
+    const suffix = [
+      ...messageRows,
+      ...proposedPlanRows,
+      ...turnPlanRows,
+      ...workRows,
+      ...reportRows,
+    ].toSorted(compareTimelineEntriesByCreatedAt);
     return {
       messages,
       proposedPlans,
       workEntries,
+      turnPlans,
+      reports,
       entries: mergeTimelineEntrySuffix(previous.entries, suffix),
     };
   }
 
   const messageRows = messages.filter(showMessage).map(timelineEntryFromMessage);
   const proposedPlanRows = proposedPlans.map(timelineEntryFromProposedPlan);
+  const turnPlanRows = turnPlans.map(timelineEntryFromTurnPlan);
   const workRows = workEntries.map(timelineEntryFromWork);
+  const reportRows = reports.map(timelineEntryFromReport);
   return {
     messages,
     proposedPlans,
     workEntries,
-    entries: [...messageRows, ...proposedPlanRows, ...workRows].toSorted(
-      compareTimelineEntriesByCreatedAt,
-    ),
+    turnPlans,
+    reports,
+    entries: [
+      ...messageRows,
+      ...proposedPlanRows,
+      ...turnPlanRows,
+      ...workRows,
+      ...reportRows,
+    ].toSorted(compareTimelineEntriesByCreatedAt),
   };
 }
 
@@ -2068,43 +2160,14 @@ export function deriveTimelineEntries(
   turnPlans: ReadonlyArray<TurnPlanEntry> = [],
   reports: ReadonlyArray<SessionReport> = [],
 ): TimelineEntry[] {
-  const messageRows: TimelineEntry[] = messages.map((message) => ({
-    id: message.id,
-    kind: "message",
-    createdAt: message.createdAt,
-    message,
-  }));
-  const proposedPlanRows: TimelineEntry[] = proposedPlans.map((proposedPlan) => ({
-    id: proposedPlan.id,
-    kind: "proposed-plan",
-    createdAt: proposedPlan.createdAt,
-    proposedPlan,
-  }));
-  const turnPlanRows: TimelineEntry[] = turnPlans.map((turnPlan) => ({
-    id: turnPlan.id,
-    kind: "turn-plan",
-    createdAt: turnPlan.createdAt,
-    turnPlan,
-  }));
-  const workRows: TimelineEntry[] = workEntries.map((entry) => ({
-    id: entry.id,
-    kind: "work",
-    createdAt: entry.createdAt,
-    entry,
-  }));
-  const reportRows: TimelineEntry[] = reports.map((report) => ({
-    id: report.reportId,
-    kind: "session-report",
-    createdAt: report.createdAt,
-    report,
-  }));
-  return [
-    ...messageRows,
-    ...proposedPlanRows,
-    ...turnPlanRows,
-    ...workRows,
-    ...reportRows,
-  ].toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return deriveTimelineEntriesWithState(
+    messages,
+    proposedPlans,
+    workEntries,
+    null,
+    turnPlans,
+    reports,
+  ).entries;
 }
 
 export function inferCheckpointTurnCountByTurnId(

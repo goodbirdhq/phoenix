@@ -162,8 +162,8 @@ export function EnvironmentProviders({
     <section className="space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-base leading-[22px] font-semibold">Providers on {label}</h2>
-          <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+          <h2 className="text-base leading-5.5 font-semibold">Providers on {label}</h2>
+          <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
             Provider instances, credentials and configuration on this machine.
           </p>
         </div>
@@ -207,7 +207,7 @@ export function EnvironmentProviders({
           {error}
         </p>
       )}
-      <Table className="environment-table">
+      <Table data-environment-table="">
         <TableHeader>
           <TableRow>
             <TableHead>Provider account</TableHead>
@@ -235,7 +235,7 @@ export function EnvironmentProviders({
                   <div className="flex items-center gap-3">
                     {Mark && <Mark className="size-5 shrink-0" />}
                     <div>
-                      <p className="text-[13px] leading-[18px] font-medium">
+                      <p className="leading-4.5 font-medium">
                         {provider.displayName ?? definition?.label ?? provider.driver}
                       </p>
                       <p className="mt-0.5 text-xs leading-4 text-muted-foreground">
@@ -248,7 +248,7 @@ export function EnvironmentProviders({
                 <TableCell>
                   <span className="flex items-center gap-3 capitalize">
                     <span
-                      className={`size-1.5 shrink-0 rounded-full ${provider.status === "ready" ? "bg-emerald-700" : provider.status === "disabled" ? "bg-zinc-500" : "bg-amber-700"}`}
+                      className={`size-1.5 shrink-0 rounded-full ${provider.status === "ready" ? "bg-success-foreground" : provider.status === "disabled" ? "bg-muted-foreground" : "bg-warning"}`}
                     />
                     {provider.status}
                   </span>
@@ -350,12 +350,14 @@ export function EnvironmentProviders({
           })}
           {!visibleProviders?.length && (
             <TableRow>
-              <TableCell colSpan={5} className="text-center text-muted-foreground">
-                {providers === null
-                  ? "Loading providers…"
-                  : enabledProviders?.length
-                    ? "No providers match your search."
-                    : "No enabled providers. Add a provider to get started."}
+              <TableCell colSpan={5} className="text-center">
+                <span className="text-muted-foreground">
+                  {providers === null
+                    ? "Loading providers…"
+                    : enabledProviders?.length
+                      ? "No providers match your search."
+                      : "No enabled providers. Add a provider to get started."}
+                </span>
               </TableCell>
             </TableRow>
           )}
@@ -364,27 +366,27 @@ export function EnvironmentProviders({
       <section className="space-y-6 pt-3">
         <div>
           <h2 className="text-base font-semibold">Provider configuration</h2>
-          <p className="mt-1 text-[13px] text-muted-foreground">
+          <p className="mt-1 text-xs text-muted-foreground">
             Select an instance above to manage its settings.
           </p>
         </div>
         <div className="grid gap-x-8 gap-y-6 border-y py-5 sm:grid-cols-3">
           <div>
             <h3 className="text-sm font-medium">Instances &amp; authentication</h3>
-            <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+            <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
               Add accounts, rename instances, enable or disable, configure credentials and remove
               named instances.
             </p>
           </div>
           <div>
             <h3 className="text-sm font-medium">Runtime &amp; models</h3>
-            <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+            <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
               Binary path, environment variables, provider settings and model availability.
             </p>
           </div>
           <div>
             <h3 className="text-sm font-medium">Health &amp; updates</h3>
-            <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+            <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
               Refresh health, review update details and use supported update methods.
             </p>
           </div>
@@ -392,7 +394,7 @@ export function EnvironmentProviders({
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h3 className="text-sm font-medium">Account usage</h3>
-            <p className="mt-1 text-xs leading-[18px] text-muted-foreground">
+            <p className="mt-1 text-xs leading-4.5 text-muted-foreground">
               Inspect limits and usage in the Usage destination.
             </p>
           </div>
@@ -424,7 +426,7 @@ export function EnvironmentProviders({
           if (!open && !mutationBusy) setDeleting(null);
         }}
       >
-        <DialogPopup className="rounded-[14px] sm:max-w-[620px]">
+        <DialogPopup className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>Delete provider?</DialogTitle>
             <DialogDescription>

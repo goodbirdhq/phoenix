@@ -1,22 +1,25 @@
 /**
- * UsageService - scans provider transcripts and returns priced usage buckets.
+ * UsageService - scans provider history and returns priced usage buckets.
  *
- * The scan reads the provider CLIs' own session files (Claude Code, Codex, and
- * Grok Build) rather than T3 Code's orchestration projections, so usage covers
- * turns driven outside T3 Code too. This is the approach `ccusage` takes.
+ * The scan reads the providers' own session files and databases rather than
+ * Phoenix's orchestration projections, so usage covers turns driven outside
+ * Phoenix too. This is the approach `ccusage` takes. Every configured provider
+ * instance contributes its history store once, and each source row names the
+ * instances that point at it. Cursor's history comes from its account API.
  *
- * Transcripts are append-only, so parsed records are memoised per file by
+ * JSONL transcripts are append-only, so parsed records are memoised per file by
  * `(size, mtime)`. A cold 30-day scan of ~1.4 GB lands around 2-3 seconds; warm
  * scans only reparse files that changed, and a file that merely grew resumes
  * from its cached parse position so only the appended bytes are read.
+ * SQLite readers query live databases each scan so WAL writes remain visible.
  *
  * @module UsageService
  */
-import { UsageAttributionQuery } from "./UsageAttributionQuery.ts";
-import { attributeUsageSessions, usageSessionLinkCandidates } from "./usageAttribution.ts";
 import * as NodeOS from "node:os";
 
 import {
+  ProviderDriverKind,
+  ProviderInstanceId,
   USAGE_CONTRACT_VERSION,
   narrowUsageSummary,
   type ServerSettings as ServerSettingsValue,
@@ -27,10 +30,11 @@ import {
   type UsageSummaryInput,
   UsageReadError,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -43,21 +47,27 @@ import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../config.ts";
+import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { resolveAntigravityInstanceDirectories } from "../provider/antigravityAuthSupport.ts";
 import {
   claudeInstanceHomes,
   claudeProjectsDirCandidates,
   codexInstanceHomes,
   grokInstanceHomes,
-  opencodeInstanceDatabases,
-  type ProviderInstanceHome,
+  opencodeInstanceStores,
+  providerInstanceConfigsForDriver,
 } from "../provider/providerHomes.ts";
+import { readAntigravityUsage } from "./antigravityUsageReader.ts";
+import { readCursorAccountUsage } from "./cursorUsageReader.ts";
+import { readOpenCodeUsage } from "./opencodeUsageReader.ts";
+import { UsageAttributionQuery } from "./UsageAttributionQuery.ts";
+import { attributeUsageSessions, usageSessionLinkCandidates } from "./usageAttribution.ts";
 import { UsageAggregator, makeDayFormatter } from "./usageAggregation.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
   readDirectoryVolumeId,
-  readOpenCodeUsageDatabase,
   readTranscriptRecords,
 } from "./usageTranscriptReader.ts";
 import {
@@ -88,6 +98,24 @@ const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Longest window the UI offers, plus slack. Older entries are pruned. */
 const CACHE_RETENTION_DAYS = 90;
 
+const ANTIGRAVITY_DRIVER = ProviderDriverKind.make("antigravity");
+const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
+
+/**
+ * Variables the Cursor login lookup below reads. An instance that sets any of
+ * them in its own environment signs in elsewhere, so the server's login is not
+ * its history.
+ */
+const CURSOR_LOGIN_VARIABLES = new Set([
+  "HOME",
+  "USERPROFILE",
+  "APPDATA",
+  "XDG_CONFIG_HOME",
+  "AGENT_CLI_CREDENTIAL_STORE",
+  "CURSOR_AUTH_TOKEN",
+  "CURSOR_API_KEY",
+]);
+
 /** On-disk shape of the rate snapshot. */
 const RatesCacheFile = Schema.Struct({
   fetchedAtMs: Schema.Number,
@@ -104,6 +132,11 @@ const encodeRatesCache = Schema.encodeEffect(
 const ScanCacheJson = Schema.fromJsonString(Schema.Unknown as unknown as Schema.Codec<unknown>);
 const decodeScanCacheFile = Schema.decodeUnknownEffect(ScanCacheJson);
 const encodeScanCacheFile = Schema.encodeEffect(ScanCacheJson);
+const encodeUsageRecordKey = Schema.encodeSync(ScanCacheJson);
+const CachedSource = Schema.Struct({ dir: Schema.String, volumeId: Schema.String });
+const decodeCachedSources = Schema.decodeUnknownOption(
+  Schema.Struct({ sources: Schema.Record(Schema.String, CachedSource) }),
+);
 
 export class UsageService extends Context.Service<
   UsageService,
@@ -136,12 +169,7 @@ export const layerTest = Layer.succeed(
             untilDay: input.untilDay,
             buckets: [],
             sources: [],
-            pricing: {
-              status: "unavailable",
-              source: LITELLM_RATES_URL,
-              fetchedAt: null,
-              knownModels: 0,
-            },
+            pricing: EMPTY_PRICING,
             scanDurationMs: 0,
           },
           input.contractVersion,
@@ -151,37 +179,52 @@ export const layerTest = Layer.succeed(
   }),
 );
 
-/** One physical directory to scan, and the source row it will report as. */
-interface TranscriptDir {
-  readonly kind: "transcriptDir";
+/** One physical history store to scan, and the configured instances pointing at it. */
+interface UsageStore {
   readonly provider: UsageProviderKind;
+  /** Canonical location, reported as the source's `resolvedHomePath`. */
   readonly storePath: string;
-  readonly sourceId: string;
-  readonly configuredInstanceIds: readonly string[];
-  readonly fileName?: string;
-}
-
-interface OpenCodeDatabase {
-  readonly kind: "opencodeDatabase";
-  readonly provider: "opencode";
-  readonly storePath: string;
-  readonly sourceId: string;
   readonly configuredInstanceIds: readonly string[];
 }
 
-type UsageStore = TranscriptDir | OpenCodeDatabase;
+/** A second instance resolving to a store already listed joins it rather than rescanning it. */
+function addStore<T extends UsageStore>(stores: Map<string, T>, store: T): void {
+  const key = `${store.provider}\u0000${store.storePath}`;
+  const existing = stores.get(key);
+  stores.set(
+    key,
+    existing === undefined
+      ? store
+      : {
+          ...existing,
+          configuredInstanceIds: [
+            ...new Set([...existing.configuredInstanceIds, ...store.configuredInstanceIds]),
+          ].sort(),
+        },
+  );
+}
 
 export const make = Effect.gen(function* () {
   const attributionQuery = yield* UsageAttributionQuery;
+  const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const hostEnvironment = yield* HostProcessEnvironment;
+  const platform = yield* HostProcessPlatform;
 
   const fileCache: ScanCache = new Map();
+  /** Last known canonical path and volume per configured directory; see `resolveTranscriptDir`. */
+  const sourceCache = new Map<string, typeof CachedSource.Type>();
   let cacheDirty = false;
+  const isWithinDirectory = (filePath: string, dir: string) => {
+    const relative = path.relative(dir, filePath);
+    return relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
+  };
+  const canonicalPath = (target: string) =>
+    fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => target));
 
   const ratesCachePath = path.join(config.stateDir, "usage-model-rates.json");
   const scanCachePath = path.join(config.stateDir, "usage-scan-cache.json");
@@ -249,7 +292,7 @@ export const make = Effect.gen(function* () {
 
     yield* encodeRatesCache({ fetchedAtMs: now, document: fetched }).pipe(
       Effect.flatMap((serialized) => fileSystem.writeFileString(ratesCachePath, serialized)),
-      Effect.catchCause(() => Effect.void),
+      Effect.ignoreCause,
     );
   });
 
@@ -259,83 +302,6 @@ export const make = Effect.gen(function* () {
     Effect.map(pricing),
     Effect.withSpan("UsageService.refreshRates"),
   );
-
-  /**
-   * The one directory to scan for a Claude home: the first candidate layout
-   * that exists, or the last one, which then reports itself as missing.
-   */
-  const resolveClaudeTranscriptDir = (home: ProviderInstanceHome) =>
-    Effect.gen(function* () {
-      const candidates = yield* claudeProjectsDirCandidates(home);
-      for (const candidate of candidates) {
-        const exists = yield* fileSystem
-          .exists(candidate)
-          .pipe(Effect.catchCause(() => Effect.succeed(false)));
-        if (exists) return candidate;
-      }
-      return candidates[candidates.length - 1] ?? home.homePath;
-    });
-
-  /** Resolves the history stores of every configured provider instance. */
-  const resolveUsageStores = Effect.fn("UsageService.resolveUsageStores")(function* (
-    settings: ServerSettingsValue,
-  ) {
-    const stores: UsageStore[] = [];
-    const storesByPath = new Map<string, UsageStore>();
-    const addDir = (
-      provider: UsageProviderKind,
-      storePath: string,
-      configuredInstanceIds: readonly string[],
-      fileName?: string,
-    ) => {
-      const key = `${provider}:${storePath}`;
-      const existing = storesByPath.get(key);
-      if (existing) {
-        const merged = {
-          ...existing,
-          configuredInstanceIds: [
-            ...new Set([...existing.configuredInstanceIds, ...configuredInstanceIds]),
-          ].sort(),
-        };
-        stores[stores.indexOf(existing)] = merged;
-        storesByPath.set(key, merged);
-        return;
-      }
-      const store: TranscriptDir = {
-        kind: "transcriptDir",
-        provider,
-        storePath,
-        sourceId: String(stores.length),
-        ...(fileName === undefined ? {} : { fileName }),
-        configuredInstanceIds,
-      };
-      stores.push(store);
-      storesByPath.set(key, store);
-    };
-    const addOpenCodeDatabase = (storePath: string, configuredInstanceIds: readonly string[]) => {
-      stores.push({
-        kind: "opencodeDatabase",
-        provider: "opencode",
-        configuredInstanceIds,
-        storePath,
-        sourceId: String(stores.length),
-      });
-    };
-
-    for (const home of yield* claudeInstanceHomes(settings)) {
-      addDir("claude", yield* resolveClaudeTranscriptDir(home), home.instanceIds);
-    }
-    for (const home of yield* codexInstanceHomes(settings)) {
-      addDir("codex", path.join(home.homePath, "sessions"), home.instanceIds);
-    }
-    for (const database of yield* opencodeInstanceDatabases(settings)) {
-      addOpenCodeDatabase(database.databasePath, database.instanceIds);
-    }
-    for (const home of yield* grokInstanceHomes(settings, hostEnvironment)) {
-      addDir("grok", path.join(home.homePath, "sessions"), home.instanceIds, "updates.jsonl");
-    }
-    return stores;
-  });
 
   // A settings failure must not silently discard custom rates or transcript homes.
   const readSettings = settingsService.getSettings.pipe(
@@ -364,6 +330,12 @@ export const make = Effect.gen(function* () {
       );
       if (document === null) return;
       for (const [path, entry] of decodeScanCache(document)) fileCache.set(path, entry);
+      const sources = decodeCachedSources(document);
+      if (Option.isSome(sources)) {
+        for (const [key, source] of Object.entries(sources.value.sources)) {
+          sourceCache.set(key, source);
+        }
+      }
     }),
   );
 
@@ -371,13 +343,16 @@ export const make = Effect.gen(function* () {
     if (!cacheDirty) return;
     // Cleared only after the write lands, so a failed persist is retried on
     // the next scan instead of leaving disk permanently stale.
-    yield* encodeScanCacheFile(encodeScanCache(fileCache)).pipe(
+    yield* encodeScanCacheFile({
+      ...encodeScanCache(fileCache),
+      sources: Object.fromEntries(sourceCache),
+    }).pipe(
       Effect.flatMap((serialized) => fileSystem.writeFileString(scanCachePath, serialized)),
       Effect.map(() => {
         cacheDirty = false;
       }),
       // A cache we cannot write is a slower next start, not a failed read.
-      Effect.catchCause(() => Effect.void),
+      Effect.ignoreCause,
     );
   });
 
@@ -422,7 +397,10 @@ export const make = Effect.gen(function* () {
       );
       // A read failure is not an empty transcript: caching it under this
       // (size, mtime) would silently drop the file's usage until it changes.
-      if (parsed === null) return [];
+      // What an earlier read saved still stands.
+      if (parsed === null) {
+        return cached?.provider === provider ? [...cached.records, ...cached.tailRecords] : [];
+      }
 
       // Stored already de-duplicated within the file, which is 99% of all
       // duplicates. The aggregator still runs the cross-file dedupe pass. One
@@ -445,52 +423,105 @@ export const make = Effect.gen(function* () {
       return tailRecords.length === 0 ? records : [...records, ...tailRecords];
     });
 
-  type ScannedStore =
-    | {
-        readonly kind: "transcriptDir";
-        readonly provider: UsageProviderKind;
-        readonly storePath: string;
-        readonly sourceId: string;
-        readonly configuredInstanceIds: readonly string[];
-        readonly volumeId: string;
-        readonly files:
-          | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
-          | null;
-      }
-    | {
-        readonly kind: "opencodeDatabase";
-        readonly provider: "opencode";
-        readonly storePath: string;
-        readonly sourceId: string;
-        readonly configuredInstanceIds: readonly string[];
-        readonly volumeId: string;
-        readonly exists: boolean;
-      };
+  /**
+   * Canonical path and volume of one configured transcript directory.
+   *
+   * The last known answer is kept per configured path, so cleanup that removes
+   * the directory neither moves the source to a new fingerprint nor strands
+   * the history saved from it. A recreated directory keeps reporting its old
+   * volume while that saved history remains.
+   */
+  const resolveTranscriptDir = Effect.fn("UsageService.resolveTranscriptDir")(function* (
+    provider: UsageProviderKind,
+    directory: string,
+    retentionCutoffMs: number,
+  ) {
+    const sourceKey = provider + "\0" + directory;
+    const previous = sourceCache.get(sourceKey);
+    const dir = yield* fileSystem
+      .realPath(directory)
+      .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
+    const currentVolumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
+    const hasRetainedHistory = fileCache
+      .entries()
+      .some(
+        ([filePath, entry]) =>
+          entry.provider === provider &&
+          entry.mtimeMs >= retentionCutoffMs &&
+          entry.records.length + entry.tailRecords.length > 0 &&
+          isWithinDirectory(filePath, dir),
+      );
+    const volumeId =
+      previous?.dir === dir && (hasRetainedHistory || !currentVolumeId)
+        ? previous.volumeId || currentVolumeId
+        : currentVolumeId;
+    if (previous?.dir !== dir || previous.volumeId !== volumeId) {
+      sourceCache.set(sourceKey, { dir, volumeId });
+      cacheDirty = true;
+    }
+    return { dir, volumeId };
+  });
 
-  const collectStores = Effect.fn("UsageService.collectStores")(function* (
+  /** One store's walk and parse, before rates are involved. */
+  interface ScannedStore extends UsageStore {
+    readonly volumeId: string;
+    /** Set for account-wide history that is not local to this environment. */
+    readonly hostId?: string;
+    readonly status?: UsageSource["status"];
+    readonly message?: string;
+    readonly action?: UsageSource["action"];
+    /** Parsed records per file, or `null` when the store does not exist. */
+    readonly files:
+      | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
+      | null;
+  }
+
+  /** Claude, Codex, and Grok JSONL transcripts of every configured instance. */
+  const collectTranscripts = Effect.fn("UsageService.collectTranscripts")(function* (
     windowStartMs: number,
     settings: ServerSettingsValue,
+    retentionCutoffMs: number,
   ) {
-    const stores = yield* resolveUsageStores(settings).pipe(Effect.provideService(Path.Path, path));
+    const configured: Array<{
+      readonly provider: UsageProviderKind;
+      readonly directory: string;
+      readonly instanceIds: readonly string[];
+    }> = [];
+    for (const home of yield* claudeInstanceHomes(settings, hostEnvironment)) {
+      for (const directory of yield* claudeProjectsDirCandidates(home)) {
+        configured.push({ provider: "claude", directory, instanceIds: home.instanceIds });
+      }
+    }
+    for (const home of yield* codexInstanceHomes(settings, hostEnvironment)) {
+      const directory = path.join(home.homePath, "sessions");
+      configured.push({ provider: "codex", directory, instanceIds: home.instanceIds });
+    }
+    for (const home of yield* grokInstanceHomes(settings, hostEnvironment)) {
+      const directory = path.join(home.homePath, "sessions");
+      configured.push({ provider: "grok", directory, instanceIds: home.instanceIds });
+    }
+
+    // Aliased homes resolve to one canonical directory and are scanned once.
+    const stores = new Map<string, UsageStore & { readonly volumeId: string }>();
+    for (const { provider, directory, instanceIds } of configured) {
+      const { dir, volumeId } = yield* resolveTranscriptDir(provider, directory, retentionCutoffMs);
+      addStore(stores, { provider, storePath: dir, volumeId, configuredInstanceIds: instanceIds });
+    }
+
     const scanned: ScannedStore[] = [];
-    for (const store of stores) {
-      const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(store.storePath));
+    for (const store of stores.values()) {
       const exists = yield* fileSystem
         .exists(store.storePath)
         .pipe(Effect.catchCause(() => Effect.succeed(false)));
-      if (store.kind === "opencodeDatabase") {
-        scanned.push({ ...store, volumeId, exists });
-        continue;
-      }
       if (!exists) {
-        scanned.push({ ...store, volumeId, files: null });
+        scanned.push({ ...store, files: null });
         continue;
       }
       const files = yield* Effect.promise(() =>
         listTranscriptFiles(
           store.storePath,
           windowStartMs,
-          store.fileName === undefined ? undefined : { fileName: store.fileName },
+          store.provider === "grok" ? { fileName: "updates.jsonl" } : undefined,
         ),
       );
       const parsedFiles: { path: string; records: readonly UsageRecord[] }[] = [];
@@ -498,10 +529,241 @@ export const make = Effect.gen(function* () {
         const records = yield* readFileRecords(file.path, file.size, file.mtimeMs, store.provider);
         parsedFiles.push({ path: file.path, records });
       }
-      scanned.push({ ...store, volumeId, files: parsedFiles });
+      scanned.push({ ...store, files: parsedFiles });
     }
     return scanned;
   });
+
+  /** OpenCode's SQLite and older JSON history, per configured instance's data directory. */
+  const collectOpenCode = Effect.fn("UsageService.collectOpenCode")(function* (
+    windowStartMs: number,
+    settings: ServerSettingsValue,
+  ) {
+    const stores = new Map<
+      string,
+      UsageStore & { readonly dataDir: string; databasePath?: string }
+    >();
+    for (const store of yield* opencodeInstanceStores(settings, hostEnvironment)) {
+      const dataDir = yield* canonicalPath(store.dataDir);
+      const databasePath =
+        store.databasePath === undefined ? undefined : yield* canonicalPath(store.databasePath);
+      addStore(stores, {
+        provider: "opencode",
+        storePath: databasePath ?? dataDir,
+        dataDir,
+        ...(databasePath === undefined ? {} : { databasePath }),
+        configuredInstanceIds: store.instanceIds,
+      });
+    }
+
+    const scanned: ScannedStore[] = [];
+    for (const { dataDir, databasePath, ...store } of stores.values()) {
+      const result = yield* Effect.promise(() =>
+        readOpenCodeUsage(dataDir, windowStartMs, databasePath),
+      );
+      scanned.push({
+        ...store,
+        volumeId: yield* Effect.promise(() => readDirectoryVolumeId(store.storePath)),
+        files: result.missing && !result.error ? null : result.files,
+        status: result.error ? "partial" : "ok",
+        ...(result.error ? { message: "Some OpenCode history could not be read." } : {}),
+      });
+    }
+    return scanned;
+  });
+
+  /**
+   * Antigravity conversation databases: the user's own installs, which belong
+   * to no configured instance, plus each instance's private Phoenix profile.
+   */
+  const collectAntigravity = Effect.fn("UsageService.collectAntigravity")(function* (
+    windowStartMs: number,
+    settings: ServerSettingsValue,
+  ) {
+    const home = NodeOS.homedir();
+    const overrides = hostEnvironment["ANTIGRAVITY_DATA_DIR"]
+      ?.split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const roots: Array<{ readonly root: string; readonly instanceIds: readonly string[] }> = (
+      overrides?.length
+        ? overrides.map((root) => path.resolve(expandHomePath(root)))
+        : [
+            ...["antigravity", "antigravity-cli", "antigravity-ide", "antigravity-backup"].map(
+              (name) => path.join(home, ".gemini", name),
+            ),
+            path.join(home, ".config", "antigravity"),
+          ]
+    ).map((root) => ({ root, instanceIds: [] }));
+    for (const entry of providerInstanceConfigsForDriver(settings, ANTIGRAVITY_DRIVER)) {
+      const directories = yield* resolveAntigravityInstanceDirectories(
+        config.stateDir,
+        ProviderInstanceId.make(entry.instanceId),
+      ).pipe(
+        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(Path.Path, path),
+        Effect.mapError(
+          (cause) =>
+            new UsageReadError({
+              reason: "scanFailed",
+              detail: "Antigravity profile directory could not be resolved.",
+              cause,
+            }),
+        ),
+      );
+      roots.push({
+        root: path.join(directories.profile, "antigravity-acp"),
+        instanceIds: [entry.instanceId],
+      });
+    }
+
+    const stores = new Map<string, UsageStore>();
+    for (const { root, instanceIds } of roots) {
+      const resolvedRoot = yield* canonicalPath(root);
+      const nested = path.join(resolvedRoot, "conversations");
+      const dir = (yield* fileSystem
+        .exists(nested)
+        .pipe(Effect.catchCause(() => Effect.succeed(false))))
+        ? nested
+        : resolvedRoot;
+      addStore(stores, {
+        provider: "antigravity",
+        storePath: yield* canonicalPath(dir),
+        configuredInstanceIds: instanceIds,
+      });
+    }
+
+    const dirs = [...stores.values()].map((store) => store.storePath);
+    const antigravity = yield* Effect.promise(() => readAntigravityUsage(dirs, windowStartMs));
+    const scanned: ScannedStore[] = [];
+    for (const store of stores.values()) {
+      const dir = store.storePath;
+      const exists = yield* fileSystem
+        .exists(dir)
+        .pipe(Effect.catchCause(() => Effect.succeed(false)));
+      const failed = antigravity.errors.some(
+        (error) => error === dir || error.startsWith(`${dir}${path.sep}`),
+      );
+      scanned.push({
+        ...store,
+        volumeId: yield* Effect.promise(() => readDirectoryVolumeId(dir)),
+        files: !exists && !failed ? null : antigravity.files.filter((file) => file.root === dir),
+        status: failed ? "partial" : "ok",
+        ...(failed ? { message: "Some Antigravity history could not be read." } : {}),
+      });
+    }
+    return scanned;
+  });
+
+  /**
+   * Cursor account history from its dashboard API, using the CLI login saved
+   * on this server. Local records would be partial, so without an account
+   * reading the source reports why instead of an incomplete total.
+   */
+  const collectCursor = Effect.fn("UsageService.collectCursor")(function* (
+    windowStartMs: number,
+    settings: ServerSettingsValue,
+  ) {
+    const configuredInstanceIds = providerInstanceConfigsForDriver(settings, CURSOR_DRIVER)
+      .filter(
+        (entry) =>
+          !(entry.environment ?? []).some((variable) => CURSOR_LOGIN_VARIABLES.has(variable.name)),
+      )
+      .map((entry) => entry.instanceId);
+    const home = NodeOS.homedir();
+    const cursorUserHome =
+      (platform === "win32" ? hostEnvironment["USERPROFILE"] : hostEnvironment["HOME"]) || home;
+    const configHome = hostEnvironment["XDG_CONFIG_HOME"]?.trim();
+    const cursorHome =
+      platform === "darwin"
+        ? path.join(cursorUserHome, "Library", "Application Support")
+        : platform === "win32"
+          ? hostEnvironment["APPDATA"] || path.join(cursorUserHome, "AppData", "Roaming")
+          : configHome && path.isAbsolute(configHome)
+            ? configHome
+            : path.join(cursorUserHome, ".config");
+    const cursorAuthPath =
+      platform === "darwin"
+        ? path.join(cursorUserHome, ".cursor", "auth.json")
+        : path.join(cursorHome, platform === "win32" ? "Cursor" : "cursor", "auth.json");
+    const credentialStore = hostEnvironment["AGENT_CLI_CREDENTIAL_STORE"];
+    const loginUnavailable =
+      Boolean(hostEnvironment["CURSOR_AUTH_TOKEN"]?.trim()) ||
+      Boolean(hostEnvironment["CURSOR_API_KEY"]?.trim()) ||
+      credentialStore === "memory";
+    if (
+      platform === "darwin" &&
+      credentialStore !== "file" &&
+      !loginUnavailable &&
+      !settings.cursorKeychainUsageEnabled
+    ) {
+      return {
+        provider: "cursor",
+        storePath: cursorAuthPath,
+        configuredInstanceIds,
+        volumeId: "",
+        files: null,
+        message: "Cursor account usage is off on this environment.",
+        action: "enableCursorKeychain",
+      } satisfies ScannedStore;
+    }
+    const cursorUntilMs = yield* Clock.currentTimeMillis;
+    const account = loginUnavailable
+      ? {
+          accountKey: null,
+          records: [],
+          missing: true,
+          error: "Cursor account history needs a Cursor CLI login on this server.",
+        }
+      : yield* Effect.promise(() =>
+          readCursorAccountUsage(
+            platform === "darwin" && credentialStore !== "file"
+              ? { kind: "keychain" }
+              : cursorAuthPath,
+            windowStartMs,
+            cursorUntilMs,
+          ),
+        );
+    if (account.accountKey !== null && account.error === null && !account.missing) {
+      // The same account includes CLI and desktop history from every machine.
+      // A stable remote fingerprint prevents connected environments counting it twice.
+      const source = `cursor-account:${account.accountKey}`;
+      return {
+        provider: "cursor",
+        storePath: source,
+        configuredInstanceIds,
+        hostId: "cursor.com",
+        volumeId: account.accountKey,
+        files: [{ path: source, records: account.records }],
+        status: "ok",
+      } satisfies ScannedStore;
+    }
+    return {
+      provider: "cursor",
+      storePath: cursorAuthPath,
+      configuredInstanceIds,
+      volumeId: yield* Effect.promise(() => readDirectoryVolumeId(cursorAuthPath)),
+      // Never combine a local fallback with another server's account-wide history.
+      files: null,
+      message:
+        account.error ?? "Cursor account history needs a Cursor CLI login saved on this server.",
+    } satisfies ScannedStore;
+  });
+
+  const collectStores = Effect.fn("UsageService.collectStores")(
+    function* (windowStartMs: number, settings: ServerSettingsValue, retentionCutoffMs: number) {
+      return [
+        ...(yield* collectTranscripts(windowStartMs, settings, retentionCutoffMs)),
+        ...(yield* collectOpenCode(windowStartMs, settings)),
+        ...(yield* collectAntigravity(windowStartMs, settings)),
+        yield* collectCursor(windowStartMs, settings),
+      ];
+    },
+    // The home resolvers read `Path` and the platform themselves; satisfy them
+    // from what this service captured so the scan stays context-free.
+    Effect.provideService(Path.Path, path),
+    Effect.provideService(HostProcessPlatform, platform),
+  );
 
   const scanSummary = Effect.fn("UsageService.scanSummary")(function* (
     input: UsageSummaryInput,
@@ -551,12 +813,13 @@ export const make = Effect.gen(function* () {
     }
     const windowStartMs =
       (hourlyWindow?.sinceTimeMs ?? DateTime.toEpochMillis(windowStart.value)) - MTIME_SLACK_MS;
+    const retentionCutoffMs = startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
     // Pricing only matters once records are aggregated, so the rate table
     // loads while transcripts stream instead of gating them: a cold rates
     // fetch on a slow network no longer delays the scan by its own timeout.
     const [, scannedStores] = yield* Effect.all(
-      [ensureRates(false), collectStores(windowStartMs, settings)],
+      [ensureRates(false), collectStores(windowStartMs, settings, retentionCutoffMs)],
       { concurrency: 2 },
     );
 
@@ -572,111 +835,86 @@ export const make = Effect.gen(function* () {
     });
 
     const sources: UsageSource[] = [];
-    const livePaths = new Set<string>();
-    const walkedRoots: string[] = [];
 
-    for (const store of scannedStores) {
-      const { kind, provider, storePath, sourceId, volumeId, configuredInstanceIds } = store;
-      if (kind === "opencodeDatabase") {
-        if (!store.exists) {
-          sources.push({
-            fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
-            id: sourceId,
-            configuredInstanceIds,
-            status: "missing",
-            scannedFiles: 0,
-            skippedFiles: 0,
-            malformedRecords: 0,
-            distinctSessions: 0,
-            message: "No OpenCode usage database on this environment.",
-          });
+    for (const [index, store] of scannedStores.entries()) {
+      const { provider, storePath, volumeId, configuredInstanceIds, files, status, message } =
+        store;
+      // Summary-local, and what this source's buckets and sessions point at.
+      const sourceId = String(index);
+      const retainedFiles = [...(files ?? [])];
+      const livePaths = new Set(retainedFiles.map((file) => file.path));
+      // Cleanup may remove transcripts, but the usage we already saved still
+      // contributes to this source. Keep the normal aggregation and dedupe path.
+      for (const [filePath, entry] of fileCache) {
+        if (
+          entry.provider !== provider ||
+          entry.mtimeMs < retentionCutoffMs ||
+          livePaths.has(filePath) ||
+          !isWithinDirectory(filePath, storePath)
+        ) {
           continue;
         }
-        const sessionIds = new Set<string>();
-        const read = yield* Effect.promise(() =>
-          readOpenCodeUsageDatabase(storePath, windowStartMs, (record) => {
-            if (aggregator.add(record, sourceId) && record.sessionId.length > 0) {
-              sessionIds.add(record.sessionId);
-            }
-          }),
-        );
-        sources.push({
-          fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
-          id: sourceId,
-          configuredInstanceIds,
-          status: read === null ? "failed" : read.complete ? "ok" : "partial",
-          scannedFiles: read === null ? 0 : 1,
-          skippedFiles: read === null || !read.complete ? 1 : 0,
-          malformedRecords: read?.malformedRecords ?? 0,
-          distinctSessions: sessionIds.size,
-          message:
-            read === null
-              ? "OpenCode usage database could not be read."
-              : read.complete
-                ? null
-                : "OpenCode usage database was only partially read.",
-        });
-        continue;
+        retainedFiles.push({ path: filePath, records: [...entry.records, ...entry.tailRecords] });
       }
-
-      const { files } = store;
-      if (files === null) {
-        sources.push({
-          fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
-          id: sourceId,
-          configuredInstanceIds,
-          status: "missing",
-          scannedFiles: 0,
-          skippedFiles: 0,
-          malformedRecords: 0,
-          distinctSessions: 0,
-          message: "No transcript directory on this environment.",
-        });
-        continue;
-      }
-
-      walkedRoots.push(storePath);
       let scannedFiles = 0;
       let skippedFiles = 0;
-      // Distinct per directory. Buckets carry per-cell session counts, but a
+      // Distinct per store. Buckets carry per-cell session counts, but a
       // session spans days and models, so clients total this figure instead.
       const sessionIds = new Set<string>();
 
-      for (const file of files) {
-        livePaths.add(file.path);
+      for (const file of retainedFiles) {
         if (file.records.length === 0) {
           skippedFiles += 1;
           continue;
         }
         scannedFiles += 1;
+        const codexEventOccurrences = new Map<string, number>();
         for (const record of file.records) {
-          // Only sessions that contributed in-window count: the mtime slack
-          // admits boundary files whose records fall outside the range.
-          if (aggregator.add(record, sourceId) && record.sessionId.length > 0) {
+          let usageRecord = record;
+          if (record.provider === "codex" && record.sessionId.length > 0) {
+            // Match moved rollout copies without collapsing repeated equal events
+            // within one rollout (timestamps can have only second precision).
+            const key = encodeUsageRecordKey([
+              record.provider,
+              record.sessionId,
+              record.timestampMs,
+              record.model,
+              record.totals,
+            ]);
+            const occurrence = (codexEventOccurrences.get(key) ?? 0) + 1;
+            codexEventOccurrences.set(key, occurrence);
+            usageRecord = { ...record, dedupeKey: key + ":" + occurrence };
+          }
+          // Only sessions contributing in-window count; the mtime slack can
+          // admit boundary files whose records fall outside the range.
+          if (aggregator.add(usageRecord, sourceId, storePath) && record.sessionId.length > 0) {
             sessionIds.add(record.sessionId);
           }
         }
       }
 
       sources.push({
-        fingerprint: { hostId, provider, resolvedHomePath: storePath, volumeId },
+        fingerprint: {
+          hostId: store.hostId ?? hostId,
+          provider,
+          resolvedHomePath: storePath,
+          volumeId,
+        },
         id: sourceId,
         configuredInstanceIds,
-        status: "ok",
+        // Clients exclude missing sources, so saved records remain an available source.
+        status: files === null && scannedFiles === 0 ? "missing" : (status ?? "ok"),
         scannedFiles,
         skippedFiles,
         malformedRecords: 0,
         distinctSessions: sessionIds.size,
-        message: null,
+        message:
+          message ?? (files === null ? "No transcript directory on this environment." : null),
+        ...(store.action ? { action: store.action } : {}),
       });
     }
 
-    const pruned = pruneScanCache(fileCache, {
-      livePaths,
-      walkedRoots,
-      windowStartMs,
-      retentionCutoffMs: startedAtMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-    });
+    const pruned = pruneScanCache(fileCache, retentionCutoffMs);
     if (pruned > 0) cacheDirty = true;
     yield* persistScanCache();
 
@@ -726,15 +964,7 @@ export const make = Effect.gen(function* () {
         ...(sessionUsage === undefined ? {} : { sessionUsage }),
         ...(threadCreations === undefined ? {} : { threadCreations, threadCreationSource }),
         sources,
-        pricing: {
-          status: ratesStatus,
-          source: LITELLM_RATES_URL,
-          fetchedAt:
-            ratesFetchedAtMs === null
-              ? null
-              : DateTime.formatIso(DateTime.makeUnsafe(ratesFetchedAtMs)),
-          knownModels: rates.size,
-        },
+        pricing: pricing(),
         scanDurationMs: Math.max(0, finishedAtMs - startedAtMs),
       } satisfies UsageSummary,
       input.contractVersion,
@@ -742,7 +972,7 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * In-flight scans by window and custom prices, so concurrent identical requests (the usage
+   * In-flight scans by request and settings, so concurrent identical requests (the usage
    * page open on two clients at once) share one scan instead of racing over
    * the same corpus twice.
    */
@@ -751,6 +981,7 @@ export const make = Effect.gen(function* () {
   const scanKey = (
     input: UsageSummaryInput,
     priceOverrides: ServerSettingsValue["usagePriceOverrides"],
+    cursorKeychainUsageEnabled: boolean,
   ): string =>
     JSON.stringify([
       input.timeZone,
@@ -760,13 +991,14 @@ export const make = Effect.gen(function* () {
       input.sinceTime ?? null,
       input.untilTime ?? null,
       priceOverrides,
+      cursorKeychainUsageEnabled,
       input.includeSessions ?? false,
       input.contractVersion ?? 4,
     ]);
 
   const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
     const settings = yield* readSettings;
-    const key = scanKey(input, settings.usagePriceOverrides);
+    const key = scanKey(input, settings.usagePriceOverrides, settings.cursorKeychainUsageEnabled);
     const deferred = yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const existing = inflightScans.get(key);

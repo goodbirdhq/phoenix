@@ -54,7 +54,7 @@ export function EnvironmentMetricsRouteScreen() {
   const { environments, refresh } = useMobileHostMetricsOverview();
   const ordered = useMemo(
     () =>
-      environments.toSorted((left, right) => {
+      [...environments].sort((left, right) => {
         const leftConnected = left.connectionPhase === "connected";
         const rightConnected = right.connectionPhase === "connected";
         if (leftConnected !== rightConnected) return leftConnected ? -1 : 1;

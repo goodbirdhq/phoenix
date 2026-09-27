@@ -61,7 +61,7 @@ function parseField(raw: string, min: number, max: number): FieldSpec | null {
     if (!inBounds(value, min, max)) return null;
     values.add(value);
   }
-  return values.size === 0 ? null : { kind: "values", values: [...values].toSorted(compare) };
+  return values.size === 0 ? null : { kind: "values", values: [...values].sort(compare) };
 }
 
 function inBounds(value: number, min: number, max: number): boolean {
@@ -126,7 +126,7 @@ function describeCronExpression(expression: string): string | null {
 
 function describeWeekdays(values: ReadonlyArray<number>): string {
   // Cron accepts both 0 and 7 for Sunday.
-  const days = [...new Set(values.map((value) => (value === 7 ? 0 : value)))].toSorted(compare);
+  const days = [...new Set(values.map((value) => (value === 7 ? 0 : value)))].sort(compare);
   const key = days.join(",");
   if (key === "1,2,3,4,5") return "Weekdays";
   if (key === "0,6") return "Weekends";

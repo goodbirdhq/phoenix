@@ -37,7 +37,7 @@ export function ScheduleHistoryTable({
       </p>
     );
   return (
-    <Table className="schedule-history">
+    <Table data-schedule-history="">
       <colgroup>
         <col style={{ width: compact ? "auto" : "230px" }} />
         <col style={{ width: compact ? "150px" : "130px" }} />
@@ -64,7 +64,7 @@ export function ScheduleHistoryTable({
                   entry.type === "failed"
                     ? "text-destructive"
                     : entry.type === "triggered"
-                      ? "text-emerald-700 dark:text-emerald-400"
+                      ? "text-success-foreground"
                       : "text-muted-foreground"
                 }
               >
@@ -76,7 +76,7 @@ export function ScheduleHistoryTable({
               </span>
             </TableCell>
             {!compact && (
-              <TableCell className="pr-4">
+              <TableCell>
                 {entry.type === "triggered" ? (
                   scheduleHistoryStartedLabel(entry, timeZone)
                 ) : entry.type === "failed" ? (
@@ -95,12 +95,7 @@ export function ScheduleHistoryTable({
             )}
             <TableCell className="text-right">
               {entry.type === "triggered" ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-[22px] p-0 text-[13px] leading-[22px]"
-                  onClick={() => onOpenThread(entry.threadId)}
-                >
+                <Button variant="ghost" size="sm" onClick={() => onOpenThread(entry.threadId)}>
                   Open thread →
                 </Button>
               ) : (
@@ -154,7 +149,7 @@ export function ScheduleHistory({
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl leading-[22px] font-semibold">Occurrence history</h2>
+        <h2 className="text-xl leading-5.5 font-semibold">Occurrence history</h2>
         <p className="mt-1.5 text-xs text-muted-foreground">
           {timeZone} · Newest first · Triggered means the thread accepted its first turn.
         </p>
@@ -172,7 +167,7 @@ export function ScheduleHistory({
         {cursor && (
           <Button
             variant="outline"
-            className="schedule-control"
+            data-schedule-control=""
             disabled={!online || requested !== null}
             onClick={() => setRequested(cursor)}
           >
@@ -182,7 +177,7 @@ export function ScheduleHistory({
         {older && (
           <Button
             variant="outline"
-            className="schedule-control"
+            data-schedule-control=""
             onClick={() => {
               setEntries(detail.history);
               setCursor(detail.historyNextCursor);

@@ -8,8 +8,8 @@ import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { evolveScheduleDefinition } from "../../schedule/ScheduleDomain.ts";
 
-const historyLayer = it.layer(NodeSqliteClient.layerMemory());
-const replayLayer = it.layer(NodeSqliteClient.layerMemory());
+const historyLayer = it.layer(NodeSqliteClient.layer({ filename: ":memory:" }));
+const replayLayer = it.layer(NodeSqliteClient.layer({ filename: ":memory:" }));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeDomainEventJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ScheduleDomainEvent),

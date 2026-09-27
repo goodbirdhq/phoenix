@@ -55,7 +55,7 @@ Linux window capture also uses Phoenix-owned identifiers:
 (`DesktopAppIdentity.resolveUserDataPath`). Adopting it would point two live applications at one
 directory. A test asserts this never regresses.
 
-**`PHOENIX_HOME` has no `T3CODE_HOME` fallback**, even though every other environment variable does.
+**`PHOENIX_HOME` has no `T3CODE_HOME` fallback**, even though the other branded configuration variables do.
 The base dir holds the SQLite database and auth state; inheriting a `T3CODE_HOME` that the user set
 for T3 Code would put both apps in one directory — the exact collision this design prevents.
 
@@ -63,7 +63,9 @@ for T3 Code would put both apps in one directory — the exact collision this de
 
 Phoenix reads `PHOENIX_<NAME>` first and falls back to `T3CODE_<NAME>` (`brandedString` /
 `brandedBoolean` in `apps/desktop/src/app/DesktopConfig.ts`), so existing configuration keeps
-working. `PHOENIX_HOME` is the documented exception above.
+working. `PHOENIX_HOME` is the documented exception above. Server telemetry is the other
+exception: it reads only the `T3CODE_POSTHOG_*` and `T3CODE_TELEMETRY_*` names
+(`apps/server/src/telemetry/AnalyticsService.ts`).
 
 ## Source identity — stays upstream (renaming only causes conflicts)
 

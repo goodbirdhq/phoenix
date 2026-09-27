@@ -120,8 +120,8 @@ export function UsageReport({
             <TableBody>
               {visible.map((row) => (
                 <TableRow key={row.key}>
-                  <TableCell className="py-5">
-                    <div className="flex items-center gap-3">
+                  <TableCell>
+                    <div className="flex items-center gap-3 py-3">
                       {row.project ? (
                         <ProjectFavicon
                           project={{
@@ -153,7 +153,7 @@ export function UsageReport({
                       </div>
                     </div>
                   </TableCell>
-                  <TableCell className="max-w-60 whitespace-normal text-xs">
+                  <TableCell className="max-w-60 whitespace-normal">
                     {row.models.length <= 3 ? (
                       row.models.join(", ")
                     ) : (
@@ -166,25 +166,32 @@ export function UsageReport({
                     )}
                   </TableCell>
                   {mode === "projects" && (
-                    <TableCell className="text-right tabular-nums">{row.sessions}</TableCell>
+                    <TableCell className="text-right">
+                      <span className="tabular-nums">{row.sessions}</span>
+                    </TableCell>
                   )}
-                  <TableCell className="text-right tabular-nums">
-                    {formatTokens(row.totalTokens)}
+                  <TableCell className="text-right">
+                    <span className="tabular-nums">{formatTokens(row.totalTokens)}</span>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatTokens(row.cachedInputTokens)} / {formatTokens(row.cacheCreationTokens)}
+                  <TableCell className="text-right">
+                    <span className="tabular-nums">
+                      {formatTokens(row.cachedInputTokens)} /{" "}
+                      {formatTokens(row.cacheCreationTokens)}
+                    </span>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatUsd(row.costUsd)}
+                  <TableCell className="text-right">
+                    <span className="tabular-nums">{formatUsd(row.costUsd)}</span>
                     {row.unpricedRecords > 0 && (
                       <div className="text-xs text-muted-foreground">Some usage unpriced</div>
                     )}
                   </TableCell>
-                  <TableCell className="text-right text-xs text-muted-foreground">
-                    {formatDateTimeShort(
-                      row.lastActivityAt,
-                      Intl.DateTimeFormat().resolvedOptions().timeZone,
-                    )}
+                  <TableCell className="text-right">
+                    <span className="text-muted-foreground">
+                      {formatDateTimeShort(
+                        row.lastActivityAt,
+                        Intl.DateTimeFormat().resolvedOptions().timeZone,
+                      )}
+                    </span>
                   </TableCell>
                 </TableRow>
               ))}

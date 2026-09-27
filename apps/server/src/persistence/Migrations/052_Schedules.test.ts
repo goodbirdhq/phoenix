@@ -5,7 +5,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const layer = it.layer(NodeSqliteClient.layerMemory());
+const layer = it.layer(NodeSqliteClient.layer({ filename: ":memory:" }));
 
 layer("052_Schedules", (it) => {
   it.effect("creates durable Schedule definitions, Occurrences, receipts, and events", () =>

@@ -11,8 +11,17 @@ import { resolveMediaSource } from "@t3tools/client-runtime/media-source";
 import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 
+/**
+ * Activities the worktree setup card already represents. The settled record
+ * is rendered by the card on web and mobile, never as a
+ * worklog entry, so it is hidden from the activity feed even when it failed.
+ */
 export function isWorktreeSetupActivity(kind: string): boolean {
-  return kind === "setup-script.requested" || kind === "setup-script.started";
+  return (
+    kind === "setup-script.requested" ||
+    kind === "setup-script.started" ||
+    kind === "worktree-setup"
+  );
 }
 
 export type WorkLogToolLifecycleStatus = RuntimeItemStatus | "stopped";
@@ -129,7 +138,7 @@ function resolveT3McpToolPresentation(
 ) {
   if (!value) return null;
   const name = normalizeCompactToolLabel(value).replace(
-    /^(?:mcp__(?:t3-code|t3_code|t3code)__|(?:t3-code|t3_code|t3code)(?:[.:/]|\s*·\s*))/i,
+    /^(?:mcp__(?:phoenix|t3-code|t3_code|t3code)__|(?:phoenix|t3-code|t3_code|t3code)(?:[.:/]|\s*·\s*))/i,
     "",
   );
   if (!Object.hasOwn(T3_MCP_TOOL_LABELS, name)) return null;

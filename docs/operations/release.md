@@ -19,6 +19,31 @@ Use **Actions → Release → Run workflow**, selecting the intended ref:
 - `publish_web` defaults to false. Enable it only after configuring Phoenix's
   Vercel targets below.
 
+> Upstream's `release.yml` also grew a `schedule`/tag-push trigger with automatic
+> nightly promotion, a `preview` release channel, and a shared `build_bundle` job
+> feeding six parallel per-platform jobs, each a call into the new reusable
+> `release-desktop.yml` (also carrying a self-updating Linux `.deb`) and gated on a
+> `relay_public_config` job that reads production T3 Connect/Clerk secrets. All of
+> that is parked, unwired, alongside the AUR job below: Phoenix's release policy is
+> manual-dispatch-only (see the top of this document), Phoenix ships only the macOS
+> arm64 desktop target today, and the whole job graph reads managed-auth and relay
+> identifiers Phoenix no longer has. `release-desktop.yml` remains in the tree as
+> reference, unreferenced by anything.
+>
+> Upstream also split the labeled-PR macOS preview build (`preview:mac`) into an
+> untrusted build half and a trusted `desktop-macos-preview-publish.yml` half that
+> signs, notarizes, and calls `release-desktop.yml` with those same Clerk/relay
+> values — supporting fork PRs, which Phoenix's preview never has. Phoenix keeps its
+> own single-workflow `desktop-macos-preview.yml`: it builds an **unsigned** DMG for
+> same-repo PRs only and publishes it anonymously to a rolling `desktop-preview`
+> prerelease, needing no signing certificate or Clerk/relay configuration at all.
+> `desktop-macos-preview-publish.yml` was deleted rather than left as dead weight: its
+> `workflow_run` trigger matches on workflow _name_, and "Desktop macOS Preview" is the
+> name Phoenix's own workflow kept, so leaving it in place would have it fire — and
+> fail — after every real preview build.
+
+## Required release credentials
+
 The workflow retains lint, typecheck, tests, native packaging and updater metadata.
 The currently enabled desktop target is macOS arm64; other platform entries remain
 parked. A requested npm publication must succeed before the GitHub Release publishes.
@@ -88,6 +113,30 @@ The existing Phoenix identities are preserved: Expo `@neilbarton/phoenix`, Apple
 team `39DYB2TD96`, ASC app `6807867658`. Update messages are passed as data, not shell
 source. Explicit release requests queue without cancelling an active publication.
 
+## Server self-update release invariant
+
+Connected servers update to the client's exact version, not to an npm dist-tag. Every released
+desktop or hosted client version must therefore have a matching `t3@<version>` package available on
+npm before users can receive that client.
+
+The workflow enforces this ordering:
+
+1. `publish_cli` publishes the exact release version to npm, when requested.
+2. `release` depends on `publish_cli` before exposing desktop artifacts in GitHub Releases.
+3. `deploy_web` depends on `release` before moving the hosted channel to the new client.
+
+Preserve these dependencies when changing the release graph. Publishing a client first would leave
+the **Update server** action targeting a package version that does not exist yet.
+
+For a release smoke test, confirm `npm view t3@<version> version` returns the expected version, then
+connect the new client to a server on the previous version and verify that the update action
+reconnects to the matching server. When the release adds database migrations, verify that the
+remote update applies them and reconnects. A failed trial must restore the database snapshot and
+restart the previous server. If the installed launcher does not support the target protocol,
+verify that the update stops before restart and run `npx t3@<version> service update` once on the
+server machine. Also test the manual or desktop-managed guidance when those environments are
+available.
+
 ## Desktop auto-update notes
 
 - Updater runtime: `apps/desktop/src/updates/DesktopUpdates.ts`.
@@ -102,7 +151,7 @@ source. Explicit release requests queue without cancelling an active publication
   - `T3CODE_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
 - Required release assets for updater:
-  - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
+  - platform installers (`.exe`, `.dmg`, `.AppImage`, `.deb`, plus macOS `.zip` for Squirrel.Mac update payloads)
   - channel metadata: `latest*.yml` for stable releases, `nightly*.yml` for nightly releases
   - `*.blockmap` files (used for differential downloads)
 - macOS metadata note:
@@ -114,13 +163,13 @@ source. Explicit release requests queue without cancelling an active publication
 Windows packages the bundled server and only its runtime-external/native
 dependency closure in `resources/server.asar`. Native modules and helper
 executables declared as unpacked by that archive must be present at the matching
-paths below `resources/server.asar.unpacked`. The Windows-native backend reads
-the archive in place through Electron. Packaged Windows builds also ship a
+paths below `resources/server.asar.unpacked`. the archive in place through Electron. Packaged Windows builds also ship a
 Linux-only `resources/wsl-runtime.tar.gz` plus its SHA-256 sidecar. WSL verifies
 and extracts that archive into `~/.phoenix/wsl-runtime/sha256-<archive-digest>` inside
 the selected distro, then reuses it for later launches of the same update. The
 Windows-side `wsl-server-tree/<version>` extraction remains a fallback and is
-removed after the distro-local runtime passes preflight.
+removed after the distro-local runtime passes preflight. (Windows is currently
+parked in `release.yml`'s desktop matrix, so this path is dormant until it ships.)
 
 Windows keeps JavaScript and package metadata inside `app.asar` and unpacks only
 native libraries and helper executables. Avoid enabling whole-package smart
@@ -136,11 +185,12 @@ break:
 - On same-architecture Windows builds, the packaged primary cannot load the fff
   native library from inside `server.asar` through its `.unpacked` sibling.
 - The isolated, extracted sidecar cannot load the server entry with plain Node.
-- A Windows build with a WSL node-pty prebuild omits the WSL archive or SHA-256
-  sidecar, the sidecar digest does not match the emitted archive, or required
-  Linux runtime members are absent.
-- The emitted WSL archive contains Windows/Darwin node-pty payloads, ConPTY,
-  pnpm install metadata, or Windows-only FFF, ffi-rs, or msgpackr bindings.
+- A Windows build given `--wsl-runtime` omits the WSL archive or SHA-256
+  sidecar, or the sidecar digest does not match the emitted archive.
+- The emitted WSL archive is not a Linux CLI release archive: it must unpack to
+  a single `t3-<version>-linux-<arch>` directory holding `t3`, `client/`, and
+  `node_modules/` with the Linux node-pty binary, and must not carry a loose
+  server bundle (`bin.mjs`).
 - The external Windows resource monitor is absent.
 - The unpacked Windows application contains more than 80 files.
 
@@ -232,6 +282,7 @@ Checklist:
    - preflight passes
    - release quality checks pass
    - all matrix builds pass
+   - `publish_cli` publishes the exact release version before the release job, when requested
    - release job uploads expected files
 6. Smoke test downloaded artifacts.
 

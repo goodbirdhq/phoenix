@@ -45,15 +45,13 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     // turns every stop press into a silent no-op for half an hour.
     const bootMs = yield* Clock.currentTimeMillis;
     const sweep = Effect.gen(function* () {
-      const bindings = yield* directory.listBindings();
+      // Stopped rows stay for their resume cursors and far outnumber live
+      // ones, so the query skips them.
+      const bindings = yield* directory.listBindings({ excludeStopped: true });
       const now = yield* Clock.currentTimeMillis;
       let reapedCount = 0;
 
       for (const binding of bindings) {
-        if (binding.status === "stopped") {
-          continue;
-        }
-
         const lastSeenMs = Date.parse(binding.lastSeenAt);
         if (Number.isNaN(lastSeenMs)) {
           yield* Effect.logWarning("provider.session.reaper.invalid-last-seen", {
@@ -211,7 +209,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       if (reapedCount > 0) {
         yield* Effect.logInfo("provider.session.reaper.sweep-complete", {
           reapedCount,
-          totalBindings: bindings.length,
+          liveBindings: bindings.length,
         });
       }
     });

@@ -30,8 +30,8 @@ export function UsageRefreshButton({
   }
   return (
     <Button
-      size="sm"
-      className={compact ? "size-9 shrink-0 p-0" : undefined}
+      size={compact ? "icon" : "sm"}
+      className={compact ? "size-9 shrink-0" : undefined}
       variant="outline"
       disabled={refreshing || !!disabledReason}
       aria-description={disabledReason}

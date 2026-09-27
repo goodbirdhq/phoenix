@@ -89,7 +89,7 @@ export function ScheduleDetailRouteScreen(props: Props) {
         };
   const recentHistory = detail?.history ?? [];
   const visibleHistory = [...currentHistoryState.older, ...recentHistory];
-  const displayedHistory = visibleHistory.toReversed();
+  const displayedHistory = [...visibleHistory].reverse();
   const remainingHistoryCapacity = Math.max(
     0,
     MAX_VISIBLE_SCHEDULE_HISTORY - visibleHistory.length,
@@ -217,7 +217,7 @@ export function ScheduleDetailRouteScreen(props: Props) {
             </View>
           ) : null}
 
-          <SettingsSection title="Schedule" card>
+          <SettingsSection title="Schedule">
             <View className="gap-3 p-4">
               <View className="flex-row items-center justify-between gap-3">
                 <Text className="min-w-0 flex-1 text-xl font-t3-bold text-foreground">
@@ -246,7 +246,7 @@ export function ScheduleDetailRouteScreen(props: Props) {
             </View>
           </SettingsSection>
 
-          <SettingsSection title="Actions" card>
+          <SettingsSection title="Actions">
             <ActionRow
               disabled={!online || busyAction !== null}
               label="Run now"
@@ -315,7 +315,7 @@ export function ScheduleDetailRouteScreen(props: Props) {
             />
           </SettingsSection>
 
-          <SettingsSection title="History" card>
+          <SettingsSection title="History">
             {currentHistoryState.nextCursor !== null ||
             currentHistoryState.requestedCursor !== null ? (
               <View className="gap-2 border-b border-separator p-4">

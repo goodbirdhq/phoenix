@@ -111,7 +111,11 @@ export function SchedulesPage() {
     });
   const create = () => void navigate({ to: "/schedules", search: { create: randomUUID() } });
   return (
-    <SidebarInset className="schedule-surface usage-surface h-dvh min-h-0 overflow-hidden bg-background text-foreground isolate">
+    <SidebarInset
+      data-schedule-surface=""
+      data-usage-surface=""
+      className="h-dvh min-h-0 overflow-hidden isolate"
+    >
       <header
         className={cn(
           "flex h-[52px] shrink-0 items-center border-b px-4 sm:px-8",
@@ -225,7 +229,7 @@ export function SchedulesPage() {
                     : "Run a prompt once or on a recurring schedule. Each occurrence starts a fresh thread on its owning environment.")
               }
               action={
-                <Button className="schedule-control" onClick={create}>
+                <Button data-schedule-control="" onClick={create}>
                   <PlusIcon className="size-4" />
                   Create schedule
                 </Button>
@@ -316,20 +320,21 @@ function ScheduleDetailView({
   const latest = row.latestHistory;
   return (
     <>
-      <PageHeading
-        className="schedule-heading"
-        title={row.name}
-        icon={<CalendarIcon strokeWidth={1.7} />}
-        description={
-          <span className="flex flex-wrap items-center gap-1.5">
-            <EnvironmentIcon environmentId={row.environmentId} className="size-4" />
-            {project?.title ?? "Missing project"} · {row.environmentLabel} ·{" "}
-            <span className="capitalize">{row.state}</span>
-            {!row.online && " · Offline"}
-          </span>
-        }
-        actions={<ScheduleActions row={row} />}
-      />
+      <div data-schedule-heading="">
+        <PageHeading
+          title={row.name}
+          icon={<CalendarIcon strokeWidth={1.7} />}
+          description={
+            <span className="flex flex-wrap items-center gap-1.5">
+              <EnvironmentIcon environmentId={row.environmentId} className="size-4" />
+              {project?.title ?? "Missing project"} · {row.environmentLabel} ·{" "}
+              <span className="capitalize">{row.state}</span>
+              {!row.online && " · Offline"}
+            </span>
+          }
+          actions={<ScheduleActions row={row} />}
+        />
+      </div>
       {!row.online && (
         <div role="status" className="rounded-lg bg-muted p-4 text-sm">
           <p className="font-medium">{row.environmentLabel} is offline</p>
@@ -358,190 +363,199 @@ function ScheduleDetailView({
           })
         }
       >
-        <TabsList className="gap-6" aria-label="Schedule sections">
-          <TabsTrigger value="overview" className="data-[active]:font-semibold">
+        <TabsList data-schedule-sections="" aria-label="Schedule sections">
+          <TabsTrigger value="overview">
             <LayoutGridIcon className="size-4" />
             Overview
           </TabsTrigger>
-          <TabsTrigger value="history" className="data-[active]:font-semibold">
+          <TabsTrigger value="history">
             <HistoryIcon className="size-4" />
             History
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="overview" className="space-y-6">
-          <div className="grid gap-8 border-b pt-1 pb-5 sm:grid-cols-3">
-            <ScheduleStat
-              label="Next occurrence"
-              icon={<CalendarIcon strokeWidth={1.7} />}
-              value={
-                row.state !== "enabled"
-                  ? row.state === "paused"
-                    ? "Paused"
-                    : "No next occurrence"
-                  : row.nextOccurrenceAt
-                    ? scheduleDisplayTimestamp(row.nextOccurrenceAt, row.timeZone)
-                    : "Unavailable"
-              }
-              description={
-                row.state === "paused"
-                  ? "No upcoming occurrences"
-                  : row.state === "completed"
-                    ? "One-time schedule completed"
-                    : row.state === "failed"
-                      ? "Update the schedule to recover"
-                      : row.timeZone
-              }
-            />
-            <ScheduleStat
-              label={row.timing.type === "one-time" ? "Timing" : "Repeats"}
-              icon={row.timing.type === "one-time" ? <CalendarIcon /> : <RepeatIcon />}
-              value={scheduleRepeatSummary(row.timing, row.timeZone).value}
-              description={
-                row.timing.type === "one-time"
-                  ? scheduleDisplayTimestamp(row.timing.runAt, row.timeZone)
-                  : scheduleRepeatSummary(row.timing, row.timeZone).description
-              }
-            />
-            <ScheduleStat
-              label="Last occurrence"
-              destructive={latest?.type === "failed"}
-              icon={<HistoryIcon />}
-              value={
-                latest
-                  ? latest.type === "triggered"
-                    ? "Triggered"
-                    : latest.type === "failed"
-                      ? "Failed"
-                      : "Skipped"
-                  : "Not yet triggered"
-              }
-              description={
-                latest
-                  ? scheduleDisplayTimestamp(
-                      latest.type === "triggered"
-                        ? latest.triggeredAt
-                        : latest.type === "failed"
-                          ? latest.lastFailedAt
-                          : latest.lastScheduledFor,
-                      row.timeZone,
-                    )
-                  : "No recorded occurrences"
-              }
-            />
-          </div>
-          <section className="space-y-2.5">
-            <h2 className="text-sm leading-[22px] font-semibold">Prompt</h2>
-            {detail ? (
-              <p className="schedule-prompt rounded-lg border bg-muted/20 px-5 py-4 text-sm leading-[22px] whitespace-pre-wrap break-words">
-                {detail.prompt}
-              </p>
-            ) : (
-              <QueryMessage error={error} refresh={refresh} online={row.online} />
-            )}
-            <p className="text-xs text-muted-foreground">
-              {schedulePromptExplanation(row.state, latest?.type ?? null)}
-            </p>
-          </section>
-          <section className="space-y-3">
-            <h2 className="text-sm leading-[22px] font-semibold">Execution</h2>
-            <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-3">
-              <ExecutionField label="Provider & model">
-                <span className="flex items-center gap-2">
-                  {ProviderIcon && <ProviderIcon className="size-4 shrink-0" />}
-                  {provider?.displayName ??
-                    providerMeta?.label ??
-                    row.execution.modelSelection.instanceId}{" "}
-                  ·{" "}
-                  {provider?.models.find(
-                    (model) => model.slug === row.execution.modelSelection.model,
-                  )?.name ?? row.execution.modelSelection.model}
-                </span>
-              </ExecutionField>
-              <ExecutionField label="Permissions">
-                {
-                  {
-                    "full-access": "Full access",
-                    "approval-required": "Approval required",
-                    "auto-accept-edits": "Auto-accept edits",
-                    auto: "Auto",
-                  }[row.execution.runtimeMode]
+        <TabsContent value="overview">
+          <div className="space-y-6">
+            <div className="grid gap-8 border-b pt-1 pb-5 sm:grid-cols-3">
+              <ScheduleStat
+                label="Next occurrence"
+                icon={<CalendarIcon strokeWidth={1.7} />}
+                value={
+                  row.state !== "enabled"
+                    ? row.state === "paused"
+                      ? "Paused"
+                      : "No next occurrence"
+                    : row.nextOccurrenceAt
+                      ? scheduleDisplayTimestamp(row.nextOccurrenceAt, row.timeZone)
+                      : "Unavailable"
                 }
-              </ExecutionField>
-              <ExecutionField label="Interaction">
-                {row.execution.interactionMode === "plan" ? "Plan" : "Build"}
-              </ExecutionField>
-              <ExecutionField label="Workspace">
-                {row.execution.workspaceMode === "worktree"
-                  ? "New worktree"
-                  : "Shared project workspace"}
-              </ExecutionField>
-              <ExecutionField label="Base branch">
-                {row.execution.baseBranch ?? "Not applicable"}
-              </ExecutionField>
-              <ExecutionField label="Environment">
-                <span className="flex items-center gap-2">
-                  <EnvironmentIcon environmentId={row.environmentId} className="size-4" />
-                  {row.environmentLabel} · {row.online ? "Online" : "Offline"}
-                </span>
-              </ExecutionField>
-            </dl>
-          </section>
-          <section>
-            <div className="mb-6 flex items-center justify-between">
-              <h2 className="text-sm leading-[22px] font-semibold">Recent history</h2>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="schedule-history-link text-muted-foreground"
-                onClick={() =>
-                  void navigate({
-                    to: "/schedules",
-                    search: { environment: row.environmentId, schedule: row.id, tab: "history" },
-                  })
+                description={
+                  row.state === "paused"
+                    ? "No upcoming occurrences"
+                    : row.state === "completed"
+                      ? "One-time schedule completed"
+                      : row.state === "failed"
+                        ? "Update the schedule to recover"
+                        : row.timeZone
                 }
-              >
-                View all history →
-              </Button>
-            </div>
-            {row.state === "failed" && latest?.type === "failed" ? (
-              <div role="status" className="schedule-failure space-y-1.5 rounded-lg border p-4">
-                <p className="text-sm leading-[22px] font-semibold">Could not create the thread</p>
-                <p className="text-[13px] leading-[22px]">
-                  {latest.code} · {latest.message}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {latest.count} {latest.count === 1 ? "attempt" : "attempts"} ·{" "}
-                  {scheduleDisplayTimestamp(latest.lastFailedAt, row.timeZone)} · No thread was
-                  created.
-                </p>
-              </div>
-            ) : detail ? (
-              <ScheduleHistoryTable
-                entries={detail.history.slice(-2)}
-                timeZone={row.timeZone}
-                onOpenThread={openThread}
-                compact
               />
-            ) : (
-              <QueryMessage error={error} refresh={refresh} online={row.online} />
+              <ScheduleStat
+                label={row.timing.type === "one-time" ? "Timing" : "Repeats"}
+                icon={row.timing.type === "one-time" ? <CalendarIcon /> : <RepeatIcon />}
+                value={scheduleRepeatSummary(row.timing, row.timeZone).value}
+                description={
+                  row.timing.type === "one-time"
+                    ? scheduleDisplayTimestamp(row.timing.runAt, row.timeZone)
+                    : scheduleRepeatSummary(row.timing, row.timeZone).description
+                }
+              />
+              <ScheduleStat
+                label="Last occurrence"
+                destructive={latest?.type === "failed"}
+                icon={<HistoryIcon />}
+                value={
+                  latest
+                    ? latest.type === "triggered"
+                      ? "Triggered"
+                      : latest.type === "failed"
+                        ? "Failed"
+                        : "Skipped"
+                    : "Not yet triggered"
+                }
+                description={
+                  latest
+                    ? scheduleDisplayTimestamp(
+                        latest.type === "triggered"
+                          ? latest.triggeredAt
+                          : latest.type === "failed"
+                            ? latest.lastFailedAt
+                            : latest.lastScheduledFor,
+                        row.timeZone,
+                      )
+                    : "No recorded occurrences"
+                }
+              />
+            </div>
+            <section className="space-y-2.5">
+              <h2 className="text-sm leading-5.5 font-semibold">Prompt</h2>
+              {detail ? (
+                <p
+                  data-schedule-prompt=""
+                  className="rounded-lg border bg-muted/20 px-5 py-4 text-sm leading-5.5 whitespace-pre-wrap break-words"
+                >
+                  {detail.prompt}
+                </p>
+              ) : (
+                <QueryMessage error={error} refresh={refresh} online={row.online} />
+              )}
+              <p className="text-xs text-muted-foreground">
+                {schedulePromptExplanation(row.state, latest?.type ?? null)}
+              </p>
+            </section>
+            <section className="space-y-3">
+              <h2 className="text-sm leading-5.5 font-semibold">Execution</h2>
+              <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-3">
+                <ExecutionField label="Provider & model">
+                  <span className="flex items-center gap-2">
+                    {ProviderIcon && <ProviderIcon className="size-4 shrink-0" />}
+                    {provider?.displayName ??
+                      providerMeta?.label ??
+                      row.execution.modelSelection.instanceId}{" "}
+                    ·{" "}
+                    {provider?.models.find(
+                      (model) => model.slug === row.execution.modelSelection.model,
+                    )?.name ?? row.execution.modelSelection.model}
+                  </span>
+                </ExecutionField>
+                <ExecutionField label="Permissions">
+                  {
+                    {
+                      "full-access": "Full access",
+                      "approval-required": "Approval required",
+                      "auto-accept-edits": "Auto-accept edits",
+                      auto: "Auto",
+                    }[row.execution.runtimeMode]
+                  }
+                </ExecutionField>
+                <ExecutionField label="Interaction">
+                  {row.execution.interactionMode === "plan" ? "Plan" : "Build"}
+                </ExecutionField>
+                <ExecutionField label="Workspace">
+                  {row.execution.workspaceMode === "worktree"
+                    ? "New worktree"
+                    : "Shared project workspace"}
+                </ExecutionField>
+                <ExecutionField label="Base branch">
+                  {row.execution.baseBranch ?? "Not applicable"}
+                </ExecutionField>
+                <ExecutionField label="Environment">
+                  <span className="flex items-center gap-2">
+                    <EnvironmentIcon environmentId={row.environmentId} className="size-4" />
+                    {row.environmentLabel} · {row.online ? "Online" : "Offline"}
+                  </span>
+                </ExecutionField>
+              </dl>
+            </section>
+            <section>
+              <div className="mb-6 flex items-center justify-between">
+                <h2 className="text-sm leading-5.5 font-semibold">Recent history</h2>
+                <Button
+                  variant="ghost-muted"
+                  size="sm"
+                  data-schedule-history-link=""
+                  onClick={() =>
+                    void navigate({
+                      to: "/schedules",
+                      search: { environment: row.environmentId, schedule: row.id, tab: "history" },
+                    })
+                  }
+                >
+                  View all history →
+                </Button>
+              </div>
+              {row.state === "failed" && latest?.type === "failed" ? (
+                <div
+                  role="status"
+                  data-schedule-failure=""
+                  className="space-y-1.5 rounded-lg border p-4"
+                >
+                  <p className="text-sm leading-5.5 font-semibold">Could not create the thread</p>
+                  <p className="text-sm leading-5.5">
+                    {latest.code} · {latest.message}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {latest.count} {latest.count === 1 ? "attempt" : "attempts"} ·{" "}
+                    {scheduleDisplayTimestamp(latest.lastFailedAt, row.timeZone)} · No thread was
+                    created.
+                  </p>
+                </div>
+              ) : detail ? (
+                <ScheduleHistoryTable
+                  entries={detail.history.slice(-2)}
+                  timeZone={row.timeZone}
+                  onOpenThread={openThread}
+                  compact
+                />
+              ) : (
+                <QueryMessage error={error} refresh={refresh} online={row.online} />
+              )}
+            </section>
+            {row.state === "failed" && (
+              <p className="text-xs text-muted-foreground">
+                Opening this schedule marks the failure notice as seen. The history entry remains.
+              </p>
             )}
-          </section>
-          {row.state === "failed" && (
-            <p className="text-xs text-muted-foreground">
-              Opening this schedule marks the failure notice as seen. The history entry remains.
-            </p>
-          )}
-          <div className="flex flex-wrap items-center gap-5">
-            <ScheduleActions row={row} lifecycleOnly />
-            <p className="text-xs text-muted-foreground">
-              {row.state === "paused"
-                ? "Resuming starts at the next future time. The paused period is not caught up."
-                : row.state === "completed"
-                  ? "Choose a new future time to enable this schedule again. Run now leaves it completed."
-                  : row.state === "failed"
-                    ? "Fix the cause, then try again. A new future time re-enables a failed one-time schedule."
-                    : `Runs on ${row.environmentLabel} even when Phoenix clients are closed.`}
-            </p>
+            <div className="flex flex-wrap items-center gap-5">
+              <ScheduleActions row={row} lifecycleOnly />
+              <p className="text-xs text-muted-foreground">
+                {row.state === "paused"
+                  ? "Resuming starts at the next future time. The paused period is not caught up."
+                  : row.state === "completed"
+                    ? "Choose a new future time to enable this schedule again. Run now leaves it completed."
+                    : row.state === "failed"
+                      ? "Fix the cause, then try again. A new future time re-enables a failed one-time schedule."
+                      : `Runs on ${row.environmentLabel} even when Phoenix clients are closed.`}
+              </p>
+            </div>
           </div>
         </TabsContent>
         <TabsContent value="history">
@@ -615,9 +629,9 @@ function ScheduleStat({
 }
 function ExecutionField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="min-w-0 space-y-[3px]">
+    <div className="min-w-0 space-y-0.75">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="text-[13px] leading-[22px] break-words">{children}</dd>
+      <dd className="text-sm leading-5.5 break-words">{children}</dd>
     </div>
   );
 }
@@ -799,12 +813,13 @@ function ScheduleEditorJourney({
   };
   return (
     <>
-      <PageHeading
-        className="schedule-heading"
-        title={editing ? "Edit schedule" : duplicating ? "Duplicate schedule" : "Create schedule"}
-        icon={<CalendarIcon strokeWidth={1.7} />}
-        description="Run a saved prompt once or on a recurring cadence."
-      />
+      <div data-schedule-heading="">
+        <PageHeading
+          title={editing ? "Edit schedule" : duplicating ? "Duplicate schedule" : "Create schedule"}
+          icon={<CalendarIcon strokeWidth={1.7} />}
+          description="Run a saved prompt once or on a recurring cadence."
+        />
+      </div>
       {error && (
         <p
           role="alert"
@@ -846,7 +861,7 @@ function ScheduleEditorJourney({
         </>
       )}
       <Dialog open={discard} onOpenChange={setDiscard}>
-        <DialogPopup className="schedule-surface sm:max-w-[430px]" showCloseButton={false}>
+        <DialogPopup data-schedule-surface="" className="sm:max-w-[430px]" showCloseButton={false}>
           <DialogHeader>
             <DialogTitle>Discard this draft?</DialogTitle>
             <DialogDescription>

@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const mocks = vi.hoisted(() => ({
   os: "android",
-  native: null as { configure?: ReturnType<typeof vi.fn>; clear?: ReturnType<typeof vi.fn> } | null,
+  version: 36,
+  openSettings: vi.fn(),
+  native: null as {
+    configure?: ReturnType<typeof vi.fn>;
+    clear?: ReturnType<typeof vi.fn>;
+    openLiveUpdateSettings?: ReturnType<typeof vi.fn>;
+  } | null,
   config: { scheme: ["phoenix-preview"], extra: { iosPersonalTeamBuild: false } },
   requireModule: vi.fn(),
 }));
@@ -10,7 +16,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("expo", () => ({ requireOptionalNativeModule: mocks.requireModule }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: mocks.config } }));
 vi.mock("react-native", () => ({
+  Linking: { openSettings: mocks.openSettings },
   Platform: {
+    get Version() {
+      return mocks.version;
+    },
     get OS() {
       return mocks.os;
     },
@@ -20,6 +30,8 @@ vi.mock("react-native", () => ({
 beforeEach(() => {
   vi.resetModules();
   mocks.os = "android";
+  mocks.version = 36;
+  mocks.openSettings.mockReset().mockResolvedValue(undefined);
   mocks.native = { configure: vi.fn(), clear: vi.fn() };
   mocks.config.extra.iosPersonalTeamBuild = false;
   mocks.requireModule.mockReset().mockImplementation(() => mocks.native);

@@ -120,6 +120,10 @@ export interface CursorAdapterLiveOptions {
    * the latest snapshot so the closure isn't stale.
    */
   readonly resolveSettings?: Effect.Effect<CursorSettings>;
+  readonly onAvailableCommands?: (
+    commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
+    cwd: string,
+  ) => Effect.Effect<void>;
 }
 
 interface PendingApproval {
@@ -821,6 +825,11 @@ export function makeCursorAdapter(
                     return;
                   case "ModeChanged":
                     return;
+                  case "AvailableCommandsUpdated":
+                    yield* (
+                      options?.onAvailableCommands?.(event.availableCommands, cwd) ?? Effect.void
+                    );
+                    return;
                   case "AssistantItemStarted":
                     ctx.assistantReply = new CursorTransportFailure();
                     yield* offerRuntimeEvent(
@@ -875,6 +884,27 @@ export function makeCursorAdapter(
                         threadId: ctx.threadId,
                         turnId: ctx.activeTurnId,
                         toolCall: event.toolCall,
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
+                  case "ThoughtDelta":
+                    // Thoughts are narration, not the reply: they stay out of
+                    // `assistantReply` so a resumed turn replays only answers.
+                    yield* logNative(
+                      ctx.threadId,
+                      "session/update",
+                      event.rawPayload,
+                      "acp.jsonrpc",
+                    );
+                    yield* offerRuntimeEvent(
+                      makeAcpContentDeltaEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        streamKind: "reasoning_text",
+                        text: event.text,
                         rawPayload: event.rawPayload,
                       }),
                     );
@@ -1000,13 +1030,15 @@ export function makeCursorAdapter(
           }
 
           const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
+          const rawPrompt = input.input?.trim() ?? "";
+          const isNativeCommand = /^\/[^\s/]+(?:\s|$)/.test(rawPrompt);
           // A seeded session leads with the prior conversation so the agent
-          // continues the thread instead of meeting it cold.
-          if (ctx.pendingSeedPrompt) {
+          // continues the thread instead of meeting it cold. A native command
+          // must stay the whole prompt, so the seed waits for the next turn.
+          if (ctx.pendingSeedPrompt && !isNativeCommand) {
             promptParts.push({ type: "text", text: ctx.pendingSeedPrompt });
             ctx.pendingSeedPrompt = undefined;
           }
-          const rawPrompt = input.input?.trim() ?? "";
           if (rawPrompt) {
             let cursorSkillNames = ctx.cursorSkillNames;
             if (hasCursorSkillMention(rawPrompt) && cursorSkillNames === undefined) {
@@ -1074,17 +1106,21 @@ export function makeCursorAdapter(
             });
           }
 
+          // ACP commands parse the complete text. Extra context can turn an exact
+          // command into an ordinary model prompt or change its arguments.
           const dispatched = yield* Deferred.make<void>();
           const prompt = yield* ctx.acp
             .prompt(
               {
-                prompt: [
-                  ...promptParts,
-                  {
-                    type: "text",
-                    text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
-                  },
-                ],
+                prompt: isNativeCommand
+                  ? promptParts
+                  : [
+                      ...promptParts,
+                      {
+                        type: "text",
+                        text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
+                      },
+                    ],
               },
               { dispatched },
             )

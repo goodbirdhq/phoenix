@@ -56,10 +56,10 @@ export const UsageLimitWarningBanner = memo(function UsageLimitWarningBanner({
         {action}
         <Button
           aria-label={`Dismiss ${warning.accountName} usage warning`}
-          className="absolute top-1.5 right-1.5 size-6 text-muted-foreground hover:text-foreground"
+          className="absolute top-1.5 right-1.5 size-6"
           onClick={onDismiss}
           size="icon-xs"
-          variant="ghost"
+          variant="ghost-muted"
         >
           <XIcon aria-hidden className="size-3.5" />
         </Button>

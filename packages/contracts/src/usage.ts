@@ -1,14 +1,13 @@
 /**
  * Usage reporting contract.
  *
- * Each environment scans the provider CLIs' own on-disk session transcripts
- * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`,
- * `~/.grok/sessions/**\/updates.jsonl`, and OpenCode's `opencode.db`) rather
- * than relying on Phoenix's own orchestration projections, so usage stays
- * complete even for turns that were never driven through Phoenix. This mirrors
- * the approach `ccusage` takes.
+ * Each environment scans the provider CLIs' own native session files and
+ * databases (Claude/Codex/Grok transcripts, OpenCode's `opencode.db`, Cursor
+ * and Antigravity history) rather than relying on Phoenix's own orchestration
+ * projections, so usage stays complete even for turns that were never driven
+ * through Phoenix. Source status describes gaps in local coverage.
  *
- * Environments return pre-aggregated `(day, hourStart?, provider, model)`
+ * Environments return pre-aggregated `(day, hourStart?, provider, sourceId?, model, sourcePath?)`
  * buckets. Raw transcript records never cross the wire.
  *
  * @module usage
@@ -22,17 +21,26 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  * client renders partial coverage when an environment reports an older version
  * rather than failing the whole page.
  */
-export const USAGE_CONTRACT_VERSION = 6 as const;
+export const USAGE_CONTRACT_VERSION = 7 as const;
+
 /**
  * Oldest {@link UsageSummary} version a current client will still merge.
  *
- * v5 added `opencode` and v6 added `grok` to {@link UsageProviderKind}; v4
- * Claude/Codex buckets remain valid, so mixed-version environments keep those
- * totals instead of treating every older server as stale.
+ * v5 added `opencode`, v6 added `grok`, and v7 added `cursor` and
+ * `antigravity` to {@link UsageProviderKind}; v4 Claude/Codex buckets remain
+ * valid, so mixed-version environments keep those totals instead of treating
+ * every older server as stale.
  */
 export const USAGE_MERGE_COMPATIBLE_SINCE = 4 as const;
 
-export const UsageProviderKind = Schema.Literals(["claude", "codex", "grok", "opencode"]);
+export const UsageProviderKind = Schema.Literals([
+  "claude",
+  "codex",
+  "grok",
+  "cursor",
+  "opencode",
+  "antigravity",
+]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
 /**
@@ -105,6 +113,11 @@ export const UsageBucket = Schema.Struct({
    */
   sourceId: Schema.optional(TrimmedNonEmptyString),
   model: TrimmedNonEmptyString,
+  /**
+   * The producing source's `resolvedHomePath`: the same attribution keyed by
+   * directory instead of by id. Clients prefer `sourceId` when both are set.
+   */
+  sourcePath: Schema.optional(TrimmedNonEmptyString),
   totals: UsageTokenTotals,
   costUsd: Schema.Number,
   /**
@@ -180,6 +193,8 @@ export const UsageSource = Schema.Struct({
    */
   distinctSessions: NonNegativeInt,
   message: Schema.NullOr(TrimmedNonEmptyString),
+  /** An action the client can offer to make this source available. */
+  action: Schema.optionalKey(Schema.Literal("enableCursorKeychain")),
 });
 export type UsageSource = typeof UsageSource.Type;
 
@@ -296,11 +311,24 @@ export const UsageSummary = Schema.Struct({
 export type UsageSummary = typeof UsageSummary.Type;
 
 /**
+ * Provider vocabulary each contract version can decode. Providers are a closed
+ * literal union, so an older caller must never receive a newer provider.
+ */
+const USAGE_PROVIDERS_BY_CONTRACT_VERSION: ReadonlyArray<
+  readonly [version: number, providers: ReadonlySet<UsageProviderKind>]
+> = [
+  [7, new Set(UsageProviderKind.literals)],
+  [6, new Set<UsageProviderKind>(["claude", "codex", "grok", "opencode"])],
+  [5, new Set<UsageProviderKind>(["claude", "codex", "opencode"])],
+  [USAGE_MERGE_COMPATIBLE_SINCE, new Set<UsageProviderKind>(["claude", "codex"])],
+];
+
+/**
  * Expresses a summary in the vocabulary an older caller can decode.
  *
- * Version 5 added `opencode`; version 6 adds `grok`. Because providers are a
- * closed literal union, v5 callers receive Claude/Codex/OpenCode and v4 callers
- * receive Claude/Codex. Each response carries the matching contract marker.
+ * Version 5 added `opencode`, version 6 `grok`, and version 7 `cursor` and
+ * `antigravity`. Each response carries the contract marker of the vocabulary
+ * it was narrowed to.
  */
 export const narrowUsageSummary = (
   summary: UsageSummary,
@@ -310,16 +338,11 @@ export const narrowUsageSummary = (
   if (requestedVersion >= USAGE_CONTRACT_VERSION) {
     return summary;
   }
-  const narrowedContractVersion = requestedVersion >= 5 ? 5 : USAGE_MERGE_COMPATIBLE_SINCE;
-  const buckets = summary.buckets.filter(
-    (bucket) =>
-      bucket.provider !== "grok" && (requestedVersion >= 5 || bucket.provider !== "opencode"),
-  );
-  const sources = summary.sources.filter(
-    (source) =>
-      source.fingerprint.provider !== "grok" &&
-      (requestedVersion >= 5 || source.fingerprint.provider !== "opencode"),
-  );
+  const [narrowedContractVersion, providers] =
+    USAGE_PROVIDERS_BY_CONTRACT_VERSION.find(([version]) => requestedVersion >= version) ??
+    USAGE_PROVIDERS_BY_CONTRACT_VERSION.at(-1)!;
+  const buckets = summary.buckets.filter((bucket) => providers.has(bucket.provider));
+  const sources = summary.sources.filter((source) => providers.has(source.fingerprint.provider));
   if (
     summary.contractVersion === narrowedContractVersion &&
     buckets.length === summary.buckets.length &&
@@ -335,11 +358,7 @@ export const narrowUsageSummary = (
     ...(summary.sessionUsage === undefined
       ? {}
       : {
-          sessionUsage: summary.sessionUsage.filter(
-            (session) =>
-              session.provider !== "grok" &&
-              (requestedVersion >= 5 || session.provider !== "opencode"),
-          ),
+          sessionUsage: summary.sessionUsage.filter((session) => providers.has(session.provider)),
         }),
   };
 };

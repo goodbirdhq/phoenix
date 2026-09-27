@@ -79,88 +79,92 @@ export function MermaidViewer({
       }}
     >
       <DialogPopup
-        className="flex h-[min(88vh,900px)] w-[min(94vw,1200px)] max-w-none flex-col gap-3 p-4"
+        className="flex h-[min(88vh,900px)] w-[min(94vw,1200px)] max-w-none flex-col"
         showCloseButton={false}
         finalFocus={() => returnFocusTarget}
       >
-        <div className="flex flex-wrap items-center gap-2 pr-8">
-          <DialogTitle className="mr-auto text-base font-semibold">Mermaid diagram</DialogTitle>
-          <Button size="sm" variant="outline" onClick={fit}>
-            Fit
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setZoom((value) => Math.min(value * 1.25, 8))}
-          >
-            Zoom in
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setZoom((value) => Math.max(value / 1.25, 0.25))}
-          >
-            Zoom out
-          </Button>
-          <Button size="sm" variant="outline" onClick={fit}>
-            Reset
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setShowSource((value) => !value)}>
-            {showSource ? "Show diagram" : "Show source"}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void navigator.clipboard.writeText(source)}
-          >
-            Copy source
-          </Button>
-          <Button size="sm" variant="outline" onClick={onClose}>
-            Close
-          </Button>
+        <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+          <div className="flex flex-wrap items-center gap-2 pr-8">
+            <DialogTitle className="mr-auto">
+              <span className="text-base">Mermaid diagram</span>
+            </DialogTitle>
+            <Button size="sm" variant="outline" onClick={fit}>
+              Fit
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setZoom((value) => Math.min(value * 1.25, 8))}
+            >
+              Zoom in
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setZoom((value) => Math.max(value / 1.25, 0.25))}
+            >
+              Zoom out
+            </Button>
+            <Button size="sm" variant="outline" onClick={fit}>
+              Reset
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setShowSource((value) => !value)}>
+              {showSource ? "Show diagram" : "Show source"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void navigator.clipboard.writeText(source)}
+            >
+              Copy source
+            </Button>
+            <Button size="sm" variant="outline" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+          {showSource || result.error ? (
+            <div className="min-h-0 flex-1 overflow-auto rounded border border-border p-3">
+              {result.error ? (
+                <p role="alert" className="mb-3 text-destructive">
+                  {result.error}
+                </p>
+              ) : null}
+              <pre className="whitespace-pre-wrap break-words text-xs select-text">{source}</pre>
+            </div>
+          ) : result.svg ? (
+            <div
+              className="min-h-0 flex-1 overflow-hidden rounded border border-border bg-background"
+              aria-label="Diagram canvas"
+              onPointerDown={(event) => {
+                drag.current = { x: event.clientX - pan.x, y: event.clientY - pan.y };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                if (drag.current)
+                  setPan({ x: event.clientX - drag.current.x, y: event.clientY - drag.current.y });
+              }}
+              onPointerUp={() => {
+                drag.current = null;
+              }}
+              onPointerCancel={() => {
+                drag.current = null;
+              }}
+            >
+              <iframe
+                title="Mermaid diagram"
+                sandbox=""
+                srcDoc={frame}
+                tabIndex={-1}
+                className="h-full w-full pointer-events-none"
+                style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+              />
+            </div>
+          ) : (
+            <div className="flex flex-1 items-center justify-center" role="status">
+              Rendering diagram…
+            </div>
+          )}
         </div>
-        {showSource || result.error ? (
-          <div className="min-h-0 flex-1 overflow-auto rounded border border-border p-3">
-            {result.error ? (
-              <p role="alert" className="mb-3 text-destructive">
-                {result.error}
-              </p>
-            ) : null}
-            <pre className="whitespace-pre-wrap break-words text-xs select-text">{source}</pre>
-          </div>
-        ) : result.svg ? (
-          <div
-            className="min-h-0 flex-1 overflow-hidden rounded border border-border bg-background"
-            aria-label="Diagram canvas"
-            onPointerDown={(event) => {
-              drag.current = { x: event.clientX - pan.x, y: event.clientY - pan.y };
-              event.currentTarget.setPointerCapture(event.pointerId);
-            }}
-            onPointerMove={(event) => {
-              if (drag.current)
-                setPan({ x: event.clientX - drag.current.x, y: event.clientY - drag.current.y });
-            }}
-            onPointerUp={() => {
-              drag.current = null;
-            }}
-            onPointerCancel={() => {
-              drag.current = null;
-            }}
-          >
-            <iframe
-              title="Mermaid diagram"
-              sandbox=""
-              srcDoc={frame}
-              tabIndex={-1}
-              className="h-full w-full pointer-events-none"
-              style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
-            />
-          </div>
-        ) : (
-          <div className="flex flex-1 items-center justify-center" role="status">
-            Rendering diagram…
-          </div>
-        )}
       </DialogPopup>
     </Dialog>
   );

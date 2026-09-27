@@ -1,17 +1,22 @@
 @import "@fontsource-variable/inter";
 
-.usage-surface {
+/* The class form is kept for surfaces that have not moved to the data attribute. */
+.usage-surface,
+[data-usage-surface] {
   font-family: "Inter Variable", var(--font-sans);
 }
 
 /* Paper's default light palette. Named themes and dark mode retain their tokens. */
-html:not(.dark):not([data-theme-id]) .usage-surface {
+html:not(.dark):not([data-theme-id]) .usage-surface,
+html:not(.dark):not([data-theme-id]) [data-usage-surface] {
   --background: #fff;
   --foreground: #27272a;
   --sidebar: #fafafa;
   --sidebar-foreground: #27272a;
   --sidebar-muted-foreground: #71717b;
   --sidebar-border: #e4e4e7;
+  /* The base selected row is white, which vanishes on this #fafafa sidebar. */
+  --sidebar-row-selected: #e4e4e7;
   --muted-foreground: #71717b;
   --border: #e4e4e7;
   --contrast-foreground: #27272a;

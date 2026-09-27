@@ -40,8 +40,8 @@ const MAX_REDIRECTS = 3;
 
 const preferredEnv = (phoenixName: string, upstreamName: string) =>
   Config.all([
-    Config.string(phoenixName).pipe(Config.option),
-    Config.string(upstreamName).pipe(Config.option),
+    Config.String(phoenixName).pipe(Config.option),
+    Config.String(upstreamName).pipe(Config.option),
   ]).pipe(Config.map(([phoenix, upstream]) => Option.orElse(phoenix, () => upstream)));
 
 // Phoenix names lead. T3 Code names remain only as a compatible deployment
@@ -125,6 +125,7 @@ export class BitbucketResponseBodyReadError extends Schema.TaggedError<Bitbucket
   {
     operation: BitbucketApiOperation,
     status: Schema.Int,
+    retryAt: Schema.optional(Schema.Number),
     cause: Schema.Defect(),
   },
 ) {
@@ -592,6 +593,7 @@ function responseError(
   // only its length is reported anyway.
   return Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
+    const retryAt = retryAtFromHeader(response.headers["retry-after"], now);
     const collected = yield* collectUint8StreamText({
       stream: response.stream,
       maxBytes: DEFAULT_MAX_RESPONSE_BYTES,
@@ -601,6 +603,7 @@ function responseError(
           new BitbucketResponseBodyReadError({
             operation,
             status: response.status,
+            retryAt,
             cause,
           }),
       ),
@@ -609,7 +612,7 @@ function responseError(
       operation,
       status: response.status,
       responseBodyLength: collected.text.length,
-      retryAt: retryAtFromHeader(response.headers["retry-after"], now),
+      retryAt,
     });
   });
 }

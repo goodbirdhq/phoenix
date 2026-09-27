@@ -77,7 +77,7 @@ export function ThreadMigrationDialog(props: {
             Its messages, checkpoints, diffs, and sidebar identity stay in place.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="space-y-4">
+        <DialogPanel>
           <div className="flex items-center gap-2 rounded-lg border bg-muted/35 px-3 py-2 text-sm">
             <span className="min-w-0 truncate font-medium">{props.sourceName}</span>
             <ArrowRightIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -92,40 +92,41 @@ export function ThreadMigrationDialog(props: {
               aria-labelledby="migration-handoff-mode-label"
               value={handoffMode}
               onValueChange={(value) => setHandoffMode(value as ThreadMigrationHandoffMode)}
-              className="gap-2"
             >
-              {options.map((option) => {
-                const disabled = option.disabledReason !== null;
-                return (
-                  <label
-                    key={option.value}
-                    className={cn(
-                      "flex gap-3 rounded-lg border bg-card px-3 py-3",
-                      disabled
-                        ? "cursor-not-allowed opacity-64"
-                        : "cursor-pointer has-[[data-checked]]:border-primary has-[[data-checked]]:bg-primary/5",
-                    )}
-                  >
-                    <Radio
-                      value={option.value}
-                      disabled={disabled}
-                      className="mt-0.5"
-                      aria-describedby={`migration-mode-${option.value}-description`}
-                    />
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium text-foreground">
-                        {option.title}
+              <div className="flex flex-col gap-2">
+                {options.map((option) => {
+                  const disabled = option.disabledReason !== null;
+                  return (
+                    <label
+                      key={option.value}
+                      className={cn(
+                        "flex gap-3 rounded-lg border bg-card px-3 py-3",
+                        disabled
+                          ? "cursor-not-allowed opacity-64"
+                          : "cursor-pointer has-[[data-checked]]:border-primary has-[[data-checked]]:bg-primary/5",
+                      )}
+                    >
+                      <Radio
+                        value={option.value}
+                        disabled={disabled}
+                        className="mt-0.5"
+                        aria-describedby={`migration-mode-${option.value}-description`}
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-foreground">
+                          {option.title}
+                        </span>
+                        <span
+                          id={`migration-mode-${option.value}-description`}
+                          className="mt-0.5 block text-muted-foreground text-xs leading-5"
+                        >
+                          {option.disabledReason ?? option.description}
+                        </span>
                       </span>
-                      <span
-                        id={`migration-mode-${option.value}-description`}
-                        className="mt-0.5 block text-muted-foreground text-xs leading-5"
-                      >
-                        {option.disabledReason ?? option.description}
-                      </span>
-                    </span>
-                  </label>
-                );
-              })}
+                    </label>
+                  );
+                })}
+              </div>
             </RadioGroup>
           </div>
 

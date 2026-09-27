@@ -3,28 +3,38 @@ name: test-t3-app
 description: Launch, retain, and test the Phoenix web app in isolated development environments, including first-try browser authentication with one-time pairing URLs, pairing-token recovery, worktree-safe state directories, cross-turn dev server lifecycle, and direct SQLite inspection or fixture seeding. Use when an agent needs to run T3 locally, iteratively test UI behavior with a human, recover from an expired or consumed pairing token, isolate dev state, or prepare test data in state.sqlite.
 ---
 
-# Test T3 App
+# Test T3 web and desktop
 
-Use this skill for the web client. For iOS Simulator, Android Emulator, or physical-device testing against an isolated T3 backend, use the sibling [`test-t3-mobile`](../test-t3-mobile/SKILL.md) skill.
+Use T3's built-in Browser panel for verification. If its tools are absent or
+the panel reports unavailable, explain the blocker and stop verification.
+Do not install or switch to another automation system. For native mobile
+testing, use [test-t3-mobile](../test-t3-mobile/SKILL.md).
 
-## Start an isolated web environment
+## Start the app
 
-1. Run commands from the repository root.
-2. Choose a base directory that belongs only to the current worktree or test:
-   - Use the repository's ignored `.t3` directory for reusable worktree-local state.
-   - Use `mktemp -d /tmp/t3code-test.XXXXXX` for disposable state and retain the printed absolute path.
-3. Start the full web stack with `vp run dev`. Add `--share` when the user needs to open it from another tailnet device. In a linked worktree it defaults to that worktree's gitignored `.t3`; pass `--home-dir <base-dir>` only when the test needs a different isolated directory.
-4. Keep the terminal session alive and read the selected server port, web port, base directory, and pairing URL from its output.
+Reuse this task's healthy dev server. Otherwise run `vp run dev` from the
+repository root and retain its terminal session. Use the worktree's ignored
+`.t3` state and read the actual ports and pairing URL from the dev-runner output.
+Never run against `~/.phoenix/userdata` or set `VITE_HTTP_URL` or `VITE_WS_URL`.
 
-Treat a base directory as disposable only when it was created or deliberately selected for the current test. Never delete or directly seed the shared `~/.t3` directory. Prefer starting with a new temporary base directory over clearing state of uncertain ownership.
+Test with meaningful project and thread data. Read
+[references/sqlite-fixtures.md](references/sqlite-fixtures.md) only when
+inspecting or seeding SQLite. Stop the test server before direct fixture writes.
 
-The worktree-local default deliberately outranks an ambient `T3CODE_HOME`; do not pass the shared home through to a worktree dev server.
+## Use the Browser panel
 
-Ports are derived from the worktree path but can shift when occupied. Always read the actual values from the `[dev-runner]` line.
+Call `preview_status`, then `preview_open` if the Browser panel is
+closed. Navigate to the complete startup pairing URL once with
+`preview_navigate`, then use `preview_snapshot` and T3's interaction tools.
+If the token was consumed or expired, run `node apps/server/src/bin.ts pair`
+for a fresh one. Keep using the same tab.
 
-Shared browser dev is single-origin: Vite proxies the backend paths, so never set `VITE_HTTP_URL` or `VITE_WS_URL` for `dev`/`dev:web`.
+## Verify and retain
 
-The dev runner disables browser auto-open by default. Do not pass `--browser` during automated testing: an automatically opened page can consume the one-time bootstrap token before the controlled browser uses it.
+Exercise the affected flow and capture the state that proves it works. Keep
+the server, state, and panel available while the user inspects or iterates.
+An assistant turn ending is not teardown. Stop only processes you started,
+using retained terminal sessions or captured PIDs.
 
 ### Verify a shared environment before human handoff
 
