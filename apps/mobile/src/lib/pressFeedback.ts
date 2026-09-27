@@ -1,13 +1,18 @@
-// A touch that turns into a scroll or swipe is cancelled within this window,
-// so a fill that waits this long only ever shows for a finger resting on a row.
-export const PRESS_FEEDBACK_DELAY_MS = 120;
+// Pressability reports responder loss through onPressOut, but holds that call
+// until 130ms after the touch began (DEFAULT_MIN_PRESS_DURATION; Pressable does
+// not forward minPressDuration). Painting later than that means a scroll or
+// swipe that takes the touch early is always reported before the fill appears,
+// while a finger resting on the row still lights it promptly.
+export const PRESS_FEEDBACK_DELAY_MS = 150;
 
 /**
- * Pressed fill timing driven by raw touch events, not Pressability's pressed
- * state: that one activates on release for taps shorter than its press delay
- * and holds press-out for 130ms, so it can flash after navigation or after a
- * scroll start. This paints only once a touch has stayed down for the delay,
- * and clears the moment the touch ends or is cancelled.
+ * Pressed fill timing for rows. Pressable's own `pressed` activates on release
+ * for quick taps and can outlive a scroll start, so this runs alongside it:
+ * paint only once a touch has stayed down for the delay, and end at the first
+ * sign the touch is over or no longer a press. Callers feed it raw touch end
+ * and cancel, plus Pressability's onPressOut, which is the only signal on iOS
+ * when the ScrollView takes the gesture or the finger leaves the retention
+ * rect. Once ended, a touch never paints again until the next touch start.
  */
 export function createPressFeedback(
   onChange: (pressed: boolean) => void,
@@ -34,8 +39,8 @@ export function createPressFeedback(
         set(true);
       }, delayMs);
     },
-    /** Release, cancel, or responder termination: all end the fill at once. */
-    touchEnd() {
+    /** Touch end, touch cancel, or press-out: the fill ends and stays off. */
+    end() {
       clearTimer();
       set(false);
     },

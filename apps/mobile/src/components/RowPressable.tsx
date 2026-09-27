@@ -37,12 +37,13 @@ export function RowPressable({
   readonly interactionOpacity?: number;
 }) {
   const { hovered, hoverGesture } = useHoverGesture(props.disabled ?? false);
-  // Raw touch events, not Pressable's `pressed`: see createPressFeedback.
-  // Touch end and cancel both bubble from the finger's target; a scroll or
-  // swipe taking the gesture arrives as a cancel.
+  // Not Pressable's `pressed`: see createPressFeedback. The touch starts the
+  // wait; raw touch end and cancel end it, and so does onPressOut, which is
+  // how Pressability reports losing the responder to a scroll (the iOS
+  // ScrollView sends no touch cancel) or the finger leaving the retention rect.
   const [pressed, setPressed] = useState(false);
   const feedback = useMemo(() => createPressFeedback(setPressed), []);
-  useEffect(() => () => feedback.touchEnd(), [feedback]);
+  useEffect(() => () => feedback.end(), [feedback]);
   return (
     <GestureDetector gesture={hoverGesture}>
       <Pressable
@@ -53,12 +54,16 @@ export function RowPressable({
           props.onTouchStart?.(event);
         }}
         onTouchEnd={(event) => {
-          feedback.touchEnd();
+          feedback.end();
           props.onTouchEnd?.(event);
         }}
         onTouchCancel={(event) => {
-          feedback.touchEnd();
+          feedback.end();
           props.onTouchCancel?.(event);
+        }}
+        onPressOut={(event) => {
+          feedback.end();
+          props.onPressOut?.(event);
         }}
       >
         {() => (
