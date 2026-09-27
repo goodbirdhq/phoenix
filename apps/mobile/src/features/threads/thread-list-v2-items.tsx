@@ -994,10 +994,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Choose ${pr.accessibilityLabel}`}
-            // The number is ~13pt tall; reach 44pt without moving the layout.
-            // More slack on the left, over the plain detail text, than on the
-            // right where the agent group and status sit.
-            hitSlop={{ top: 16, bottom: 16, left: 20, right: 8 }}
+            // The number is ~13pt tall; reach 44pt vertically without moving
+            // the layout. Left slop stays inside the 6pt gap so the end of a
+            // long branch still opens the thread; the agent group on the
+            // right wins any overlap anyway.
+            hitSlop={{ top: 16, bottom: 16, left: 6, right: 8 }}
             onPress={(event) => {
               event.stopPropagation();
               setPrPickerOpen(true);

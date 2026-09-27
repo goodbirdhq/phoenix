@@ -3,11 +3,14 @@
 
 const MAX_SPOKEN_ERROR_LENGTH = 120;
 
-/** One line of the error, cut at a word so a stack trace does not become the label. */
+/**
+ * One line of the error, cut at a word so a stack trace does not become the
+ * label. The ellipsis counts toward the cap.
+ */
 export function truncateSpokenError(error: string): string {
   const text = error.replace(/\s+/g, " ").trim();
   if (text.length <= MAX_SPOKEN_ERROR_LENGTH) return text;
-  const cut = text.slice(0, MAX_SPOKEN_ERROR_LENGTH);
+  const cut = text.slice(0, MAX_SPOKEN_ERROR_LENGTH - 1);
   const lastSpace = cut.lastIndexOf(" ");
   return `${(lastSpace > MAX_SPOKEN_ERROR_LENGTH / 2 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }

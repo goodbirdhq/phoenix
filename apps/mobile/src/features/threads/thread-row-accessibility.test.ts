@@ -49,13 +49,14 @@ describe("truncateSpokenError", () => {
   it("cuts long errors at a word boundary with an ellipsis", () => {
     const error = `${"word ".repeat(40)}tail`;
     const spoken = truncateSpokenError(error);
-    expect(spoken.length).toBeLessThanOrEqual(121);
+    expect(spoken.length).toBeLessThanOrEqual(120);
     expect(spoken.endsWith("word…")).toBe(true);
   });
 
   it("hard-cuts a single long token instead of dropping most of it", () => {
     const spoken = truncateSpokenError("x".repeat(300));
-    expect(spoken).toBe(`${"x".repeat(120)}…`);
+    expect(spoken).toBe(`${"x".repeat(119)}…`);
+    expect(spoken.length).toBe(120);
   });
 });
 

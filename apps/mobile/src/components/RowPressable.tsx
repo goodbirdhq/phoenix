@@ -1,13 +1,18 @@
-import { createContext, useContext, type ComponentProps, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import { Pressable, View, type PressableProps } from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
 
 import { cn } from "../lib/cn";
+import { createPressFeedback } from "../lib/pressFeedback";
 import { useHoverGesture } from "../lib/useHoverGesture";
-
-// A touch that starts a scroll or swipe is cancelled within this window, so
-// the fill only appears for a finger that stays on the row.
-const ROW_PRESS_DELAY_MS = 120;
 
 const RowLongPressContext = createContext<PressableProps["onLongPress"]>(undefined);
 
@@ -32,14 +37,31 @@ export function RowPressable({
   readonly interactionOpacity?: number;
 }) {
   const { hovered, hoverGesture } = useHoverGesture(props.disabled ?? false);
+  // Raw touch events, not Pressable's `pressed`: see createPressFeedback.
+  // Touch end and cancel both bubble from the finger's target; a scroll or
+  // swipe taking the gesture arrives as a cancel.
+  const [pressed, setPressed] = useState(false);
+  const feedback = useMemo(() => createPressFeedback(setPressed), []);
+  useEffect(() => () => feedback.touchEnd(), [feedback]);
   return (
     <GestureDetector gesture={hoverGesture}>
       <Pressable
-        unstable_pressDelay={ROW_PRESS_DELAY_MS}
         {...props}
         className={cn("relative overflow-hidden", className)}
+        onTouchStart={(event) => {
+          feedback.touchDown();
+          props.onTouchStart?.(event);
+        }}
+        onTouchEnd={(event) => {
+          feedback.touchEnd();
+          props.onTouchEnd?.(event);
+        }}
+        onTouchCancel={(event) => {
+          feedback.touchEnd();
+          props.onTouchCancel?.(event);
+        }}
       >
-        {({ pressed }) => (
+        {() => (
           <>
             <View
               pointerEvents="none"
