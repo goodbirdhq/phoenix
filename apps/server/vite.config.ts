@@ -27,6 +27,13 @@ const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version
   ? "nightly"
   : "latest";
 
+// `build:exe` (T3CODE_PACK_EXE=1) wraps the same bundle in a Node
+// single-executable (dist-exe/phoenix) for scripts/build-cli-archive.ts.
+// tsdown's exe step refuses multi-chunk output and counts the sourcemap as a
+// chunk, so this is a separate mode. It embeds the host Node, which must
+// support `--build-sea` (25.7+); release.yml pins it with VP_NODE_VERSION.
+const packExecutable = process.env.T3CODE_PACK_EXE === "1";
+
 // The revision this bundle was built from, so `phoenix --version` can name the
 // commit an install is actually running. CI passes it explicitly; a local build
 // reads git directly and marks an uncommitted tree, because a dirty build is
@@ -64,10 +71,22 @@ export default mergeConfig(
       },
     },
     pack: {
-      entry: ["src/bin.ts", "src/claude-history-worker.ts"],
-      outDir: "dist",
-      sourcemap: true,
+      // The executable embeds one entry; the history worker becomes a hidden
+      // subcommand there instead of a sibling script.
+      entry: packExecutable ? ["src/bin.ts"] : ["src/bin.ts", "src/claude-history-worker.ts"],
+      outDir: packExecutable ? "dist-exe" : "dist",
+      sourcemap: !packExecutable,
       clean: true,
+      ...(packExecutable
+        ? {
+            exe: {
+              fileName: "phoenix",
+              outDir: "dist-exe",
+              // `import()` does not work in a SEA when useCodeCache is true.
+              seaConfig: { useCodeCache: false },
+            },
+          }
+        : {}),
       deps: {
         // Both halves are required. `alwaysBundle` forces the JS dependencies in
         // (declared deps are external by default, which is what this change is
