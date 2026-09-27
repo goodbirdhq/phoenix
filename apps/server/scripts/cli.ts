@@ -27,6 +27,7 @@ import {
   ServerCliDevelopmentIconSourceMissingError,
   ServerCliDevelopmentIconTargetMissingError,
   ServerCliExecutableImportError,
+  ServerCliPackTarballError,
   ServerCliPublishIconSourceMissingError,
   ServerCliPublishIconTargetMissingError,
 } from "./cliErrors.ts";
@@ -252,6 +253,85 @@ const createVpPmPublishArgs = (config: PublishCommandConfig): ReadonlyArray<stri
   return args;
 };
 
+// Packs the publish-ready package and installs the tarball with npm into an
+// empty project, then boots the CLI from there. Every other check in the
+// pipeline resolves dependencies through pnpm, which applies the repo's
+// patchedDependencies; npm consumers (`npx`, remote service updates) never
+// get those patches. This is the one step that loads the module graph the
+// way they will.
+const smokeInstalledPackage = Effect.fn("smokeInstalledPackage")(function* (input: {
+  readonly repoRoot: string;
+  readonly verbose: boolean;
+}) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const smokeRoot = yield* fs.makeTempDirectoryScoped({ prefix: "phoenix-npm-smoke-" });
+  const packDir = path.join(smokeRoot, "pack");
+  const projectDir = path.join(smokeRoot, "project");
+  yield* fs.makeDirectory(packDir);
+  yield* fs.makeDirectory(projectDir);
+  const stdout = input.verbose ? "inherit" : "ignore";
+
+  const pack = yield* resolveSpawnCommand("vp", [
+    "pm",
+    "pack",
+    "--filter",
+    "@goodbirdhq/phoenix",
+    "--pack-destination",
+    packDir,
+  ]);
+  yield* runCommand(
+    ChildProcess.make(pack.command, pack.args, {
+      cwd: input.repoRoot,
+      stdout,
+      stderr: "inherit",
+      shell: pack.shell,
+    }),
+  );
+  const tarballs = (yield* fs.readDirectory(packDir)).filter((name) => name.endsWith(".tgz"));
+  if (tarballs.length !== 1) {
+    return yield* new ServerCliPackTarballError({ packDir, tarballs });
+  }
+
+  yield* fs.writeFileString(
+    path.join(projectDir, "package.json"),
+    '{ "name": "phoenix-npm-smoke", "private": true }\n',
+  );
+  const install = yield* resolveSpawnCommand("npm", [
+    "install",
+    "--no-audit",
+    "--no-fund",
+    "--loglevel=error",
+    path.join(packDir, tarballs[0]!),
+  ]);
+  yield* runCommand(
+    ChildProcess.make(install.command, install.args, {
+      cwd: projectDir,
+      stdout,
+      stderr: "inherit",
+      shell: install.shell,
+    }),
+  );
+
+  // `--version` loads the eager module graph, where a dependency that only
+  // resolves under pnpm fails, without starting a server or touching state.
+  // A launcher context inherited from a Phoenix-managed shell would make the
+  // CLI refuse to start for an unrelated reason, so it stays out of the env.
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([name]) => name !== "T3_SERVICE_LAUNCHER_CONTEXT" && name !== "T3_BOOT_SERVICE_UNIT",
+    ),
+  );
+  yield* Effect.log("[cli] Booting the npm-installed package");
+  yield* runCommand(
+    ChildProcess.make(
+      process.execPath,
+      [path.join(projectDir, "node_modules/@goodbirdhq/phoenix/dist/bin.mjs"), "--version"],
+      { cwd: projectDir, stdout: "inherit", stderr: "inherit", env },
+    ),
+  );
+});
+
 const publishCmd = Command.make(
   "publish",
   {
@@ -328,6 +408,8 @@ const publishCmd = Command.make(
               yield* fs.writeFile(icon.targetPath, icon.publish);
             }
             yield* Effect.log("[cli] Applied package metadata and publish icon overrides");
+
+            yield* smokeInstalledPackage({ repoRoot, verbose: config.verbose }).pipe(Effect.scoped);
 
             const args = createVpPmPublishArgs(config);
             const spawnCommand = yield* resolveSpawnCommand("vp", ["pm", ...args]);
