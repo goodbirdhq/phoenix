@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildThreadRowAccessibilityLabel,
   pendingTaskRowAccessibility,
+  spokenWakeTime,
   truncateSpokenError,
 } from "./thread-row-accessibility";
 
@@ -31,7 +32,7 @@ describe("buildThreadRowAccessibilityLabel", () => {
 
   it("reads the wake countdown on snoozed rows", () => {
     expect(buildThreadRowAccessibilityLabel({ ...base, snoozeWakeLabel: "45m" })).toBe(
-      "Fix login. Ready, codex, gpt-5. Wakes in 45m",
+      "Fix login. Ready, codex, gpt-5. Wakes in 45 minutes",
     );
     expect(buildThreadRowAccessibilityLabel({ ...base, snoozeWakeLabel: "now" })).toBe(
       "Fix login. Ready, codex, gpt-5. Wakes now",
@@ -42,6 +43,21 @@ describe("buildThreadRowAccessibilityLabel", () => {
     expect(buildThreadRowAccessibilityLabel({ ...base, hasQueuedMessages: true })).toBe(
       "Fix login. messages queued to send. Ready, codex, gpt-5",
     );
+  });
+});
+
+describe("spokenWakeTime", () => {
+  it("expands the row's compact units into words", () => {
+    expect(spokenWakeTime("45m")).toBe("Wakes in 45 minutes");
+    expect(spokenWakeTime("1m")).toBe("Wakes in 1 minute");
+    expect(spokenWakeTime("2h")).toBe("Wakes in 2 hours");
+    expect(spokenWakeTime("1h")).toBe("Wakes in 1 hour");
+    expect(spokenWakeTime("3d")).toBe("Wakes in 3 days");
+    expect(spokenWakeTime("now")).toBe("Wakes now");
+  });
+
+  it("passes an unfamiliar label through unchanged", () => {
+    expect(spokenWakeTime("Tue 9:00")).toBe("Wakes in Tue 9:00");
   });
 });
 
@@ -69,7 +85,7 @@ describe("pendingTaskRowAccessibility", () => {
       environmentLabel: null,
     });
     expect(draft.label).toBe("Add tests, Draft, phoenix");
-    expect(draft.deleteActionLabel).toBe("Delete draft");
+    expect(draft.deleteActionLabel).toBe("Discard draft");
     expect(draft.hint).toMatch(/composer/);
   });
 

@@ -30,14 +30,22 @@ export function buildThreadRowAccessibilityLabel(input: {
     input.hasQueuedMessages ? "messages queued to send" : null,
     input.identityLabel,
     input.failedError ? truncateSpokenError(input.failedError) : null,
-    input.snoozeWakeLabel === undefined
-      ? null
-      : input.snoozeWakeLabel === "now"
-        ? "Wakes now"
-        : `Wakes in ${input.snoozeWakeLabel}`,
+    input.snoozeWakeLabel === undefined ? null : spokenWakeTime(input.snoozeWakeLabel),
   ]
     .filter(Boolean)
     .join(". ");
+}
+
+const WAKE_UNIT_NAMES = { m: "minute", h: "hour", d: "day" } as const;
+
+/** "45m" reads as letters; say "Wakes in 45 minutes" instead. */
+export function spokenWakeTime(wakeLabel: string): string {
+  if (wakeLabel === "now") return "Wakes now";
+  const match = /^(\d+)([mhd])$/.exec(wakeLabel);
+  if (!match) return `Wakes in ${wakeLabel}`;
+  const count = Number(match[1]);
+  const unit = WAKE_UNIT_NAMES[match[2] as keyof typeof WAKE_UNIT_NAMES];
+  return `Wakes in ${count} ${count === 1 ? unit : `${unit}s`}`;
 }
 
 /** Draft rows never send on their own; queued rows send when the environment reconnects. */
@@ -55,6 +63,6 @@ export function pendingTaskRowAccessibility(input: {
     hint: isDraft
       ? "Opens the draft in the new task composer"
       : "Sends when the environment reconnects. Opens the task for editing",
-    deleteActionLabel: isDraft ? "Delete draft" : "Delete queued task",
+    deleteActionLabel: isDraft ? "Discard draft" : "Delete queued task",
   };
 }
