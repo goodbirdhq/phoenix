@@ -8,11 +8,13 @@ export const PRESS_FEEDBACK_DELAY_MS = 150;
 /**
  * Pressed fill timing for rows. Pressable's own `pressed` activates on release
  * for quick taps and can outlive a scroll start, so this runs alongside it:
- * paint only once a touch has stayed down for the delay, and end at the first
- * sign the touch is over or no longer a press. Callers feed it raw touch end
- * and cancel, plus Pressability's onPressOut, which is the only signal on iOS
- * when the ScrollView takes the gesture or the finger leaves the retention
- * rect. Once ended, a touch never paints again until the next touch start.
+ * paint only once a press has stayed down for the delay, and end at the first
+ * sign it is over or no longer a press. Arm it from the row's own onPressIn,
+ * which fires at responder grant, so a touch that a nested pressable owns
+ * never arms the row (its press-out would never reach the row to end it).
+ * End it on raw touch end and cancel, plus onPressOut, which is the only
+ * signal on iOS when the ScrollView takes the gesture or the finger leaves
+ * the retention rect. Once ended, nothing paints until the next press-in.
  */
 export function createPressFeedback(
   onChange: (pressed: boolean) => void,
@@ -32,7 +34,8 @@ export function createPressFeedback(
     onChange(next);
   };
   return {
-    touchDown() {
+    /** The row was granted the responder; nested pressables own their own grants. */
+    pressIn() {
       clearTimer();
       timer = setTimeout(() => {
         timer = null;
