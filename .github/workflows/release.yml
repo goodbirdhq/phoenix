@@ -234,18 +234,20 @@ jobs:
         id: resource_monitor_cache
         uses: actions/cache@v6
         with:
-          path: native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor
-          key: resource-monitor-x86_64-unknown-linux-gnu-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
+          path: native/resource-monitor/target/x86_64-unknown-linux-musl/release/t3-resource-monitor
+          key: resource-monitor-x86_64-unknown-linux-musl-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
 
       - name: Setup Rust
         if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-gnu
+          targets: x86_64-unknown-linux-musl
 
+      # Static musl build: the WSL runtime must load on old distros, and a gnu
+      # build links against this runner's glibc (2.39).
       - name: Build resource monitor
         if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
-        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-musl
 
       # Server bundle plus the web client in apps/server/dist/client.
       - name: Build CLI package
@@ -263,7 +265,7 @@ jobs:
           set -euo pipefail
           target_dir="$RUNNER_TEMP/cli-resource-monitor/linux-x64"
           mkdir -p "$target_dir"
-          cp native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor "$target_dir/"
+          cp native/resource-monitor/target/x86_64-unknown-linux-musl/release/t3-resource-monitor "$target_dir/"
 
       - name: Build CLI archive
         run: |
@@ -276,6 +278,29 @@ jobs:
 
       - name: Smoke-test CLI archive
         run: node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "${{ needs.preflight.outputs.version }}"
+
+      # The WSL runtime targets glibc 2.28, the floor of the embedded Node.
+      # fff's prebuilt gnu library needs 2.30 (gettid); only workspace file
+      # search depends on it.
+      - name: Check CLI archive glibc floor
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d)"
+          tar -xzf release-cli/*.tar.gz -C "$root"
+          failed=0
+          while IFS= read -r -d '' file; do
+            [[ "$(head -c 4 "$file" | od -An -tx1 | tr -d ' \n')" == 7f454c46 ]] || continue
+            rel="${file#"$root"/}"
+            limit=2.28
+            [[ "$rel" == */@ff-labs/fff-bin-linux-x64-gnu/* ]] && limit=2.30
+            need="$(objdump -T "$file" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n 1 || true)"
+            echo "${need:-none} (max $limit) $rel"
+            if [[ -n "$need" && "$(printf '%s\n' "$need" "$limit" | sort -V | tail -n 1)" != "$limit" ]]; then
+              echo "::error::$rel needs glibc $need, above $limit"
+              failed=1
+            fi
+          done < <(find "$root" -type f -print0)
+          exit "$failed"
 
       - name: Upload CLI archive
         uses: actions/upload-artifact@v7
