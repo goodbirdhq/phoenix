@@ -288,8 +288,14 @@ Checklist:
 
 - macOS build unsigned when expected signed:
   - Check all Apple secrets plus `APPLE_TEAM_ID` are populated and non-empty.
-  - Confirm the provisioning profile belongs to `APPLE_TEAM_ID.com.goodbird.phoenix` and includes
-    Associated Domains.
+- macOS app is signed and notarized but dies at launch with a bare `Killed`, no window, and no
+  crash report while `codesign --verify` and `spctl --assess` both pass:
+  - The signature claims a restricted entitlement (`com.apple.application-identifier` or any
+    `com.apple.developer.*` key) with no embedded provisioning profile, and AMFI kills the process
+    at exec. Confirm with
+    `log show --last 10m --predicate 'process == "amfid" OR process == "kernel"' | grep -i phoenix`.
+    Release builds ship no profile, so `renderMacEntitlements` in
+    `scripts/build-desktop-artifact.ts` must stay hardened-runtime keys only.
 - Windows build unsigned when expected signed:
   - Check all Azure ATS and auth secrets are populated and non-empty.
 - Build fails with signing error:
