@@ -94,7 +94,7 @@ import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
 // A minimal stand-in for the Linux CLI release archive: one top-level
 // directory named after the archive stem holding the executable, the web
-// client, and the runtime externals with node-pty built from source.
+// client, and the runtime externals with node-pty's Linux prebuild.
 const makeLinuxCliArchiveFixture = Effect.fn("test.makeLinuxCliArchiveFixture")(function* (input: {
   readonly root: string;
   readonly stem: string;
@@ -109,7 +109,7 @@ const makeLinuxCliArchiveFixture = Effect.fn("test.makeLinuxCliArchiveFixture")(
     `${input.stem}/phoenix`,
     `${input.stem}/client/index.html`,
     `${input.stem}/node_modules/node-pty/package.json`,
-    `${input.stem}/node_modules/node-pty/build/Release/pty.node`,
+    `${input.stem}/node_modules/node-pty/prebuilds/linux-x64/pty.node`,
     ...(input.extraMembers ?? []),
   ].filter((member) => !(input.omitMembers ?? []).includes(member));
   for (const member of members) {
@@ -172,7 +172,12 @@ const WINDOWS_PAYLOAD_FIXTURE_VERSION = "1.2.3";
 const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(function* (input: {
   readonly copyUnpackedNatives: boolean;
   readonly serverEntrySource?: string;
-  readonly wslRuntime?: "valid" | "loose-server-tree" | "missing-pty" | "bad-digest";
+  readonly wslRuntime?:
+    | "valid"
+    | "source-built-pty"
+    | "loose-server-tree"
+    | "missing-pty"
+    | "bad-digest";
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -224,8 +229,11 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
         : yield* makeLinuxCliArchiveFixture({
             root: path.join(tempDir, "wsl-runtime"),
             stem,
-            ...(input.wslRuntime === "missing-pty"
-              ? { omitMembers: [`${stem}/node_modules/node-pty/build/Release/pty.node`] }
+            ...(input.wslRuntime === "missing-pty" || input.wslRuntime === "source-built-pty"
+              ? { omitMembers: [`${stem}/node_modules/node-pty/prebuilds/linux-x64/pty.node`] }
+              : {}),
+            ...(input.wslRuntime === "source-built-pty"
+              ? { extraMembers: [`${stem}/node_modules/node-pty/build/Release/pty.node`] }
               : {}),
           });
     const archivePath = path.join(resourcesDir, WSL_RUNTIME_ARCHIVE_NAME);
@@ -1196,6 +1204,26 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ).pipe(Effect.provideService(HostProcessPlatform, "linux")),
   );
 
+  it.effect("accepts an embedded archive whose node-pty was built from source", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeWindowsPayloadFixture({
+          copyUnpackedNatives: true,
+          wslRuntime: "source-built-pty",
+        });
+        const result = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
+          expectWslRuntime: true,
+        });
+
+        assert.equal(result.packagedAppDir, fixture.packagedAppDir);
+      }),
+    ).pipe(Effect.provideService(HostProcessPlatform, "linux")),
+  );
+
   it.effect("rejects an embedded archive built for a different release version", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1273,8 +1301,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "wsl-runtime-invalid");
+        const stem = wslRuntimeArchiveStem(WINDOWS_PAYLOAD_FIXTURE_VERSION, "x64");
         assert.deepStrictEqual(error.missingFiles, [
-          `${wslRuntimeArchiveStem(WINDOWS_PAYLOAD_FIXTURE_VERSION, "x64")}/node_modules/node-pty/build/Release/pty.node`,
+          `${stem}/node_modules/node-pty/build/Release/pty.node`,
+          `${stem}/node_modules/node-pty/prebuilds/linux-x64/pty.node`,
         ]);
       }),
     ),

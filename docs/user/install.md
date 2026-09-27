@@ -5,8 +5,8 @@ desktop, web, or mobile app. Set up the machine where the agents will work first
 
 ## Requirements
 
-Command-line use, SSH hosts, and WSL backends need Node.js `^22.16 || ^23.11 || >=24.10`. The
-native desktop app includes its server runtime.
+Command-line use and SSH hosts need Node.js `^22.16 || ^23.11 || >=24.10`. The native desktop
+app includes its server runtime, including the one it installs for WSL backends.
 
 You need an installed, authenticated provider before starting a thread. You can
 launch Phoenix and configure providers afterwards.
@@ -27,10 +27,14 @@ Download the latest release from
 published through `winget`, Homebrew, or the AUR; packages named T3 Code install the upstream
 product instead.
 
+On Windows, download `Phoenix-<version>-x64.exe`. It isn't code-signed yet, so SmartScreen shows
+"Windows protected your PC": choose **More info**, then **Run anyway**.
+
 ### Windows Subsystem for Linux
 
 Choose a WSL distro in **Settings → Connections** to run agents and projects there. Install
-Node.js and provider CLIs inside that distro. When the desktop app runs a WSL backend, it
+provider CLIs inside that distro, plus Node.js: many provider CLIs need it, and Phoenix falls back
+to it if its bundled runtime can't start. When the desktop app runs a WSL backend, it
 installs the matching server runtime into `~/.phoenix/wsl-runtime` inside the selected distro. The
 first launch after installing or updating Phoenix may take a little longer while that release's
 runtime is extracted. Later launches reuse the Linux-local copy so startup does not depend on
