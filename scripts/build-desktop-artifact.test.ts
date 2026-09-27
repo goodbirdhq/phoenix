@@ -1780,12 +1780,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("renders hardened-runtime entitlements without a provisioning profile", () => {
-    const entitlements = renderMacEntitlements(
-      resolveMacSigningConfiguration({ T3CODE_APPLE_TEAM_ID: "ABC1234567" }),
-    );
+    const entitlements = renderMacEntitlements();
 
-    assert.include(entitlements, "<string>ABC1234567.com.goodbird.phoenix</string>");
-    assert.include(entitlements, "<key>com.apple.developer.team-identifier</key>");
+    // Restricted entitlements need an embedded provisioning profile; without one
+    // AMFI kills the app at launch. No profile ships, so none may be claimed.
+    assert.notInclude(entitlements, "com.apple.application-identifier");
+    assert.notInclude(entitlements, "com.apple.developer.");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
     assert.include(
       entitlements,

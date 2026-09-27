@@ -1096,24 +1096,16 @@ export function resolveMacSigningConfiguration(
   };
 }
 
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-}
-
-export function renderMacEntitlements(configuration: MacSigningConfiguration): string {
+// Hardened-runtime keys only. `com.apple.application-identifier` and
+// `com.apple.developer.team-identifier` are restricted entitlements: AMFI kills a
+// Developer ID app that claims them without an embedded provisioning profile,
+// with a plain "Killed" and no crash report while codesign and spctl still pass.
+// The profile left with hosted auth, so the keys had to leave too.
+export function renderMacEntitlements(): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
-    <key>com.apple.application-identifier</key>
-    <string>${escapeXml(`${configuration.teamId}.${configuration.appId}`)}</string>
-    <key>com.apple.developer.team-identifier</key>
-    <string>${escapeXml(configuration.teamId)}</string>
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
@@ -3388,7 +3380,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     ? path.join(stageAppDir, "entitlements.mac.plist")
     : undefined;
   if (configuredMacSigning && macEntitlementsPath) {
-    yield* fs.writeFileString(macEntitlementsPath, renderMacEntitlements(configuredMacSigning));
+    yield* fs.writeFileString(macEntitlementsPath, renderMacEntitlements());
   }
 
   // Windows splits dependencies per process: app.asar carries only the
