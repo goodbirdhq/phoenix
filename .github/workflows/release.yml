@@ -204,7 +204,7 @@ jobs:
   cli_linux:
     name: Build Linux CLI archive for WSL
     needs: [preflight]
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -255,8 +255,9 @@ jobs:
 
       - name: Build CLI single-executable
         env:
-          # The Node embedded in the executable. An exact version: vp downloads
-          # it from nodejs.org/dist, and --build-sea needs 25.7+.
+          # The Node that runs the build, and so the one embedded in the
+          # executable. An exact version: vp downloads it from nodejs.org/dist,
+          # and --build-sea needs 25.7+.
           VP_NODE_VERSION: "26.8.2"
         run: node apps/server/scripts/cli.ts build-exe --verbose
 
@@ -348,6 +349,8 @@ jobs:
           #   arch: x64
           #   rust_target: x86_64-unknown-linux-gnu
           #   resource_key: linux-x64
+          # Unparking needs a cli-linux-arm64 WSL archive, per-arch Windows feed merging
+          # (see git history for the removed merge step), and its assets in the release guard.
           # - label: Windows arm64
           #   runner: windows-11-arm
           #   platform: win
@@ -635,18 +638,6 @@ jobs:
             done
           fi
 
-          # Enable if Windows arm64 builds are enabled.
-          # Windows updater metadata is channel-specific (for example
-          # "latest.yml" or "nightly.yml"). Suffix each per-arch copy so the
-          # release job can merge matching arm64/x64 manifests back into one
-          # canonical manifest per channel.
-          # if [[ "${{ matrix.platform }}" == "win" ]]; then
-          #   shopt -s nullglob
-          #   for manifest in release-publish/*.yml; do
-          #     mv "$manifest" "${manifest%.yml}-win-${{ matrix.arch }}.yml"
-          #   done
-          # fi
-
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -760,35 +751,6 @@ jobs:
               rm -f "$x64_manifest"
             fi
           done
-
-      # - name: Merge Windows updater manifests
-      #   run: |
-      #     shopt -s nullglob
-      #     found_windows_manifest=false
-      #     for x64_manifest in release-assets/*-win-x64.yml; do
-      #       if [[ "$(basename "$x64_manifest")" == builder-debug-* ]]; then
-      #         continue
-      #       fi
-
-      #       arm64_manifest="${x64_manifest/-x64.yml/-arm64.yml}"
-      #       output_manifest="${x64_manifest/-win-x64.yml/.yml}"
-      #       if [[ ! -f "$arm64_manifest" ]]; then
-      #         echo "Missing matching arm64 Windows manifest for $x64_manifest" >&2
-      #         exit 1
-      #       fi
-
-      #       found_windows_manifest=true
-      #       node scripts/merge-update-manifests.ts --platform win \
-      #         "$arm64_manifest" \
-      #         "$x64_manifest" \
-      #         "$output_manifest"
-      #       rm -f "$arm64_manifest" "$x64_manifest"
-      #     done
-
-      #     if [[ "$found_windows_manifest" != true ]]; then
-      #       echo "No Windows updater manifests found to merge." >&2
-      #       exit 1
-      #     fi
 
       # gh release create, not softprops/action-gh-release: the action 403s
       # creating releases on this repo even with contents:write, while gh with

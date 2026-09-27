@@ -5,6 +5,9 @@
  * the failures that only show inside the single-executable, such as an
  * external package reached through `import` or a native addon the hardened
  * runtime refuses to load.
+ *
+ * This is a black-box smoke test of a built binary, so it polls with sleeps.
+ * That is not a pattern for tests, which should wait on receipts.
  */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";

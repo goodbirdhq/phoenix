@@ -30,8 +30,9 @@ const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version
 // `build:exe` (T3CODE_PACK_EXE=1) wraps the same bundle in a Node
 // single-executable (dist-exe/phoenix) for scripts/build-cli-archive.ts.
 // tsdown's exe step refuses multi-chunk output and counts the sourcemap as a
-// chunk, so this is a separate mode. It embeds the host Node, which must
-// support `--build-sea` (25.7+); release.yml pins it with VP_NODE_VERSION.
+// chunk, so this is a separate mode. It embeds the Node that runs the build:
+// vp downloads VP_NODE_VERSION from nodejs.org when set, which release.yml
+// pins; it must support `--build-sea` (25.7+).
 const packExecutable = process.env.T3CODE_PACK_EXE === "1";
 
 // The revision this bundle was built from, so `phoenix --version` can name the
