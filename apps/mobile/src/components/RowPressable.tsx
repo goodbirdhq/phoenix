@@ -39,9 +39,9 @@ export function RowPressable({
   const { hovered, hoverGesture } = useHoverGesture(props.disabled ?? false);
   // Not Pressable's `pressed`: see createPressFeedback. The row's own press-in
   // (responder grant; a touch on the avatar or PR label grants the child, not
-  // the row) starts the wait. Raw touch end is a real finger-up and flashes a
-  // quick tap. onPressOut reports losing the responder to a scroll (the iOS
-  // ScrollView sends no touch cancel) or the finger leaving the retention rect.
+  // the row) starts the wait. A confirmed onPress flashes a quick tap.
+  // onPressOut reports losing the responder to a scroll (the iOS ScrollView
+  // sends no touch cancel) or the finger leaving the retention rect.
   const [pressed, setPressed] = useState(false);
   const feedback = useMemo(() => createPressFeedback(setPressed), []);
   useEffect(() => () => feedback.end(), [feedback]);
@@ -54,9 +54,9 @@ export function RowPressable({
           feedback.pressIn();
           props.onPressIn?.(event);
         }}
-        onTouchEnd={(event) => {
-          feedback.touchEnd();
-          props.onTouchEnd?.(event);
+        onPress={(event) => {
+          feedback.press();
+          props.onPress?.(event);
         }}
         onPressOut={(event) => {
           feedback.pressOut();

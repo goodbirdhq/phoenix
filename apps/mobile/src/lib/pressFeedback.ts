@@ -12,13 +12,14 @@ export const PRESS_FEEDBACK_FLASH_MS = 90;
  * for quick taps and can outlive a scroll start, so this runs alongside it.
  * Arm it from the row's own onPressIn, which fires at responder grant, so a
  * touch that a nested pressable owns never arms the row (its press-out would
- * never reach the row). A press that stays down paints after the delay. A raw
- * touch end while still armed is a real finger-up on a row-owned tap and
- * flashes the fill. onPressOut is the only signal on iOS when the ScrollView
- * takes the gesture or the finger leaves the retention rect: while armed it
- * disarms on the next tick, so no flash, unless a touch end in the same event
- * batch shows it was a release. Once ended, nothing paints until the next
- * press-in.
+ * never reach the row). A press that stays down paints after the delay. A
+ * confirmed onPress while still armed is a quick tap and flashes the fill; a
+ * scroll takeover, retention exit or long press never produces onPress, so
+ * lifting the finger after one of those cannot flash. onPressOut is the only
+ * signal on iOS when the ScrollView takes the gesture or the finger leaves the
+ * retention rect: while armed it disarms on the next tick, because on a
+ * release Pressability calls onPressOut just before onPress in the same
+ * batch. Once ended, nothing paints until the next press-in.
  */
 export function createPressFeedback(
   onChange: (pressed: boolean) => void,
@@ -62,27 +63,24 @@ export function createPressFeedback(
         set(true);
       }, delayMs);
     },
-    /** Raw finger-up. Flashes a tap that lifted before the delay; ends a lit hold. */
-    touchEnd() {
+    /** Confirmed onPress. Flashes a tap that lifted before the delay. */
+    press() {
       clearPressOut();
-      if (armTimer !== null) {
-        clearArm();
-        set(true);
-        flashTimer = setTimeout(() => {
-          flashTimer = null;
-          set(false);
-        }, flashMs);
-        return;
-      }
-      if (flashTimer === null) set(false);
+      if (armTimer === null) return;
+      clearArm();
+      set(true);
+      flashTimer = setTimeout(() => {
+        flashTimer = null;
+        set(false);
+      }, flashMs);
     },
     /** Pressability press-out: release, responder loss, or leaving the retention rect. */
     pressOut() {
       // The 130ms-delayed press-out of a tap that is already flashing.
       if (flashTimer !== null) return;
       if (armTimer !== null) {
-        // Release and takeover look alike here; a touch end in this same
-        // event batch tells them apart before the disarm runs.
+        // Release and takeover look alike here; the onPress of a release
+        // follows in this same batch, before the disarm runs.
         if (pressOutTimer === null) {
           pressOutTimer = setTimeout(() => {
             pressOutTimer = null;
