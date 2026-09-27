@@ -23,12 +23,13 @@ Use **Actions → Release → Run workflow**, selecting the intended ref:
 > nightly promotion, a `preview` release channel, and a shared `build_bundle` job
 > feeding six parallel per-platform jobs, each a call into the new reusable
 > `release-desktop.yml` (also carrying a self-updating Linux `.deb`) and gated on a
-> `relay_public_config` job that reads production T3 Connect/Clerk secrets. All of
-> that is parked, unwired, alongside the AUR job below: Phoenix's release policy is
-> manual-dispatch-only (see the top of this document), Phoenix ships only the macOS
-> arm64 and Windows x64 desktop targets, and the whole job graph reads managed-auth and relay
-> identifiers Phoenix no longer has. `release-desktop.yml` remains in the tree as
-> reference, unreferenced by anything.
+> `relay_public_config` job that reads production T3 Connect/Clerk secrets. Phoenix
+> took none of it, and neither `release-desktop.yml` nor upstream's AUR publishing
+> workflow is in the tree: Phoenix's release policy is manual-dispatch-only (see the
+> top of this document), Phoenix ships only the macOS arm64 and Windows x64 desktop
+> targets, and that job graph reads managed-auth and relay identifiers Phoenix no
+> longer has. The one CLI archive Phoenix needs, the Linux WSL runtime, is built by
+> `release.yml`'s own `cli_linux` job.
 >
 > Upstream also split the labeled-PR macOS preview build (`preview:mac`) into an
 > untrusted build half and a trusted `desktop-macos-preview-publish.yml` half that
