@@ -19,29 +19,14 @@ Use **Actions → Release → Run workflow**, selecting the intended ref:
 - `publish_web` defaults to false. Enable it only after configuring Phoenix's
   Vercel targets below.
 
-> Upstream's `release.yml` also grew a `schedule`/tag-push trigger with automatic
-> nightly promotion, a `preview` release channel, and a shared `build_bundle` job
-> feeding six parallel per-platform jobs, each a call into the new reusable
-> `release-desktop.yml` (also carrying a self-updating Linux `.deb`) and gated on a
-> `relay_public_config` job that reads production T3 Connect/Clerk secrets. Phoenix
-> took none of it, and neither `release-desktop.yml` nor upstream's AUR publishing
-> workflow is in the tree: Phoenix's release policy is manual-dispatch-only (see the
-> top of this document), Phoenix ships only the macOS arm64 and Windows x64 desktop
-> targets, and that job graph reads managed-auth and relay identifiers Phoenix no
-> longer has. The one CLI archive Phoenix needs, the Linux WSL runtime, is built by
-> `release.yml`'s own `cli_linux` job.
+> Phoenix ships macOS arm64 and Windows x64 from its own `release.yml`. Upstream's
+> release graph (scheduled/tag triggers, the `preview` channel, the reusable
+> `release-desktop.yml`, AUR publishing, and its relay/Clerk-gated jobs) was not taken.
 >
-> Upstream also split the labeled-PR macOS preview build (`preview:mac`) into an
-> untrusted build half and a trusted `desktop-macos-preview-publish.yml` half that
-> signs, notarizes, and calls `release-desktop.yml` with those same Clerk/relay
-> values — supporting fork PRs, which Phoenix's preview never has. Phoenix keeps its
-> own single-workflow `desktop-macos-preview.yml`: it builds an **unsigned** DMG for
-> same-repo PRs only and publishes it anonymously to a rolling `desktop-preview`
-> prerelease, needing no signing certificate or Clerk/relay configuration at all.
-> `desktop-macos-preview-publish.yml` was deleted rather than left as dead weight: its
-> `workflow_run` trigger matches on workflow _name_, and "Desktop macOS Preview" is the
-> name Phoenix's own workflow kept, so leaving it in place would have it fire — and
-> fail — after every real preview build.
+> One trap remains: upstream's `desktop-macos-preview-publish.yml` must stay deleted. Its
+> `workflow_run` trigger matches on workflow _name_, and Phoenix's own unsigned,
+> same-repo-only `desktop-macos-preview.yml` kept the name "Desktop macOS Preview", so
+> restoring it would fire, and fail, after every preview build.
 
 ## Required release credentials
 
@@ -160,7 +145,7 @@ available.
   - channel metadata: `latest*.yml` for stable releases, `nightly*.yml` for nightly releases
   - `*.blockmap` files (used for differential downloads)
 - Windows metadata note:
-  - `electron-updater` reads `latest.yml` on stable and `nightly.yml` on nightly. With only Windows x64 enabled, the build's manifest is published as-is; the per-arch merge in `release.yml` is for when Windows arm64 returns.
+  - `electron-updater` reads `latest.yml` on stable and `nightly.yml` on nightly. Only Windows x64 ships, so the build's manifest is published as-is. Shipping Windows arm64 again needs a per-arch manifest merge (`scripts/merge-update-manifests.ts --platform win`).
 - macOS metadata note:
   - `electron-updater` reads `latest-mac.yml` on stable and `nightly-mac.yml` on nightly, for both Intel and Apple Silicon.
   - The workflow merges the per-arch mac manifests into one channel-specific mac manifest before publishing the GitHub Release.
@@ -170,7 +155,9 @@ available.
 Windows packages the bundled server and only its runtime-external/native
 dependency closure in `resources/server.asar`. Native modules and helper
 executables declared as unpacked by that archive must be present at the matching
-paths below `resources/server.asar.unpacked`. the archive in place through Electron. Packaged Windows builds also ship a
+paths below `resources/server.asar.unpacked`. The primary server runs from that
+archive in place through Electron's asar-aware `ELECTRON_RUN_AS_NODE` runtime.
+Packaged Windows builds also ship a
 Linux-only `resources/wsl-runtime.tar.gz` plus its SHA-256 sidecar. WSL verifies
 and extracts that archive into `~/.phoenix/wsl-runtime/sha256-<archive-digest>` inside
 the selected distro, then reuses it for later launches of the same update. The
@@ -290,6 +277,8 @@ Checklist:
 5. Verify workflow steps:
    - preflight passes
    - release quality checks pass
+   - `cli_linux` builds, smoke-tests, and glibc-checks the WSL runtime archive; the
+     desktop matrix waits on it
    - all matrix builds pass
    - `publish_cli` publishes the exact release version before the release job, when requested
    - release job uploads expected files
@@ -306,6 +295,20 @@ Checklist:
 - Build fails with signing error:
   - Retry with secrets removed to confirm unsigned path still works.
   - Re-check certificate/profile names and tenant/client credentials.
+- `Check CLI archive glibc floor` fails, usually after a dependency bump:
+  - The step names the ELF and the glibc it needs. The WSL runtime targets glibc 2.28,
+    the floor of the embedded Node.
+  - Decide whether to pin the dependency to a build that meets the floor, add a
+    scoped exception with its reason (as for fff's library), or raise the limit
+    knowingly and drop support for older distros.
+- `Smoke-test CLI archive` fails because the executable cannot load a package:
+  - An external package is being reached through `import`, which a single-executable
+    cannot resolve. `build:exe` reports this as `ServerCliExecutableImportError`;
+    load the package through `createRequire`.
+- The release job fails with `Missing expected release assets: …`:
+  - One platform's build produced nothing, or not the listed files. There is no
+    macOS-only publish path by design, so rerun the failed build instead of publishing
+    without it.
 
 ### Optional hosted-client links
 
