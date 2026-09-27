@@ -199,9 +199,94 @@ jobs:
           NPM_TRUSTED_PUBLISHING: ${{ vars.NPM_TRUSTED_PUBLISHING }}
         run: node .github/scripts/release-public-config.cjs
 
+  # The Windows desktop embeds this Linux CLI archive as its WSL runtime
+  # (resources/wsl-runtime.tar.gz); the WSL backend runs it inside the distro.
+  cli_linux:
+    name: Build Linux CLI archive for WSL
+    needs: [preflight]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=t3...
+              - --filter=@t3tools/web...
+              - --filter=@t3tools/scripts...
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Cache resource monitor
+        id: resource_monitor_cache
+        uses: actions/cache@v6
+        with:
+          path: native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor
+          key: resource-monitor-x86_64-unknown-linux-gnu-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
+
+      - name: Setup Rust
+        if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build resource monitor
+        if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
+
+      # Server bundle plus the web client in apps/server/dist/client.
+      - name: Build CLI package
+        run: vp run --filter t3 build
+
+      - name: Build CLI single-executable
+        env:
+          # The Node embedded in the executable. An exact version: vp downloads
+          # it from nodejs.org/dist, and --build-sea needs 25.7+.
+          VP_NODE_VERSION: "26.8.2"
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+
+      - name: Stage resource monitor for the CLI archive
+        run: |
+          set -euo pipefail
+          target_dir="$RUNNER_TEMP/cli-resource-monitor/linux-x64"
+          mkdir -p "$target_dir"
+          cp native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor "$target_dir/"
+
+      - name: Build CLI archive
+        run: |
+          node scripts/build-cli-archive.ts \
+            --platform linux \
+            --arch x64 \
+            --version "${{ needs.preflight.outputs.version }}" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
+            --output-dir release-cli
+
+      - name: Smoke-test CLI archive
+        run: node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "${{ needs.preflight.outputs.version }}"
+
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-linux-x64
+          path: release-cli/*
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.label }}
-    needs: [preflight, public_config]
+    needs: [preflight, public_config, cli_linux]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -215,8 +300,15 @@ jobs:
             arch: arm64
             rust_target: aarch64-apple-darwin
             resource_key: darwin-arm64
-          # Linux, Windows, and Intel macOS builds are parked until we want
-          # them — Apple Silicon is the only desktop target we ship right now.
+          - label: Windows x64
+            runner: windows-2025
+            platform: win
+            target: nsis
+            arch: x64
+            rust_target: x86_64-pc-windows-msvc
+            resource_key: win32-x64
+          # Linux, Intel macOS, and Windows arm64 builds are parked until we
+          # want them.
           # - label: macOS x64
           #   runner: macos-15
           #   platform: mac
@@ -231,13 +323,6 @@ jobs:
           #   arch: x64
           #   rust_target: x86_64-unknown-linux-gnu
           #   resource_key: linux-x64
-          # - label: Windows x64
-          #   runner: windows-2025
-          #   platform: win
-          #   target: nsis
-          #   arch: x64
-          #   rust_target: x86_64-pc-windows-msvc
-          #   resource_key: win32-x64
           # - label: Windows arm64
           #   runner: windows-11-arm
           #   platform: win
@@ -312,6 +397,13 @@ jobs:
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Download Linux CLI archive for WSL
+        if: matrix.platform == 'win'
+        uses: actions/download-artifact@v8
+        with:
+          name: cli-linux-${{ matrix.arch }}
+          path: wsl-runtime
 
       - name: Install Spectre-mitigated MSVC libs
         if: matrix.platform == 'win'
@@ -467,6 +559,9 @@ jobs:
               echo "macOS signing disabled (missing one or more Apple signing secrets)."
             fi
           elif [[ "${{ matrix.platform }}" == "win" ]]; then
+            # Embed the Linux CLI archive as the WSL runtime; the builder then
+            # requires and validates resources/wsl-runtime.tar.gz(.sha256).
+            args+=(--wsl-runtime "$GITHUB_WORKSPACE"/wsl-runtime/t3-*-linux-${{ matrix.arch }}.tar.gz)
             if has_all \
               "$AZURE_TENANT_ID" \
               "$AZURE_CLIENT_ID" \
@@ -504,6 +599,9 @@ jobs:
               cp "$file" release-publish/
             done
           done
+          # electron-builder's config dump, not an updater feed. Every build
+          # emits one, so it would also collide in the release job's merge.
+          rm -f release-publish/builder-debug.yml
 
           if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" != "arm64" ]]; then
             shopt -s nullglob
@@ -536,8 +634,8 @@ jobs:
     needs: [preflight, public_config, quality, build]
     # Manual opt-in, validated against NPM_TRUSTED_PUBLISHING in public_config.
     # OIDC keeps registry credentials out of the build jobs. We publish without bundled resource
-    # monitors: the matrix only builds darwin-arm64, and shipping one
-    # platform's monitor in a cross-platform npm package helps no one.
+    # monitors: the matrix builds only darwin-arm64 and win32-x64, and shipping
+    # a subset of platforms' monitors in a cross-platform npm package helps no one.
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && needs.build.result == 'success' && needs.public_config.result == 'success' && inputs.publish_npm }}
     # ubuntu-24.04, not blacksmith: npm rejects provenance attestations from
     # self-hosted runners, and Blacksmith registers as self-hosted.
@@ -682,9 +780,9 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          assets=(release-assets/*.dmg release-assets/*.zip release-assets/*.blockmap release-assets/*.yml)
-          if ! compgen -G "release-assets/*.dmg" >/dev/null || ! compgen -G "release-assets/*.yml" >/dev/null; then
-            echo "Missing expected release assets (need at least one .dmg and one .yml):" >&2
+          assets=(release-assets/*.dmg release-assets/*.zip release-assets/*.exe release-assets/*.blockmap release-assets/*.yml)
+          if ! compgen -G "release-assets/*.dmg" >/dev/null || ! compgen -G "release-assets/*.exe" >/dev/null || ! compgen -G "release-assets/*.yml" >/dev/null; then
+            echo "Missing expected release assets (need a .dmg, an .exe, and their .yml feeds):" >&2
             ls -la release-assets/ >&2
             exit 1
           fi
