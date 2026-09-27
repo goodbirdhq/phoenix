@@ -8,7 +8,7 @@ import {
 import IconChevronRight from "@tabler/icons-react-native/IconChevronRight";
 import { getThreadListV2NewBranchMenuTitle } from "./thread-list-v2-row-appearance";
 import { getThreadRowColors } from "./thread-row-colors";
-import { RowPressable } from "../../components/RowPressable";
+import { RowPressable, useRowLongPress } from "../../components/RowPressable";
 import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
@@ -75,6 +75,10 @@ import { useProject, useEnvironmentServerConfig } from "../../state/entities";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
+import {
+  buildThreadRowAccessibilityLabel,
+  pendingTaskRowAccessibility,
+} from "./thread-row-accessibility";
 
 /**
  * Thread List v2 renders one flat native list: rich edge-to-edge rows for
@@ -273,6 +277,12 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   const detail = [pendingTask.branch ?? projectTitle, props.environmentLabel]
     .filter(Boolean)
     .join(" · ");
+  const accessibility = pendingTaskRowAccessibility({
+    kind: pendingTask.kind,
+    title: pendingTask.title,
+    projectTitle,
+    environmentLabel: props.environmentLabel,
+  });
 
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
@@ -292,15 +302,9 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
         shouldOpenOnLongPress
       >
         <RowPressable
-          accessibilityActions={[{ name: "delete", label: "Delete queued task" }]}
-          accessibilityHint={
-            isDraft
-              ? "Opens the draft in the new task composer"
-              : "Sends when the environment reconnects. Opens the task for editing"
-          }
-          accessibilityLabel={[pendingTask.title, "Queued", projectTitle, props.environmentLabel]
-            .filter(Boolean)
-            .join(", ")}
+          accessibilityActions={[{ name: "delete", label: accessibility.deleteActionLabel }]}
+          accessibilityHint={accessibility.hint}
+          accessibilityLabel={accessibility.label}
           accessibilityRole="button"
           onAccessibilityAction={({ nativeEvent }) => {
             if (nativeEvent.actionName === "delete") onDeletePendingTask(pendingTask);
@@ -990,7 +994,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Choose ${pr.accessibilityLabel}`}
-            hitSlop={8}
+            // The number is ~13pt tall; reach 44pt without moving the layout.
+            // More slack on the left, over the plain detail text, than on the
+            // right where the agent group and status sit.
+            hitSlop={{ top: 16, bottom: 16, left: 20, right: 8 }}
             onPress={(event) => {
               event.stopPropagation();
               setPrPickerOpen(true);
@@ -1044,6 +1051,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
     { name: "activate", label: "Open conversation" },
     { name: "showActions", label: "Conversation actions" },
     { name: "showSessionDetails", label: "Session details" },
+    ...(pr ? [{ name: "choosePullRequest", label: `Choose ${pr.accessibilityLabel}` }] : []),
     ...(props.agentThreads?.length
       ? [
           {
@@ -1064,6 +1072,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
     close();
     if (nativeEvent.actionName === "showActions") setSheet("actions");
     else if (nativeEvent.actionName === "showSessionDetails") setSheet("details");
+    else if (nativeEvent.actionName === "choosePullRequest") setPrPickerOpen(true);
     else if (nativeEvent.actionName === "toggleAgents") toggleAgents();
     else if (nativeEvent.actionName === "activate") onSelectThread(thread);
   };
@@ -1077,13 +1086,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
       accessibilityHint={
         swipeAccessibilityHint + (props.pinningSupported ? " Swipe right to pin or unpin." : "")
       }
-      accessibilityLabel={[
-        thread.title,
-        props.hasQueuedMessages ? "messages queued to send" : null,
-        threadIdentityLabel(thread, props.providerInstance?.displayName ?? null),
-      ]
-        .filter(Boolean)
-        .join(". ")}
+      accessibilityLabel={buildThreadRowAccessibilityLabel({
+        title: thread.title,
+        hasQueuedMessages: props.hasQueuedMessages === true,
+        identityLabel: threadIdentityLabel(thread, props.providerInstance?.displayName ?? null),
+        failedError,
+        snoozeWakeLabel: snoozedRow ? props.snoozeWakeLabelText : undefined,
+      })}
       accessibilityRole="button"
       accessibilityState={{ selected, ...(canExpandAgents ? { expanded: groupExpanded } : {}) }}
       accessibilityActions={rowAccessibilityActions}
@@ -1107,23 +1116,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
         backgroundColor: rowColors.backgroundColor,
       }}
     >
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Session details for ${thread.title}`}
-        hitSlop={6}
-        onPress={(event) => {
-          event.stopPropagation();
+      <ThreadRowAvatarButton
+        thread={thread}
+        // A child in its parent's project leads with its provider instead.
+        project={props.parentProjectId === thread.projectId ? null : props.project}
+        providerDriver={providerDriver}
+        onPress={() => {
           close();
           setSheet("details");
         }}
-      >
-        {/* A child in its parent's project leads with its provider instead. */}
-        <ThreadAvatar
-          thread={thread}
-          project={props.parentProjectId === thread.projectId ? null : props.project}
-          providerDriver={providerDriver}
-        />
-      </Pressable>
+      />
       {rowBody}
     </RowPressable>
   );
@@ -1249,6 +1251,38 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
     </View>
   );
 });
+
+/** Session-details button; on Android a hold on it opens the row's menu instead. */
+function ThreadRowAvatarButton(props: {
+  readonly thread: EnvironmentThreadShell;
+  readonly project: EnvironmentProject | null;
+  readonly providerDriver: string | null;
+  readonly onPress: () => void;
+}) {
+  // Read inside the row so the injected opener reaches this nested pressable,
+  // which otherwise swallows the hold. A hold that fires onLongPress does not
+  // release into onPress (Pressability cancels it), so details stay closed.
+  const rowLongPress = useRowLongPress();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Session details for ${props.thread.title}`}
+      // The 32×30 avatar reaches 46×44 with this slop.
+      hitSlop={7}
+      onPress={(event) => {
+        event.stopPropagation();
+        props.onPress();
+      }}
+      onLongPress={rowLongPress}
+    >
+      <ThreadAvatar
+        thread={props.thread}
+        project={props.project}
+        providerDriver={props.providerDriver}
+      />
+    </Pressable>
+  );
+}
 
 function ExpandedThreadAgentRows({
   parentProps,
