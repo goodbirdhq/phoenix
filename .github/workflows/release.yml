@@ -802,12 +802,36 @@ jobs:
           PREVIOUS_TAG: ${{ needs.preflight.outputs.previous_tag }}
           IS_PRERELEASE: ${{ needs.preflight.outputs.is_prerelease }}
           MAKE_LATEST: ${{ needs.preflight.outputs.make_latest }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          CHANNEL: ${{ needs.preflight.outputs.release_channel }}
         run: |
           set -euo pipefail
           shopt -s nullglob
           assets=(release-assets/*.dmg release-assets/*.zip release-assets/*.exe release-assets/*.blockmap release-assets/*.yml)
-          if ! compgen -G "release-assets/*.dmg" >/dev/null || ! compgen -G "release-assets/*.exe" >/dev/null || ! compgen -G "release-assets/*.yml" >/dev/null; then
-            echo "Missing expected release assets (need a .dmg, an .exe, and their .yml feeds):" >&2
+
+          # Every enabled target's installers, blockmaps, and exact updater
+          # feed. Keep in step with the build matrix: a release missing one
+          # platform's feed silently strands that platform's updates.
+          feed="latest"
+          if [[ "$CHANNEL" == "nightly" ]]; then
+            feed="nightly"
+          fi
+          required=(
+            "Phoenix-$VERSION-arm64.dmg"
+            "Phoenix-$VERSION-arm64.dmg.blockmap"
+            "Phoenix-$VERSION-arm64.zip"
+            "Phoenix-$VERSION-arm64.zip.blockmap"
+            "$feed-mac.yml"
+            "Phoenix-$VERSION-x64.exe"
+            "Phoenix-$VERSION-x64.exe.blockmap"
+            "$feed.yml"
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -f "release-assets/$name" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "Missing expected release assets: ${missing[*]}" >&2
             ls -la release-assets/ >&2
             exit 1
           fi
