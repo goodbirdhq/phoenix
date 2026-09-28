@@ -5053,7 +5053,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             ? (activeThreadModelSelection?.model ?? selectedModelForPickerWithCustomFallback)
             : selectedModelForPickerWithCustomFallback
         }
-        lockedProvider={lockedProvider}
+        lockedProvider={
+          // Deliberately unlocked while the composer's own resolution above
+          // stays locked: they answer different questions. That one must never
+          // silently resolve a started thread onto another driver when its
+          // account is disabled or missing from the catalog. Picking an account
+          // here is instead a request to migrate, which the thread hands to the
+          // migration flow — and greying those accounts out hides exactly the
+          // ones a rate-limited thread needs to move to.
+          null
+        }
         lockedContinuationGroupKey={lockedContinuationGroupKey}
         instanceEntries={providerInstanceEntries}
         keybindings={keybindings}
