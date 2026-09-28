@@ -864,6 +864,12 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
             ...(input?.seed !== undefined ? { seed: input.seed } : {}),
             runtimeMode: desiredRuntimeMode,
+            // The reactor is the thread's instance authority: it has already
+            // weighed live sessions, the read model and any migration above.
+            // The persisted binding is the one input it does not consult, and
+            // it legitimately lags whenever a migration rebinds the thread
+            // while the old account's session is still winding down.
+            allowMigration: true,
           })
           .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
 
