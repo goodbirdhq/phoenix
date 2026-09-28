@@ -1823,26 +1823,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 <span className="min-w-0 flex-1 truncate">{thread.branch ?? "Local checkout"}</span>
                 {terminalStatusIcon}
                 {pinIndicator}
-                {isRemote ? (
-                  <EnvironmentMachineIcon
-                    aria-hidden
-                    kind={props.environmentMachine}
-                    className="size-3.5 shrink-0 text-sidebar-muted-foreground/70"
-                  />
-                ) : null}
-                {/* The avatar's provider badge is too small to carry initials, so
-                  rows from a provider with several accounts name theirs here. */}
-                {!isNested && showInstanceBadge ? (
-                  <ProviderInstanceIcon
-                    driverKind={providerEntry.driverKind}
-                    displayName={providerEntry.displayName}
-                    accentColor={providerEntry.accentColor}
-                    showBadge
-                    // Glyph dims, badge stays saturated; offset matches the composer trigger.
-                    iconClassName="size-3.5 opacity-60"
-                    badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs"
-                  />
-                ) : null}
                 {teamMembers.length > 1 ? (
                   <SidebarTeamAvatars
                     members={teamMembers}
@@ -1852,6 +1832,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     expandable={props.teamExpandable}
                     selected={props.isActive || isSelected}
                     onToggle={() => props.onToggleTeam(threadKey)}
+                  />
+                ) : null}
+                {/* No account glyph here: the row's own account already rides
+                  as the provider badge on the leading avatar, so repeating it
+                  past the stack reads as a session that fell out of the group.
+                  The machine says where the row runs, not who works on it, so
+                  it trails on its own. */}
+                {isRemote ? (
+                  <EnvironmentMachineIcon
+                    aria-hidden
+                    kind={props.environmentMachine}
+                    className="ml-auto size-3.5 shrink-0 text-sidebar-muted-foreground/70"
                   />
                 ) : null}
               </div>
