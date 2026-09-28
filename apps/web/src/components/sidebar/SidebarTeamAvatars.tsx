@@ -145,11 +145,14 @@ export function SidebarTeamAvatars(props: {
             className="absolute top-0 flex size-[22px] items-center justify-center rounded-full bg-sidebar ring-1 ring-sidebar"
             style={{ left: steps === 0 ? 0 : `calc((100% - 22px) * ${index / steps})` }}
           >
+            {/* No account badge in the stack: at 20px it is initials and an
+              accent dot competing inside a circle that already carries the
+              provider glyph and a status ring, and neighbouring accounts
+              often share initials. The stack answers "how many sessions and
+              how are they doing"; which account each one runs on is named in
+              the details popover. */}
             <SessionAvatar status={status} size={20}>
-              <SessionIcon
-                provider={providers.get(instanceId)}
-                showBadge={instanceBadges.get(instanceId) ?? false}
-              />
+              <SessionIcon provider={providers.get(instanceId)} showBadge={false} />
             </SessionAvatar>
           </span>
         );
