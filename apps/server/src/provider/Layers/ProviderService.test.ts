@@ -1306,6 +1306,39 @@ antigravityInstanceRouting.layer("ProviderServiceLive instance-owned conversatio
         }
       }),
   );
+
+  it.effect("lets an authorised migration replace a binding left on the old instance", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      originalAntigravityInstanceAvailable = true;
+
+      const threadId = asThreadId("thread-antigravity-authorised-migration");
+      yield* directory.upsert({
+        threadId,
+        provider: antigravityDriver,
+        providerInstanceId: originalAntigravityInstanceId,
+        status: "stopped",
+        runtimeMode: "approval-required",
+        resumeCursor: { sessionId: "native-session" },
+      });
+      replacementAntigravity.startSession.mockClear();
+
+      yield* provider.startSession(threadId, {
+        providerInstanceId: replacementAntigravityInstanceId,
+        threadId,
+        runtimeMode: "approval-required",
+        allowMigration: true,
+      });
+
+      assert.equal(replacementAntigravity.startSession.mock.calls.length, 1);
+      // The stale instance's cursor must not follow the thread onto the new
+      // account: a different continuation identity cannot resume it.
+      assert.equal(replacementAntigravity.startSession.mock.calls[0]?.[0].resumeCursor, undefined);
+      const rebound = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(rebound.providerInstanceId, replacementAntigravityInstanceId);
+    }),
+  );
 });
 
 const unsupportedRollback = makeProviderServiceLayer({ supportsConversationRollback: false });

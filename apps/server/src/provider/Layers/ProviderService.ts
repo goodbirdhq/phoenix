@@ -2078,7 +2078,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        // A binding for another instance normally means an accidental switch
+        // that would strand a native conversation, so it is refused. Callers
+        // that own the instance decision opt out: the binding they are
+        // replacing is the stale side, and letting it veto the start wedges
+        // the thread forever, because nothing else ever clears it.
         if (
+          input.allowMigration !== true &&
           persistedBinding?.provider === resolvedProvider &&
           persistedBinding.providerInstanceId !== resolvedInstanceId &&
           (input.resumeCursor != null || persistedBinding.resumeCursor != null)
@@ -2172,6 +2178,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         yield* upsertSessionBinding(sessionWithInstance, threadId, {
           modelSelection: input.modelSelection,
         });
+        // Logged after the rebind lands, not before the start: a start that
+        // fails must not leave a record of a migration that never happened.
+        // This is the only trace that a thread changed accounts and left a
+        // native conversation behind on the old one — without it the hand-off
+        // is silent, and a thread that later needs that conversation back has
+        // nothing pointing at which instance still holds it.
+        if (
+          persistedBinding !== undefined &&
+          persistedBinding.providerInstanceId !== resolvedInstanceId
+        ) {
+          yield* Effect.logInfo("provider.session.binding-migrated", {
+            threadId,
+            fromInstanceId: persistedBinding.providerInstanceId,
+            toInstanceId: resolvedInstanceId,
+            // Matches the guard above: the directory stores `unknown | null`,
+            // so a null cursor is absent, not abandoned.
+            abandonedResumeCursor: persistedBinding.resumeCursor != null,
+          });
+        }
         yield* analytics.record("provider.session.started", {
           provider: sessionWithInstance.provider,
           runtimeMode: input.runtimeMode,
