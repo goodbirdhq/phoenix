@@ -208,6 +208,8 @@ describe("ProviderCommandReactor", () => {
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+    /** Instance named by the persisted runtime binding, independent of the read model. */
+    readonly boundInstanceId?: ProviderInstanceId;
     readonly tryHandlePromptCommandEffect?: ProviderAuthService["Service"]["tryHandlePromptCommand"];
   }) {
     const now = "2026-01-01T00:00:00.000Z";
@@ -398,6 +400,7 @@ describe("ProviderCommandReactor", () => {
           conversationSeeding: "framed-prompt",
         }),
       assertConversationRollbackSupported: () => unsupported(),
+      getBoundInstanceId: () => Effect.succeed(input?.boundInstanceId),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
         const driverKind = ProviderDriverKind.make(
@@ -2109,6 +2112,67 @@ describe("ProviderCommandReactor", () => {
         const thread = (yield* Effect.promise(() => harness.readModel())).threads[0];
         expect(thread?.title).toBe("Fix QR pairing expiry");
         expect(thread?.titleState?.needsRefinement).toBe(false);
+      }),
+  );
+
+  effectIt.effect(
+    "seeds the new account when only the persisted binding knows the thread's old one",
+    () =>
+      Effect.gen(function* () {
+        // The read model has no session row — a projection rebuild or restored
+        // userdata loses it — while the runtime binding still names the account
+        // holding the native conversation. Answering "which account is this
+        // thread on" from the thread's own selection compares the migration
+        // target against itself, so the hand-off carries nothing.
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            threadModelSelection: {
+              instanceId: ProviderInstanceId.make("claudeAgent_target"),
+              model: "claude-opus-5",
+            },
+            boundInstanceId: ProviderInstanceId.make("claudeAgent_origin"),
+          }),
+        );
+        const threadId = ThreadId.make("thread-1");
+
+        // History without a session: appended, never turned.
+        yield* harness.engine.dispatch({
+          type: "thread.message.user.append",
+          commandId: CommandId.make("append-history"),
+          threadId,
+          message: {
+            messageId: asMessageId("history-1"),
+            text: "Earlier work that must survive the hand-off",
+            attachments: [],
+          },
+          createdAt: "2026-01-01T00:00:00.000Z",
+        });
+        const beforeStart = yield* Effect.promise(() => harness.readModel());
+        expect(beforeStart.threads[0]?.session ?? null).toBeNull();
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("start-after-rebind"),
+          threadId,
+          message: {
+            messageId: asMessageId("message-after-rebind"),
+            role: "user",
+            text: "carry on",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        });
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
+
+        const started = harness.startSession.mock.calls[0]?.[1] as
+          | { readonly seed?: { readonly messages: ReadonlyArray<{ readonly text: string }> } }
+          | undefined;
+        expect(started?.seed).toBeDefined();
+        expect(started?.seed?.messages.map((message) => message.text)).toContain(
+          "Earlier work that must survive the hand-off",
+        );
       }),
   );
 

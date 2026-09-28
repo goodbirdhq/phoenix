@@ -181,6 +181,19 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<ProviderSessionRuntimeLiveness>;
 
   /**
+   * The instance the thread's persisted runtime binding names, if any.
+   *
+   * Survives the process, unlike `listSessions`, and outlives the read model's
+   * session row. A caller deciding which account a thread is on needs it: the
+   * read model can have no session while a binding still holds a native
+   * conversation on another account, and answering from the thread's own
+   * selection in that case compares the target against itself.
+   */
+  readonly getBoundInstanceId?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderInstanceId | undefined>;
+
+  /**
    * Read capabilities for the adapter bound to a configured provider instance.
    */
   readonly getCapabilities: (

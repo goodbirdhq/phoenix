@@ -678,10 +678,21 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       // instance's late stop event (observed live: the old account's stop
       // landed after the migration bind and overwrote the session as
       // "stopped" on the old instance).
+      // The persisted binding outlives both the live session and the read
+      // model's session row, so it is the last witness that a thread still owns
+      // a native conversation on another account. Without it a thread whose
+      // session row is gone answers this question with its own selection —
+      // which a migration has already rebound to the target — so the
+      // continuation check below compares the target against itself, calls it
+      // compatible, and hands the thread over carrying nothing.
+      const boundInstanceId = providerService.getBoundInstanceId
+        ? yield* providerService.getBoundInstanceId(threadId)
+        : undefined;
       const currentInstanceId =
-        activeSession !== undefined && activeSession.providerInstanceId !== undefined
-          ? activeSession.providerInstanceId
-          : (thread.session?.providerInstanceId ?? thread.modelSelection.instanceId);
+        activeSession?.providerInstanceId ??
+        thread.session?.providerInstanceId ??
+        boundInstanceId ??
+        thread.modelSelection.instanceId;
       const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
       const desiredInstanceId = desiredModelSelection.instanceId;
       const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(

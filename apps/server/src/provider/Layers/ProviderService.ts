@@ -2815,6 +2815,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  // Read-only view of the persisted binding. A directory read that fails is
+  // reported as "no binding" rather than failing the caller: every consumer is
+  // deciding which instance a thread is on, and they all have a weaker fallback
+  // to fall back to.
+  const getBoundInstanceId: ProviderServiceMethod<"getBoundInstanceId"> = Effect.fn(
+    "getBoundInstanceId",
+  )(function* (threadId) {
+    const binding = yield* directory
+      .getBinding(threadId)
+      .pipe(
+        Effect.orElseSucceed(() => Option.none<ProviderSessionDirectory.ProviderRuntimeBinding>()),
+      );
+    return Option.getOrUndefined(binding)?.providerInstanceId;
+  });
+
   const listSessions: ProviderServiceMethod<"listSessions"> = Effect.fn("listSessions")(
     function* () {
       const currentAdapters = yield* getAdapterEntries;
@@ -3151,6 +3166,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     stopSession,
     listSessions,
     getSessionRuntimeLiveness,
+    getBoundInstanceId,
     getCapabilities,
     getInstanceInfo,
     getAvailability: (instanceId, provider) =>
