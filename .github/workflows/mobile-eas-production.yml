@@ -223,10 +223,35 @@ jobs:
 
       - name: Build Android APK (manual)
         if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'build' && (inputs.platform == 'android' || inputs.platform == 'all')
+        id: android_build
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas build --platform android --profile production:apk --non-interactive --no-wait
+        run: |
+          eas build --platform android --profile production:apk --non-interactive --json > eas-android-build.json
+          apk_url="$(jq -r 'if type == "array" then .[0] else . end | .artifacts.buildUrl // empty' eas-android-build.json)"
+          if [ -z "$apk_url" ]; then
+            echo "::error::EAS build finished without an artifact URL"
+            cat eas-android-build.json >&2
+            exit 1
+          fi
+          echo "apk_url=$apk_url" >> "$GITHUB_OUTPUT"
+
+      # eas build --json blocks until the EAS-hosted build finishes, then prints
+      # the artifact's pre-signed download URL. Pulling it into a workflow
+      # artifact makes it reachable with plain GitHub repo access, no Expo login.
+      - name: Download Android APK
+        if: steps.android_build.outcome == 'success'
+        working-directory: apps/mobile
+        run: curl -fL -o phoenix-production.apk "${{ steps.android_build.outputs.apk_url }}"
+
+      - name: Upload Android APK artifact
+        if: steps.android_build.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: phoenix-android-production-apk
+          path: apps/mobile/phoenix-production.apk
+          if-no-files-found: error
 
       - name: Publish OTA update (manual)
         if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'update'
