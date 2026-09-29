@@ -23,13 +23,18 @@ import {
   type LimitFailoverReactorShape,
 } from "../Services/LimitFailoverReactor.ts";
 
-type UsageLimitSessionEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+type ThreadSessionSetEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+type MigrationRefusedEvent = Extract<OrchestrationEvent, { type: "thread.migration-refused" }>;
+type FailoverInput = ThreadSessionSetEvent | MigrationRefusedEvent;
 
-const isUsageLimitSessionError = (event: OrchestrationEvent): event is UsageLimitSessionEvent =>
-  event.type === "thread.session-set" &&
+const isUsageLimitSessionError = (event: ThreadSessionSetEvent): boolean =>
   event.payload.session.status === "error" &&
   event.payload.session.lastErrorKind === "usage-limit" &&
   event.payload.session.providerInstanceId !== undefined;
+
+/** A session that came up: whatever refused this thread before, it started somewhere since. */
+const isSessionStarted = (event: ThreadSessionSetEvent): boolean =>
+  event.payload.session.status === "ready";
 
 /**
  * The session window is the short-horizon quota that usage limits interrupt,
@@ -66,13 +71,23 @@ export const remainingScore = (availability: ProviderAvailability): number => {
  */
 export const failoverCandidates = (
   instances: Readonly<Record<string, ProviderInstanceConfig>>,
-  input: { readonly originInstanceId: ProviderInstanceId; readonly group: string },
+  input: {
+    readonly originInstanceId: ProviderInstanceId;
+    readonly group: string;
+    /**
+     * Instances that have already refused to take this thread. A refusal is a
+     * property of the pair — this thread's resume state against that account —
+     * so offering the same target again only reproduces it.
+     */
+    readonly refusedInstanceIds?: ReadonlySet<string>;
+  },
 ): ReadonlyArray<readonly [string, ProviderInstanceConfig]> =>
   Object.entries(instances).filter(
     ([instanceId, config]) =>
       instanceId !== String(input.originInstanceId) &&
       config.failoverGroup === input.group &&
-      resolveProviderInstanceEnabled(config),
+      resolveProviderInstanceEnabled(config) &&
+      input.refusedInstanceIds?.has(instanceId) !== true,
   );
 
 const makeLimitFailoverReactor = Effect.gen(function* () {
@@ -81,8 +96,28 @@ const makeLimitFailoverReactor = Effect.gen(function* () {
   const settingsService = yield* ServerSettingsService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
 
+  /**
+   * Targets that have refused each thread since its session last came up.
+   *
+   * "The selection has left the origin" is the only thing absorbing a burst of
+   * usage-limit events, and a refusal puts the selection back — so on its own
+   * that guard would let every later event in the episode re-pick the same
+   * target and be refused again. A refused target is dropped from the thread's
+   * candidates instead, so within one episode the set only shrinks and a
+   * thread can be handed to each member of its group at most once.
+   *
+   * The entry is dropped the moment a session for that thread reaches ready.
+   * The reactor cannot tell a permanent refusal (an incompatible resume state)
+   * from a passing one (a missing worktree, a CLI that failed to spawn), and
+   * holding either forever would walk a thread down its group until
+   * auto-failover silently stopped working for it. A successful start cannot
+   * happen inside a refusal episode — the refusal *is* the start that did not
+   * happen — so clearing on one can never reopen the loop.
+   */
+  const refusedTargetsByThread = new Map<string, Set<string>>();
+
   const processUsageLimit = Effect.fn("processUsageLimit")(function* (
-    event: UsageLimitSessionEvent,
+    event: ThreadSessionSetEvent,
   ) {
     const threadId = event.payload.threadId;
     const originInstanceId = event.payload.session.providerInstanceId;
@@ -108,7 +143,12 @@ const makeLimitFailoverReactor = Effect.gen(function* () {
       return;
     }
 
-    const candidates = failoverCandidates(instances, { originInstanceId, group });
+    const refusedInstanceIds = refusedTargetsByThread.get(String(threadId));
+    const candidates = failoverCandidates(instances, {
+      originInstanceId,
+      group,
+      ...(refusedInstanceIds !== undefined ? { refusedInstanceIds } : {}),
+    });
     // getAvailability is optional on the service shape; a build without it
     // cannot rank, so every non-limited member scores as unknown (0).
     const getAvailability = providerService.getAvailability;
@@ -132,6 +172,7 @@ const makeLimitFailoverReactor = Effect.gen(function* () {
         originInstanceId,
         group,
         candidates: candidates.map(([instanceId]) => instanceId),
+        refused: [...(refusedInstanceIds ?? [])],
       });
       return;
     }
@@ -158,8 +199,29 @@ const makeLimitFailoverReactor = Effect.gen(function* () {
     });
   });
 
-  const processSafely = (event: UsageLimitSessionEvent) =>
-    processUsageLimit(event).pipe(
+  /**
+   * Refusals ride the same queue as the limits they answer so the memo is
+   * always written before the next event is judged against it.
+   */
+  const processEvent = (event: FailoverInput) => {
+    if (event.type === "thread.migration-refused") {
+      return Effect.sync(() => {
+        const threadId = String(event.payload.threadId);
+        const refused = refusedTargetsByThread.get(threadId) ?? new Set<string>();
+        refused.add(String(event.payload.attemptedModelSelection.instanceId));
+        refusedTargetsByThread.set(threadId, refused);
+      });
+    }
+    if (isSessionStarted(event)) {
+      return Effect.sync(() => {
+        refusedTargetsByThread.delete(String(event.payload.threadId));
+      });
+    }
+    return isUsageLimitSessionError(event) ? processUsageLimit(event) : Effect.void;
+  };
+
+  const processSafely = (event: FailoverInput) =>
+    processEvent(event).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.interrupt;
@@ -175,13 +237,25 @@ const makeLimitFailoverReactor = Effect.gen(function* () {
 
   const start: LimitFailoverReactorShape["start"] = Effect.fn("start")(function* () {
     yield* forkParked(
-      Stream.runForEach(engine.streamDomainEvents, (event) =>
-        isUsageLimitSessionError(event) ? worker.enqueue(event) : Effect.void,
-      ),
+      Stream.runForEach(engine.streamDomainEvents, (event) => {
+        if (event.type === "thread.migration-refused") {
+          return worker.enqueue(event);
+        }
+        if (event.type !== "thread.session-set") {
+          return Effect.void;
+        }
+        // Ready session-sets are frequent, so only a thread that already holds
+        // refusals pays for one; going through the queue keeps the clear
+        // ordered against the limits and refusals around it.
+        return isUsageLimitSessionError(event) ||
+          (isSessionStarted(event) && refusedTargetsByThread.has(String(event.payload.threadId)))
+          ? worker.enqueue(event)
+          : Effect.void;
+      }),
     );
   });
 
-  return { start } satisfies LimitFailoverReactorShape;
+  return { start, drain: worker.drain } satisfies LimitFailoverReactorShape;
 });
 
 export const LimitFailoverReactorLive = Layer.effect(

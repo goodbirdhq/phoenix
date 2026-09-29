@@ -57,6 +57,7 @@ describe("OrchestrationReactor", () => {
               started.push("limit-failover-reactor");
               return Effect.void;
             },
+            drain: Effect.void,
           }),
         ),
         Layer.provideMerge(

@@ -306,6 +306,20 @@ export function applyThreadDetailEvent(
         },
       };
 
+    // The refusal answering a migration carries the selection the server
+    // resolved, so the client applies it exactly as it applies the migration
+    // — no reader-side rule, and the optimistic rebind is undone by the same
+    // single writer that made it.
+    case "thread.migration-refused":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          modelSelection: event.payload.modelSelection,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
     case "thread.pull-request-linked": {
       const link = event.payload.link;
       const others = thread.pullRequests.filter(

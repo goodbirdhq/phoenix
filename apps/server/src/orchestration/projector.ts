@@ -41,6 +41,7 @@ import {
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadMigratedPayload,
+  ThreadMigrationRefusedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
   ThreadSettledPayload,
@@ -799,6 +800,26 @@ export function projectEvent(
     // arrives as its own activity event.
     case "thread.migrated":
       return decodeForEvent(ThreadMigratedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            modelSelection: payload.modelSelection,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    // The hand-off that migration asked for was refused. The decider has
+    // already resolved what the thread is bound to now, so this applies the
+    // selection exactly as thread.migrated does; the history row arrives as
+    // its own activity event.
+    case "thread.migration-refused":
+      return decodeForEvent(
+        ThreadMigrationRefusedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
         Effect.map((payload) => ({
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {

@@ -3,6 +3,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   THREAD_MIGRATION_ACTIVITY_KIND,
+  THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
   ThreadId,
   TurnId,
   type OrchestrationReadModel,
@@ -16,6 +17,8 @@ import { decideOrchestrationCommand } from "./decider.ts";
 import { projectEvent } from "./projector.ts";
 
 const NOW = "2026-08-19T00:00:00.000Z";
+/** A refusal always lands after the migration it answers. */
+const REFUSED_AT = "2026-08-19T00:00:05.000Z";
 const THREAD_ID = ThreadId.make("thread-1");
 const ORIGIN = ProviderInstanceId.make("claude_personal");
 const TARGET = ProviderInstanceId.make("claude_work");
@@ -71,6 +74,39 @@ function migrateCommand(overrides: Record<string, unknown> = {}) {
     ...overrides,
   } as const as Parameters<typeof decideOrchestrationCommand>[0]["command"];
 }
+
+function refuseCommand(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "thread.migration.refuse",
+    commandId: CommandId.make("cmd-refuse"),
+    threadId: THREAD_ID,
+    fromModelSelection: { instanceId: ORIGIN, model: "claude-opus-5" },
+    attemptedModelSelection: { instanceId: TARGET, model: "claude-opus-5" },
+    trigger: "auto-failover",
+    detail: "incompatible resume state",
+    createdAt: REFUSED_AT,
+    ...overrides,
+  } as const as Parameters<typeof decideOrchestrationCommand>[0]["command"];
+}
+
+/**
+ * Fold decided commands' events into the read model, in order, numbering them
+ * as one continuous stream so activity ordering is the real one.
+ */
+const projectAll = Effect.fnUntraced(function* (
+  readModel: OrchestrationReadModel,
+  decided: ReadonlyArray<Effect.Success<ReturnType<typeof decideOrchestrationCommand>>>,
+) {
+  let projected = readModel;
+  let sequence = 0;
+  for (const outcome of decided) {
+    for (const event of Array.isArray(outcome) ? outcome : [outcome]) {
+      sequence += 1;
+      projected = yield* projectEvent(projected, { ...event, sequence });
+    }
+  }
+  return projected;
+});
 
 it.layer(NodeServices.layer)("thread migration decider", (it) => {
   it.effect("rejects a metadata account switch after a thread has started", () =>
@@ -307,6 +343,154 @@ it.layer(NodeServices.layer)("thread migration decider", (it) => {
         }),
       );
       expect(result._tag).toBe("Failure");
+    }),
+  );
+
+  it.effect("puts a thread back on the origin when the hand-off is refused", () =>
+    Effect.gen(function* () {
+      const decided = yield* decideOrchestrationCommand({
+        command: refuseCommand(),
+        readModel: makeReadModel({
+          modelSelection: { instanceId: TARGET, model: "claude-opus-5" },
+        }),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.migration-refused",
+        "thread.activity-appended",
+      ]);
+      const refused = events[0]!;
+      if (refused.type !== "thread.migration-refused")
+        throw new Error("expected thread.migration-refused");
+      expect(refused.payload.modelSelection).toEqual({
+        instanceId: ORIGIN,
+        model: "claude-opus-5",
+      });
+      expect(refused.payload.attemptedModelSelection.instanceId).toBe(TARGET);
+    }),
+  );
+
+  // The rebind is only taken back while it is still standing. A meta update or
+  // a second migration decided in between is a newer statement about where the
+  // thread belongs; a blind restore would silently discard it.
+  it.effect("leaves a selection that moved on under the refusal alone", () =>
+    Effect.gen(function* () {
+      const moved = ProviderInstanceId.make("claude_spare");
+      const decided = yield* decideOrchestrationCommand({
+        command: refuseCommand(),
+        readModel: makeReadModel({
+          modelSelection: { instanceId: moved, model: "claude-opus-5" },
+        }),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      const refused = events[0]!;
+      if (refused.type !== "thread.migration-refused")
+        throw new Error("expected thread.migration-refused");
+
+      expect(refused.payload.modelSelection.instanceId).toBe(moved);
+    }),
+  );
+
+  // "Still standing" is about the account alone. A meta update that changed
+  // the model or its options in between picked them for an account the thread
+  // never reached; letting that count as "moved on" would leave the selection
+  // on the refused target while the session sits on the origin — the split
+  // brain this whole path exists to remove.
+  it.effect("still puts the thread back when only the model changed in between", () =>
+    Effect.gen(function* () {
+      const decided = yield* decideOrchestrationCommand({
+        command: refuseCommand(),
+        readModel: makeReadModel({
+          modelSelection: { instanceId: TARGET, model: "claude-sonnet-5" },
+        }),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      const refused = events[0]!;
+      if (refused.type !== "thread.migration-refused")
+        throw new Error("expected thread.migration-refused");
+
+      expect(refused.payload.modelSelection).toEqual({
+        instanceId: ORIGIN,
+        model: "claude-opus-5",
+      });
+    }),
+  );
+
+  it.effect("writes a refusal row whose id is derived from the command", () =>
+    Effect.gen(function* () {
+      const decided = yield* decideOrchestrationCommand({
+        command: refuseCommand(),
+        readModel: makeReadModel({
+          modelSelection: { instanceId: TARGET, model: "claude-opus-5" },
+        }),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      const appended = events[1]!;
+      if (appended.type !== "thread.activity-appended")
+        throw new Error("expected thread.activity-appended");
+
+      expect(appended.payload.activity.kind).toBe(THREAD_MIGRATION_FAILED_ACTIVITY_KIND);
+      expect(appended.payload.activity.tone).toBe("error");
+      // A redelivered thread.migrated upserts this row instead of appending a
+      // second one, the same way the migration row itself does.
+      expect(appended.payload.activity.id).toBe("thread-migration-refused:cmd-refuse");
+      expect(appended.payload.activity.payload).toEqual({
+        fromInstanceId: ORIGIN,
+        fromModel: "claude-opus-5",
+        toInstanceId: TARGET,
+        toModel: "claude-opus-5",
+        trigger: "auto-failover",
+        detail: "incompatible resume state",
+      });
+    }),
+  );
+
+  it.effect("records a refusal for a thread archived in the meantime", () =>
+    Effect.gen(function* () {
+      const decided = yield* decideOrchestrationCommand({
+        command: refuseCommand(),
+        readModel: makeReadModel({
+          archivedAt: NOW,
+          modelSelection: { instanceId: TARGET, model: "claude-opus-5" },
+        }),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      expect(events[0]?.type).toBe("thread.migration-refused");
+    }),
+  );
+
+  it.effect("leaves the read model back on the origin after a refusal", () =>
+    Effect.gen(function* () {
+      const readModel = makeReadModel();
+      const migrated = yield* decideOrchestrationCommand({
+        command: migrateCommand(),
+        readModel,
+      });
+      const refused = yield* decideOrchestrationCommand({
+        command: refuseCommand({
+          attemptedModelSelection: {
+            instanceId: TARGET,
+            model: "claude-opus-5",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+          fromModelSelection: {
+            instanceId: ORIGIN,
+            model: "claude-opus-5",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+        }),
+        readModel: yield* projectAll(readModel, [migrated]),
+      });
+
+      const projected = yield* projectAll(readModel, [migrated, refused]);
+
+      const thread = projected.threads[0]!;
+      expect(thread.modelSelection.instanceId).toBe(ORIGIN);
+      expect(thread.activities.map((activity) => activity.kind)).toEqual([
+        THREAD_MIGRATION_ACTIVITY_KIND,
+        THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
+      ]);
     }),
   );
 

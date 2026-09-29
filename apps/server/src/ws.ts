@@ -323,6 +323,7 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
       | "thread.report-posted"
       | "thread.activity-appended"
       | "thread.migrated"
+      | "thread.migration-refused"
       | "thread.turn-diff-completed"
       | "thread.reverted"
       | "thread.session-set"
@@ -341,6 +342,8 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
     // An open thread must rebind its model selection when a migration lands,
     // including one the server started on its own (auto-failover).
     event.type === "thread.migrated" ||
+    // …and rebind again when the hand-off that migration asked for is refused.
+    event.type === "thread.migration-refused" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
     event.type === "thread.session-set" ||

@@ -53,6 +53,22 @@ describe("failoverCandidates", () => {
       select({ origin: instance("codex"), grok: instance("grok", { enabled: true }) }),
     ).toEqual(["grok"]);
   });
+
+  // A refusal is a property of the pair — this thread's resume state against
+  // that account — so re-offering the target only reproduces it, and the
+  // migrate/refuse round trip repeats for every later event in the episode.
+  it("drops a target that already refused this thread", () => {
+    expect(
+      failoverCandidates(
+        { origin: instance("codex"), refused: instance("codex"), spare: instance("codex") },
+        {
+          originInstanceId: origin,
+          group: "pool",
+          refusedInstanceIds: new Set(["refused"]),
+        },
+      ).map(([id]) => id),
+    ).toEqual(["spare"]);
+  });
 });
 
 describe("remainingScore", () => {

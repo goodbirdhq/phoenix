@@ -26,6 +26,7 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "@effect/vitest";
@@ -190,18 +191,21 @@ describe("provider migration across accounts", () => {
             createdAt: MIGRATED_AT,
           });
 
-          // Also settles on a recorded error, and bounded well under the
-          // default: a refused migration is only logged — nothing marks the
-          // session — so without a bound this waits out the full timeout to say
-          // nothing useful. The success path settles in well under a second.
+          // A refusal settles too: it lands on the session as lastError and
+          // writes a `thread.migration.failed` row, so either outcome is
+          // observable state rather than a wait that has to time out.
           const migrated = yield* harness.waitForThread(
             String(THREAD_ID),
             (thread) =>
               thread.session?.providerInstanceId === TARGET_INSTANCE ||
               (thread.session?.lastError ?? null) !== null,
-            15_000,
           );
 
+          expect(
+            migrated.activities.some(
+              (activity) => activity.kind === THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
+            ),
+          ).toBe(false);
           expect(migrated.session?.lastError ?? null).toBeNull();
           expect(migrated.session?.providerInstanceId).toBe(TARGET_INSTANCE);
           expect(migrated.modelSelection.instanceId).toBe(TARGET_INSTANCE);

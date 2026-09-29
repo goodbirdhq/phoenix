@@ -435,26 +435,58 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         ),
       );
 
-    const setThreadSessionErrorOnTurnStartFailure = Effect.fnUntraced(function* (input: {
+    const setThreadSessionErrorOnStartFailure = Effect.fnUntraced(function* (input: {
       readonly threadId: ThreadId;
       readonly detail: string;
       readonly createdAt: string;
+      /**
+       * Record the reason as the session's own, without declaring the session
+       * dead: the status is left alone and any earlier `lastErrorKind` goes
+       * with the error it described.
+       *
+       * A refused migration never stopped anything — stale sessions are only
+       * torn down after a *successful* adapter start — so the origin session
+       * is still up and still serving turns. Forcing "error" would make the
+       * sidebar read "failed", the phase read "disconnected", and thread
+       * settling drop a queued turn start and pull the thread out of a snooze,
+       * all about a session that is fine. Carrying a stale
+       * `lastErrorKind: "usage-limit"` forward is worse than cosmetic: this
+       * very session-set would match `isUsageLimitSessionError` and hand
+       * `LimitFailoverReactor` a fresh limit signal that the refusal itself
+       * manufactured, and the web chat view suppresses its error banner for
+       * that kind — hiding the reason this call exists to record.
+       */
+      readonly keepSessionStatus?: boolean;
     }) {
       const thread = yield* resolveThreadShell(input.threadId);
       if (!thread) {
         return;
       }
       const session = thread.session;
+      // Seeded so the key is always present to destructure away; it is put
+      // back only on the paths that still own the error it classifies.
+      const { lastErrorKind, ...carriedSession } = {
+        ...(session ?? {
+          threadId: input.threadId,
+          providerName: null,
+          providerInstanceId: thread.modelSelection.instanceId,
+          runtimeMode: thread.runtimeMode,
+        }),
+        lastErrorKind: session?.lastErrorKind,
+      };
       yield* setThreadSession({
         threadId: input.threadId,
         session: {
-          ...(session ?? {
-            threadId: input.threadId,
-            providerName: null,
-            providerInstanceId: thread.modelSelection.instanceId,
-            runtimeMode: thread.runtimeMode,
-          }),
-          status: session?.status === "stopped" ? "stopped" : "error",
+          ...carriedSession,
+          ...(input.keepSessionStatus !== true && lastErrorKind !== undefined
+            ? { lastErrorKind }
+            : {}),
+          status:
+            input.keepSessionStatus === true
+              ? (session?.status ?? "error")
+              : session?.status === "stopped"
+                ? "stopped"
+                : "error",
           activeTurnId: null,
           lastError: input.detail,
           updatedAt: input.createdAt,
@@ -1562,7 +1594,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           );
         }
         const detail = formatFailureDetail(cause);
-        return setThreadSessionErrorOnTurnStartFailure({
+        return setThreadSessionErrorOnStartFailure({
           threadId: event.payload.threadId,
           detail,
           createdAt: event.payload.createdAt,
@@ -1687,7 +1719,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         }
         const detail = formatFailureDetail(cause);
         if (!compactionSessionEnsured) {
-          return setThreadSessionErrorOnTurnStartFailure({
+          return setThreadSessionErrorOnStartFailure({
             threadId: event.payload.threadId,
             detail,
             createdAt: event.payload.createdAt,
@@ -2476,13 +2508,71 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             // the rebound thread.modelSelection, seeded if history exists.
             return;
           }
+          // A refused hand-off is the same kind of failure as a refused turn
+          // start, and reports itself the same way: the reason lands on the
+          // session and an error row lands in the thread's history. It also
+          // has to take the rebind back — thread.migrated is already durable,
+          // and a thread left claiming an account its session never joined
+          // would trip the instance guard on every later turn. That unwind is
+          // a decision about where the thread belongs, so it goes through the
+          // decider as thread.migration.refuse rather than being inferred by
+          // each projection from the history row.
+          const reportRefusedMigration = Effect.fnUntraced(function* (cause: Cause.Cause<unknown>) {
+            if (Cause.hasInterruptsOnly(cause)) {
+              return yield* Effect.interrupt;
+            }
+            const detail = formatFailureDetail(cause);
+            // Stamped now, not with the migration's own timestamp: the refusal
+            // happened after the attempt, and history rows with equal
+            // timestamps fall back to sorting by id, which would show the
+            // refusal above the migration it answers.
+            const refusedAt = DateTime.formatIso(yield* DateTime.now);
+            yield* orchestrationEngine.dispatch({
+              type: "thread.migration.refuse",
+              // Derived from the event, so a redelivered thread.migrated
+              // records the same refusal instead of a second one.
+              commandId: CommandId.make(`migration-refused:${event.eventId}`),
+              threadId: event.payload.threadId,
+              fromModelSelection: event.payload.fromModelSelection,
+              attemptedModelSelection: event.payload.modelSelection,
+              trigger: event.payload.trigger,
+              detail,
+              createdAt: refusedAt,
+            });
+            yield* setThreadSessionErrorOnStartFailure({
+              threadId: event.payload.threadId,
+              detail,
+              createdAt: refusedAt,
+              keepSessionStatus: true,
+            });
+            // The decider owns which selection stands after a refusal, so the
+            // cache is refreshed from the read model rather than guessed.
+            const settled = yield* resolveThreadShell(event.payload.threadId);
+            if (settled) {
+              threadModelSelections.set(event.payload.threadId, settled.modelSelection);
+            }
+          });
           // A stopped session migrates too — otherwise the stale binding would
           // trip the instance guard on the next turn.
-          yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
-            modelSelection: event.payload.modelSelection,
-            allowMigration: true,
-            ...(event.payload.brief !== undefined ? { migrationBrief: event.payload.brief } : {}),
-          });
+          const restarted = yield* ensureSessionForThread(
+            event.payload.threadId,
+            event.occurredAt,
+            {
+              modelSelection: event.payload.modelSelection,
+              allowMigration: true,
+              ...(event.payload.brief !== undefined ? { migrationBrief: event.payload.brief } : {}),
+            },
+          ).pipe(
+            Effect.as(true),
+            Effect.catchCause((cause) => reportRefusedMigration(cause).pipe(Effect.as(false))),
+          );
+          // Auto-failover's retry is skipped after a refusal. The thread is
+          // back on the account the limit fired on, so the retry would start
+          // there, fail the same way, and hand the failover reactor another
+          // usage-limit session error to react to.
+          if (!restarted) {
+            return;
+          }
           // Auto-failover retries the failed turn here, after the rebind, so the
           // retry can never race the session restart into the instance guard.
           if (event.payload.trigger === "auto-failover") {

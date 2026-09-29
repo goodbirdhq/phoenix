@@ -659,6 +659,10 @@ describe("ProviderCommandReactor", () => {
       runtime!.runPromise(queueReactor.start().pipe(Scope.provide(scope!)));
     if (input?.queueReactor) await startQueueReactor();
     const drain = () => Effect.runPromise(reactor.drain);
+    // Failover reacts to events nobody awaits; draining both workers in turn is
+    // how a test observes the whole reaction instead of sleeping.
+    const drainFailover = () =>
+      runtime!.runPromise(Effect.andThen(limitFailoverReactor.drain, reactor.drain));
 
     return {
       engine,
@@ -710,6 +714,7 @@ describe("ProviderCommandReactor", () => {
       runtimeSessions,
       stateDir,
       drain,
+      drainFailover,
       startReactor,
       runEffect,
       get titleRegenerationCompletionDispatchAttempts() {
@@ -4057,6 +4062,376 @@ describe("ProviderCommandReactor", () => {
           resumeCursor: { opaque: "resume-1" },
         });
       }),
+  );
+
+  effectIt.effect(
+    "reports a refused migration on the thread and puts it back on the origin account",
+    () =>
+      Effect.gen(function* () {
+        const refusal =
+          "Thread 'thread-1' cannot switch from instance 'codex' to 'codex_work' because their provider resume state is incompatible.";
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            startSessionEffect: (session) =>
+              session.providerInstanceId === ProviderInstanceId.make("codex_work")
+                ? Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: ProviderDriverKind.make("codex"),
+                      method: "thread.turn.start",
+                      detail: refusal,
+                    }),
+                  )
+                : Effect.succeed(session),
+          }),
+        );
+        const threadId = ThreadId.make("thread-1");
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-migrate-refused-1"),
+          threadId,
+          message: {
+            messageId: asMessageId("user-message-migrate-refused-1"),
+            role: "user",
+            text: "first",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+        yield* harness.engine.dispatch({
+          type: "thread.migrate",
+          commandId: CommandId.make("cmd-migrate-refused"),
+          threadId,
+          targetInstanceId: ProviderInstanceId.make("codex_work"),
+          handoffMode: "replay",
+          trigger: "manual",
+          createdAt: now,
+        });
+
+        const refusedRow = (model: Awaited<ReturnType<typeof harness.readModel>>) =>
+          model.threads
+            .find((entry) => entry.id === threadId)
+            ?.activities.find((activity) => activity.kind === "thread.migration.failed");
+        yield* Effect.promise(() =>
+          waitFor(async () => refusedRow(await harness.readModel()) !== undefined),
+        );
+        yield* Effect.promise(() => harness.drain());
+
+        const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+          (entry) => entry.id === threadId,
+        );
+        // The rebind and the refusal read as one story: the migration row stays,
+        // the failure row says what happened, and the selection is back where
+        // the session actually is.
+        expect(thread?.activities.some((activity) => activity.kind === "thread.migrated")).toBe(
+          true,
+        );
+        expect(
+          thread?.activities.find((activity) => activity.kind === "thread.migration.failed"),
+        ).toMatchObject({
+          tone: "error",
+          payload: {
+            fromInstanceId: ProviderInstanceId.make("codex"),
+            toInstanceId: ProviderInstanceId.make("codex_work"),
+            trigger: "manual",
+            detail: expect.stringContaining(refusal),
+          },
+        });
+        expect(thread?.session?.lastError).toContain(refusal);
+        expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex"));
+        expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("codex"));
+        // The origin session was never stopped — stale sessions are only torn
+        // down after a successful start — so it must not be reported dead.
+        expect(thread?.session?.status).toBe("ready");
+
+        // And the thread is not wedged: the next turn starts on the account it
+        // never left instead of tripping the instance guard.
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-migrate-refused-2"),
+          threadId,
+          message: {
+            messageId: asMessageId("user-message-migrate-refused-2"),
+            role: "user",
+            text: "second",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+      }),
+  );
+
+  effectIt.effect("moves a thread past a target that refused it instead of re-offering it", () =>
+    Effect.gen(function* () {
+      // "The selection has left the origin" was the whole dedupe guard, and a
+      // refusal puts the selection back. Without a second signal, every later
+      // usage-limit event in the episode re-ranks the same candidates and picks
+      // the same target again. A third group member is what tells the two
+      // candidate guards apart: dropping only the refused target keeps failing
+      // the thread over, while "never fail over again after a refusal" would
+      // strand it on the limited account.
+      const refusal =
+        "Thread 'thread-1' cannot switch from instance 'codex' to 'codex_work' because their provider resume state is incompatible.";
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          settingsOverrides: {
+            providerInstances: {
+              [ProviderInstanceId.make("codex")]: {
+                driver: ProviderDriverKind.make("codex"),
+                failoverGroup: ProviderFailoverGroup.make("pool"),
+              },
+              // Ranked first: without availability readings every candidate
+              // scores the same, so the group's order decides the target.
+              [ProviderInstanceId.make("codex_work")]: {
+                driver: ProviderDriverKind.make("codex"),
+                failoverGroup: ProviderFailoverGroup.make("pool"),
+              },
+              [ProviderInstanceId.make("codex_spare")]: {
+                driver: ProviderDriverKind.make("codex"),
+                failoverGroup: ProviderFailoverGroup.make("pool"),
+              },
+            },
+          },
+          startSessionEffect: (session) =>
+            session.providerInstanceId === ProviderInstanceId.make("codex_work")
+              ? Effect.fail(
+                  new ProviderAdapterRequestError({
+                    provider: ProviderDriverKind.make("codex"),
+                    method: "thread.turn.start",
+                    detail: refusal,
+                  }),
+                )
+              : Effect.succeed(session),
+        }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-refusal-walk"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-refusal-walk"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+      yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+      const limitSession = (updatedAt: string) => ({
+        threadId,
+        status: "error" as const,
+        providerName: "codex" as const,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "approval-required" as const,
+        activeTurnId: null,
+        lastError: "You've hit your usage limit.",
+        lastErrorKind: "usage-limit" as const,
+        updatedAt,
+      });
+      const threadNow = async () =>
+        (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-refusal-walk-1"),
+        threadId,
+        session: limitSession(now),
+        createdAt: now,
+      });
+
+      yield* Effect.promise(() =>
+        waitFor(
+          async () =>
+            (await threadNow())?.activities.some(
+              (activity) => activity.kind === "thread.migration.failed",
+            ) ?? false,
+        ),
+      );
+      yield* Effect.promise(() => harness.drainFailover());
+
+      const refused = yield* Effect.promise(threadNow);
+      expect(refused?.modelSelection.instanceId).toBe(ProviderInstanceId.make("codex"));
+      expect(refused?.session?.lastError).toContain(refusal);
+      // The refusal owns the session's error now. Leaving the limit's kind on
+      // it would make this very session-set look like a fresh limit signal, and
+      // the chat view hides its error banner for that kind.
+      expect(refused?.session?.lastErrorKind).toBeUndefined();
+
+      // A second, stale report of the same limit. The thread is genuinely back
+      // on the limited account, so the original guard lets it through.
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-refusal-walk-2"),
+        threadId,
+        session: limitSession("2026-01-01T00:00:01.000Z"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+      yield* Effect.promise(() =>
+        waitFor(
+          async () =>
+            (await threadNow())?.session?.providerInstanceId ===
+            ProviderInstanceId.make("codex_spare"),
+        ),
+      );
+      yield* Effect.promise(() => harness.drainFailover());
+
+      const thread = yield* Effect.promise(threadNow);
+      // codex_work was offered once and refused once; the thread then moved on
+      // to the member that had not refused it.
+      expect(
+        thread?.activities.filter((activity) => activity.kind === "thread.migration.failed").length,
+      ).toBe(1);
+      expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("codex_spare"));
+      const targets = harness.startSession.mock.calls.flatMap((call) => {
+        const instanceId = (call[1] as { providerInstanceId?: ProviderInstanceId } | undefined)
+          ?.providerInstanceId;
+        return instanceId === undefined ? [] : [String(instanceId)];
+      });
+      expect(targets.filter((instanceId) => instanceId === "codex_work").length).toBe(1);
+      expect(targets.filter((instanceId) => instanceId === "codex_spare").length).toBe(1);
+    }),
+  );
+
+  effectIt.effect("offers a refused target again once the thread starts somewhere", () =>
+    Effect.gen(function* () {
+      // The reactor cannot tell an incompatible resume state from a missing
+      // worktree or a CLI that failed to spawn, so holding a refusal forever
+      // would walk a thread down its group until failover stopped working for
+      // it. A session coming up ends the episode the refusal belonged to.
+      let refuseTarget = true;
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          settingsOverrides: {
+            providerInstances: {
+              [ProviderInstanceId.make("codex")]: {
+                driver: ProviderDriverKind.make("codex"),
+                failoverGroup: ProviderFailoverGroup.make("pool"),
+              },
+              [ProviderInstanceId.make("codex_work")]: {
+                driver: ProviderDriverKind.make("codex"),
+                failoverGroup: ProviderFailoverGroup.make("pool"),
+              },
+            },
+          },
+          startSessionEffect: (session) =>
+            refuseTarget && session.providerInstanceId === ProviderInstanceId.make("codex_work")
+              ? Effect.fail(
+                  new ProviderAdapterRequestError({
+                    provider: ProviderDriverKind.make("codex"),
+                    method: "thread.turn.start",
+                    detail: "the worktree was missing",
+                  }),
+                )
+              : Effect.succeed(session),
+        }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-refusal-reopen"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-refusal-reopen"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+      yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+      const limitSession = (updatedAt: string) => ({
+        threadId,
+        status: "error" as const,
+        providerName: "codex" as const,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "approval-required" as const,
+        activeTurnId: null,
+        lastError: "You've hit your usage limit.",
+        lastErrorKind: "usage-limit" as const,
+        updatedAt,
+      });
+      const threadNow = async () =>
+        (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-refusal-reopen-1"),
+        threadId,
+        session: limitSession(now),
+        createdAt: now,
+      });
+      yield* Effect.promise(() =>
+        waitFor(
+          async () =>
+            (await threadNow())?.activities.some(
+              (activity) => activity.kind === "thread.migration.failed",
+            ) ?? false,
+        ),
+      );
+      yield* Effect.promise(() => harness.drainFailover());
+
+      // The thread's session comes up again — whatever refused it did so in an
+      // episode that is over.
+      refuseTarget = false;
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-refusal-reopen-ready"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:02.000Z",
+        },
+        createdAt: "2026-01-01T00:00:02.000Z",
+      });
+      yield* Effect.promise(() => harness.drainFailover());
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-refusal-reopen-2"),
+        threadId,
+        session: limitSession("2026-01-01T00:00:03.000Z"),
+        createdAt: "2026-01-01T00:00:03.000Z",
+      });
+      yield* Effect.promise(() =>
+        waitFor(
+          async () =>
+            (await threadNow())?.session?.providerInstanceId ===
+            ProviderInstanceId.make("codex_work"),
+        ),
+      );
+
+      expect((yield* Effect.promise(threadNow))?.modelSelection.instanceId).toBe(
+        ProviderInstanceId.make("codex_work"),
+      );
+    }),
   );
 
   it("restarts the provider session when the thread workspace changes", async () => {
