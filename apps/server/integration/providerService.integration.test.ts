@@ -3,7 +3,10 @@ import { ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contr
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts/settings";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, assert } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -11,6 +14,8 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
+import type { ProviderAdapterError } from "../src/provider/Errors.ts";
+import type { ProviderAdapterShape } from "../src/provider/Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapterRegistry.ts";
 import { makeAdapterRegistryMock } from "../src/provider/testUtils/providerAdapterRegistryMock.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
@@ -41,6 +46,7 @@ import {
 } from "./fixtures/providerRuntime.ts";
 
 const codexInstanceId = ProviderInstanceId.make("codex");
+const codexFailoverInstanceId = ProviderInstanceId.make("codex_failover");
 
 const makeWorkspaceDirectory = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -384,6 +390,117 @@ it.live("reports runtime mode per turn and on mode transitions", () =>
           .map((entry) => [entry.properties?.from, entry.properties?.to]),
         [["approval-required", "full-access"]],
       );
+    }).pipe(Effect.provide(fixture.layer));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+/**
+ * Two accounts on one driver, with the target account's `startSession` held
+ * open after it has registered its session. That pause is the interleaving the
+ * bug needs: `ProviderService.startSession` exposes the replacement on the new
+ * adapter before it stops the old session and rebinds the directory, so a
+ * listing that lands in between sees the new session against the old binding.
+ * The window is a few microseconds in a real run, which is why it is held
+ * open explicitly rather than raced for.
+ */
+const makeMigrationInterleavingFixture = Effect.gen(function* () {
+  const cwd = yield* makeWorkspaceDirectory;
+  const origin = yield* makeTestProviderAdapterHarness();
+  const target = yield* makeTestProviderAdapterHarness();
+
+  const sessionRegistered = yield* Deferred.make<void>();
+  const releaseStart = yield* Deferred.make<void>();
+  const targetAdapter: ProviderAdapterShape<ProviderAdapterError> = {
+    ...target.adapter,
+    startSession: (input) =>
+      target.adapter
+        .startSession(input)
+        .pipe(
+          Effect.tap(() =>
+            Deferred.succeed(sessionRegistered, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseStart)),
+            ),
+          ),
+        ),
+  };
+
+  // Each account needs its own adapter: adapters are asked for their sessions
+  // per instance, so one object serving both ids would report the same session
+  // under both and there would be no mismatch to observe.
+  const registry = makeAdapterRegistryMock(
+    { [ProviderDriverKind.make("codex")]: origin.adapter },
+    { [codexFailoverInstanceId]: targetAdapter },
+  );
+
+  const shared = Layer.mergeAll(
+    ProviderSessionDirectoryLive.pipe(Layer.provide(ProviderSessionRuntime.layer)),
+    Layer.succeed(ProviderAdapterRegistry, registry),
+    ServerConfig.layerTest(cwd, cwd).pipe(Layer.provide(NodeServices.layer)),
+    ServerSettingsService.layerTest(DEFAULT_SERVER_SETTINGS),
+    AnalyticsService.layerTest,
+    Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers),
+  ).pipe(Layer.provide(SqlitePersistenceMemory));
+
+  return {
+    cwd,
+    origin,
+    target,
+    sessionRegistered,
+    releaseStart,
+    layer: makeProviderServiceLive().pipe(Layer.provide(NodeServices.layer), Layer.provide(shared)),
+  } as const;
+});
+
+it.live("lists sessions while a migration start is mid-flight", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeMigrationInterleavingFixture;
+    const threadId = ThreadId.make("thread-migration-interleaving");
+
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        cwd: fixture.cwd,
+        runtimeMode: "full-access",
+      });
+
+      const migrating = yield* Effect.forkChild(
+        provider.startSession(threadId, {
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexFailoverInstanceId,
+          cwd: fixture.cwd,
+          runtimeMode: "full-access",
+        }),
+      );
+
+      // The target adapter now holds a session for the thread and the directory
+      // still names the origin account. Before the fix this listing died.
+      yield* Deferred.await(fixture.sessionRegistered);
+      const exit = yield* Effect.exit(provider.listSessions());
+      assert.equal(Exit.hasDies(exit), false);
+
+      const midFlight = (yield* exit).filter((session) => session.threadId === threadId);
+      assert.deepEqual(
+        midFlight.map((session) => session.providerInstanceId),
+        // Bound account first: callers resolve a thread's session with `find`,
+        // and until the rebind lands the thread is still on the origin.
+        [codexInstanceId, codexFailoverInstanceId],
+      );
+
+      yield* Deferred.succeed(fixture.releaseStart, undefined);
+      yield* Fiber.join(migrating);
+
+      const settled = (yield* provider.listSessions()).filter(
+        (session) => session.threadId === threadId,
+      );
+      assert.deepEqual(
+        settled.map((session) => session.providerInstanceId),
+        [codexFailoverInstanceId],
+      );
+      assert.deepEqual(fixture.origin.listActiveSessionIds(), []);
     }).pipe(Effect.provide(fixture.layer));
   }).pipe(Effect.provide(NodeServices.layer)),
 );
