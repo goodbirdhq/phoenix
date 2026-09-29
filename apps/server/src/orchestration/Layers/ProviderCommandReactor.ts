@@ -685,9 +685,35 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       // which a migration has already rebound to the target — so the
       // continuation check below compares the target against itself, calls it
       // compatible, and hands the thread over carrying nothing.
-      const boundInstanceId = providerService.getBoundInstanceId
-        ? yield* providerService.getBoundInstanceId(threadId)
-        : undefined;
+      // Scoped to a missing session row on purpose. With a row present — even
+      // one carrying no instance id — the read model is the more current
+      // answer, and feeding the binding into the migration guard below could
+      // refuse a start that used to work.
+      //
+      // Only an instance this build still has can answer anyway: bindings
+      // outlive provider config, so restored userdata or an account removed in
+      // Settings leaves one pointing at nothing. Resolving that would fail the
+      // start outright, where falling through to the thread's own selection —
+      // configured by construction — still works.
+      const boundInstanceId =
+        thread.session === null && providerService.getBoundInstanceId
+          ? yield* providerService.getBoundInstanceId(threadId).pipe(
+              Effect.flatMap((candidate) =>
+                candidate === undefined
+                  ? Effect.succeed(undefined)
+                  : providerService.getInstanceInfo(candidate).pipe(
+                      Effect.as(candidate),
+                      Effect.tapError(() =>
+                        Effect.logWarning(
+                          "provider command reactor ignoring binding on unconfigured instance",
+                          { threadId, boundInstanceId: candidate },
+                        ),
+                      ),
+                      Effect.orElseSucceed(() => undefined),
+                    ),
+              ),
+            )
+          : undefined;
       const currentInstanceId =
         activeSession?.providerInstanceId ??
         thread.session?.providerInstanceId ??
@@ -1556,7 +1582,11 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       const authCommandHandled = yield* withNativeDelivery(
         event,
         Effect.gen(function* () {
-          // Native account commands belong to the thread's existing provider session.
+          // Native account commands belong to the thread's existing provider
+          // session. Deliberately does not consult the persisted binding the
+          // way the start path does: this picks where to deliver a slash
+          // command now, not which account owns a conversation worth carrying,
+          // so a binding for a session that no longer exists is no help.
           const instanceId =
             thread.session?.providerInstanceId ??
             event.payload.modelSelection?.instanceId ??

@@ -2822,11 +2822,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const getBoundInstanceId: ProviderServiceMethod<"getBoundInstanceId"> = Effect.fn(
     "getBoundInstanceId",
   )(function* (threadId) {
-    const binding = yield* directory
-      .getBinding(threadId)
-      .pipe(
-        Effect.orElseSucceed(() => Option.none<ProviderSessionDirectory.ProviderRuntimeBinding>()),
-      );
+    const binding = yield* directory.getBinding(threadId).pipe(
+      // Logged, not silent: the weaker answer this falls back to is exactly the
+      // state that strands a conversation on another account, so a transient
+      // read fault must not read as "this thread has no binding".
+      Effect.tapError((cause) =>
+        Effect.logWarning("provider.binding.read-failed", { threadId, cause }),
+      ),
+      Effect.orElseSucceed(() => Option.none<ProviderSessionDirectory.ProviderRuntimeBinding>()),
+    );
     return Option.getOrUndefined(binding)?.providerInstanceId;
   });
 

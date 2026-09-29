@@ -49,6 +49,7 @@ import {
   ProviderAdapterProcessError,
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterTurnStoppedError,
+  ProviderUnsupportedError,
   ProviderWorkspaceMissingError,
   type ProviderServiceError,
 } from "../../provider/Errors.ts";
@@ -210,6 +211,8 @@ describe("ProviderCommandReactor", () => {
     ) => Effect.Effect<ProviderSession, ProviderServiceError>;
     /** Instance named by the persisted runtime binding, independent of the read model. */
     readonly boundInstanceId?: ProviderInstanceId;
+    /** Instance ids this build does not have configured. */
+    readonly unknownInstanceIds?: ReadonlyArray<string>;
     readonly tryHandlePromptCommandEffect?: ProviderAuthService["Service"]["tryHandlePromptCommand"];
   }) {
     const now = "2026-01-01T00:00:00.000Z";
@@ -403,6 +406,11 @@ describe("ProviderCommandReactor", () => {
       getBoundInstanceId: () => Effect.succeed(input?.boundInstanceId),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
+        if (input?.unknownInstanceIds?.includes(raw)) {
+          return Effect.fail(
+            new ProviderUnsupportedError({ provider: ProviderDriverKind.make(raw) }),
+          );
+        }
         const driverKind = ProviderDriverKind.make(
           raw.startsWith("claude")
             ? "claudeAgent"
@@ -2173,6 +2181,53 @@ describe("ProviderCommandReactor", () => {
         expect(started?.seed?.messages.map((message) => message.text)).toContain(
           "Earlier work that must survive the hand-off",
         );
+        // Pins the destination too: seeding the right history into the wrong
+        // account would still lose the thread.
+        expect(
+          (started as { readonly providerInstanceId?: string } | undefined)?.providerInstanceId,
+        ).toBe("claudeAgent_target");
+      }),
+  );
+
+  effectIt.effect(
+    "still starts when the persisted binding names an account this build no longer has",
+    () =>
+      Effect.gen(function* () {
+        // Bindings outlive provider config: restored userdata, or an account
+        // removed in Settings. Resolving one that is gone must not fail the
+        // start — the thread's own selection is configured by construction.
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            threadModelSelection: {
+              instanceId: ProviderInstanceId.make("claudeAgent_target"),
+              model: "claude-opus-5",
+            },
+            boundInstanceId: ProviderInstanceId.make("removed_account"),
+            unknownInstanceIds: ["removed_account"],
+          }),
+        );
+        const threadId = ThreadId.make("thread-1");
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("start-with-dead-binding"),
+          threadId,
+          message: {
+            messageId: asMessageId("message-dead-binding"),
+            role: "user",
+            text: "carry on",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        });
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
+
+        const started = harness.startSession.mock.calls[0]?.[1] as
+          | { readonly providerInstanceId?: string }
+          | undefined;
+        expect(started?.providerInstanceId).toBe("claudeAgent_target");
       }),
   );
 
