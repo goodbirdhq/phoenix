@@ -7,6 +7,7 @@ import {
   ApprovalRequestId,
   CodexSettings,
   ProviderDriverKind,
+  type ProviderInstanceId,
   type OrchestrationEvent,
   type OrchestrationThread,
   type ProviderApprovalDecision,
@@ -186,6 +187,8 @@ export interface OrchestrationIntegrationHarness {
   readonly workspaceDir: string;
   readonly dbPath: string;
   readonly adapterHarness: TestProviderAdapterHarness | null;
+  /** Adapters for `additionalInstanceIds`, keyed by instance id. */
+  readonly adapterHarnessByInstanceId: ReadonlyMap<ProviderInstanceId, TestProviderAdapterHarness>;
   readonly engine: OrchestrationEngineShape;
   readonly snapshotQuery: ProjectionSnapshotQuery["Service"];
   readonly providerService: ProviderService["Service"];
@@ -234,6 +237,8 @@ export interface OrchestrationIntegrationHarness {
 interface MakeOrchestrationIntegrationHarnessOptions {
   readonly provider?: ProviderDriverKind;
   readonly realCodex?: boolean;
+  /** Further accounts on the same driver, for tests that migrate between them. */
+  readonly additionalInstanceIds?: ReadonlyArray<ProviderInstanceId>;
   /** Tracer for every fiber the harness runtime runs, including reactors. */
   readonly tracer?: Tracer.Tracer;
 }
@@ -252,10 +257,29 @@ export const makeOrchestrationIntegrationHarness = (
       : yield* makeTestProviderAdapterHarness({
           provider,
         });
+    // Each extra account gets its own adapter, never a shared one: adapters are
+    // asked for their sessions per instance, so one object serving two ids
+    // reports the same session under both and `listSessions` dies on the
+    // mismatch against the binding. Separate adapters also give each account
+    // its own continuation identity, which is what makes a move between them a
+    // real cross-account migration.
+    const additionalAdapterHarnesses = adapterHarness
+      ? yield* Effect.forEach(options?.additionalInstanceIds ?? [], (instanceId) =>
+          makeTestProviderAdapterHarness({ provider }).pipe(
+            Effect.map((harness) => [instanceId, harness] as const),
+          ),
+        )
+      : [];
+    const extraInstances = Object.fromEntries(
+      additionalAdapterHarnesses.map(([instanceId, harness]) => [instanceId, harness.adapter]),
+    );
     const fakeRegistry = adapterHarness
       ? Layer.succeed(
           ProviderAdapterRegistry,
-          makeAdapterRegistryMock({ [adapterHarness.provider]: adapterHarness.adapter }),
+          makeAdapterRegistryMock(
+            { [adapterHarness.provider]: adapterHarness.adapter },
+            extraInstances as Parameters<typeof makeAdapterRegistryMock>[1],
+          ),
         )
       : null;
     const rootDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -608,6 +632,7 @@ export const makeOrchestrationIntegrationHarness = (
       workspaceDir,
       dbPath,
       adapterHarness,
+      adapterHarnessByInstanceId: new Map(additionalAdapterHarnesses),
       engine,
       snapshotQuery,
       providerService,

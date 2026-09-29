@@ -20,17 +20,33 @@ export type KindAdapterMap = Partial<
   Record<ProviderDriverKind, ProviderAdapterShape<ProviderAdapterError>>
 >;
 
+/** Extra instance ids to serve, beyond each driver's default instance. */
+export type InstanceAdapterMap = Readonly<
+  Record<string, ProviderAdapterShape<ProviderAdapterError>>
+>;
+
 /**
  * Build a `ProviderAdapterRegistryShape` from a kind-keyed adapter map.
  * Every adapter present in the map is addressable through its default
  * provider instance id.
+ *
+ * `extraInstances` registers further instance ids against an adapter, which is
+ * how a test gets two accounts on one driver. Their continuation keys differ by
+ * instance id, so migrating between them is treated as crossing accounts —
+ * the case a single default instance per driver cannot express.
  */
-export const makeAdapterRegistryMock = (adapters: KindAdapterMap): ProviderAdapterRegistryShape => {
+export const makeAdapterRegistryMock = (
+  adapters: KindAdapterMap,
+  extraInstances?: InstanceAdapterMap,
+): ProviderAdapterRegistryShape => {
   const byInstanceId = new Map<ProviderInstanceId, ProviderAdapterShape<ProviderAdapterError>>();
   for (const [kind, adapter] of Object.entries(adapters)) {
     if (!adapter) continue;
     const driverKind = ProviderDriverKind.make(kind);
     byInstanceId.set(defaultInstanceIdForDriver(driverKind), adapter);
+  }
+  for (const [instanceId, adapter] of Object.entries(extraInstances ?? {})) {
+    byInstanceId.set(instanceId as ProviderInstanceId, adapter);
   }
 
   const getByInstance: ProviderAdapterRegistryShape["getByInstance"] = (instanceId) => {
