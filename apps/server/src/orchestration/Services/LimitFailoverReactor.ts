@@ -20,6 +20,15 @@ export interface LimitFailoverReactorShape {
    * finalized on shutdown.
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+
+  /**
+   * Resolves once the queue is empty and nothing is in flight.
+   *
+   * Failover reacts to events nobody awaits, so this is how a caller — a test,
+   * in practice — observes that a limit signal has been fully considered
+   * instead of sleeping and hoping.
+   */
+  readonly drain: Effect.Effect<void>;
 }
 
 export class LimitFailoverReactor extends Context.Service<

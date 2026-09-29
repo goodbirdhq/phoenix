@@ -15,7 +15,6 @@ import {
   OrchestrationSession,
   OrchestrationThread,
   isSessionMessageSentActivity,
-  isThreadMigrationFailedActivity,
   WORKTREE_SETUP_ACTIVITY_KIND,
 } from "@t3tools/contracts";
 import {
@@ -42,6 +41,7 @@ import {
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadMigratedPayload,
+  ThreadMigrationRefusedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
   ThreadSettledPayload,
@@ -809,6 +809,26 @@ export function projectEvent(
         })),
       );
 
+    // The hand-off that migration asked for was refused. The decider has
+    // already resolved what the thread is bound to now, so this applies the
+    // selection exactly as thread.migrated does; the history row arrives as
+    // its own activity event.
+    case "thread.migration-refused":
+      return decodeForEvent(
+        ThreadMigrationRefusedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            modelSelection: payload.modelSelection,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
     case "thread.runtime-mode-set":
       return decodeForEvent(ThreadRuntimeModeSetPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
@@ -1259,19 +1279,12 @@ export function projectEvent(
               ? payload.activity.payload.sentAt
               : null
             : thread.awaitingParentReplySince;
-          // A migration whose session hand-off was refused undoes its own
-          // rebind: the thread goes back to the account it never left, so it
-          // does not keep claiming one its session never joined.
-          const modelSelection = isThreadMigrationFailedActivity(payload.activity)
-            ? { modelSelection: payload.activity.payload.restoredModelSelection }
-            : {};
 
           return {
             ...nextBase,
             threads: patchThreadAt(nextBase.threads, threadIndex, {
               activities,
               awaitingParentReplySince,
-              ...modelSelection,
               updatedAt: event.occurredAt,
             }),
           };

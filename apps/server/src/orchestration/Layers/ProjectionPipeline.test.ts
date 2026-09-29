@@ -6,6 +6,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
+  ModelSelection,
   ProjectId,
   ThreadId,
   type ThreadPullRequestSnapshot,
@@ -63,6 +64,7 @@ const exists = (filePath: string) =>
   });
 
 const BaseTestLayer = makeProjectionPipelinePrefixedTestLayer("t3-projection-pipeline-test-");
+const decodeModelSelection = Schema.decodeSync(Schema.fromJsonString(ModelSelection));
 const encodeThreadLinkedPullRequest = Schema.encodeSync(
   Schema.fromJsonString(ThreadLinkedPullRequest),
 );
@@ -170,6 +172,137 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-clea
         });
         yield* projectionPipeline.projectEvent(threadDeleted).pipe(Effect.withTracer(tracer));
         assert.strictEqual(cleanupSpans, 1);
+      }),
+    );
+  },
+);
+
+/**
+ * The SQL projection is what `resolveThreadShell` and every cold client load
+ * read, so a migration and the refusal that answers it have to land on the
+ * thread row here, not only in the in-memory read model.
+ */
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-migration-rebind-")))(
+  "thread migration rebind projection",
+  (it) => {
+    const origin = ProviderInstanceId.make("codex");
+    const target = ProviderInstanceId.make("codex_work");
+    const createdAt = "2026-09-01T10:00:00.000Z";
+
+    const readModelSelection = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const rows = yield* sql<{ readonly modelSelection: string }>`
+          SELECT model_selection_json AS "modelSelection"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+        return decodeModelSelection(rows[0]!.modelSelection);
+      });
+
+    const seedMigratedThread = Effect.fnUntraced(function* (scenario: string) {
+      const threadId = ThreadId.make(`thread-migration-rebind-${scenario}`);
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const created = yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.make(`evt-migration-rebind-thread-${scenario}`),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.make(`cmd-migration-rebind-thread-${scenario}`),
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-migration-rebind"),
+          title: "Migration rebind",
+          modelSelection: { instanceId: origin, model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* projectionPipeline.projectEvent(created);
+      const migrated = yield* eventStore.append({
+        type: "thread.migrated",
+        eventId: EventId.make(`evt-migration-rebind-migrated-${scenario}`),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-09-01T10:05:00.000Z",
+        commandId: CommandId.make(`cmd-migration-rebind-migrate-${scenario}`),
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: {
+          threadId,
+          fromModelSelection: { instanceId: origin, model: "gpt-5-codex" },
+          modelSelection: { instanceId: target, model: "gpt-5-codex" },
+          handoffMode: "replay",
+          trigger: "auto-failover",
+          updatedAt: "2026-09-01T10:05:00.000Z",
+        },
+      });
+      yield* projectionPipeline.projectEvent(migrated);
+      return threadId;
+    });
+
+    const appendRefusal = Effect.fnUntraced(function* (
+      scenario: string,
+      threadId: ThreadId,
+      modelSelection: { instanceId: ProviderInstanceId; model: string },
+    ) {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const refused = yield* eventStore.append({
+        type: "thread.migration-refused",
+        eventId: EventId.make(`evt-migration-rebind-refused-${scenario}`),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-09-01T10:05:02.000Z",
+        commandId: CommandId.make(`cmd-migration-rebind-refuse-${scenario}`),
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: {
+          threadId,
+          attemptedModelSelection: { instanceId: target, model: "gpt-5-codex" },
+          modelSelection,
+          trigger: "auto-failover",
+          detail: "incompatible resume state",
+          updatedAt: "2026-09-01T10:05:02.000Z",
+        },
+      });
+      yield* projectionPipeline.projectEvent(refused);
+    });
+
+    it.effect("rebinds the thread row to the migration target", () =>
+      Effect.gen(function* () {
+        const threadId = yield* seedMigratedThread("bind");
+        assert.strictEqual((yield* readModelSelection(threadId)).instanceId, String(target));
+      }),
+    );
+
+    it.effect("puts the thread row back when the hand-off is refused", () =>
+      Effect.gen(function* () {
+        const threadId = yield* seedMigratedThread("undo");
+        yield* appendRefusal("undo", threadId, { instanceId: origin, model: "gpt-5-codex" });
+        assert.strictEqual((yield* readModelSelection(threadId)).instanceId, String(origin));
+      }),
+    );
+
+    // The refusal carries the selection the decider resolved, so a thread that
+    // moved on under it is written as it stands rather than clobbered.
+    it.effect("writes whatever selection the refusal carries", () =>
+      Effect.gen(function* () {
+        const threadId = yield* seedMigratedThread("moved");
+        const spare = ProviderInstanceId.make("codex_spare");
+        yield* appendRefusal("moved", threadId, { instanceId: spare, model: "gpt-5-codex" });
+        assert.strictEqual((yield* readModelSelection(threadId)).instanceId, String(spare));
       }),
     );
   },

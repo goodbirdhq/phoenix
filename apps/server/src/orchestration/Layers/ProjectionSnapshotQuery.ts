@@ -2143,6 +2143,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             'thread.report-posted',
             'thread.activity-appended',
             'thread.migrated',
+            'thread.migration-refused',
             'thread.turn-diff-completed',
             'thread.reverted',
             'thread.session-set',

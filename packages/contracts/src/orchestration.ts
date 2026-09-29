@@ -1096,19 +1096,21 @@ export const isThreadMigrationActivity = Schema.is(ThreadMigrationActivity);
 /**
  * Activity kind written when the session hand-off a migration asked for is
  * refused. A `thread.migrated` event is durable the moment it is decided, so
- * the refusal has to be part of the same story: this row names the target the
- * thread could not reach, and carries the selection the projections put the
- * thread back on, so a thread never keeps claiming an account its session
- * never joined.
+ * the refusal has to be part of the same story, and this row is that story's
+ * second half: it names the target the thread could not reach and why.
+ *
+ * The row only narrates. What the thread is *bound* to after a refusal is
+ * decided by `thread.migration-refused`, so the selection keeps a single
+ * writer and no projection has to read a history row to stay correct.
  */
 export const THREAD_MIGRATION_FAILED_ACTIVITY_KIND = "thread.migration.failed";
 
 export const ThreadMigrationFailedActivityPayload = Schema.Struct({
+  fromInstanceId: ProviderInstanceId,
+  fromModel: TrimmedNonEmptyString,
   toInstanceId: ProviderInstanceId,
   toModel: TrimmedNonEmptyString,
   trigger: ThreadMigrationTrigger,
-  /** Where the thread is put back: the hand-off never happened. */
-  restoredModelSelection: ModelSelection,
   detail: TrimmedNonEmptyString,
 });
 export type ThreadMigrationFailedActivityPayload = typeof ThreadMigrationFailedActivityPayload.Type;
@@ -1805,6 +1807,32 @@ const ThreadMigrateCommand = Schema.Struct({
   ),
 );
 
+/**
+ * `thread.migration.refuse` — the server reporting that the session hand-off
+ * a `thread.migrated` asked for never happened.
+ *
+ * The rebind is durable before the restart is attempted, so a refusal has to
+ * be able to take it back; otherwise the thread claims an account its session
+ * never joined and trips the instance guard on every later turn. Taking it
+ * back is a decision, not a projection detail, which is why it is a command:
+ * the decider compares the thread's *current* selection against the target
+ * that refused and only unwinds a rebind that is still standing, so a
+ * `thread.meta.update` or a second migration that landed in between is never
+ * clobbered.
+ */
+const ThreadMigrationRefuseCommand = Schema.Struct({
+  type: Schema.Literal("thread.migration.refuse"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  /** The selection the thread came from, and goes back to if it is still on the target. */
+  fromModelSelection: ModelSelection,
+  /** The selection the refused `thread.migrated` bound the thread to. */
+  attemptedModelSelection: ModelSelection,
+  trigger: ThreadMigrationTrigger,
+  detail: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const ThreadPullRequestLinkCommand = Schema.Struct({
   type: Schema.Literal("thread.pull-request.link"),
   commandId: CommandId,
@@ -2346,6 +2374,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
+  ThreadMigrationRefuseCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
   ThreadTitleGenerateCompleteCommand,
@@ -2378,6 +2407,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.auto-settle-set",
   "thread.meta-updated",
   "thread.migrated",
+  "thread.migration-refused",
   "thread.pull-request-linked",
   "thread.pull-request-unlinked",
   "thread.pull-request-synced",
@@ -2570,6 +2600,28 @@ export const ThreadMigratedPayload = Schema.Struct({
   trigger: ThreadMigrationTrigger,
   updatedAt: IsoDateTime,
 });
+
+/**
+ * A migration's session hand-off was refused, and the thread is bound to
+ * `modelSelection` from here on.
+ *
+ * `modelSelection` is absolute rather than a "restore this" instruction: the
+ * decider has already compared the thread's current selection against
+ * `attemptedModelSelection` and resolved what the thread should be on, so
+ * every projection applies this field the same way it applies
+ * `thread.migrated`'s — one writer, no reader-side rule. When the thread had
+ * already moved on under the refusal, this equals where it moved to and the
+ * event only records the failure.
+ */
+export const ThreadMigrationRefusedPayload = Schema.Struct({
+  threadId: ThreadId,
+  attemptedModelSelection: ModelSelection,
+  modelSelection: ModelSelection,
+  trigger: ThreadMigrationTrigger,
+  detail: TrimmedNonEmptyString,
+  updatedAt: IsoDateTime,
+});
+export type ThreadMigrationRefusedPayload = typeof ThreadMigrationRefusedPayload.Type;
 
 export const ThreadPullRequestLinkedPayload = Schema.Struct({
   threadId: ThreadId,
@@ -2883,6 +2935,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.migrated"),
     payload: ThreadMigratedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.migration-refused"),
+    payload: ThreadMigrationRefusedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

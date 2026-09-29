@@ -8,7 +8,6 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
-  THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -1770,6 +1769,7 @@ describe("thread.migrated", () => {
       },
     });
     if (migrated.kind !== "updated") throw new Error("expected update");
+    expect(migrated.thread.modelSelection.instanceId).toBe(ProviderInstanceId.make("claude_work"));
 
     const refused = applyThreadDetailEvent(migrated.thread, {
       ...baseEventFields,
@@ -1777,27 +1777,20 @@ describe("thread.migrated", () => {
       occurredAt: "2026-04-01T02:00:01.000Z",
       aggregateKind: "thread",
       aggregateId: ThreadId.make("thread-1"),
-      type: "thread.activity-appended",
+      type: "thread.migration-refused",
       payload: {
         threadId: ThreadId.make("thread-1"),
-        activity: {
-          id: EventId.make("11111111-1111-4111-8111-111111111111"),
-          tone: "error",
-          kind: THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
-          summary: "Migration to claude_work (claude-opus-5) was refused",
-          payload: {
-            toInstanceId: ProviderInstanceId.make("claude_work"),
-            toModel: "claude-opus-5",
-            trigger: "auto-failover",
-            restoredModelSelection: {
-              instanceId: ProviderInstanceId.make("codex"),
-              model: "gpt-5.4",
-            },
-            detail: "incompatible resume state",
-          },
-          turnId: null,
-          createdAt: "2026-04-01T02:00:01.000Z",
+        attemptedModelSelection: {
+          instanceId: ProviderInstanceId.make("claude_work"),
+          model: "claude-opus-5",
         },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        trigger: "auto-failover",
+        detail: "incompatible resume state",
+        updatedAt: "2026-04-01T02:00:01.000Z",
       },
     });
 
@@ -1806,7 +1799,38 @@ describe("thread.migrated", () => {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.4",
     });
-    expect(refused.thread.activities.at(-1)?.kind).toBe(THREAD_MIGRATION_FAILED_ACTIVITY_KIND);
+    expect(refused.thread.updatedAt).toBe("2026-04-01T02:00:01.000Z");
+  });
+
+  // The server decides what the thread is bound to after a refusal, so a
+  // refusal that arrives once the thread has moved on again carries where it
+  // moved to — the client never second-guesses it.
+  it("follows the server when a refusal lands after the thread moved on", () => {
+    const refused = applyThreadDetailEvent(baseThread, {
+      ...baseEventFields,
+      sequence: 9,
+      occurredAt: "2026-04-01T03:00:00.000Z",
+      aggregateKind: "thread",
+      aggregateId: ThreadId.make("thread-1"),
+      type: "thread.migration-refused",
+      payload: {
+        threadId: ThreadId.make("thread-1"),
+        attemptedModelSelection: {
+          instanceId: ProviderInstanceId.make("claude_work"),
+          model: "claude-opus-5",
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex_spare"),
+          model: "gpt-5.4",
+        },
+        trigger: "auto-failover",
+        detail: "incompatible resume state",
+        updatedAt: "2026-04-01T03:00:00.000Z",
+      },
+    });
+
+    if (refused.kind !== "updated") throw new Error("expected update");
+    expect(refused.thread.modelSelection.instanceId).toBe(ProviderInstanceId.make("codex_spare"));
   });
 });
 

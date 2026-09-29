@@ -4,7 +4,6 @@ import {
   UserInputAttachmentAnswerPayload,
   type ChatAttachment,
   isSessionMessageSentActivity,
-  isThreadMigrationFailedActivity,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
@@ -982,6 +981,24 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        // The refusal answering a migration. The decider resolved which
+        // selection stands, so this writes it the same way the migration
+        // itself does.
+        case "thread.migration-refused": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            modelSelection: event.payload.modelSelection,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
         case "thread.runtime-mode-set": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
@@ -1089,17 +1106,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                     : null,
                 }
               : {};
-          // A refused migration undoes its own rebind here too, so the row the
-          // clients read agrees with the account the session is actually on.
-          const restoredModelSelection =
-            event.type === "thread.activity-appended" &&
-            isThreadMigrationFailedActivity(event.payload.activity)
-              ? { modelSelection: event.payload.activity.payload.restoredModelSelection }
-              : {};
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             ...awaitingParentReply,
-            ...restoredModelSelection,
             updatedAt: event.occurredAt,
           });
           if (shouldRefreshThreadShellSummary(event)) {

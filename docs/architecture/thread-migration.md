@@ -45,13 +45,25 @@ streaming; it runs between turns or from a failed turn.
 ## When the hand-off is refused
 
 `thread.migrated` is durable before the session restart is attempted, so the rebind can
-outlive a start the provider refuses. When `ProviderCommandReactor` cannot bring the session
-across, the refusal is reported the way a refused turn start is — the reason lands on the
-session as `lastError`, and an error row lands in the thread's history — and that row
-(`thread.migration.failed`) also carries the selection the thread is put back on. Every
-projection of a thread, server-side and in the clients, restores the selection from it, so a
-thread never keeps claiming an account its session never joined, and the next turn starts on
-the account it never left instead of tripping the instance guard.
+outlive a start the provider refuses. `ProviderCommandReactor` answers that with a second
+command, `thread.migration.refuse`, which the decider turns into `thread.migration-refused`
+plus a `thread.migration.failed` history row. The event carries the selection the thread is
+bound to from then on, and every projection applies it exactly as it applies
+`thread.migrated`'s — the selection keeps one writer, and a projection that knows about
+migrations cannot silently miss the refusal.
+
+The decider resolves that selection against the read model: the origin if the thread is
+still on the refused target, and whatever it has since moved to otherwise, so a
+`thread.meta.update` or a second migration decided in between is never clobbered. The
+session's `lastError` records the reason without forcing its status — a refused start never
+stopped the origin session, which is still up and still serving turns.
+
+The refusal is also the failover reactor's second dedupe signal. Its only other one is that
+the selection has left the limited account, and a refusal puts it back; without this, every
+later usage-limit event in the episode would re-pick the same target and be refused again.
+`LimitFailoverReactor` drops a target that has refused a thread from that thread's
+candidates for as long as the process runs, so the candidate set only shrinks and a thread
+can be offered to each member of its group at most once. A restart is the retry boundary.
 
 ## Entry points
 

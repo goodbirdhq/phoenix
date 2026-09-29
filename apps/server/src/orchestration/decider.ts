@@ -3,6 +3,7 @@ import {
   reportAlreadySupersededMessage,
   EventId,
   THREAD_MIGRATION_ACTIVITY_KIND,
+  THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
   MAX_SCRIPT_ID_LENGTH,
   SCRIPT_RUN_COMMAND_PATTERN,
   MessageId,
@@ -1438,6 +1439,76 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       return [migratedEvent, migrationActivityEvent];
+    }
+
+    case "thread.migration.refuse": {
+      // A refusal is history even for a thread the user archived in between,
+      // so this is requireThread, not requireThreadNotArchived.
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // The rebind is only unwound while it is still standing. A
+      // thread.meta.update or a second migration decided between the
+      // thread.migrated and this refusal is a newer statement about where the
+      // thread belongs, and outranks the one being taken back.
+      const rebindStillStanding =
+        thread.modelSelection.instanceId === command.attemptedModelSelection.instanceId &&
+        thread.modelSelection.model === command.attemptedModelSelection.model;
+      const modelSelection = rebindStillStanding
+        ? command.fromModelSelection
+        : thread.modelSelection;
+      const refusedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.migration-refused",
+        payload: {
+          threadId: command.threadId,
+          attemptedModelSelection: command.attemptedModelSelection,
+          modelSelection,
+          trigger: command.trigger,
+          detail: command.detail,
+          updatedAt: command.createdAt,
+        },
+      };
+      // Same id derivation as the migration row it answers: a redelivered
+      // refusal upserts that row instead of appending a second one.
+      const refusalActivityEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: EventId.make(`thread-migration-refused:${command.commandId}`),
+            tone: "error",
+            kind: THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
+            summary: rebindStillStanding
+              ? `Migration to ${command.attemptedModelSelection.instanceId} (${command.attemptedModelSelection.model}) was refused; the thread stays on ${modelSelection.instanceId} (${modelSelection.model})`
+              : `Migration to ${command.attemptedModelSelection.instanceId} (${command.attemptedModelSelection.model}) was refused; the thread is on ${modelSelection.instanceId} (${modelSelection.model})`,
+            payload: {
+              fromInstanceId: command.fromModelSelection.instanceId,
+              fromModel: command.fromModelSelection.model,
+              toInstanceId: command.attemptedModelSelection.instanceId,
+              toModel: command.attemptedModelSelection.model,
+              trigger: command.trigger,
+              detail: command.detail,
+            },
+            turnId: null,
+            createdAt: command.createdAt,
+          },
+        },
+      };
+      return [refusedEvent, refusalActivityEvent];
     }
 
     case "thread.runtime-mode.set": {

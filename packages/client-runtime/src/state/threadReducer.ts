@@ -14,10 +14,7 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 import { threadPullRequestKeysEqual } from "@t3tools/shared/threadPullRequests";
-import {
-  isImportedAgentSessionMessageId,
-  isThreadMigrationFailedActivity,
-} from "@t3tools/contracts";
+import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 
 export type ThreadDetailReducerResult =
@@ -300,6 +297,20 @@ export function applyThreadDetailEvent(
     // A migration rebinds the thread to another provider instance; the
     // history row arrives separately as a thread.activity-appended event.
     case "thread.migrated":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          modelSelection: event.payload.modelSelection,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    // The refusal answering a migration carries the selection the server
+    // resolved, so the client applies it exactly as it applies the migration
+    // — no reader-side rule, and the optimistic rebind is undone by the same
+    // single writer that made it.
+    case "thread.migration-refused":
       return {
         kind: "updated",
         thread: {
@@ -783,12 +794,6 @@ export function applyThreadDetailEvent(
       // thread.reverted that discards turns can still resolve a value from
       // the turns that survive.
       const supersedesContextWindow = isResolvableContextWindowActivity(activity);
-      // A migration whose session hand-off was refused undoes its own rebind,
-      // exactly as the server's projections do: the thread goes back to the
-      // account its session never left.
-      const restoredSelection = isThreadMigrationFailedActivity(activity)
-        ? { modelSelection: activity.payload.restoredModelSelection }
-        : {};
       // Live streams append in order: an unseen id sorting at/after the tail
       // of a known-sorted array appends without re-filtering and re-sorting
       // the whole history on every event. The id set moves forward to the new
@@ -810,7 +815,6 @@ export function applyThreadDetailEvent(
           thread: {
             ...thread,
             activities,
-            ...restoredSelection,
             updatedAt: event.occurredAt,
           },
         };
@@ -833,7 +837,7 @@ export function applyThreadDetailEvent(
 
       return {
         kind: "updated",
-        thread: { ...thread, activities, ...restoredSelection, updatedAt: event.occurredAt },
+        thread: { ...thread, activities, updatedAt: event.occurredAt },
       };
     }
 

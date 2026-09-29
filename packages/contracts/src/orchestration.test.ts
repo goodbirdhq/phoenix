@@ -39,6 +39,8 @@ import {
   SnapShotAccessibility,
   isProviderSendTurnSupportedImageMimeType,
   isThreadMigrationActivity,
+  isThreadMigrationFailedActivity,
+  THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -1886,6 +1888,28 @@ it("recognizes a migration history row", () => {
     isThreadMigrationActivity({ ...activity, payload: { ...activity.payload, toModel: "" } }),
     false,
   );
+});
+
+it("recognizes a refused-migration history row", () => {
+  const activity = {
+    id: "thread-migration-refused:cmd-1",
+    tone: "error",
+    kind: THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
+    summary: "Migration to claude_work (claude-opus-5) was refused",
+    payload: {
+      fromInstanceId: "claude_personal",
+      fromModel: "claude-opus-5",
+      toInstanceId: "claude_work",
+      toModel: "claude-opus-5",
+      trigger: "auto-failover",
+      detail: "incompatible resume state",
+    },
+    turnId: null,
+    createdAt: "2026-08-19T00:00:00.000Z",
+  };
+  assert.strictEqual(isThreadMigrationFailedActivity(activity), true);
+  // The row narrates; it never carries a selection for a projection to apply.
+  assert.strictEqual(isThreadMigrationFailedActivity({ ...activity, tone: "info" }), false);
 });
 
 it("derives one typed exit reason with quota first, then the stop audit, then the status", () => {
