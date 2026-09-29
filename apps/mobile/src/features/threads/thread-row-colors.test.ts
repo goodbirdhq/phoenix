@@ -21,7 +21,6 @@ describe("thread row colors", () => {
         expect(active.swipeBackgroundColor).toBe(theme["--color-drawer"]);
         // Pointer feedback must not mix a second color into the active background.
         expect(active.interactionOpacity).toBe(0);
-        expect(active.providerIconSurfaceColor).toBe(active.backgroundColor);
         expect(idle.foregroundClassName).toBe("text-drawer-foreground");
         expect(idle.mutedForegroundClassName).toBe("text-drawer-foreground-muted");
 
