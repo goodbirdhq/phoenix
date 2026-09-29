@@ -2,11 +2,17 @@
  * The migration path with `ProviderCommandReactor`, `ProviderService` and
  * `ProviderSessionDirectory` wired together.
  *
- * `ProviderCommandReactor.test.ts` stubs `startSession`, so it cannot see the
- * guard inside `ProviderService` that a sanctioned migration has to cross. That
- * gap is why a thread once auto-failed over and then could never start again:
- * the reactor asked for the switch, `startSession` refused it using the very
- * binding the switch was replacing, and no unit test covered the pair.
+ * `ProviderCommandReactor.test.ts` stubs `startSession`, so no unit test sees
+ * the reactor and the service agree. That gap is why a thread once auto-failed
+ * over and then could never start again: the reactor asked for the switch,
+ * `startSession` refused it using the very binding the switch was replacing,
+ * and nothing covered the pair.
+ *
+ * That particular refusal is gone — #142 deleted the instance guard, so a
+ * migration can no longer be rejected on the binding alone, and removing the
+ * reactor's `allowMigration` no longer fails this test. What it defends now is
+ * the migration path end to end: a thread told to move accounts actually
+ * arrives, with its selection and session both on the target.
  *
  * @module integration/providerMigrationFailover
  */
@@ -136,7 +142,7 @@ describe("provider migration across accounts", () => {
           });
 
           // Start on the origin account so the directory holds a real binding
-          // with a resume cursor — the state the guard refuses to cross.
+          // with a resume cursor — the state a migration has to move away from.
           yield* harness.adapterHarness!.queueTurnResponseForNextSession(originTurnResponse);
           yield* harness.engine.dispatch({
             type: "thread.turn.start",
@@ -171,9 +177,8 @@ describe("provider migration across accounts", () => {
           expect(targetHarness).toBeDefined();
           yield* targetHarness!.queueTurnResponseForNextSession(targetRetryResponse);
 
-          // The failover itself. Without the reactor authorising the switch,
-          // startSession rejects it as an incompatible resume state and the
-          // thread stays on the origin account — wedged.
+          // The failover itself: the thread must end up on the target account,
+          // selection and session together.
           yield* harness.engine.dispatch({
             type: "thread.migrate",
             commandId: CommandId.make("cmd-migrate"),

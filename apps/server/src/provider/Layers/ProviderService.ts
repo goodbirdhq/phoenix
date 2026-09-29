@@ -2078,29 +2078,38 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-        // A binding for another instance normally means an accidental switch
-        // that would strand a native conversation, so it is refused. Callers
-        // that own the instance decision opt out: the binding they are
-        // replacing is the stale side, and letting it veto the start wedges
-        // the thread forever, because nothing else ever clears it.
+        // A binding naming another instance is not consulted for the instance
+        // decision. The caller owns that — it is the only party that can tell a
+        // sanctioned migration from an accident, because it holds the read
+        // model and the live session set. Refusing the start on the binding
+        // alone only ever wedged threads, since nothing else clears a binding
+        // the start was there to replace.
+        //
+        // Keeping a cursor on its own account is therefore the caller's
+        // invariant, not this function's: the fallback below only instance-
+        // checks the *persisted* branch, so a cursor passed in by the caller
+        // reaches the adapter unexamined, and no adapter validates ownership.
+        // ProviderCommandReactor upholds it by passing one only when the
+        // continuation identities match. The assertion below is the floor
+        // under that, not a restatement of it.
         if (
-          input.allowMigration !== true &&
-          persistedBinding?.provider === resolvedProvider &&
-          persistedBinding.providerInstanceId !== resolvedInstanceId &&
-          (input.resumeCursor != null || persistedBinding.resumeCursor != null)
+          input.resumeCursor != null &&
+          persistedBinding !== undefined &&
+          persistedBinding.providerInstanceId !== undefined &&
+          persistedBinding.providerInstanceId !== resolvedInstanceId
         ) {
-          const previousInstanceId = yield* requireBindingInstanceId(
-            "ProviderService.startSession",
-            persistedBinding,
-          );
-          const previousInfo = yield* registry.getInstanceInfo(previousInstanceId);
+          const previousInfo = yield* registry
+            .getInstanceInfo(persistedBinding.providerInstanceId)
+            .pipe(Effect.option);
+          const previousKey =
+            Option.getOrUndefined(previousInfo)?.continuationIdentity.continuationKey;
           if (
-            previousInfo.continuationIdentity.continuationKey !==
-            instanceInfo.continuationIdentity.continuationKey
+            previousKey !== undefined &&
+            previousKey !== instanceInfo.continuationIdentity.continuationKey
           ) {
             return yield* toValidationError(
               "ProviderService.startSession",
-              `Thread '${threadId}' cannot switch from instance '${previousInstanceId}' to '${resolvedInstanceId}' because their provider resume state is incompatible.`,
+              `Thread '${threadId}' was given a resume cursor while its binding names instance '${persistedBinding.providerInstanceId}', whose conversation instance '${resolvedInstanceId}' cannot resume.`,
             );
           }
         }
@@ -2879,6 +2888,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       }
 
       const sessions: ProviderSession[] = [];
+      // Sessions the directory does not currently name, kept so the list stays
+      // an honest answer to "which processes are attached" but sorted behind
+      // the bound one below.
+      const detached = new Set<ProviderSession>();
       for (const session of activeSessions) {
         const binding = bindingsByThreadId.get(session.threadId);
         if (!binding) {
@@ -2886,29 +2899,27 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           continue;
         }
 
+        // A live session the binding does not name is a session in transition,
+        // not corruption. `startSession` exposes the replacement on the new
+        // adapter before it stops the old one and rebinds, and a stale stop
+        // that fails leaves the old one visible for longer than that. The
+        // adapter a session came from is authoritative about where it runs, so
+        // report it as-is; only the bound session may take binding-derived
+        // state, which is the invariant the old `die` was really protecting.
+        if (
+          binding.provider !== session.provider ||
+          binding.providerInstanceId === undefined ||
+          binding.providerInstanceId !== session.providerInstanceId
+        ) {
+          sessions.push(session);
+          detached.add(session);
+          continue;
+        }
+
         const overrides: {
           resumeCursor?: ProviderSession["resumeCursor"];
           runtimeMode?: ProviderSession["runtimeMode"];
-          providerInstanceId?: ProviderSession["providerInstanceId"];
         } = {};
-        overrides.providerInstanceId = dieOnMissingBindingInstanceId(
-          "ProviderService.listSessions",
-          binding,
-        );
-        if (binding.provider !== session.provider) {
-          return yield* Effect.die(
-            new Error(
-              `ProviderService.listSessions: thread '${session.threadId}' is active on provider '${session.provider}' but persisted binding names provider '${binding.provider}'.`,
-            ),
-          );
-        }
-        if (overrides.providerInstanceId !== session.providerInstanceId) {
-          return yield* Effect.die(
-            new Error(
-              `ProviderService.listSessions: thread '${session.threadId}' is active on provider instance '${session.providerInstanceId}' but persisted binding names '${overrides.providerInstanceId}'.`,
-            ),
-          );
-        }
         if (session.resumeCursor === undefined && binding.resumeCursor !== undefined) {
           overrides.resumeCursor = binding.resumeCursor;
         }
@@ -2917,7 +2928,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }
         sessions.push(Object.assign({}, session, overrides));
       }
-      return sessions;
+      if (detached.size === 0) {
+        return sessions;
+      }
+      yield* Effect.logDebug("provider.session.list-detached", {
+        threadIds: [...detached].map((session) => session.threadId),
+      });
+      // Callers pick a thread's session with `find`, so during a transition the
+      // bound one has to come first or they read the account the thread is
+      // leaving. `sort` is stable, so everything else keeps adapter order.
+      return sessions.sort(
+        (left, right) => Number(detached.has(left)) - Number(detached.has(right)),
+      );
     },
   );
 

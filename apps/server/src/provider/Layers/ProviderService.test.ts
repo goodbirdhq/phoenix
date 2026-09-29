@@ -1262,52 +1262,44 @@ const antigravityInstanceRouting = makeProviderServiceLayer({
   },
 });
 antigravityInstanceRouting.layer("ProviderServiceLive instance-owned conversations", (it) => {
-  it.effect(
-    "does not replace a native conversation with another instance or a removed-instance fallback",
-    () =>
-      Effect.gen(function* () {
-        const provider = yield* ProviderService.ProviderService;
-        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+  // The binding a start is replacing no longer vetoes it. `startSession` had a
+  // guard that refused a cross-instance start whose resume state could not
+  // travel, but the caller that owns the instance decision always opted out of
+  // it, so it only ever fired for a binding left on an instance that had since
+  // been removed from settings — wedging exactly the thread it was meant to
+  // protect. What it was actually guarding is enforced unconditionally below:
+  // a cursor never crosses accounts.
+  it.effect("starts on a live instance when the bound instance is gone from settings", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      originalAntigravityInstanceAvailable = false;
 
-        for (const originalAvailable of [true, false]) {
-          originalAntigravityInstanceAvailable = originalAvailable;
-          for (const passCursor of [true, false]) {
-            const threadId = asThreadId(
-              `thread-antigravity-instance-${originalAvailable}-${passCursor}`,
-            );
-            const resumeCursor = { sessionId: "native-session" };
-            yield* directory.upsert({
-              threadId,
-              provider: antigravityDriver,
-              providerInstanceId: originalAntigravityInstanceId,
-              status: "stopped",
-              runtimeMode: "approval-required",
-              ...(passCursor ? {} : { resumeCursor }),
-            });
-            const originalBinding = yield* directory.getBinding(threadId);
-            replacementAntigravity.startSession.mockClear();
+      const threadId = asThreadId("thread-antigravity-removed-instance");
+      yield* directory.upsert({
+        threadId,
+        provider: antigravityDriver,
+        providerInstanceId: originalAntigravityInstanceId,
+        status: "stopped",
+        runtimeMode: "approval-required",
+        resumeCursor: { sessionId: "native-session" },
+      });
+      replacementAntigravity.startSession.mockClear();
 
-            const error = yield* Effect.flip(
-              provider.startSession(threadId, {
-                providerInstanceId: replacementAntigravityInstanceId,
-                threadId,
-                runtimeMode: "approval-required",
-                ...(passCursor ? { resumeCursor } : {}),
-              }),
-            );
+      yield* provider.startSession(threadId, {
+        providerInstanceId: replacementAntigravityInstanceId,
+        threadId,
+        runtimeMode: "approval-required",
+      });
 
-            assert.equal(
-              error._tag,
-              originalAvailable ? "ProviderValidationError" : "ProviderUnsupportedError",
-            );
-            assert.equal(replacementAntigravity.startSession.mock.calls.length, 0);
-            assert.deepEqual(yield* directory.getBinding(threadId), originalBinding);
-          }
-        }
-      }),
+      assert.equal(replacementAntigravity.startSession.mock.calls.length, 1);
+      assert.equal(replacementAntigravity.startSession.mock.calls[0]?.[0].resumeCursor, undefined);
+      const rebound = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(rebound.providerInstanceId, replacementAntigravityInstanceId);
+    }),
   );
 
-  it.effect("lets an authorised migration replace a binding left on the old instance", () =>
+  it.effect("replaces a binding left on the old instance without carrying its cursor", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
       const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
@@ -1328,7 +1320,6 @@ antigravityInstanceRouting.layer("ProviderServiceLive instance-owned conversatio
         providerInstanceId: replacementAntigravityInstanceId,
         threadId,
         runtimeMode: "approval-required",
-        allowMigration: true,
       });
 
       assert.equal(replacementAntigravity.startSession.mock.calls.length, 1);
@@ -2900,7 +2891,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("dies when an active session conflicts with its persisted binding", () =>
+  it.effect("reports a session the binding does not name instead of dying", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
       const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
@@ -2917,11 +2908,21 @@ routing.layer("ProviderServiceLive routing", (it) => {
         threadId,
         provider: ProviderDriverKind.make("claudeAgent"),
         providerInstanceId: claudeAgentInstanceId,
-        runtimeMode: "full-access",
+        runtimeMode: "approval-required",
+        resumeCursor: { sessionId: "other-account" },
       });
 
       const exit = yield* Effect.exit(provider.listSessions());
-      assert.equal(Exit.hasDies(exit), true);
+      assert.equal(Exit.hasDies(exit), false);
+      const listed = (yield* exit).filter((session) => session.threadId === threadId);
+      assert.equal(listed.length, 1);
+      // The adapter the session came from is the truth about where it runs, and
+      // none of the other account's binding state may be attributed to it.
+      assert.equal(listed[0]?.providerInstanceId, codexInstanceId);
+      assert.equal(listed[0]?.provider, "codex");
+      assert.equal(listed[0]?.runtimeMode, "full-access");
+      assert.notDeepEqual(listed[0]?.resumeCursor, { sessionId: "other-account" });
+
       yield* directory.upsert({
         threadId,
         provider: ProviderDriverKind.make("codex"),

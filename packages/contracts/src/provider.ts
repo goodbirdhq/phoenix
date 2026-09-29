@@ -90,10 +90,12 @@ export const ProviderSessionStartInput = Schema.Struct({
   // decides whether its provider takes history natively or framed into the
   // first prompt (see ProviderAdapterCapabilities.conversationSeeding).
   seed: Schema.optional(ProviderConversationSeed),
-  // Set by callers that own the thread's instance decision and have already
-  // validated it against live sessions and the read model. It lets the start
-  // replace a persisted binding that names a different instance, instead of
-  // being refused by the very state the caller is rebinding.
+  /**
+   * @deprecated Accepted and ignored. `startSession` no longer consults the
+   * binding it is replacing, so every start is a permitted migration and this
+   * flag selects nothing. Kept only so the one caller still setting it keeps
+   * compiling; remove it and that call site together.
+   */
   allowMigration: Schema.optional(Schema.Boolean),
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
