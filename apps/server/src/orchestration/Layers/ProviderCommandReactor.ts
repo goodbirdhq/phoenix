@@ -703,13 +703,18 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
                   ? Effect.succeed(undefined)
                   : providerService.getInstanceInfo(candidate).pipe(
                       Effect.as(candidate),
-                      Effect.tapError(() =>
+                      // catchTag, not orElseSucceed: this tolerates an
+                      // instance the build cannot resolve, and nothing else. If
+                      // getInstanceInfo ever gains a second failure — a settings
+                      // read, a driver probe — that one must not be swallowed
+                      // here, and this stops compiling instead of silently
+                      // stranding the conversation again.
+                      Effect.catchTag("ProviderUnsupportedError", () =>
                         Effect.logWarning(
-                          "provider command reactor ignoring binding on unconfigured instance",
+                          "provider command reactor ignoring binding on unavailable instance",
                           { threadId, boundInstanceId: candidate },
-                        ),
+                        ).pipe(Effect.as(undefined)),
                       ),
-                      Effect.orElseSucceed(() => undefined),
                     ),
               ),
             )
