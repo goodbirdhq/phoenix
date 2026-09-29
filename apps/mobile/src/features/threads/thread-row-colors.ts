@@ -33,7 +33,5 @@ export function getThreadRowColors(
       : sidebarPane
         ? "accent-drawer-foreground-muted"
         : "accent-foreground-muted",
-    // Provider badges blend into the surface beneath them.
-    providerIconSurfaceColor: backgroundColor,
   };
 }

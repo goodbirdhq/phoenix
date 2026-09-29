@@ -18,7 +18,6 @@ function makeConfig(
     readonly instanceId: string;
     readonly driver: string;
     readonly displayName?: string;
-    readonly accentColor?: string;
   }>,
 ): ServerConfig {
   return { providers } as unknown as ServerConfig;
@@ -56,19 +55,22 @@ describe("resolveThreadProviderInstance", () => {
     const serverConfigs = new Map<EnvironmentId, ServerConfig>([
       [
         environmentA,
-        makeConfig([{ instanceId: "codex", driver: "codex", accentColor: "#ff8800" }]),
+        makeConfig([{ instanceId: "codex", driver: "codex", displayName: "Codex x 5" }]),
       ],
-      [environmentB, makeConfig([{ instanceId: "codex", driver: "codex" }])],
+      [
+        environmentB,
+        makeConfig([{ instanceId: "codex", driver: "codex", displayName: "Codex x 20" }]),
+      ],
     ]);
 
     const threadA = makeThread(environmentA, "codex");
     const threadB = makeThread(environmentB, "codex");
 
-    expect(resolveThreadProviderInstance(serverConfigs, threadA)?.accentColor).toBe("#ff8800");
-    expect(resolveThreadProviderInstance(serverConfigs, threadB)?.accentColor).toBeUndefined();
+    expect(resolveThreadProviderInstance(serverConfigs, threadA)?.displayName).toBe("Codex x 5");
+    expect(resolveThreadProviderInstance(serverConfigs, threadB)?.displayName).toBe("Codex x 20");
   });
 
-  it("labels a custom instance by its id so its initials differ from the default", () => {
+  it("labels a custom instance by its id when it has the default display name", () => {
     const environmentId = EnvironmentId.make("environment-a");
     const serverConfigs = new Map<EnvironmentId, ServerConfig>([
       [
@@ -87,16 +89,6 @@ describe("resolveThreadProviderInstance", () => {
       resolveThreadProviderInstance(serverConfigs, makeThread(environmentId, "codex_personal"))
         ?.displayName,
     ).toBe("Codex Personal");
-  });
-
-  it("hides the badge for a single instance with no accent color", () => {
-    const environmentId = EnvironmentId.make("environment-a");
-    const serverConfigs = new Map<EnvironmentId, ServerConfig>([
-      [environmentId, makeConfig([{ instanceId: "codex", driver: "codex" }])],
-    ]);
-    const thread = makeThread(environmentId, "codex");
-
-    expect(resolveThreadProviderInstance(serverConfigs, thread)?.showBadge).toBe(false);
   });
 });
 

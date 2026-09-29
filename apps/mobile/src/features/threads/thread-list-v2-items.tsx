@@ -48,7 +48,6 @@ import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
-import { ProviderInstanceIcon } from "../../components/ProviderIcon";
 import {
   resolveThreadProviderInstance,
   type ThreadRowProviderInstance,
@@ -911,7 +910,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
       : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`;
 
   // Two lines beside the session avatar: title and time, then branch (or
-  // project) · machine with the PR, agent group, account and status after it.
+  // project) · machine with the PR, agent group and status after it.
   // A failed session's last error takes the branch slot so the height holds.
   const failedError = status === "failed" ? (thread.session?.lastError ?? null) : null;
   const detail = [
@@ -1017,18 +1016,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
             onToggle={toggleAgents}
             onDetails={() => setSheet("details")}
             parentProjectId={thread.projectId}
-          />
-        ) : null}
-        {/* The avatar's provider badge is too small for initials, so a thread
-            on one of several accounts of the same provider names it here. */}
-        {props.providerInstance?.showBadge ? (
-          <ProviderInstanceIcon
-            provider={props.providerInstance.driverKind}
-            size={14}
-            displayName={props.providerInstance.displayName}
-            accentColor={props.providerInstance.accentColor}
-            showBadge
-            surfaceColor={rowColors.providerIconSurfaceColor}
           />
         ) : null}
         {statusLabel ? (

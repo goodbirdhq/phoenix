@@ -1,19 +1,13 @@
 import { useMemo } from "react";
 
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import {
-  normalizeProviderAccentColor,
-  resolveProviderInstanceDisplayName,
-  shouldShowInstanceBadge,
-} from "@t3tools/client-runtime/state/provider-instance-display";
+import { resolveProviderInstanceDisplayName } from "@t3tools/client-runtime/state/provider-instance-display";
 import type { EnvironmentId, ProviderDriverKind, ServerConfig } from "@t3tools/contracts";
 
-/** What a thread row needs to draw the provider glyph and its account badge. */
+/** Provider identity for the leading avatar and accessible account label. */
 export interface ThreadRowProviderInstance {
   readonly driverKind: ProviderDriverKind;
   readonly displayName: string;
-  readonly accentColor?: string | undefined;
-  readonly showBadge: boolean;
 }
 
 /**
@@ -29,17 +23,9 @@ export function resolveThreadProviderInstance(
   const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
   const snapshot = providers.find((provider) => provider.instanceId === instanceId);
   if (!snapshot) return null;
-  const entry = {
+  return {
     driverKind: snapshot.driver,
     displayName: resolveProviderInstanceDisplayName(snapshot),
-    accentColor: normalizeProviderAccentColor(snapshot.accentColor),
-  };
-  return {
-    ...entry,
-    showBadge: shouldShowInstanceBadge(
-      entry,
-      providers.map((provider) => ({ driverKind: provider.driver })),
-    ),
   };
 }
 
