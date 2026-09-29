@@ -1093,6 +1093,40 @@ export type ThreadMigrationActivity = typeof ThreadMigrationActivity.Type;
 
 export const isThreadMigrationActivity = Schema.is(ThreadMigrationActivity);
 
+/**
+ * Activity kind written when the session hand-off a migration asked for is
+ * refused. A `thread.migrated` event is durable the moment it is decided, so
+ * the refusal has to be part of the same story: this row names the target the
+ * thread could not reach, and carries the selection the projections put the
+ * thread back on, so a thread never keeps claiming an account its session
+ * never joined.
+ */
+export const THREAD_MIGRATION_FAILED_ACTIVITY_KIND = "thread.migration.failed";
+
+export const ThreadMigrationFailedActivityPayload = Schema.Struct({
+  toInstanceId: ProviderInstanceId,
+  toModel: TrimmedNonEmptyString,
+  trigger: ThreadMigrationTrigger,
+  /** Where the thread is put back: the hand-off never happened. */
+  restoredModelSelection: ModelSelection,
+  detail: TrimmedNonEmptyString,
+});
+export type ThreadMigrationFailedActivityPayload = typeof ThreadMigrationFailedActivityPayload.Type;
+
+export const ThreadMigrationFailedActivity = Schema.Struct({
+  id: EventId,
+  tone: Schema.Literal("error"),
+  kind: Schema.Literal(THREAD_MIGRATION_FAILED_ACTIVITY_KIND),
+  summary: TrimmedNonEmptyString,
+  payload: ThreadMigrationFailedActivityPayload,
+  turnId: Schema.Null,
+  sequence: Schema.optional(NonNegativeInt),
+  createdAt: IsoDateTime,
+});
+export type ThreadMigrationFailedActivity = typeof ThreadMigrationFailedActivity.Type;
+
+export const isThreadMigrationFailedActivity = Schema.is(ThreadMigrationFailedActivity);
+
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",
   "interrupted",

@@ -4,6 +4,7 @@ import {
   UserInputAttachmentAnswerPayload,
   type ChatAttachment,
   isSessionMessageSentActivity,
+  isThreadMigrationFailedActivity,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
@@ -1088,9 +1089,17 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                     : null,
                 }
               : {};
+          // A refused migration undoes its own rebind here too, so the row the
+          // clients read agrees with the account the session is actually on.
+          const restoredModelSelection =
+            event.type === "thread.activity-appended" &&
+            isThreadMigrationFailedActivity(event.payload.activity)
+              ? { modelSelection: event.payload.activity.payload.restoredModelSelection }
+              : {};
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             ...awaitingParentReply,
+            ...restoredModelSelection,
             updatedAt: event.occurredAt,
           });
           if (shouldRefreshThreadShellSummary(event)) {

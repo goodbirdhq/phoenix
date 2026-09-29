@@ -4059,6 +4059,109 @@ describe("ProviderCommandReactor", () => {
       }),
   );
 
+  effectIt.effect(
+    "reports a refused migration on the thread and puts it back on the origin account",
+    () =>
+      Effect.gen(function* () {
+        const refusal =
+          "Thread 'thread-1' cannot switch from instance 'codex' to 'codex_work' because their provider resume state is incompatible.";
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            startSessionEffect: (session) =>
+              session.providerInstanceId === ProviderInstanceId.make("codex_work")
+                ? Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: ProviderDriverKind.make("codex"),
+                      method: "thread.turn.start",
+                      detail: refusal,
+                    }),
+                  )
+                : Effect.succeed(session),
+          }),
+        );
+        const threadId = ThreadId.make("thread-1");
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-migrate-refused-1"),
+          threadId,
+          message: {
+            messageId: asMessageId("user-message-migrate-refused-1"),
+            role: "user",
+            text: "first",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Effect.promise(() => completeProviderTurn(harness, now));
+
+        yield* harness.engine.dispatch({
+          type: "thread.migrate",
+          commandId: CommandId.make("cmd-migrate-refused"),
+          threadId,
+          targetInstanceId: ProviderInstanceId.make("codex_work"),
+          handoffMode: "replay",
+          trigger: "manual",
+          createdAt: now,
+        });
+
+        const refusedRow = (model: Awaited<ReturnType<typeof harness.readModel>>) =>
+          model.threads
+            .find((entry) => entry.id === threadId)
+            ?.activities.find((activity) => activity.kind === "thread.migration.failed");
+        yield* Effect.promise(() =>
+          waitFor(async () => refusedRow(await harness.readModel()) !== undefined),
+        );
+        yield* Effect.promise(() => harness.drain());
+
+        const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+          (entry) => entry.id === threadId,
+        );
+        // The rebind and the refusal read as one story: the migration row stays,
+        // the failure row says what happened, and the selection is back where
+        // the session actually is.
+        expect(thread?.activities.some((activity) => activity.kind === "thread.migrated")).toBe(
+          true,
+        );
+        expect(
+          thread?.activities.find((activity) => activity.kind === "thread.migration.failed"),
+        ).toMatchObject({
+          tone: "error",
+          payload: {
+            toInstanceId: ProviderInstanceId.make("codex_work"),
+            trigger: "manual",
+            restoredModelSelection: { instanceId: ProviderInstanceId.make("codex") },
+            detail: expect.stringContaining(refusal),
+          },
+        });
+        expect(thread?.session?.lastError).toContain(refusal);
+        expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex"));
+        expect(thread?.modelSelection.instanceId).toBe(ProviderInstanceId.make("codex"));
+
+        // And the thread is not wedged: the next turn starts on the account it
+        // never left instead of tripping the instance guard.
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-migrate-refused-2"),
+          threadId,
+          message: {
+            messageId: asMessageId("user-message-migrate-refused-2"),
+            role: "user",
+            text: "second",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+      }),
+  );
+
   it("restarts the provider session when the thread workspace changes", async () => {
     const harness = await createHarness({
       threadModelSelection: {

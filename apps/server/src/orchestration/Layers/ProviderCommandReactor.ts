@@ -14,6 +14,8 @@ import {
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
+  THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
+  type ThreadMigrationFailedActivityPayload,
   type TurnId,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
@@ -303,12 +305,16 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         | "provider.turn.interrupt.failed"
         | "provider.approval.respond.failed"
         | "provider.user-input.respond.failed"
-        | "provider.session.stop.failed";
+        | "provider.session.stop.failed"
+        | typeof THREAD_MIGRATION_FAILED_ACTIVITY_KIND;
       readonly summary: string;
       readonly detail: string;
       readonly turnId: TurnId | null;
       readonly createdAt: string;
       readonly requestId?: string;
+      // Rows whose kind carries more than a detail (a refused migration names
+      // the target it could not reach, and the selection restored in its place).
+      readonly context?: Record<string, unknown>;
     }) =>
       Effect.all({
         commandId: serverCommandId("provider-failure-activity"),
@@ -325,6 +331,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
               kind: input.kind,
               summary: input.summary,
               payload: {
+                ...input.context,
                 detail: input.detail,
                 ...(input.requestId ? { requestId: input.requestId } : {}),
               },
@@ -435,7 +442,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         ),
       );
 
-    const setThreadSessionErrorOnTurnStartFailure = Effect.fnUntraced(function* (input: {
+    const setThreadSessionErrorOnStartFailure = Effect.fnUntraced(function* (input: {
       readonly threadId: ThreadId;
       readonly detail: string;
       readonly createdAt: string;
@@ -1562,7 +1569,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
           );
         }
         const detail = formatFailureDetail(cause);
-        return setThreadSessionErrorOnTurnStartFailure({
+        return setThreadSessionErrorOnStartFailure({
           threadId: event.payload.threadId,
           detail,
           createdAt: event.payload.createdAt,
@@ -1687,7 +1694,7 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         }
         const detail = formatFailureDetail(cause);
         if (!compactionSessionEnsured) {
-          return setThreadSessionErrorOnTurnStartFailure({
+          return setThreadSessionErrorOnStartFailure({
             threadId: event.payload.threadId,
             detail,
             createdAt: event.payload.createdAt,
@@ -2476,13 +2483,64 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
             // the rebound thread.modelSelection, seeded if history exists.
             return;
           }
+          // A refused hand-off is the same kind of failure as a refused turn
+          // start, and reports itself the same way: the reason lands on the
+          // session, and an error row lands in the thread's history. The row
+          // also puts the selection back on the account the session never left
+          // — the rebind is already durable, and a thread left claiming the
+          // target would trip the instance guard on every later turn.
+          const reportRefusedMigration = (cause: Cause.Cause<unknown>) => {
+            if (Cause.hasInterruptsOnly(cause)) {
+              return Effect.interrupt;
+            }
+            const detail = formatFailureDetail(cause);
+            const restored = event.payload.fromModelSelection;
+            threadModelSelections.set(event.payload.threadId, restored);
+            const context: ThreadMigrationFailedActivityPayload = {
+              toInstanceId: event.payload.modelSelection.instanceId,
+              toModel: event.payload.modelSelection.model,
+              trigger: event.payload.trigger,
+              restoredModelSelection: restored,
+              detail,
+            };
+            return setThreadSessionErrorOnStartFailure({
+              threadId: event.payload.threadId,
+              detail,
+              createdAt: event.occurredAt,
+            }).pipe(
+              Effect.flatMap(() =>
+                appendProviderFailureActivity({
+                  threadId: event.payload.threadId,
+                  kind: THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
+                  summary: `Migration to ${context.toInstanceId} (${context.toModel}) was refused; the thread stays on ${restored.instanceId} (${restored.model})`,
+                  detail,
+                  context,
+                  turnId: null,
+                  createdAt: event.occurredAt,
+                }),
+              ),
+              Effect.asVoid,
+            );
+          };
           // A stopped session migrates too — otherwise the stale binding would
           // trip the instance guard on the next turn.
-          yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
-            modelSelection: event.payload.modelSelection,
-            allowMigration: true,
-            ...(event.payload.brief !== undefined ? { migrationBrief: event.payload.brief } : {}),
-          });
+          const restarted = yield* ensureSessionForThread(
+            event.payload.threadId,
+            event.occurredAt,
+            {
+              modelSelection: event.payload.modelSelection,
+              allowMigration: true,
+              ...(event.payload.brief !== undefined ? { migrationBrief: event.payload.brief } : {}),
+            },
+          ).pipe(
+            Effect.as(true),
+            Effect.catchCause((cause) => reportRefusedMigration(cause).pipe(Effect.as(false))),
+          );
+          // The retry below would only re-enter the refusal, and the failure row
+          // already says the message stayed where it was.
+          if (!restarted) {
+            return;
+          }
           // Auto-failover retries the failed turn here, after the rebind, so the
           // retry can never race the session restart into the instance guard.
           if (event.payload.trigger === "auto-failover") {

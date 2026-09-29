@@ -15,6 +15,7 @@ import {
   OrchestrationSession,
   OrchestrationThread,
   isSessionMessageSentActivity,
+  isThreadMigrationFailedActivity,
   WORKTREE_SETUP_ACTIVITY_KIND,
 } from "@t3tools/contracts";
 import {
@@ -1258,12 +1259,19 @@ export function projectEvent(
               ? payload.activity.payload.sentAt
               : null
             : thread.awaitingParentReplySince;
+          // A migration whose session hand-off was refused undoes its own
+          // rebind: the thread goes back to the account it never left, so it
+          // does not keep claiming one its session never joined.
+          const modelSelection = isThreadMigrationFailedActivity(payload.activity)
+            ? { modelSelection: payload.activity.payload.restoredModelSelection }
+            : {};
 
           return {
             ...nextBase,
             threads: patchThreadAt(nextBase.threads, threadIndex, {
               activities,
               awaitingParentReplySince,
+              ...modelSelection,
               updatedAt: event.occurredAt,
             }),
           };

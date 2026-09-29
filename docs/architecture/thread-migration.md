@@ -42,6 +42,17 @@ Two handoff modes:
 Manual migration lets the user choose the mode. Migration is disabled while a turn is
 streaming; it runs between turns or from a failed turn.
 
+## When the hand-off is refused
+
+`thread.migrated` is durable before the session restart is attempted, so the rebind can
+outlive a start the provider refuses. When `ProviderCommandReactor` cannot bring the session
+across, the refusal is reported the way a refused turn start is — the reason lands on the
+session as `lastError`, and an error row lands in the thread's history — and that row
+(`thread.migration.failed`) also carries the selection the thread is put back on. Every
+projection of a thread, server-side and in the clients, restores the selection from it, so a
+thread never keeps claiming an account its session never joined, and the next turn starts on
+the account it never left instead of tripping the instance guard.
+
 ## Entry points
 
 - **Model picker**: instances on other accounts and drivers are no longer greyed out on

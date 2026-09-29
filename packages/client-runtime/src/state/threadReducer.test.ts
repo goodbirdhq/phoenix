@@ -8,6 +8,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -1743,6 +1744,69 @@ describe("thread.migrated", () => {
       model: "claude-opus-5",
     });
     expect(result.thread.updatedAt).toBe("2026-04-01T02:00:00.000Z");
+  });
+
+  it("puts the thread back on the origin account when the hand-off is refused", () => {
+    const migrated = applyThreadDetailEvent(baseThread, {
+      ...baseEventFields,
+      sequence: 7,
+      occurredAt: "2026-04-01T02:00:00.000Z",
+      aggregateKind: "thread",
+      aggregateId: ThreadId.make("thread-1"),
+      type: "thread.migrated",
+      payload: {
+        threadId: ThreadId.make("thread-1"),
+        fromModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claude_work"),
+          model: "claude-opus-5",
+        },
+        handoffMode: "replay",
+        trigger: "auto-failover",
+        updatedAt: "2026-04-01T02:00:00.000Z",
+      },
+    });
+    if (migrated.kind !== "updated") throw new Error("expected update");
+
+    const refused = applyThreadDetailEvent(migrated.thread, {
+      ...baseEventFields,
+      sequence: 8,
+      occurredAt: "2026-04-01T02:00:01.000Z",
+      aggregateKind: "thread",
+      aggregateId: ThreadId.make("thread-1"),
+      type: "thread.activity-appended",
+      payload: {
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("11111111-1111-4111-8111-111111111111"),
+          tone: "error",
+          kind: THREAD_MIGRATION_FAILED_ACTIVITY_KIND,
+          summary: "Migration to claude_work (claude-opus-5) was refused",
+          payload: {
+            toInstanceId: ProviderInstanceId.make("claude_work"),
+            toModel: "claude-opus-5",
+            trigger: "auto-failover",
+            restoredModelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5.4",
+            },
+            detail: "incompatible resume state",
+          },
+          turnId: null,
+          createdAt: "2026-04-01T02:00:01.000Z",
+        },
+      },
+    });
+
+    if (refused.kind !== "updated") throw new Error("expected update");
+    expect(refused.thread.modelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4",
+    });
+    expect(refused.thread.activities.at(-1)?.kind).toBe(THREAD_MIGRATION_FAILED_ACTIVITY_KIND);
   });
 });
 
