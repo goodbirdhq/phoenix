@@ -392,6 +392,31 @@ it.layer(NodeServices.layer)("thread migration decider", (it) => {
     }),
   );
 
+  // "Still standing" is about the account alone. A meta update that changed
+  // the model or its options in between picked them for an account the thread
+  // never reached; letting that count as "moved on" would leave the selection
+  // on the refused target while the session sits on the origin — the split
+  // brain this whole path exists to remove.
+  it.effect("still puts the thread back when only the model changed in between", () =>
+    Effect.gen(function* () {
+      const decided = yield* decideOrchestrationCommand({
+        command: refuseCommand(),
+        readModel: makeReadModel({
+          modelSelection: { instanceId: TARGET, model: "claude-sonnet-5" },
+        }),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      const refused = events[0]!;
+      if (refused.type !== "thread.migration-refused")
+        throw new Error("expected thread.migration-refused");
+
+      expect(refused.payload.modelSelection).toEqual({
+        instanceId: ORIGIN,
+        model: "claude-opus-5",
+      });
+    }),
+  );
+
   it.effect("writes a refusal row whose id is derived from the command", () =>
     Effect.gen(function* () {
       const decided = yield* decideOrchestrationCommand({

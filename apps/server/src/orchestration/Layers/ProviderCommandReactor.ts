@@ -440,14 +440,21 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
       readonly detail: string;
       readonly createdAt: string;
       /**
-       * Record the reason without declaring the session dead.
+       * Record the reason as the session's own, without declaring the session
+       * dead: the status is left alone and any earlier `lastErrorKind` goes
+       * with the error it described.
        *
-       * A refused migration never stopped anything: stale sessions are only
-       * torn down after a *successful* adapter start, so the origin session is
-       * still up and still serving turns. Forcing "error" there would make the
+       * A refused migration never stopped anything — stale sessions are only
+       * torn down after a *successful* adapter start — so the origin session
+       * is still up and still serving turns. Forcing "error" would make the
        * sidebar read "failed", the phase read "disconnected", and thread
-       * settling drop a queued turn start and pull the thread out of a snooze
-       * — all about a session that is fine.
+       * settling drop a queued turn start and pull the thread out of a snooze,
+       * all about a session that is fine. Carrying a stale
+       * `lastErrorKind: "usage-limit"` forward is worse than cosmetic: this
+       * very session-set would match `isUsageLimitSessionError` and hand
+       * `LimitFailoverReactor` a fresh limit signal that the refusal itself
+       * manufactured, and the web chat view suppresses its error banner for
+       * that kind — hiding the reason this call exists to record.
        */
       readonly keepSessionStatus?: boolean;
     }) {
@@ -456,15 +463,24 @@ const make = (options?: { readonly interruptTimeoutSeconds?: number }) =>
         return;
       }
       const session = thread.session;
+      // Seeded so the key is always present to destructure away; it is put
+      // back only on the paths that still own the error it classifies.
+      const { lastErrorKind, ...carriedSession } = {
+        ...(session ?? {
+          threadId: input.threadId,
+          providerName: null,
+          providerInstanceId: thread.modelSelection.instanceId,
+          runtimeMode: thread.runtimeMode,
+        }),
+        lastErrorKind: session?.lastErrorKind,
+      };
       yield* setThreadSession({
         threadId: input.threadId,
         session: {
-          ...(session ?? {
-            threadId: input.threadId,
-            providerName: null,
-            providerInstanceId: thread.modelSelection.instanceId,
-            runtimeMode: thread.runtimeMode,
-          }),
+          ...carriedSession,
+          ...(input.keepSessionStatus !== true && lastErrorKind !== undefined
+            ? { lastErrorKind }
+            : {}),
           status:
             input.keepSessionStatus === true
               ? (session?.status ?? "error")

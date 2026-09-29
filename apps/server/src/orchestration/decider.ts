@@ -1449,13 +1449,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      // The rebind is only unwound while it is still standing. A
-      // thread.meta.update or a second migration decided between the
-      // thread.migrated and this refusal is a newer statement about where the
-      // thread belongs, and outranks the one being taken back.
+      // The rebind is only unwound while it is still standing, and "standing"
+      // is about the account alone: the instance is the routing key the
+      // session is bound to, so it is the only part of the selection a
+      // refusal can contradict. A thread.meta.update that changed the model
+      // or its options in between picked those for the account the thread
+      // never reached, and must not keep the thread pointed at it. A second
+      // migration, which does move the instance, is a newer statement about
+      // where the thread belongs and outranks the one being taken back.
       const rebindStillStanding =
-        thread.modelSelection.instanceId === command.attemptedModelSelection.instanceId &&
-        thread.modelSelection.model === command.attemptedModelSelection.model;
+        thread.modelSelection.instanceId === command.attemptedModelSelection.instanceId;
       const modelSelection = rebindStillStanding
         ? command.fromModelSelection
         : thread.modelSelection;

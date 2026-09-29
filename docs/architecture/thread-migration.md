@@ -49,21 +49,31 @@ outlive a start the provider refuses. `ProviderCommandReactor` answers that with
 command, `thread.migration.refuse`, which the decider turns into `thread.migration-refused`
 plus a `thread.migration.failed` history row. The event carries the selection the thread is
 bound to from then on, and every projection applies it exactly as it applies
-`thread.migrated`'s — the selection keeps one writer, and a projection that knows about
-migrations cannot silently miss the refusal.
+`thread.migrated`'s, so the selection keeps one writer. Nothing in the type system forces a
+projection to handle the new event — they all fall through a `default` — but it now sits
+beside `thread.migrated` in every switch and routing list, so the refusal is found wherever
+the rebind is.
 
-The decider resolves that selection against the read model: the origin if the thread is
-still on the refused target, and whatever it has since moved to otherwise, so a
-`thread.meta.update` or a second migration decided in between is never clobbered. The
-session's `lastError` records the reason without forcing its status — a refused start never
-stopped the origin session, which is still up and still serving turns.
+The decider resolves that selection against the read model, comparing the instance alone:
+the instance is the routing key the session is bound to, so it is the only part of the
+selection a refusal can contradict. A second migration decided in between has moved it and
+outranks the refusal; a `thread.meta.update` that only changed the model or its options
+picked them for an account the thread never reached, and does not keep it pointed there.
+
+The session's `lastError` records the reason without forcing its status, and drops any
+earlier `lastErrorKind` with the error it described. A refused start never stopped the
+origin session, which is still up and still serving turns; and a stale
+`lastErrorKind: "usage-limit"` would make the refusal's own session-set look like a fresh
+limit signal — the loop below, manufactured out of nothing.
 
 The refusal is also the failover reactor's second dedupe signal. Its only other one is that
-the selection has left the limited account, and a refusal puts it back; without this, every
-later usage-limit event in the episode would re-pick the same target and be refused again.
+the selection has left the limited account, and a refusal puts it back, so a burst of
+usage-limit events would otherwise re-pick the same target and be refused again.
 `LimitFailoverReactor` drops a target that has refused a thread from that thread's
-candidates for as long as the process runs, so the candidate set only shrinks and a thread
-can be offered to each member of its group at most once. A restart is the retry boundary.
+candidates, so within one episode the set only shrinks and a thread can be offered each
+member of its group at most once. The entry is dropped as soon as a session for that thread
+reaches ready: the reactor cannot tell a permanent refusal from a passing one, and holding
+either would walk the thread down its group until failover quietly stopped working for it.
 
 ## Entry points
 

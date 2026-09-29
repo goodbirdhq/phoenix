@@ -23,18 +23,18 @@ import {
   type LimitFailoverReactorShape,
 } from "../Services/LimitFailoverReactor.ts";
 
-type UsageLimitSessionEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+type ThreadSessionSetEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
 type MigrationRefusedEvent = Extract<OrchestrationEvent, { type: "thread.migration-refused" }>;
-type FailoverInput = UsageLimitSessionEvent | MigrationRefusedEvent;
+type FailoverInput = ThreadSessionSetEvent | MigrationRefusedEvent;
 
-const isUsageLimitSessionError = (event: OrchestrationEvent): event is UsageLimitSessionEvent =>
-  event.type === "thread.session-set" &&
+const isUsageLimitSessionError = (event: ThreadSessionSetEvent): boolean =>
   event.payload.session.status === "error" &&
   event.payload.session.lastErrorKind === "usage-limit" &&
   event.payload.session.providerInstanceId !== undefined;
 
-const isFailoverInput = (event: OrchestrationEvent): event is FailoverInput =>
-  isUsageLimitSessionError(event) || event.type === "thread.migration-refused";
+/** A session that came up: whatever refused this thread before, it started somewhere since. */
+const isSessionStarted = (event: ThreadSessionSetEvent): boolean =>
+  event.payload.session.status === "ready";
 
 /**
  * The session window is the short-horizon quota that usage limits interrupt,
@@ -97,24 +97,27 @@ const makeLimitFailoverReactor = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery;
 
   /**
-   * Targets that have refused each thread, for as long as this process runs.
+   * Targets that have refused each thread since its session last came up.
    *
    * "The selection has left the origin" is the only thing absorbing a burst of
    * usage-limit events, and a refusal puts the selection back — so on its own
    * that guard would let every later event in the episode re-pick the same
-   * target, be refused again, and do it forever, since the refusal itself
-   * writes another error session-set carrying the usage-limit kind.
+   * target and be refused again. A refused target is dropped from the thread's
+   * candidates instead, so within one episode the set only shrinks and a
+   * thread can be handed to each member of its group at most once.
    *
-   * A refused target is dropped from the thread's candidates instead. The
-   * candidate set only ever shrinks, so a thread can be handed to each member
-   * of its group at most once and the loop cannot exist. Nothing clears the
-   * memo: a restart is the retry boundary, and manual migration never asks
-   * this reactor.
+   * The entry is dropped the moment a session for that thread reaches ready.
+   * The reactor cannot tell a permanent refusal (an incompatible resume state)
+   * from a passing one (a missing worktree, a CLI that failed to spawn), and
+   * holding either forever would walk a thread down its group until
+   * auto-failover silently stopped working for it. A successful start cannot
+   * happen inside a refusal episode — the refusal *is* the start that did not
+   * happen — so clearing on one can never reopen the loop.
    */
   const refusedTargetsByThread = new Map<string, Set<string>>();
 
   const processUsageLimit = Effect.fn("processUsageLimit")(function* (
-    event: UsageLimitSessionEvent,
+    event: ThreadSessionSetEvent,
   ) {
     const threadId = event.payload.threadId;
     const originInstanceId = event.payload.session.providerInstanceId;
@@ -209,7 +212,12 @@ const makeLimitFailoverReactor = Effect.gen(function* () {
         refusedTargetsByThread.set(threadId, refused);
       });
     }
-    return processUsageLimit(event);
+    if (isSessionStarted(event)) {
+      return Effect.sync(() => {
+        refusedTargetsByThread.delete(String(event.payload.threadId));
+      });
+    }
+    return isUsageLimitSessionError(event) ? processUsageLimit(event) : Effect.void;
   };
 
   const processSafely = (event: FailoverInput) =>
@@ -229,9 +237,21 @@ const makeLimitFailoverReactor = Effect.gen(function* () {
 
   const start: LimitFailoverReactorShape["start"] = Effect.fn("start")(function* () {
     yield* forkParked(
-      Stream.runForEach(engine.streamDomainEvents, (event) =>
-        isFailoverInput(event) ? worker.enqueue(event) : Effect.void,
-      ),
+      Stream.runForEach(engine.streamDomainEvents, (event) => {
+        if (event.type === "thread.migration-refused") {
+          return worker.enqueue(event);
+        }
+        if (event.type !== "thread.session-set") {
+          return Effect.void;
+        }
+        // Ready session-sets are frequent, so only a thread that already holds
+        // refusals pays for one; going through the queue keeps the clear
+        // ordered against the limits and refusals around it.
+        return isUsageLimitSessionError(event) ||
+          (isSessionStarted(event) && refusedTargetsByThread.has(String(event.payload.threadId)))
+          ? worker.enqueue(event)
+          : Effect.void;
+      }),
     );
   });
 
