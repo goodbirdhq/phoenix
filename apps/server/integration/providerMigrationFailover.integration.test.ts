@@ -12,6 +12,7 @@
  */
 import {
   CommandId,
+  EventId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
@@ -38,6 +39,32 @@ const MODEL = "gpt-5-codex";
 const CREATED_AT = "2026-02-24T10:00:00.000Z";
 const MIGRATED_AT = "2026-02-24T10:05:00.000Z";
 const asMessageId = (value: string): MessageId => MessageId.make(value);
+const asEventId = (value: string): EventId => EventId.make(value);
+const TURN_ID = ThreadId.make("33333333-3333-4333-8333-333333333333");
+
+/** Let the origin turn finish cleanly, so the only error the assertions can
+ * see afterwards is the migration being refused. */
+const originTurnResponse = {
+  events: [
+    {
+      type: "turn.started" as const,
+      eventId: asEventId("evt-origin-1"),
+      provider: PROVIDER,
+      createdAt: CREATED_AT,
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+    },
+    {
+      type: "turn.completed" as const,
+      eventId: asEventId("evt-origin-2"),
+      provider: PROVIDER,
+      createdAt: CREATED_AT,
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      status: "completed" as const,
+    },
+  ],
+};
 
 const withHarness = <A, E>(
   use: (harness: OrchestrationIntegrationHarness) => Effect.Effect<A, E>,
@@ -84,6 +111,7 @@ describe("provider migration across accounts", () => {
 
           // Start on the origin account so the directory holds a real binding
           // with a resume cursor — the state the guard refuses to cross.
+          yield* harness.adapterHarness!.queueTurnResponseForNextSession(originTurnResponse);
           yield* harness.engine.dispatch({
             type: "thread.turn.start",
             commandId: CommandId.make("cmd-turn-origin"),
@@ -117,11 +145,19 @@ describe("provider migration across accounts", () => {
             createdAt: MIGRATED_AT,
           });
 
+          // Also settles on a recorded error, and bounded well under the
+          // default: a refused migration is only logged — nothing marks the
+          // session — so without a bound this waits out the full timeout to say
+          // nothing useful. The success path settles in well under a second.
           const migrated = yield* harness.waitForThread(
             String(THREAD_ID),
-            (thread) => thread.session?.providerInstanceId === TARGET_INSTANCE,
+            (thread) =>
+              thread.session?.providerInstanceId === TARGET_INSTANCE ||
+              (thread.session?.lastError ?? null) !== null,
+            15_000,
           );
 
+          expect(migrated.session?.lastError ?? null).toBeNull();
           expect(migrated.session?.providerInstanceId).toBe(TARGET_INSTANCE);
           expect(migrated.modelSelection.instanceId).toBe(TARGET_INSTANCE);
         }),
