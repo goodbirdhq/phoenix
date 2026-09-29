@@ -41,6 +41,7 @@ const MIGRATED_AT = "2026-02-24T10:05:00.000Z";
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const TURN_ID = ThreadId.make("33333333-3333-4333-8333-333333333333");
+const RETRY_TURN_ID = ThreadId.make("44444444-4444-4444-8444-444444444444");
 
 /** Let the origin turn finish cleanly, so the only error the assertions can
  * see afterwards is the migration being refused. */
@@ -61,6 +62,31 @@ const originTurnResponse = {
       createdAt: CREATED_AT,
       threadId: THREAD_ID,
       turnId: TURN_ID,
+      status: "completed" as const,
+    },
+  ],
+};
+
+/** Auto-failover retries the failed turn on the target, so that adapter needs a
+ * response too — otherwise its "no queued response" error lands on the session
+ * and looks like a failed migration. */
+const targetRetryResponse = {
+  events: [
+    {
+      type: "turn.started" as const,
+      eventId: asEventId("evt-target-1"),
+      provider: PROVIDER,
+      createdAt: MIGRATED_AT,
+      threadId: THREAD_ID,
+      turnId: RETRY_TURN_ID,
+    },
+    {
+      type: "turn.completed" as const,
+      eventId: asEventId("evt-target-2"),
+      provider: PROVIDER,
+      createdAt: MIGRATED_AT,
+      threadId: THREAD_ID,
+      turnId: RETRY_TURN_ID,
       status: "completed" as const,
     },
   ],
@@ -126,10 +152,24 @@ describe("provider migration across accounts", () => {
             runtimeMode: "approval-required",
             createdAt,
           });
-          yield* harness.waitForThread(
+          // Wait on the turn's own completion receipt, not a projection poll:
+          // the instance id is already set while the turn is still running, and
+          // dispatching the migration then trips requireThreadTurnNotRunning
+          // before the guard under test is ever reached.
+          yield* harness.waitForReceipt(
+            (receipt) =>
+              receipt.type === "provider.turn.completed" && receipt.threadId === THREAD_ID,
+          );
+          yield* harness.drainProviderRuntime;
+          const origin = yield* harness.waitForThread(
             String(THREAD_ID),
             (thread) => thread.session?.providerInstanceId === ORIGIN_INSTANCE,
           );
+          expect(origin.session?.providerInstanceId).toBe(ORIGIN_INSTANCE);
+
+          const targetHarness = harness.adapterHarnessByInstanceId.get(TARGET_INSTANCE);
+          expect(targetHarness).toBeDefined();
+          yield* targetHarness!.queueTurnResponseForNextSession(targetRetryResponse);
 
           // The failover itself. Without the reactor authorising the switch,
           // startSession rejects it as an incompatible resume state and the

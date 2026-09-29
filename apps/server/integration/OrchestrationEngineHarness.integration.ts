@@ -187,6 +187,8 @@ export interface OrchestrationIntegrationHarness {
   readonly workspaceDir: string;
   readonly dbPath: string;
   readonly adapterHarness: TestProviderAdapterHarness | null;
+  /** Adapters for `additionalInstanceIds`, keyed by instance id. */
+  readonly adapterHarnessByInstanceId: ReadonlyMap<ProviderInstanceId, TestProviderAdapterHarness>;
   readonly engine: OrchestrationEngineShape;
   readonly snapshotQuery: ProjectionSnapshotQuery["Service"];
   readonly providerService: ProviderService["Service"];
@@ -630,6 +632,7 @@ export const makeOrchestrationIntegrationHarness = (
       workspaceDir,
       dbPath,
       adapterHarness,
+      adapterHarnessByInstanceId: new Map(additionalAdapterHarnesses),
       engine,
       snapshotQuery,
       providerService,
