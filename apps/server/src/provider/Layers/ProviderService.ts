@@ -2078,13 +2078,41 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-        // A binding naming another instance is not consulted here. The caller
-        // owns the instance decision — it is the only party that can tell a
+        // A binding naming another instance is not consulted for the instance
+        // decision. The caller owns that — it is the only party that can tell a
         // sanctioned migration from an accident, because it holds the read
-        // model and the live session set — and it already refuses to carry a
-        // cursor across incompatible continuation identities. Refusing the
-        // start on the binding alone only ever wedged threads, since nothing
-        // else clears a binding the start was there to replace.
+        // model and the live session set. Refusing the start on the binding
+        // alone only ever wedged threads, since nothing else clears a binding
+        // the start was there to replace.
+        //
+        // Keeping a cursor on its own account is therefore the caller's
+        // invariant, not this function's: the fallback below only instance-
+        // checks the *persisted* branch, so a cursor passed in by the caller
+        // reaches the adapter unexamined, and no adapter validates ownership.
+        // ProviderCommandReactor upholds it by passing one only when the
+        // continuation identities match. The assertion below is the floor
+        // under that, not a restatement of it.
+        if (
+          input.resumeCursor != null &&
+          persistedBinding !== undefined &&
+          persistedBinding.providerInstanceId !== undefined &&
+          persistedBinding.providerInstanceId !== resolvedInstanceId
+        ) {
+          const previousInfo = yield* registry
+            .getInstanceInfo(persistedBinding.providerInstanceId)
+            .pipe(Effect.option);
+          const previousKey =
+            Option.getOrUndefined(previousInfo)?.continuationIdentity.continuationKey;
+          if (
+            previousKey !== undefined &&
+            previousKey !== instanceInfo.continuationIdentity.continuationKey
+          ) {
+            return yield* toValidationError(
+              "ProviderService.startSession",
+              `Thread '${threadId}' was given a resume cursor while its binding names instance '${persistedBinding.providerInstanceId}', whose conversation instance '${resolvedInstanceId}' cannot resume.`,
+            );
+          }
+        }
         const effectiveResumeCursor =
           input.resumeCursor ??
           (persistedBinding?.providerInstanceId === resolvedInstanceId

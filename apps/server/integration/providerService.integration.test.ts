@@ -47,6 +47,8 @@ import {
 
 const codexInstanceId = ProviderInstanceId.make("codex");
 const codexFailoverInstanceId = ProviderInstanceId.make("codex_failover");
+/** The account the migrating thread starts on; the driver default is its target. */
+const codexOriginInstanceId = ProviderInstanceId.make("codex_origin");
 
 const makeWorkspaceDirectory = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -427,9 +429,12 @@ const makeMigrationInterleavingFixture = Effect.gen(function* () {
   // Each account needs its own adapter: adapters are asked for their sessions
   // per instance, so one object serving both ids would report the same session
   // under both and there would be no mismatch to observe.
+  // Target registered first, origin second, so the adapters list the detached
+  // session before the bound one. Without that the fixture's natural order is
+  // already bound-first and the sort under test does nothing observable.
   const registry = makeAdapterRegistryMock(
-    { [ProviderDriverKind.make("codex")]: origin.adapter },
-    { [codexFailoverInstanceId]: targetAdapter },
+    { [ProviderDriverKind.make("codex")]: targetAdapter },
+    { [codexOriginInstanceId]: origin.adapter },
   );
 
   const shared = Layer.mergeAll(
@@ -461,7 +466,7 @@ it.live("lists sessions while a migration start is mid-flight", () =>
       yield* provider.startSession(threadId, {
         threadId,
         provider: ProviderDriverKind.make("codex"),
-        providerInstanceId: codexInstanceId,
+        providerInstanceId: codexOriginInstanceId,
         cwd: fixture.cwd,
         runtimeMode: "full-access",
       });
@@ -470,7 +475,7 @@ it.live("lists sessions while a migration start is mid-flight", () =>
         provider.startSession(threadId, {
           threadId,
           provider: ProviderDriverKind.make("codex"),
-          providerInstanceId: codexFailoverInstanceId,
+          providerInstanceId: codexInstanceId,
           cwd: fixture.cwd,
           runtimeMode: "full-access",
         }),
@@ -487,7 +492,7 @@ it.live("lists sessions while a migration start is mid-flight", () =>
         midFlight.map((session) => session.providerInstanceId),
         // Bound account first: callers resolve a thread's session with `find`,
         // and until the rebind lands the thread is still on the origin.
-        [codexInstanceId, codexFailoverInstanceId],
+        [codexOriginInstanceId, codexInstanceId],
       );
 
       yield* Deferred.succeed(fixture.releaseStart, undefined);
@@ -498,7 +503,7 @@ it.live("lists sessions while a migration start is mid-flight", () =>
       );
       assert.deepEqual(
         settled.map((session) => session.providerInstanceId),
-        [codexFailoverInstanceId],
+        [codexInstanceId],
       );
       assert.deepEqual(fixture.origin.listActiveSessionIds(), []);
     }).pipe(Effect.provide(fixture.layer));
