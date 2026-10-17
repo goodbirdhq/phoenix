@@ -109,7 +109,7 @@ const makeLinuxCliArchiveFixture = Effect.fn("test.makeLinuxCliArchiveFixture")(
     `${input.stem}/phoenix`,
     `${input.stem}/client/index.html`,
     `${input.stem}/node_modules/node-pty/package.json`,
-    `${input.stem}/node_modules/node-pty/prebuilds/linux-x64/pty.node`,
+    `${input.stem}/node_modules/node-pty/build/Release/pty.node`,
     ...(input.extraMembers ?? []),
   ].filter((member) => !(input.omitMembers ?? []).includes(member));
   for (const member of members) {
