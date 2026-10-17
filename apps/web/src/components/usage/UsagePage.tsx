@@ -62,6 +62,8 @@ import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import type { UsageChartMetric } from "@t3tools/client-runtime/usage/chart-series";
 import { UsageLimitsSection } from "./UsageLimits";
+import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
+import { usesChatGptSharing } from "@t3tools/shared/usageLimits";
 import { providerLimitReadings } from "./providerLimitReadings";
 import { UsageQuotas } from "./UsageQuotas";
 import { subscriptionAvailabilitySources } from "@t3tools/client-runtime/usage/usage-warning";
@@ -435,6 +437,16 @@ export function UsagePage() {
                 )}
               </TabsList>
               <TabsContent value="limits">
+                {[...presentations].some(
+                  ([id, presentation]) =>
+                    (limitsEnvironmentIds === null || limitsEnvironmentIds.has(id)) &&
+                    presentation.serverConfig?.providers.some(usesChatGptSharing),
+                ) ? (
+                  <div className="mb-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>ChatGPT shared usage</span>
+                    <ChatGptUsageButton size="xs" />
+                  </div>
+                ) : null}
                 <UsageLimitsSection
                   selectedEnvironmentIds={limitsEnvironmentIds}
                   now={limitsNow}

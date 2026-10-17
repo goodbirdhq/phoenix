@@ -143,7 +143,8 @@ export const claudeInstanceHomes = Effect.fn("providerHomes.claudeInstanceHomes"
  *
  * An instance with neither a home nor an overlay runs Codex under the
  * `CODEX_HOME` it inherits; an overlay exports its own, so an inherited one
- * never applies there.
+ * never applies there. A managed instance never adopts an inherited home, so
+ * a user's own CLI login stays separate from the one Phoenix manages.
  */
 export const codexInstanceHomes = Effect.fn("providerHomes.codexInstanceHomes")(function* (
   settings: ServerSettings,
@@ -164,7 +165,10 @@ export const codexInstanceHomes = Effect.fn("providerHomes.codexInstanceHomes")(
       baseEnvironment,
     ).CODEX_HOME?.trim();
     const layout = yield* resolveCodexHomeLayout(
-      !config.homePath.trim() && !config.shadowHomePath.trim() && inheritedHome
+      config.setupMode !== "managed" &&
+        !config.homePath.trim() &&
+        !config.shadowHomePath.trim() &&
+        inheritedHome
         ? { ...config, homePath: inheritedHome }
         : config,
     );
