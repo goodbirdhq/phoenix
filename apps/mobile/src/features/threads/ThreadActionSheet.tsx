@@ -12,7 +12,7 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import { useRef, useState, type RefObject } from "react";
-import { Pressable, View } from "react-native";
+import { Pressable, View, type ViewInstance } from "react-native";
 import IconEye from "@tabler/icons-react-native/IconEye";
 import IconTrash from "@tabler/icons-react-native/IconTrash";
 import IconArrowBackUp from "@tabler/icons-react-native/IconArrowBackUp";
@@ -46,7 +46,7 @@ export function ThreadActionSheet(props: {
   providerDriver: string | null;
   initialPage: "actions" | "snooze";
   actions: MenuAction[];
-  returnFocusRef?: RefObject<View | null>;
+  returnFocusRef?: RefObject<ViewInstance | null>;
   onDelete: () => Promise<boolean>;
   onAction: (id: string) => Promise<boolean>;
   onSnooze: (until: string) => Promise<boolean>;

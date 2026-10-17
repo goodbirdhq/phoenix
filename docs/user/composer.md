@@ -210,6 +210,12 @@ slash menu** in **Settings → General**. Skill results use the `/skill:Skill Na
 same `$name` skill token to your message. The original skill name remains searchable. If the provider
 also reports that skill as a native slash command, Phoenix hides the duplicate native entry and keeps
 the `/skill:Skill Name` label.
+After you add or change skills, plugins, or MCP servers, use **Restart agent
+session** in the command palette on web and desktop. The conversation continues,
+and your next message starts the agent again with the new setup.
+
+Provider commands must start the message to run. Phoenix commands such as
+`/model` and `/plan`, and skill mentions, work on any line.
 
 A skill token runs the skill wherever it sits in your message. Phoenix sends it to each provider in
 the form that provider runs, so the text before and after the token is kept. Skills that only you may

@@ -814,6 +814,7 @@ export type RuntimeWarningPayload = typeof RuntimeWarningPayload.Type;
 
 const RuntimeErrorPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
+  code: Schema.optional(TrimmedNonEmptyStringSchema),
   class: Schema.optional(RuntimeErrorClass),
   kind: Schema.optional(ProviderRuntimeErrorKind),
   detail: Schema.optional(Schema.Unknown),

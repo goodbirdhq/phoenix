@@ -14,12 +14,14 @@
  */
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ForwardCompatibleArray, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
  * Bumped whenever the shape of {@link UsageSummary} changes incompatibly. The
  * client renders partial coverage when an environment reports an older version
  * rather than failing the whole page.
+ * Adding providers or other array-element variants is additive: unknown
+ * entries are skipped on decode and do not require a version bump.
  */
 export const USAGE_CONTRACT_VERSION = 7 as const;
 
@@ -296,14 +298,14 @@ export const UsageSummary = Schema.Struct({
   timeZone: TrimmedNonEmptyString,
   sinceDay: UsageDay,
   untilDay: UsageDay,
-  buckets: Schema.Array(UsageBucket),
+  buckets: ForwardCompatibleArray(UsageBucket),
   /** Absent when not requested or unsupported by an older server. */
   sessionUsage: Schema.optional(Schema.Array(UsageSession)),
   threadCreations: Schema.optional(Schema.Array(UsageThreadCreation)),
   threadCreationSource: Schema.optional(
     Schema.Struct({ hostId: Schema.String, statePath: Schema.String, volumeId: Schema.String }),
   ),
-  sources: Schema.Array(UsageSource),
+  sources: ForwardCompatibleArray(UsageSource),
   pricing: UsagePricing,
   /** Wall-clock cost of the scan, surfaced in diagnostics. */
   scanDurationMs: NonNegativeInt,

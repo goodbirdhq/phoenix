@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Pressable, TextInput, type View } from "react-native";
+import { Pressable, TextInput, type View, type ViewInstance } from "react-native";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import IconTrash from "@tabler/icons-react-native/IconTrash";
 import IconInfoCircle from "@tabler/icons-react-native/IconInfoCircle";
@@ -17,7 +17,7 @@ export type ConfirmDialogRequest = {
   readonly confirmText: string;
   readonly destructive?: boolean;
   readonly thread?: EnvironmentThreadShell;
-  readonly returnFocusRef?: RefObject<View | null>;
+  readonly returnFocusRef?: RefObject<ViewInstance | null>;
   readonly onConfirm: () => void | Promise<boolean>;
   readonly onCancel?: () => void;
 };
@@ -27,7 +27,7 @@ export type TextInputDialogRequest = {
   readonly initialValue: string;
   readonly cancelText?: string;
   readonly confirmText: string;
-  readonly returnFocusRef?: RefObject<View | null>;
+  readonly returnFocusRef?: RefObject<ViewInstance | null>;
   readonly onConfirm: (value: string) => void | Promise<boolean>;
   readonly onCancel?: () => void;
 };

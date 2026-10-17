@@ -3,7 +3,7 @@ import { BrandMark } from "../../components/BrandMark";
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useMemo, useRef } from "react";
-import { Pressable, TextInput, View } from "react-native";
+import { Pressable, TextInput, type TextInputInstance, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import IconX from "@tabler/icons-react-native/IconX";
 import { ControlPillMenu } from "../../components/ControlPill";
@@ -38,7 +38,7 @@ export function HomeHeader(props: {
 }) {
   const colors = useNavigationColors();
   const insets = useSafeAreaInsets();
-  const input = useRef<TextInput>(null);
+  const input = useRef<TextInputInstance>(null);
   useHardwareKeyboardCommand("focusSearch", () => {
     props.beforeFocusSearch?.();
     input.current?.focus();

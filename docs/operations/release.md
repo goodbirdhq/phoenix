@@ -114,6 +114,10 @@ The workflow enforces this ordering:
 1. `publish_cli` publishes the exact release version to npm, when requested.
 2. `release` depends on `publish_cli` before exposing desktop artifacts in GitHub Releases.
 3. `deploy_web` depends on `release` before moving the hosted channel to the new client.
+   `build_web` builds that client earlier with `vercel deploy --prod --skip-domain`, which
+   leaves the custom domains alone but moves the project's own `*.vercel.app` production
+   hostname. That hostname is behind Vercel SSO, so users only get the client through the
+   custom domains.
 
 Preserve these dependencies when changing the release graph. Publishing a client first would leave
 the **Update server** action targeting a package version that does not exist yet.

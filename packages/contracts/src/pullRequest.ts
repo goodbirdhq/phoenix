@@ -747,6 +747,8 @@ export const PullRequestSummary = Schema.Struct({
   reviewDecision: Schema.optional(Schema.NullOr(PullRequestReviewDecision)),
   checksState: Schema.optional(Schema.NullOr(PullRequestChecksState)),
   mergeability: Schema.optional(PullRequestMergeability),
+  /** Null when the host says the pull request is in no stack; absent when the read did not ask. */
+  stack: Schema.optional(Schema.NullOr(PullRequestStackMembership)),
 });
 export type PullRequestSummary = typeof PullRequestSummary.Type;
 
@@ -1277,9 +1279,9 @@ const PROVIDER_REQUIREMENT: Partial<
   },
   bitbucket: {
     missing:
-      "Bitbucket needs API credentials on the server. Set PHOENIX_BITBUCKET_EMAIL and PHOENIX_BITBUCKET_API_TOKEN, or PHOENIX_BITBUCKET_ACCESS_TOKEN.",
+      "Bitbucket needs API credentials on the server. Add them in Settings → Source Control.",
     unauthenticated:
-      "Bitbucket rejected the configured credentials. Check PHOENIX_BITBUCKET_EMAIL and PHOENIX_BITBUCKET_API_TOKEN.",
+      "Bitbucket rejected the configured credentials. Check them in Settings → Source Control.",
   },
 };
 

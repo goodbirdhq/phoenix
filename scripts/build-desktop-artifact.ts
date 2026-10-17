@@ -3046,18 +3046,15 @@ export const validateWindowsPackagedPayload = Effect.fn(
       );
     }
     const requiredMembers = [`${stem}/phoenix`, `${stem}/client`, `${stem}/node_modules`];
-    // node-pty loads a source build first and falls back to its bundled
-    // prebuild, as does the WSL probe. Release archives ship the prebuild: it
-    // needs only glibc 2.28, like the executable, where a source build on the
-    // CI runner would raise the floor to that runner's glibc.
+    const missingMembers = requiredMembers.filter((member) => !members.includes(member));
+    // node-pty can load a source build or the prebuild for the WSL target.
     const ptyCandidates = [
       `${stem}/node_modules/node-pty/build/Release/pty.node`,
       `${stem}/node_modules/node-pty/prebuilds/linux-${input.targetArch}/pty.node`,
     ];
-    const missingMembers = [
-      ...requiredMembers.filter((member) => !members.includes(member)),
-      ...(ptyCandidates.some((member) => members.includes(member)) ? [] : ptyCandidates),
-    ];
+    if (!ptyCandidates.some((member) => members.includes(member))) {
+      missingMembers.push(...ptyCandidates);
+    }
     if (missingMembers.length > 0) {
       return yield* new WindowsPackagedPayloadValidationError({
         reason: "wsl-runtime-invalid",

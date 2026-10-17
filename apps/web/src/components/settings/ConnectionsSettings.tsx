@@ -1677,6 +1677,18 @@ function SavedBackendListRow({
     versionMismatch !== null &&
     (serverUpdateState.status === "idle" || serverUpdateState.status === "failed");
 
+  const statusTooltip = `${
+    unsupported
+      ? (environment.connection.error ?? connectionStatusText(environment.connection))
+      : enabled
+        ? connectionStatusText(environment.connection)
+        : "Switched off"
+  }${
+    versionMismatch
+      ? `\nUpdate available: ${versionMismatch.serverVersion} → ${versionMismatch.clientVersion}`
+      : ""
+  }`;
+
   return (
     <EnvironmentRow
       kind={machineKind}
@@ -1684,7 +1696,10 @@ function SavedBackendListRow({
       dimmed={!enabled}
       subtitle={
         <Tooltip>
+          {/* The status can change while the tooltip is open, and base-ui only
+              re-measures the popup when the trigger's payload changes. */}
           <TooltipTrigger
+            payload={statusTooltip}
             render={
               <span
                 className={cn(
@@ -1697,14 +1712,7 @@ function SavedBackendListRow({
             {subtitleText}
           </TooltipTrigger>
           <TooltipPopup side="top" className="whitespace-pre-wrap">
-            {unsupported
-              ? (environment.connection.error ?? connectionStatusText(environment.connection))
-              : enabled
-                ? connectionStatusText(environment.connection)
-                : "Switched off"}
-            {versionMismatch
-              ? `\nUpdate available: ${versionMismatch.serverVersion} → ${versionMismatch.clientVersion}`
-              : ""}
+            {statusTooltip}
           </TooltipPopup>
         </Tooltip>
       }
@@ -2479,18 +2487,8 @@ export function ConnectionsSettings({ hostOnly = false }: { hostOnly?: boolean }
     [setEnvironmentEnabled],
   );
 
-  // Removing forgets the pairing, credentials, and cached threads on this
-  // device. Switching off is the reversible path, so removal always confirms.
-  const handleRemoveSavedBackend = useCallback(
+  const removeSavedBackend = useCallback(
     async (environment: EnvironmentPresentation) => {
-      // Fail closed: no mounted confirm host means no removal.
-      const confirmed = await requestConfirmDialog(
-        `Remove ${environment.label} from this device?\nThis forgets its pairing, credentials, and cached threads here. Switch it off instead to keep it saved.`,
-        { variant: "destructive" },
-      );
-      if (confirmed !== true) {
-        return;
-      }
       const environmentId = environment.environmentId;
       setRemovingSavedEnvironmentId(environmentId);
       const result = await removeEnvironment(environmentId);
@@ -2508,6 +2506,20 @@ export function ConnectionsSettings({ hostOnly = false }: { hostOnly?: boolean }
       }
     },
     [removeEnvironment],
+  );
+
+  // Removing forgets the pairing, credentials, and cached threads on this
+  // device. Switching off is the reversible path, so removal always confirms.
+  const handleRemoveSavedBackend = useCallback(
+    async (environment: EnvironmentPresentation) => {
+      // Fail closed: no mounted confirm host means no removal.
+      const confirmed = await requestConfirmDialog(
+        `Remove ${environment.label} from this device?\nThis forgets its pairing, credentials, and cached threads here. Switch it off instead to keep it saved.`,
+        { variant: "destructive" },
+      );
+      if (confirmed === true) await removeSavedBackend(environment);
+    },
+    [removeSavedBackend],
   );
 
   const visibleDesktopPairingLinks = desktopPairingLinks;

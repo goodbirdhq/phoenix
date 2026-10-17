@@ -347,6 +347,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
             side="left"
             collapsible="offcanvas"
             data-app-sidebar=""
+            role="navigation"
+            aria-label={isOnSettings ? "Settings" : "Threads"}
             data-usage-surface={isOnUsage || isOnEnvironments || isOnSchedules ? "" : undefined}
             data-environment-surface={isOnEnvironments || isOnSchedules ? "" : undefined}
             resizable={{
