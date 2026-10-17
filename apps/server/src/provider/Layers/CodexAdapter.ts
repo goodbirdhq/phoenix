@@ -2463,6 +2463,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               : undefined;
             if (managedError?.revoke && options?.onManagedConnectionRevoked)
               yield* options.onManagedConnectionRevoked;
+            // A shared ChatGPT allowance running out is a usage limit like the CLI's own, so
+            // both carry the kind that account failover keys on.
+            const managedUsageLimit =
+              managedError?.code === "subscription_sharing_usage_limit_exceeded";
             let usageLimitError: ProviderRuntimeEvent | undefined;
             let usageLimitMessage: string | undefined;
             if (event.method === "turn/completed") {
@@ -2483,6 +2487,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                     message: managedError.message,
                     code: managedError.code,
                     class: "provider_error",
+                    ...(managedUsageLimit ? { kind: "usage-limit" as const } : {}),
                   },
                 };
               } else if (turnError?.codexErrorInfo === "usageLimitExceeded") {
@@ -2493,6 +2498,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   payload: {
                     message: usageLimitMessage,
                     class: "provider_error",
+                    kind: "usage-limit",
                     ...(turnError.message ? { detail: turnError.message } : {}),
                   },
                 };
@@ -2508,6 +2514,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                     message: managedError.message,
                     detail: managedError.message,
                     code: managedError.code,
+                    ...(managedUsageLimit ? { kind: "usage-limit" as const } : {}),
                   },
                 } satisfies ProviderRuntimeEvent;
 

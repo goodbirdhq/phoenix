@@ -3188,6 +3188,7 @@ usageLimitLayer("CodexAdapterLive usage limits", (it) => {
         if (event.type === "runtime.error") {
           NodeAssert.equal(event.payload.message, expected);
           NodeAssert.equal(event.payload.detail, CODEX_OUT_OF_CREDITS);
+          NodeAssert.equal(event.payload.kind, "usage-limit");
         }
         if (event.type === "turn.completed") {
           NodeAssert.equal(event.payload.errorMessage, expected);
@@ -3420,6 +3421,7 @@ it.effect("managed turn failures preserve the sharing-limit code for client noti
     if (events[0]?.type === "runtime.error") {
       NodeAssert.equal(events[0].payload.code, "subscription_sharing_usage_limit_exceeded");
       NodeAssert.match(events[0].payload.message, /ChatGPT usage limit/);
+      NodeAssert.equal(events[0].payload.kind, "usage-limit");
     }
     NodeAssert.equal(events[1]?.type, "turn.completed");
     if (events[1]?.type === "turn.completed") NodeAssert.equal(events[1].payload.state, "failed");

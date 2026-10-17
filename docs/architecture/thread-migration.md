@@ -105,7 +105,8 @@ Auto-failover and the limit popup fire only on a classified usage-limit signal, 
 generic turn failures, auth errors, or crashes — those keep the plain error banner. The
 primary source is the provider's own native signal: Claude's SDK emits a `rate_limit_event`
 that was previously discarded as telemetry, backed by classifying the limit-shaped turn
-failure. Codex reports quota through its existing usage surface.
+failure. Codex classifies a failed turn whose error is `usageLimitExceeded`, or, for a managed
+ChatGPT connection, `subscription_sharing_usage_limit_exceeded`.
 
 ## Out of scope
 
