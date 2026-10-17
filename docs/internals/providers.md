@@ -154,9 +154,16 @@ another machine. Forward only the callback for the owned pending flow; a success
 request is not proof that provider authentication finished. The native process owns token exchange
 and storage.
 
-Antigravity sign-out closes admission to new processes and stops existing processes before clearing
-account metadata. Otherwise a helper or resumed session could retain the old account. Cached model
-lists do not establish current access, and an authoritative empty catalog must clear the old list.
+Managed ChatGPT sign-in for a remote environment can finish on a local primary. The
+[primary handoff](../../apps/server/src/provider/CodexChatGptHandoff.ts) uses an ephemeral
+credential store and the destination's environment ID. It exchanges and verifies the code before
+transferring the issued client registration and tokens. Only the destination persists and refreshes
+that session; retaining a primary refresh session would race refresh-token rotation. Without a local
+primary, the client uses the remote callback completion flow.
+
+Antigravity sign-out closes admission to new processes and stops existing processes before clearing account
+metadata. Otherwise a helper or resumed session could retain the old account. Cached model lists
+do not establish current access, and an authoritative empty catalog must clear the old list.
 
 Antigravity text-generation helpers deny tool requests, but native hooks and MCP configuration can
 run before the prompt. They reject profiles with such configuration before launch. Prompt

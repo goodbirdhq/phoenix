@@ -10,6 +10,7 @@ import {
   ScrollView,
   View,
   useWindowDimensions,
+  type ViewInstance,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppText } from "./AppText";
@@ -24,7 +25,7 @@ export function ModalSlideUp(props: {
   children: ReactNode;
   footer?: ReactNode;
   cancelText?: string;
-  returnFocusRef?: RefObject<View | null>;
+  returnFocusRef?: RefObject<ViewInstance | null>;
   busy?: boolean;
   onClose: () => void;
   onDismiss?: () => void;
@@ -33,7 +34,7 @@ export function ModalSlideUp(props: {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const [reduceMotion, setReduceMotion] = useState(false);
-  const heading = useRef<View>(null);
+  const heading = useRef<ViewInstance>(null);
   const close = useRef(props.onClose);
   close.current = props.onClose;
   const busy = useRef(props.busy);

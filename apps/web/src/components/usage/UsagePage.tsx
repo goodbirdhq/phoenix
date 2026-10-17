@@ -25,7 +25,11 @@ import {
   EnvironmentId,
   ProviderDriverKind,
 } from "@t3tools/contracts";
-import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
+import {
+  cursorKeychainAccessEnvironments,
+  refreshUsageLimits,
+} from "@t3tools/client-runtime/state/usage";
+import type { MergedUsage } from "@t3tools/shared/usageMerge";
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
 
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
@@ -41,6 +45,7 @@ import {
   enumerateHourStarts,
   formatDateTimeShort,
   formatDayShort,
+  formatUsageContractMismatch,
   formatUsd,
   makeWindow,
 } from "@t3tools/shared/usageFormat";
@@ -57,6 +62,8 @@ import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import type { UsageChartMetric } from "@t3tools/client-runtime/usage/chart-series";
 import { UsageLimitsSection } from "./UsageLimits";
+import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
+import { usesChatGptSharing } from "@t3tools/shared/usageLimits";
 import { providerLimitReadings } from "./providerLimitReadings";
 import { UsageQuotas } from "./UsageQuotas";
 import { subscriptionAvailabilitySources } from "@t3tools/client-runtime/usage/usage-warning";
@@ -288,9 +295,7 @@ export function UsagePage() {
 
   // A Cursor account only needs this offer on the all-accounts view: Usage
   // accounts are built from subscription drivers, and Cursor history is shared.
-  const cursorAccessEnvironments = accountKey
-    ? []
-    : environments.filter((environment) => environment.needsCursorKeychainAccess);
+  const cursorAccessEnvironments = accountKey ? [] : cursorKeychainAccessEnvironments(environments);
   const onCursorEnabled = () => {
     refreshUsage();
     void refreshLimits(false, true);
@@ -432,6 +437,16 @@ export function UsagePage() {
                 )}
               </TabsList>
               <TabsContent value="limits">
+                {[...presentations].some(
+                  ([id, presentation]) =>
+                    (limitsEnvironmentIds === null || limitsEnvironmentIds.has(id)) &&
+                    presentation.serverConfig?.providers.some(usesChatGptSharing),
+                ) ? (
+                  <div className="mb-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>ChatGPT shared usage</span>
+                    <ChatGptUsageButton size="xs" />
+                  </div>
+                ) : null}
                 <UsageLimitsSection
                   selectedEnvironmentIds={limitsEnvironmentIds}
                   now={limitsNow}
@@ -476,7 +491,7 @@ export function UsagePage() {
                         <UsageCoverageNotice
                           environments={environments}
                           duplicateSources={merged.duplicateSources}
-                          staleEnvironments={merged.staleEnvironments}
+                          contractMismatches={merged.contractMismatches}
                           sourceMessages={sourceMessages}
                         />
                         {mode === "projects" && (
@@ -580,7 +595,7 @@ export function UsagePage() {
                   <UsageCoverageNotice
                     environments={environments}
                     duplicateSources={merged.duplicateSources}
-                    staleEnvironments={merged.staleEnvironments}
+                    contractMismatches={merged.contractMismatches}
                     sourceMessages={sourceMessages}
                   />
                 </div>
@@ -609,22 +624,26 @@ export function UsagePage() {
 function UsageCoverageNotice({
   environments,
   duplicateSources,
-  staleEnvironments,
+  contractMismatches,
   sourceMessages,
 }: {
   readonly environments: readonly EnvironmentUsageStatus[];
   readonly duplicateSources: readonly string[];
-  readonly staleEnvironments: readonly string[];
+  readonly contractMismatches: MergedUsage["contractMismatches"];
   /** Reader messages for partial or failed history sources. */
   readonly sourceMessages: readonly string[];
 }) {
   const failed = environments.filter((environment) => environment.error !== null);
-  const stale = environments.filter((environment) =>
-    staleEnvironments.includes(environment.environmentId),
+  const mismatchByEnvironment = new Map(
+    contractMismatches.map((mismatch) => [mismatch.environmentId, mismatch]),
   );
+  const incompatible = environments.flatMap((environment) => {
+    const mismatch = mismatchByEnvironment.get(environment.environmentId);
+    return mismatch === undefined ? [] : [{ environment, mismatch }];
+  });
   if (
     failed.length === 0 &&
-    stale.length === 0 &&
+    incompatible.length === 0 &&
     duplicateSources.length === 0 &&
     sourceMessages.length === 0
   ) {
@@ -636,9 +655,9 @@ function UsageCoverageNotice({
       {failed.map((environment) => (
         <span key={environment.label}>{environment.label} could not report usage.</span>
       ))}
-      {stale.map((environment) => (
-        <span key={environment.label}>
-          {environment.label} runs an older server version and is excluded from totals.
+      {incompatible.map(({ environment, mismatch }) => (
+        <span key={environment.environmentId}>
+          {formatUsageContractMismatch(environment.label, mismatch)}
         </span>
       ))}
       {sourceMessages.map((message) => (

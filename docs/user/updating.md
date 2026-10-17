@@ -86,6 +86,13 @@ update can roll back to the previous version. If the update still fails:
 3. For a command-line server, relaunch it with `npx @goodbirdhq/phoenix@<client-version>`, replacing
    `<client-version>` with the client version shown in the warning.
 
+## Update providers
+
+**Settings → Providers** shows provider updates for the selected environment.
+**Update all** updates every outdated provider on every connected environment
+at once. Hover it to see which providers it will update. Providers that only
+offer a manual update command are not included.
+
 ## Mobile updates
 
 To update an environment from your phone, open **Settings → Environments** and

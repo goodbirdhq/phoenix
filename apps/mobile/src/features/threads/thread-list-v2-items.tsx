@@ -30,7 +30,7 @@ import {
   useState,
   type ComponentProps,
 } from "react";
-import { Alert, Pressable, useWindowDimensions, View } from "react-native";
+import { Alert, Pressable, useWindowDimensions, View, type ViewInstance } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import { ThreadSessionDetails } from "./ThreadSessionDetails";
@@ -506,14 +506,12 @@ interface ThreadListV2RowProps {
       row's menu offers snooze presets, so those menus refresh while mounted
       without invalidating every other row. */
   readonly snoozePresetMinute: string;
-  readonly simultaneousSwipeGesture?: ComponentProps<
-    typeof ThreadSwipeable
-  >["simultaneousWithExternalGesture"];
+  readonly simultaneousSwipeGesture?: ComponentProps<typeof ThreadSwipeable>["simultaneousWith"];
 }
 
 export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2RowProps) {
   const { width: windowWidth } = useWindowDimensions();
-  const rowFocusRef = useRef<View>(null);
+  const rowFocusRef = useRef<ViewInstance>(null);
   const [groupExpanded, setGroupExpanded] = useState(false);
   const [sheet, setSheet] = useState<"actions" | "snooze" | "details" | null>(null);
   useEffect(() => {
@@ -1152,7 +1150,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
           primaryAction={primaryAction}
           secondaryAction={secondaryAction}
           resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}`}
-          simultaneousWithExternalGesture={props.simultaneousSwipeGesture}
+          simultaneousWith={props.simultaneousSwipeGesture}
           threadTitle={thread.title}
         >
           {(close) => (

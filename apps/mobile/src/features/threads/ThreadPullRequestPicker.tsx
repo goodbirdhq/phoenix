@@ -4,7 +4,7 @@ import {
   threadPullRequestKeyOf,
 } from "@t3tools/shared/threadPullRequests";
 import type { RefObject } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { Alert, Pressable, View, type ViewInstance } from "react-native";
 
 import { AppText } from "../../components/AppText";
 import { ModalSlideUp } from "../../components/ModalSlideUp";
@@ -21,7 +21,7 @@ import type { ThreadPrPresentation } from "../../state/use-thread-pr";
 export function ThreadPullRequestPicker(props: {
   readonly thread: Pick<EnvironmentThreadShell, "title" | "pullRequests">;
   readonly presentation: ThreadPrPresentation;
-  readonly returnFocusRef?: RefObject<View | null>;
+  readonly returnFocusRef?: RefObject<ViewInstance | null>;
   readonly onClose: () => void;
 }) {
   const colors = useNavigationColors();

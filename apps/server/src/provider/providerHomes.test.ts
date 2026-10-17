@@ -248,6 +248,28 @@ describe("codexInstanceHomes", () => {
     }).pipe(Effect.provide(Path.layer)),
   );
 
+  effectIt.effect("never gives a managed instance the CODEX_HOME it inherits", () =>
+    Effect.gen(function* () {
+      const homes = yield* codexInstanceHomes(
+        decodeSettings({
+          providerInstances: {
+            codex_managed: {
+              driver: "codex",
+              config: { setupMode: "managed" },
+              environment: [{ name: "CODEX_HOME", value: "/homes/user-cli" }],
+            },
+          },
+        }),
+        { CODEX_HOME: "/homes/codex-server" },
+      );
+      // The implicit default instance still inherits; the managed one keeps Codex's default.
+      assert.deepEqual(homePaths(homes), [
+        "/homes/codex-server",
+        NodePath.join(NodeOS.homedir(), ".codex"),
+      ]);
+    }).pipe(Effect.provide(Path.layer)),
+  );
+
   effectIt.effect("reads a second Codex account's home", () =>
     Effect.gen(function* () {
       const settings = decodeSettings({

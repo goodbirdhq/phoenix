@@ -3,7 +3,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { RefObject } from "react";
-import { Pressable, View } from "react-native";
+import { Pressable, View, type ViewInstance } from "react-native";
 import { AppText } from "../../components/AppText";
 import { ModalSlideUp } from "../../components/ModalSlideUp";
 import { ThreadAvatar, threadIdentityLabel } from "../../components/ThreadAvatar";
@@ -16,7 +16,7 @@ export function ThreadSessionDetails(props: {
   descendants: ReadonlyArray<EnvironmentThreadShell>;
   project: EnvironmentProject | null;
   providerDriver: string | null;
-  returnFocusRef: RefObject<View | null>;
+  returnFocusRef: RefObject<ViewInstance | null>;
   onClose: () => void;
   onSelect: (thread: EnvironmentThreadShell) => void;
 }) {

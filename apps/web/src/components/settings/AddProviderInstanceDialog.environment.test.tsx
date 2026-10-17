@@ -92,7 +92,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
     (field.props.onChange as (event: { target: { value: string } }) => void)({
       target: { value: label },
     });
-    click("Next");
+    click("Configure manually");
     click("Next");
     return { render, click, onOpenChange };
   }
@@ -143,7 +143,12 @@ describe("AddProviderInstanceDialog environment routing", () => {
       input: {
         patch: {
           providerInstances: {
-            codex_work: { driver: "codex", enabled: true, displayName: "Work" },
+            codex_work: {
+              driver: "codex",
+              enabled: true,
+              displayName: "Work",
+              config: { setupMode: "existing" },
+            },
           },
         },
       },

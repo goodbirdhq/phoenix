@@ -724,6 +724,8 @@ export const make = Effect.gen(function* () {
             cursorUntilMs,
           ),
         );
+    // No saved login means there is no account source to report, not a setup error.
+    if (account.missing && account.error === null) return null;
     if (account.accountKey !== null && account.error === null && !account.missing) {
       // The same account includes CLI and desktop history from every machine.
       // A stable remote fingerprint prevents connected environments counting it twice.
@@ -752,12 +754,11 @@ export const make = Effect.gen(function* () {
 
   const collectStores = Effect.fn("UsageService.collectStores")(
     function* (windowStartMs: number, settings: ServerSettingsValue, retentionCutoffMs: number) {
-      return [
-        ...(yield* collectTranscripts(windowStartMs, settings, retentionCutoffMs)),
-        ...(yield* collectOpenCode(windowStartMs, settings)),
-        ...(yield* collectAntigravity(windowStartMs, settings)),
-        yield* collectCursor(windowStartMs, settings),
-      ];
+      const transcripts = yield* collectTranscripts(windowStartMs, settings, retentionCutoffMs);
+      const openCode = yield* collectOpenCode(windowStartMs, settings);
+      const antigravity = yield* collectAntigravity(windowStartMs, settings);
+      const cursor = yield* collectCursor(windowStartMs, settings);
+      return [...transcripts, ...openCode, ...antigravity, ...(cursor ? [cursor] : [])];
     },
     // The home resolvers read `Path` and the platform themselves; satisfy them
     // from what this service captured so the scan stays context-free.

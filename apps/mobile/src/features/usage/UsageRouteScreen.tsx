@@ -1,3 +1,4 @@
+import { ChatGptUsageSummary } from "./ChatGptUsageSummary";
 import { scopeAccountHistory } from "@t3tools/client-runtime/usage/account-history";
 import { UsageReport } from "./UsageReport";
 import {
@@ -7,6 +8,7 @@ import {
 import { usageReportSeries } from "@t3tools/client-runtime/usage/report-chart-series";
 import { findUsageAccount, usageAccountMemberKey } from "@t3tools/client-runtime/usage/accounts";
 import { type RouteProp, useIsFocused, useNavigation, useRoute } from "@react-navigation/native";
+import { cursorKeychainAccessEnvironments } from "@t3tools/client-runtime/state/usage";
 import {
   deriveSubscriptionLimits,
   providerLimitSourceName,
@@ -28,6 +30,7 @@ import {
   enumerateHourStarts,
   formatPercent,
   formatTokens,
+  formatUsageContractMismatch,
   formatUsd,
   formatDateTimeShort,
   makeWindow,
@@ -212,9 +215,7 @@ export function UsageRouteScreen() {
       limit.availability.windows.some((window) => window.resetsAt !== undefined),
     ),
   );
-  const cursorAccessEnvironments = selectedEnvironments.filter(
-    (environment) => environment.needsCursorKeychainAccess,
-  );
+  const cursorAccessEnvironments = cursorKeychainAccessEnvironments(selectedEnvironments);
   const refreshAfterCursorEnable = () => {
     void refresh();
     void limits.refreshAfterEnable();
@@ -545,6 +546,7 @@ export function UsageRouteScreen() {
                 merged={merged}
                 isPartial={isPartial}
               />
+              <ChatGptUsageSummary selectedEnvironmentIds={selectedEnvironmentIds} />
 
               {merged.duplicateSources.length > 0 ? (
                 <Text className="text-sm text-foreground-muted">
@@ -829,7 +831,7 @@ function CursorEnableLimits({
         <ProviderIcon provider="cursor" size={18} />
         <Text className="text-base font-t3-medium text-foreground">Cursor</Text>
       </View>
-      <View className="items-start gap-3 rounded-[24px] border-continuous bg-card p-4">
+      <View className="items-start gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
         <Text className="text-xs text-foreground-muted">{CURSOR_KEYCHAIN_COPY}</Text>
         <View className="flex-row flex-wrap gap-2">
           {environments.map((environment) => (
@@ -1189,7 +1191,12 @@ function usageEnvironmentStatus(environment: EnvironmentUsageStatus): string {
     environment.summary &&
     !isCompatibleUsageContractVersion(environment.summary.contractVersion, USAGE_CONTRACT_VERSION)
   ) {
-    return "Older server · excluded from usage totals";
+    return formatUsageContractMismatch(environment.label, {
+      direction:
+        environment.summary.contractVersion < USAGE_CONTRACT_VERSION
+          ? "serverBehind"
+          : "clientBehind",
+    });
   }
   if (!environment.isConnected)
     return environment.summary ? "Disconnected · showing saved usage" : "Waiting for connection…";

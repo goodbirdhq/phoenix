@@ -221,12 +221,13 @@ describe("usage cost provenance is additive", () => {
     expect(decoded.buckets[1]?.providerReportedRecords).toBe(1);
   });
 
-  it("rejects a provenance value the closed three-value union does not define", () => {
-    expect(() =>
-      decodeUsageSummary({
-        ...summary,
-        buckets: summary.buckets.map((bucket) => ({ ...bucket, costSource: "mixed" })),
-      }),
-    ).toThrow();
+  it("skips a bucket whose provenance the closed three-value union does not define", () => {
+    // Buckets decode forward-compatibly: a newer server's value drops that
+    // bucket instead of failing the whole summary.
+    const decoded = decodeUsageSummary({
+      ...summary,
+      buckets: summary.buckets.map((bucket) => ({ ...bucket, costSource: "mixed" })),
+    });
+    expect(decoded.buckets).toEqual([]);
   });
 });

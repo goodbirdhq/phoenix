@@ -16,7 +16,7 @@ export function MermaidViewer(props: {
   readonly theme: "light" | "dark";
   readonly onClose: () => void;
 }) {
-  const webView = useRef<WebView>(null);
+  const webView = useRef<WebView<object>>(null);
   const [ready, setReady] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,7 +98,7 @@ export function MermaidViewer(props: {
             overflow: "hidden",
           }}
         >
-          <WebView
+          <WebView<object>
             ref={webView}
             source={{ html: viewerHtml, baseUrl: "about:blank" }}
             originWhitelist={["about:blank"]}
