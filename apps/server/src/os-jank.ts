@@ -119,7 +119,9 @@ export const expandHomePath = Effect.fn(function* (input: string) {
 export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
   const { join, resolve } = yield* Path.Path;
   if (!raw || raw.trim().length === 0) {
-    return join(yield* HostProcess.HomeDirectory, ".t3");
+    // ".phoenix", not ".t3": Phoenix runs alongside upstream T3 Code and must not
+    // share its state directory (SQLite database, auth, projects).
+    return join(yield* HostProcess.HomeDirectory, ".phoenix");
   }
   return resolve(yield* expandHomePath(raw.trim()));
 });
