@@ -8,7 +8,12 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
+import {
+  isProviderNativeSubagentThread,
+  type ContextMenuItem,
+  type EnvironmentId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
 import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
@@ -512,23 +517,38 @@ export function buildMultiSelectThreadContextMenuItems(input: {
   ];
 }
 
-function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
-  return thread.lineage.relationshipToParent === "subagent";
+// Provider-native subagents belong to their parent's conversation and are
+// reachable from its Lineage view, so they have no sidebar row. Phoenix child
+// sessions (delegated threads) are ordinary sessions and group under their
+// parent instead.
+type SidebarLineageInput = Pick<SidebarThreadSummary, "lineage"> & {
+  readonly source: Pick<SidebarThreadSummary["source"], "creationSource">;
+};
+
+function isSidebarHiddenSubagent(thread: SidebarLineageInput): boolean {
+  return isProviderNativeSubagentThread({
+    lineage: thread.lineage,
+    creationSource: thread.source.creationSource,
+  });
 }
 
-// Subagent threads have no sidebar row, so an open subagent is represented by
-// its nearest non-subagent ancestor. A broken chain (missing parent, cycle,
-// other environment) resolves to the thread itself, which then matches no row.
+export function isSidebarChildSession(thread: SidebarLineageInput): boolean {
+  return thread.lineage.relationshipToParent === "subagent" && !isSidebarHiddenSubagent(thread);
+}
+
+// An open provider subagent is represented by its nearest ancestor with a
+// row. A broken chain (missing parent, cycle, other environment) resolves to
+// the thread itself, which then matches no row.
 export function resolveSidebarRowThreadId(
   threadId: ThreadId,
   environmentId: EnvironmentId,
-  threads: readonly Pick<SidebarThreadSummary, "id" | "environmentId" | "lineage">[],
+  threads: readonly (Pick<SidebarThreadSummary, "id" | "environmentId"> & SidebarLineageInput)[],
 ): ThreadId {
   const findThread = (id: ThreadId) =>
     threads.find((thread) => thread.id === id && thread.environmentId === environmentId);
   const visited = new Set<ThreadId>();
   let thread = findThread(threadId);
-  while (thread !== undefined && isSidebarSubagentThread(thread)) {
+  while (thread !== undefined && isSidebarHiddenSubagent(thread)) {
     if (thread.lineage.parentThreadId === null || visited.has(thread.id)) return threadId;
     visited.add(thread.id);
     thread = findThread(thread.lineage.parentThreadId);
@@ -537,18 +557,153 @@ export function resolveSidebarRowThreadId(
 }
 
 export function filterSidebarV2VisibleThreads<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage"> & {
-    environmentId: string;
-    projectId: string;
-  },
+  T extends Pick<SidebarThreadSummary, "archivedAt"> &
+    SidebarLineageInput & {
+      environmentId: string;
+      projectId: string;
+    },
 >(threads: readonly T[], scopedProjectKeys: ReadonlySet<string> | null): T[] {
   return threads.filter(
     (thread) =>
       thread.archivedAt === null &&
-      !isSidebarSubagentThread(thread) &&
+      !isSidebarHiddenSubagent(thread) &&
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
+}
+
+type SidebarTeamInput = Pick<SidebarThreadSummary, "environmentId" | "id" | "pinnedAt"> &
+  SidebarLineageInput;
+
+const sidebarTeamKey = (thread: Pick<SidebarThreadSummary, "environmentId" | "id">) =>
+  `${thread.environmentId}:${thread.id}`;
+
+/**
+ * Pulls child sessions out of the live sections and hangs them under their
+ * parent's row, the way Phoenix groups a team. A child joins its parent only
+ * when both are live (pinned, active or working); a pinned child is pinned on
+ * its own, and settled or snoozed children stay on their shelves. Children
+ * keep the order of the sections they came from. A missing parent or a
+ * parent cycle leaves the child as its own row rather than hiding it.
+ */
+export function groupSidebarChildSessions<T extends SidebarTeamInput>(sections: {
+  readonly pinned: readonly T[];
+  readonly active: readonly T[];
+  readonly working: readonly T[];
+}): {
+  pinned: T[];
+  active: T[];
+  working: T[];
+  childrenByKey: ReadonlyMap<string, readonly T[]>;
+} {
+  const live = new Map<string, T>();
+  for (const thread of [...sections.pinned, ...sections.active, ...sections.working]) {
+    live.set(sidebarTeamKey(thread), thread);
+  }
+  const parentKeyOf = (thread: T): string | null =>
+    thread.pinnedAt == null && isSidebarChildSession(thread) && thread.lineage.parentThreadId
+      ? `${thread.environmentId}:${thread.lineage.parentThreadId}`
+      : null;
+  const joinsParent = (thread: T): boolean => {
+    const seen = new Set([sidebarTeamKey(thread)]);
+    let parentKey = parentKeyOf(thread);
+    if (parentKey === null || !live.has(parentKey)) return false;
+    while (parentKey !== null) {
+      if (seen.has(parentKey)) return false;
+      seen.add(parentKey);
+      const parent = live.get(parentKey);
+      if (parent === undefined) return true;
+      parentKey = parentKeyOf(parent);
+    }
+    return true;
+  };
+  const childrenByKey = new Map<string, T[]>();
+  const roots = (list: readonly T[]) =>
+    list.filter((thread) => {
+      if (!joinsParent(thread)) return true;
+      const parentKey = parentKeyOf(thread)!;
+      const siblings = childrenByKey.get(parentKey);
+      if (siblings) siblings.push(thread);
+      else childrenByKey.set(parentKey, [thread]);
+      return false;
+    });
+  // Children are collected in section order: active before working.
+  const pinned = roots(sections.pinned);
+  const active = roots(sections.active);
+  const working = roots(sections.working);
+  return { pinned, active, working, childrenByKey };
+}
+
+/** Every descendant of a row, depth first, regardless of expansion. */
+export function sidebarTeamDescendants<
+  T extends Pick<SidebarThreadSummary, "environmentId" | "id">,
+>(thread: T, childrenByKey: ReadonlyMap<string, readonly T[]>): T[] {
+  const descendants: T[] = [];
+  const visit = (parent: T) => {
+    for (const child of childrenByKey.get(sidebarTeamKey(parent)) ?? []) {
+      descendants.push(child);
+      visit(child);
+    }
+  };
+  visit(thread);
+  return descendants;
+}
+
+/** The nested rows under a row: a child's own children show only while that
+ * child is expanded too. */
+export function visibleSidebarTeamRows<
+  T extends Pick<SidebarThreadSummary, "environmentId" | "id">,
+>(
+  thread: T,
+  childrenByKey: ReadonlyMap<string, readonly T[]>,
+  expandedKeys: ReadonlySet<string>,
+): { thread: T; depth: number }[] {
+  const rows: { thread: T; depth: number }[] = [];
+  const visit = (parent: T, depth: number) => {
+    if (!expandedKeys.has(sidebarTeamKey(parent))) return;
+    for (const child of childrenByKey.get(sidebarTeamKey(parent)) ?? []) {
+      rows.push({ thread: child, depth });
+      visit(child, depth + 1);
+    }
+  };
+  visit(thread, 1);
+  return rows;
+}
+
+const teamStatusPriority: Record<SidebarThreadStatus, number> = {
+  approval: 0,
+  input: 1,
+  failed: 2,
+  limited: 3,
+  working: 4,
+  waiting: 5,
+  ready: 6,
+};
+
+/**
+ * A collapsed team shows its most urgent member on the parent's avatar, and
+ * the target is the session to open for the next action, not always the
+ * parent. An expanded team shows each member on its own row, so the parent
+ * keeps its own status (which still carries upstream's child-input roll-up).
+ */
+export function resolveSidebarTeamStatus<T extends SidebarThreadStatusInput>(
+  parent: T,
+  members: readonly T[],
+  expanded: boolean,
+): { status: SidebarThreadStatus; target: T } {
+  let target = parent;
+  let status = resolveSidebarThreadStatus(parent);
+  if (expanded) return { status, target };
+  for (const member of members) {
+    const next = resolveSidebarThreadStatus(member);
+    // A child waiting on its own children is not a request for a person.
+    if (next === "waiting") continue;
+    if (teamStatusPriority[next] < teamStatusPriority[status]) {
+      status = next;
+      target = member;
+    }
+  }
+  return { status, target };
 }
 
 export function buildBulkTitleRegenerationContextMenuItem(input: {
@@ -882,7 +1037,7 @@ export function shouldRecedeSidebarThread(input: {
   return false;
 }
 
-type SidebarThreadStatusInput = Pick<
+export type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
   | "hasPendingApprovals"
   | "hasPendingUserInput"
@@ -1303,7 +1458,7 @@ export function sortLogicalProjectsForSidebar<
 
 export function sortSidebarV2ProjectGroups<
   TProject extends LogicalSidebarProject,
-  TThread extends ScopedSidebarThread & Pick<SidebarThreadSummary, "lineage">,
+  TThread extends ScopedSidebarThread & SidebarLineageInput,
 >(
   projects: readonly TProject[],
   threads: readonly TThread[],

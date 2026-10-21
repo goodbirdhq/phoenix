@@ -9,6 +9,7 @@ import {
   sessionAvatarLabel,
   type SessionAvatarStatus,
 } from "./sidebar/SessionAvatar";
+import { SidebarTeamAvatars } from "./sidebar/SidebarTeamAvatars";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
   dropThreadContext,
@@ -191,6 +192,10 @@ import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
+  groupSidebarChildSessions,
+  resolveSidebarTeamStatus,
+  sidebarTeamDescendants,
+  visibleSidebarTeamRows,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
@@ -210,7 +215,6 @@ import {
   resolveSidebarThreadSection,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
-  resolveSidebarThreadStatus,
   resolveThreadLastVisitedAt,
   searchSidebarThreads,
   shouldCreateNewThreadInCurrentProject,
@@ -453,7 +457,7 @@ function useSidebarThreads(input: {
   const { projectScopeKey, scopedProjectKeys, serverConfigs, optimisticDrop, routeThreadRef } =
     input;
   const threads = useThreadShells();
-  const routeRowThreadKey =
+  const routeThreadRowKey =
     routeThreadRef === null
       ? null
       : scopedThreadKey(
@@ -466,6 +470,11 @@ function useSidebarThreads(input: {
             ),
           ),
         );
+  // Teams start collapsed. Expansion lives with this sidebar instance and
+  // forgets threads that leave the list.
+  const [expandedTeamKeys, setExpandedTeamKeys] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
   const nowMinute = useNowMinute();
   // Snooze wake times are second-precise, so classifying with the quantized
@@ -513,8 +522,35 @@ function useSidebarThreads(input: {
   const partitionNextWakeAt = partition.snoozedThreads[0]?.snoozedUntil ?? null;
   if (partitionNextWakeAt !== nextSnoozeWakeAt) setNextSnoozeWakeAt(partitionNextWakeAt);
 
-  const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
-    partition;
+  const {
+    pinnedThreads,
+    activeThreads,
+    workingThreads,
+    snoozedThreads,
+    settledThreads,
+    childThreadsByKey,
+  } = partition;
+  // A child session's row stands for it while its team is open; a collapsed
+  // team's parent row stands in, the way a provider subagent's parent does.
+  const parentKeyByChildKey = new Map<string, string>();
+  for (const [parentKey, children] of childThreadsByKey) {
+    for (const child of children) parentKeyByChildKey.set(threadShellKey(child), parentKey);
+  }
+  const routeRowThreadKey = (() => {
+    if (routeThreadRowKey === null) return null;
+    // The highest collapsed ancestor is the row on screen.
+    let row = routeThreadRowKey;
+    const seen = new Set([row]);
+    for (
+      let parentKey = parentKeyByChildKey.get(row);
+      parentKey !== undefined && !seen.has(parentKey);
+      parentKey = parentKeyByChildKey.get(parentKey)
+    ) {
+      seen.add(parentKey);
+      if (!expandedTeamKeys.has(parentKey)) row = parentKey;
+    }
+    return row;
+  })();
   const visibleSettledThreads = (() => {
     if (settledThreads.length <= settledVisibleCount) return settledThreads;
     const visible = settledThreads.slice(0, settledVisibleCount);
@@ -535,13 +571,23 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
+  const withTeamRows = (list: readonly EnvironmentThreadShell[]) =>
+    list.flatMap((thread) => [
+      thread,
+      ...visibleSidebarTeamRows(thread, childThreadsByKey, expandedTeamKeys).map(
+        (row) => row.thread,
+      ),
+    ]);
+  // Expanded child sessions follow their parent for traversal, jump hints and
+  // range selection, as they do on screen.
   const orderedThreads = [
-    ...pinnedThreads,
-    ...activeThreads,
-    ...visibleWorkingThreads,
+    ...withTeamRows(pinnedThreads),
+    ...withTeamRows(activeThreads),
+    ...withTeamRows(visibleWorkingThreads),
     ...visibleSnoozedThreads,
     ...renderedSettledThreads,
   ];
+  const childThreads = [...childThreadsByKey.values()].flat();
   const sectionByThreadKey = new Map<string, SidebarSection>();
   for (const [list, section] of [
     [pinnedThreads, "pinned"],
@@ -550,7 +596,22 @@ function useSidebarThreads(input: {
     [snoozedThreads, "snoozed"],
     [settledThreads, "settled"],
   ] as const) {
-    for (const thread of list) sectionByThreadKey.set(threadShellKey(thread), section);
+    for (const thread of list) {
+      sectionByThreadKey.set(threadShellKey(thread), section);
+      for (const child of sidebarTeamDescendants(thread, childThreadsByKey)) {
+        sectionByThreadKey.set(threadShellKey(child), section);
+      }
+    }
+  }
+  const toggleTeam = (key: string) =>
+    setExpandedTeamKeys((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  const teamKeys = new Set(childThreadsByKey.keys());
+  if ([...expandedTeamKeys].some((key) => !teamKeys.has(key))) {
+    setExpandedTeamKeys(new Set([...expandedTeamKeys].filter((key) => teamKeys.has(key))));
   }
   return {
     routeRowThreadKey,
@@ -561,9 +622,12 @@ function useSidebarThreads(input: {
       ...pinnedThreads,
       ...activeThreads,
       ...workingThreads,
+      ...childThreads,
       ...snoozedThreads,
       ...settledThreads,
     ],
+    expandedTeamKeys,
+    toggleTeam,
     settledVisibleCount,
     hiddenSettledCount: settledThreads.length - visibleSettledThreads.length,
     showMoreSettled: () =>
@@ -659,8 +723,8 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const sortedActive = workingShelfEnabled
     ? sortInboxThreadsByReturn(active, inboxReturns.returnedAt)
     : sortThreadsForSidebar(active);
-  return {
-    pinnedThreads:
+  const teams = groupSidebarChildSessions({
+    pinned:
       optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
         ? sortedPinned
         : orderItemsByPreferredIds({
@@ -668,9 +732,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
             preferredIds: optimisticDrop.order,
             getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           }),
-    draggableThreadKeys: draggable,
-    activeReorderableThreadKeys: activeReorderable,
-    activeThreads:
+    active:
       optimisticDrop?.section !== "active" || optimisticDrop.order === null
         ? sortedActive
         : orderItemsByPreferredIds({
@@ -678,7 +740,15 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
             preferredIds: optimisticDrop.order,
             getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           }),
-    workingThreads: sortWorkingThreadsBySend(working),
+    working: sortWorkingThreadsBySend(working),
+  });
+  return {
+    pinnedThreads: teams.pinned,
+    draggableThreadKeys: draggable,
+    activeReorderableThreadKeys: activeReorderable,
+    activeThreads: teams.active,
+    workingThreads: teams.working,
+    childThreadsByKey: teams.childrenByKey,
     snoozedThreads: snoozed.toSorted(
       (left, right) =>
         firstValidTimestampMs(left.snoozedUntil ?? null) -
@@ -1480,6 +1550,13 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
 type SidebarThreadRowProps = {
   thread: SidebarThreadSummary;
   variant: "card" | "slim";
+  // Nesting under a parent row; child sessions sit at depth one and below.
+  depth: number;
+  // Every grouped descendant, whether or not the team is expanded.
+  teamMembers: readonly SidebarThreadSummary[];
+  teamExpanded: boolean;
+  onToggleTeam: (threadKey: string) => void;
+  nestedRows: ReactNode;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
   snoozeSupported: boolean;
@@ -1604,7 +1681,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     : null;
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarThreadStatus(thread);
+  const teamStatus = resolveSidebarTeamStatus(thread, props.teamMembers, props.teamExpanded);
+  const status = teamStatus.status;
+  const isNested = props.depth > 0;
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =
@@ -2015,10 +2094,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       data-thread-item={threadKey}
       {...sortableRootProps}
       {...(fileDropHandlers ?? {})}
+      {...(isNested
+        ? {
+            // A nested row sits inside its parent's sortable item; its
+            // pointer must not pick the parent up.
+            onPointerDown: (event: ReactPointerEvent) => event.stopPropagation(),
+            // Each level steps 20px, keeping at least 244px for the row.
+            style: { paddingLeft: `min(${props.depth * 20}px, max(0px, calc(100% - 244px)))` },
+          }
+        : {})}
       className={cn(
         // Matches the 66px content box. The 7px of padding plus the list's
         // 1px gap gives the 8px spacing between rows.
-        "list-none pt-1 pb-0.75 [content-visibility:auto] [contain-intrinsic-size:auto_66px]",
+        "list-none pt-1 pb-0.75",
+        // A parent's height changes with its team, so only leaves skip layout.
+        props.nestedRows === null && "[content-visibility:auto] [contain-intrinsic-size:auto_66px]",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -2047,12 +2137,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               status={variantAction === "unsnooze" ? "snoozed" : status}
               project={props.project}
               provider={providerEntry}
+              nested={isNested}
+              showInstanceBadge={showInstanceBadge}
               reviewTarget={
                 status === "approval" ||
                 status === "input" ||
                 status === "failed" ||
                 status === "limited"
-                  ? thread
+                  ? teamStatus.target
                   : null
               }
               onReview={onThreadActivate}
@@ -2176,7 +2268,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               </div>
               <div className="flex h-4.5 min-w-0 items-center gap-1.5 text-xs leading-4.5 text-sidebar-muted-foreground">
                 {prBadge}
-                {thread.branch ? (
+                {/* A child session's project is its parent's, so it names
+                  its model where a root row names its branch. */}
+                {isNested ? (
+                  <span className="min-w-0 flex-1 truncate">{modelLabel}</span>
+                ) : thread.branch ? (
                   <>
                     <ThreadWorktreeIndicator thread={thread} />
                     <span className="flex min-w-0 flex-1">
@@ -2200,6 +2296,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 ) : null}
                 {terminalStatusIcon}
                 {pinIndicator}
+                {props.teamMembers.length > 0 ? (
+                  <SidebarTeamAvatars
+                    parent={thread}
+                    members={props.teamMembers}
+                    providers={props.providerEntryByInstanceId}
+                    expanded={props.teamExpanded}
+                    selected={props.isActive || isSelected}
+                    onToggle={() => props.onToggleTeam(threadKey)}
+                  />
+                ) : null}
                 {/* No account glyph here: the row's account already rides as
                   the provider badge on the leading avatar. The machine says
                   where the row runs, not who works on it, so it trails alone. */}
@@ -2217,6 +2323,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         </TooltipTrigger>
         {detailsTooltip}
       </Tooltip>
+      {props.nestedRows ? (
+        <ul role="presentation" className="flex flex-col gap-px">
+          {props.nestedRows}
+        </ul>
+      ) : null}
     </li>
   );
 });
@@ -2228,10 +2339,17 @@ function SidebarRowAvatar(props: {
   status: SessionAvatarStatus;
   project: EnvironmentProject | null;
   provider: SidebarProviderEntry | null;
+  // A child session's project is its parent's, so it leads with its provider.
+  nested: boolean;
+  showInstanceBadge: boolean;
   reviewTarget: Pick<SidebarThreadSummary, "environmentId" | "id" | "title"> | null;
   onReview: (threadRef: ScopedThreadRef) => void;
 }) {
-  const avatar = (
+  const avatar = props.nested ? (
+    <SessionAvatar status={props.status}>
+      <SessionIcon provider={props.provider} showBadge={props.showInstanceBadge} />
+    </SessionAvatar>
+  ) : (
     <SessionAvatar
       status={props.status}
       providerBadge={<SessionIcon provider={props.provider} showBadge={false} />}
@@ -2753,6 +2871,9 @@ export default function Sidebar() {
     pinnedKeysById,
     activeKeysById,
     routeRowThreadKey,
+    childThreadsByKey,
+    expandedTeamKeys,
+    toggleTeam,
   } = useSidebarThreads({
     projectScopeKey,
     scopedProjectKeys,
@@ -4541,6 +4662,105 @@ export default function Sidebar() {
                     )}
                   >
                     {(() => {
+                      const rowProps = (
+                        thread: EnvironmentThreadShell,
+                        section: SidebarSection,
+                        depth: number,
+                      ): Omit<SidebarThreadRowProps, "sortable"> => {
+                        const threadKey = scopedThreadKey(
+                          scopeThreadRef(thread.environmentId, thread.id),
+                        );
+                        const rowVariant =
+                          section === "active" || section === "pinned" || section === "working"
+                            ? "card"
+                            : "slim";
+                        const teamMembers = sidebarTeamDescendants(thread, childThreadsByKey);
+                        const teamExpanded = expandedTeamKeys.has(threadKey);
+                        return {
+                          thread,
+                          variant: rowVariant,
+                          depth,
+                          teamMembers,
+                          teamExpanded,
+                          onToggleTeam: toggleTeam,
+                          nestedRows: teamExpanded
+                            ? (childThreadsByKey.get(threadKey) ?? []).map((child) => (
+                                <SidebarThreadRow
+                                  key={scopedThreadKey(
+                                    scopeThreadRef(child.environmentId, child.id),
+                                  )}
+                                  {...rowProps(child, section, depth + 1)}
+                                />
+                              ))
+                            : null,
+                          variantAction:
+                            section === "snoozed"
+                              ? "unsnooze"
+                              : section === "settled"
+                                ? "unsettle"
+                                : "settle",
+                          settlementSupported:
+                            serverConfigs.get(thread.environmentId)?.environment.capabilities
+                              .threadSettlement === true,
+                          snoozeSupported:
+                            serverConfigs.get(thread.environmentId)?.environment.capabilities
+                              .threadSnooze === true,
+                          pinningSupported:
+                            serverConfigs.get(thread.environmentId)?.environment.capabilities
+                              .threadPinning === true,
+                          isPinned: thread.pinnedAt != null,
+                          dropVerb:
+                            dragState?.activeKey === threadKey
+                              ? resolveSidebarDropVerb(dragState.activeSection, dragTargetSection)
+                              : null,
+                          dragOverPinned:
+                            dragState?.activeKey === threadKey && dragTargetSection === "pinned",
+                          sweepAction: actionSweep?.keys.has(threadKey) ? actionSweep.action : null,
+                          snoozeWakeLabelText:
+                            section === "snoozed" && thread.snoozedUntil != null
+                              ? snoozeWakeLabel(thread.snoozedUntil, {
+                                  now: new Date().toISOString(),
+                                })
+                              : null,
+                          wokeAt: threadWokeAt(thread, { now: snoozeNow }),
+                          isActive: routeRowThreadKey === threadKey,
+                          isRouteThread: routeThreadKey === threadKey,
+                          openPullRequestsInRightPanel: routeThreadRef !== null,
+                          jumpLabel: showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null,
+                          currentEnvironmentId: primaryEnvironmentId,
+                          environmentLabel: environmentLabelById.get(thread.environmentId) ?? null,
+                          environmentMachine:
+                            environmentMachineById.get(thread.environmentId) ?? "server",
+                          scratchMachineLabel: scratchMachineLabelFor(thread),
+                          project:
+                            projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
+                          projectDisplayName:
+                            projectDisplayNameByKey.get(
+                              `${thread.environmentId}:${thread.projectId}`,
+                            ) ?? null,
+                          providerEntryByInstanceId:
+                            providerEntriesByEnvironment.get(thread.environmentId) ??
+                            EMPTY_PROVIDER_ENTRIES,
+                          timestampFormat,
+                          onThreadClick: handleThreadClick,
+                          onThreadActivate: navigateToThread,
+                          onStartRename: startThreadRename,
+                          onRenameTitleChange: setRenamingTitle,
+                          onCommitRename: commitThreadRename,
+                          onCancelRename: cancelThreadRename,
+                          isRenaming: renamingThreadKey === threadKey,
+                          renamingTitle: renamingThreadKey === threadKey ? renamingTitle : "",
+                          onContextMenu: handleThreadContextMenu,
+                          onSettle: attemptSettle,
+                          onActionSweepStart: startActionSweep,
+                          onUnsettle: attemptUnsettle,
+                          onSnooze: attemptSnooze,
+                          onUnsnooze: attemptUnsnooze,
+                          onUnpin: attemptUnpin,
+                          onAcknowledgeWoke: acknowledgeWoke,
+                          onFileDropThreads: handleThreadFileDrop,
+                        };
+                      };
                       const renderThreadRow = (
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
@@ -4548,12 +4768,10 @@ export default function Sidebar() {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
-                        const isCard =
-                          section === "active" || section === "pinned" || section === "working";
-                        const rowVariant = isCard ? "card" : "slim";
                         return (
                           <SortableThreadRow
                             key={threadKey}
+                            {...rowProps(thread, section, 0)}
                             sortableId={threadKey}
                             contextDrag={isContextDrag}
                             sortableDisabled={
@@ -4561,92 +4779,6 @@ export default function Sidebar() {
                               !draggableThreadKeys.has(threadKey) ||
                               optimisticDrop !== null
                             }
-                            thread={thread}
-                            variant={rowVariant}
-                            variantAction={
-                              section === "snoozed"
-                                ? "unsnooze"
-                                : section === "settled"
-                                  ? "unsettle"
-                                  : "settle"
-                            }
-                            settlementSupported={
-                              serverConfigs.get(thread.environmentId)?.environment.capabilities
-                                .threadSettlement === true
-                            }
-                            snoozeSupported={
-                              serverConfigs.get(thread.environmentId)?.environment.capabilities
-                                .threadSnooze === true
-                            }
-                            pinningSupported={
-                              serverConfigs.get(thread.environmentId)?.environment.capabilities
-                                .threadPinning === true
-                            }
-                            isPinned={thread.pinnedAt != null}
-                            dropVerb={
-                              dragState?.activeKey === threadKey
-                                ? resolveSidebarDropVerb(dragState.activeSection, dragTargetSection)
-                                : null
-                            }
-                            dragOverPinned={
-                              dragState?.activeKey === threadKey && dragTargetSection === "pinned"
-                            }
-                            sweepAction={
-                              actionSweep?.keys.has(threadKey) ? actionSweep.action : null
-                            }
-                            snoozeWakeLabelText={
-                              section === "snoozed" && thread.snoozedUntil != null
-                                ? snoozeWakeLabel(thread.snoozedUntil, {
-                                    now: new Date().toISOString(),
-                                  })
-                                : null
-                            }
-                            wokeAt={threadWokeAt(thread, { now: snoozeNow })}
-                            isActive={routeRowThreadKey === threadKey}
-                            isRouteThread={routeThreadKey === threadKey}
-                            openPullRequestsInRightPanel={routeThreadRef !== null}
-                            jumpLabel={
-                              showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null
-                            }
-                            currentEnvironmentId={primaryEnvironmentId}
-                            environmentLabel={
-                              environmentLabelById.get(thread.environmentId) ?? null
-                            }
-                            environmentMachine={
-                              environmentMachineById.get(thread.environmentId) ?? "server"
-                            }
-                            scratchMachineLabel={scratchMachineLabelFor(thread)}
-                            project={
-                              projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
-                              null
-                            }
-                            projectDisplayName={
-                              projectDisplayNameByKey.get(
-                                `${thread.environmentId}:${thread.projectId}`,
-                              ) ?? null
-                            }
-                            providerEntryByInstanceId={
-                              providerEntriesByEnvironment.get(thread.environmentId) ??
-                              EMPTY_PROVIDER_ENTRIES
-                            }
-                            timestampFormat={timestampFormat}
-                            onThreadClick={handleThreadClick}
-                            onThreadActivate={navigateToThread}
-                            onStartRename={startThreadRename}
-                            onRenameTitleChange={setRenamingTitle}
-                            onCommitRename={commitThreadRename}
-                            onCancelRename={cancelThreadRename}
-                            isRenaming={renamingThreadKey === threadKey}
-                            renamingTitle={renamingThreadKey === threadKey ? renamingTitle : ""}
-                            onContextMenu={handleThreadContextMenu}
-                            onSettle={attemptSettle}
-                            onActionSweepStart={startActionSweep}
-                            onUnsettle={attemptUnsettle}
-                            onSnooze={attemptSnooze}
-                            onUnsnooze={attemptUnsnooze}
-                            onUnpin={attemptUnpin}
-                            onAcknowledgeWoke={acknowledgeWoke}
-                            onFileDropThreads={handleThreadFileDrop}
                           />
                         );
                       };

@@ -10,6 +10,11 @@ import {
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
   resolveSidebarRowThreadId,
+  filterSidebarV2VisibleThreads,
+  groupSidebarChildSessions,
+  resolveSidebarTeamStatus,
+  sidebarTeamDescendants,
+  visibleSidebarTeamRows,
   isSidebarThreadWorking,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
@@ -161,20 +166,33 @@ describe("archiveSelectedThreadEntries", () => {
 });
 
 describe("sidebar thread lineage helpers", () => {
-  it("maps an open subagent to its nearest visible ancestor's sidebar row", () => {
-    const environmentId = EnvironmentId.make("environment-row");
-    const otherEnvironmentId = EnvironmentId.make("environment-other");
-    const subagentOf = (id: string, parentId: ThreadId, environment = environmentId) =>
-      makeThreadFixture({
-        id: ThreadId.make(id),
-        environmentId: environment,
-        lineage: {
-          rootThreadId: parentId,
-          parentThreadId: parentId,
-          relationshipToParent: "subagent",
-        },
-      });
-    const root = makeThreadFixture({ id: ThreadId.make("thread-root"), environmentId });
+  const environmentId = EnvironmentId.make("environment-row");
+  const otherEnvironmentId = EnvironmentId.make("environment-other");
+  const subagentOf = (
+    id: string,
+    parentId: ThreadId,
+    creationSource: "provider" | "mcp",
+    overrides: ThreadFixtureOverrides = {},
+  ) => {
+    const thread = makeThreadFixture({
+      id: ThreadId.make(id),
+      environmentId,
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+      ...overrides,
+    });
+    return { ...thread, source: { ...thread.source, creationSource } };
+  };
+  const providerSubagentOf = (id: string, parentId: ThreadId, environment = environmentId) =>
+    subagentOf(id, parentId, "provider", { environmentId: environment });
+  const childSessionOf = (id: string, parentId: ThreadId, overrides: ThreadFixtureOverrides = {}) =>
+    subagentOf(id, parentId, "mcp", overrides);
+  const root = makeThreadFixture({ id: ThreadId.make("thread-root"), environmentId });
+
+  it("maps an open provider subagent to its nearest ancestor's sidebar row", () => {
     const fork = makeThreadFixture({
       id: ThreadId.make("thread-fork"),
       environmentId,
@@ -184,21 +202,133 @@ describe("sidebar thread lineage helpers", () => {
         relationshipToParent: "fork",
       },
     });
-    const child = subagentOf("thread-child", root.id);
-    const grandchild = subagentOf("thread-grandchild", child.id);
-    const forkChild = subagentOf("thread-fork-child", fork.id);
-    const orphan = subagentOf("thread-orphan", ThreadId.make("thread-missing"));
-    const elsewhere = subagentOf("thread-elsewhere", root.id, otherEnvironmentId);
-    const threads = [root, fork, child, grandchild, forkChild, orphan, elsewhere];
+    const child = providerSubagentOf("thread-child", root.id);
+    const grandchild = providerSubagentOf("thread-grandchild", child.id);
+    const forkChild = providerSubagentOf("thread-fork-child", fork.id);
+    const orphan = providerSubagentOf("thread-orphan", ThreadId.make("thread-missing"));
+    const elsewhere = providerSubagentOf("thread-elsewhere", root.id, otherEnvironmentId);
+    const session = childSessionOf("thread-session", root.id);
+    const sessionSubagent = providerSubagentOf("thread-session-subagent", session.id);
+    const threads = [
+      root,
+      fork,
+      child,
+      grandchild,
+      forkChild,
+      orphan,
+      elsewhere,
+      session,
+      sessionSubagent,
+    ];
 
     expect(resolveSidebarRowThreadId(child.id, environmentId, threads)).toBe(root.id);
     expect(resolveSidebarRowThreadId(grandchild.id, environmentId, threads)).toBe(root.id);
     expect(resolveSidebarRowThreadId(forkChild.id, environmentId, threads)).toBe(fork.id);
     expect(resolveSidebarRowThreadId(elsewhere.id, otherEnvironmentId, threads)).toBe(elsewhere.id);
     expect(resolveSidebarRowThreadId(orphan.id, environmentId, threads)).toBe(orphan.id);
-    const loopA = subagentOf("thread-loop-a", ThreadId.make("thread-loop-b"));
-    const loopB = subagentOf("thread-loop-b", loopA.id);
+    // A child session has its own row, and so stands in for its own subagents.
+    expect(resolveSidebarRowThreadId(session.id, environmentId, threads)).toBe(session.id);
+    expect(resolveSidebarRowThreadId(sessionSubagent.id, environmentId, threads)).toBe(session.id);
+    const loopA = providerSubagentOf("thread-loop-a", ThreadId.make("thread-loop-b"));
+    const loopB = providerSubagentOf("thread-loop-b", loopA.id);
     expect(resolveSidebarRowThreadId(loopA.id, environmentId, [loopA, loopB])).toBe(loopA.id);
+  });
+
+  it("lists child sessions and hides provider subagents", () => {
+    const session = childSessionOf("thread-session", root.id);
+    const subagent = providerSubagentOf("thread-subagent", root.id);
+    expect(
+      filterSidebarV2VisibleThreads([root, session, subagent], null).map((thread) => thread.id),
+    ).toEqual([root.id, session.id]);
+  });
+
+  it("hangs live child sessions under their live parent", () => {
+    const pinned = makeThreadFixture({
+      id: ThreadId.make("thread-pinned"),
+      environmentId,
+      pinnedAt: "2026-03-09T10:00:00.000Z",
+    });
+    const first = childSessionOf("thread-first", root.id);
+    const second = childSessionOf("thread-second", root.id);
+    const grandchild = childSessionOf("thread-grandchild", first.id);
+    const underPin = childSessionOf("thread-under-pin", pinned.id);
+    const pinnedChild = childSessionOf("thread-pinned-child", root.id, {
+      pinnedAt: "2026-03-09T10:00:00.000Z",
+    });
+    const orphan = childSessionOf("thread-orphan", ThreadId.make("thread-settled-parent"));
+    const loopA = childSessionOf("thread-loop-a", ThreadId.make("thread-loop-b"));
+    const loopB = childSessionOf("thread-loop-b", loopA.id);
+    const elsewhere = childSessionOf("thread-elsewhere", root.id, {
+      environmentId: otherEnvironmentId,
+    });
+
+    const grouped = groupSidebarChildSessions({
+      pinned: [pinned, pinnedChild],
+      active: [grandchild, root, first, underPin, orphan, loopA, loopB, elsewhere],
+      working: [second],
+    });
+
+    expect(grouped.pinned.map((thread) => thread.id)).toEqual([pinned.id, pinnedChild.id]);
+    expect(grouped.active.map((thread) => thread.id)).toEqual([
+      root.id,
+      orphan.id,
+      loopA.id,
+      loopB.id,
+      elsewhere.id,
+    ]);
+    expect(grouped.working).toEqual([]);
+    const childIds = (thread: typeof root) =>
+      (grouped.childrenByKey.get(`${thread.environmentId}:${thread.id}`) ?? []).map(
+        (child) => child.id,
+      );
+    expect(childIds(root)).toEqual([first.id, second.id]);
+    expect(childIds(first)).toEqual([grandchild.id]);
+    expect(childIds(pinned)).toEqual([underPin.id]);
+
+    expect(sidebarTeamDescendants(root, grouped.childrenByKey).map((thread) => thread.id)).toEqual([
+      first.id,
+      grandchild.id,
+      second.id,
+    ]);
+    const visible = (expanded: readonly (typeof root)[]) =>
+      visibleSidebarTeamRows(
+        root,
+        grouped.childrenByKey,
+        new Set(expanded.map((thread) => `${thread.environmentId}:${thread.id}`)),
+      ).map((row) => [row.thread.id, row.depth]);
+    expect(visible([])).toEqual([]);
+    expect(visible([root])).toEqual([
+      [first.id, 1],
+      [second.id, 1],
+    ]);
+    expect(visible([root, first])).toEqual([
+      [first.id, 1],
+      [grandchild.id, 2],
+      [second.id, 1],
+    ]);
+  });
+
+  it("surfaces a collapsed team's most urgent member and the session to open", () => {
+    const idle = { hasPendingApprovals: false, hasPendingUserInput: false, runtime: null };
+    const parent = { ...idle, id: "parent" };
+    const asking = { ...idle, id: "asking", hasPendingUserInput: true };
+    const approving = { ...idle, id: "approving", hasPendingApprovals: true };
+    const waiting = {
+      ...idle,
+      id: "waiting",
+      blockedOnThreadWait: true,
+      runtime: { status: "running" },
+    };
+    const members = [waiting, asking, approving] as unknown as (typeof parent)[];
+
+    const collapsed = resolveSidebarTeamStatus(parent, members, false);
+    expect(collapsed.status).toBe("approval");
+    expect(collapsed.target.id).toBe("approving");
+    const onlyWaiting = resolveSidebarTeamStatus(parent, [waiting] as never, false);
+    expect(onlyWaiting.status).toBe("ready");
+    const expanded = resolveSidebarTeamStatus(parent, members, true);
+    expect(expanded.status).toBe("ready");
+    expect(expanded.target).toBe(parent);
   });
 });
 
@@ -787,6 +917,10 @@ describe("sortScopedProjectsForSidebar", () => {
 
 describe("sortSidebarV2ProjectGroups", () => {
   it("does not let a hidden subagent thread reorder projects", () => {
+    const providerNative = <T extends { source: object }>(thread: T): T => ({
+      ...thread,
+      source: { ...thread.source, creationSource: "provider" },
+    });
     const olderProjectId = ProjectId.make("project-older");
     const newerProjectId = ProjectId.make("project-newer");
     const olderRootThreadId = ThreadId.make("thread-older-root");
@@ -813,16 +947,18 @@ describe("sortSidebarV2ProjectGroups", () => {
         projectId: newerProjectId,
         updatedAt: "2026-03-09T10:05:00.000Z",
       }),
-      makeThread({
-        id: ThreadId.make("thread-hidden-subagent"),
-        projectId: olderProjectId,
-        updatedAt: "2026-03-09T10:10:00.000Z",
-        lineage: {
-          rootThreadId: olderRootThreadId,
-          parentThreadId: olderRootThreadId,
-          relationshipToParent: "subagent",
-        },
-      }),
+      providerNative(
+        makeThread({
+          id: ThreadId.make("thread-hidden-subagent"),
+          projectId: olderProjectId,
+          updatedAt: "2026-03-09T10:10:00.000Z",
+          lineage: {
+            rootThreadId: olderRootThreadId,
+            parentThreadId: olderRootThreadId,
+            relationshipToParent: "subagent",
+          },
+        }),
+      ),
     ];
 
     expect(
