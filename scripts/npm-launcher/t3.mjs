@@ -15,7 +15,7 @@ const { version } = JSON.parse(
   fs.readFileSync(path.join(import.meta.dirname, "../package.json"), "utf8"),
 );
 
-const SUPPORTED = ["darwin-arm64", "linux-arm64", "linux-x64", "win32-arm64", "win32-x64"];
+const SUPPORTED = ["darwin-arm64", "linux-arm64", "linux-x64", "win32-x64"];
 
 function t3Home() {
   const raw = (process.env.T3CODE_HOME || "").trim();
