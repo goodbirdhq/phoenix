@@ -179,7 +179,7 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
   const platformKey = cliArchivePlatformKey(input.platform, input.arch);
   if (platformKey === undefined) {
     return yield* new PinnedRuntimeInstallError({
-      step: `selecting a t3 release archive for ${input.platform}-${input.arch}`,
+      step: `selecting a Phoenix release archive for ${input.platform}-${input.arch}`,
     });
   }
   const httpClient = input.httpClient;
@@ -192,31 +192,31 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
       yield* fetchReleaseAsset(
         httpClient,
         `${baseUrl}/${CLI_RELEASE_CHECKSUMS_FILE}`,
-        "downloading the t3 release checksums",
+        "downloading the Phoenix release checksums",
       ),
     ),
   );
   const expected = checksums.get(fileName);
   if (expected === undefined) {
     return yield* new PinnedRuntimeInstallError({
-      step: `finding ${fileName} in the t3 release checksums`,
+      step: `finding ${fileName} in the Phoenix release checksums`,
     });
   }
   const archive = yield* fetchReleaseAsset(
     httpClient,
     `${baseUrl}/${fileName}`,
-    "downloading the t3 release archive",
+    "downloading the Phoenix release archive",
     input.onProgress,
   );
   input.onProgress?.({ stage: "verify" });
   const digest = yield* Effect.tryPromise({
     try: () => crypto.subtle.digest("SHA-256", archive),
     catch: (cause) =>
-      new PinnedRuntimeInstallError({ step: "verifying the t3 release archive", cause }),
+      new PinnedRuntimeInstallError({ step: "verifying the Phoenix release archive", cause }),
   });
   if (Hex.encode(new Uint8Array(digest)) !== expected) {
     return yield* new PinnedRuntimeInstallError({
-      step: "verifying the t3 release archive checksum",
+      step: "verifying the Phoenix release archive checksum",
     });
   }
 
@@ -225,11 +225,12 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
     .writeFile(archivePath, archive)
     .pipe(
       Effect.mapError(
-        (cause) => new PinnedRuntimeInstallError({ step: "writing the t3 release archive", cause }),
+        (cause) =>
+          new PinnedRuntimeInstallError({ step: "writing the Phoenix release archive", cause }),
       ),
     );
   input.onProgress?.({ stage: "extract" });
-  const extractStep = "extracting the t3 release archive";
+  const extractStep = "extracting the Phoenix release archive";
   // The archive wraps everything in one directory named after its stem;
   // strip it so the executable lands at <versionDir>/t3.
   yield* input.runner
@@ -590,7 +591,7 @@ const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(fun
       Effect.andThen(fs.rename(versionDir, target)),
       Effect.andThen(Effect.sync(() => pruned.add(target))),
       Effect.catch((cause) =>
-        Effect.logWarning("Could not remove an unused t3 runtime.", { version, cause }),
+        Effect.logWarning("Could not remove an unused Phoenix runtime.", { version, cause }),
       ),
     );
   }
@@ -625,7 +626,7 @@ export const prunePinnedRuntimes = Effect.fn("cloud.pinned_runtime.prune")(funct
         ),
       ),
       Effect.catch((cause) =>
-        Effect.logWarning("Could not remove an unused t3 runtime.", { target, cause }),
+        Effect.logWarning("Could not remove an unused Phoenix runtime.", { target, cause }),
       ),
     );
   }

@@ -136,7 +136,7 @@ export const doctorCommand = Command.make("doctor", {
   ),
 }).pipe(
   Command.withDescription(
-    "Inspect this T3 Code data directory and repair it. Pauses and restarts the background service as needed.",
+    "Inspect this Phoenix data directory and repair it. Pauses and restarts the background service as needed.",
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
