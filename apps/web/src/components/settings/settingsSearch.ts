@@ -539,7 +539,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "cli-command",
-    title: "t3 command",
+    title: "phoenix command",
     to: "/settings/general",
     searchTerms: ["cli terminal shell path install command line"],
     desktopOnly: true,
