@@ -7,7 +7,7 @@ import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { ArchiveIcon, ArchiveX, CheckIcon, ChevronRightIcon, SettingsIcon } from "lucide-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   type BackgroundActivityProfile,
   type DesktopUpdateChannel,
@@ -270,6 +270,31 @@ function backgroundActivityProfileSettings(profile: BackgroundActivityProfile) {
       overrides: {},
     },
   };
+}
+
+const UPSTREAM_PROJECT_URL = "https://github.com/pingdotgg/t3code";
+
+function UpstreamCreditRow() {
+  const openUpstream = useCallback(() => {
+    void ensureLocalApi()
+      .shell.openExternal(UPSTREAM_PROJECT_URL)
+      .catch(() => {
+        // Opening the credit link is best-effort; failing to open it must not
+        // disrupt the settings panel.
+      });
+  }, []);
+
+  return (
+    <SettingsRow
+      title="Built on T3 Code"
+      description="Phoenix is an unofficial fork of T3 Code by T3 Tools Inc., used under the MIT license. Nearly all of the engineering behind this app is theirs."
+      control={
+        <Button onClick={openUpstream} size="xs" variant="outline">
+          View T3 Code
+        </Button>
+      }
+    />
+  );
 }
 
 function AboutVersionTitle() {
@@ -3300,7 +3325,7 @@ export function GeneralSettingsPanel() {
         <MobileAppSettingsRow />
         <SettingsRow
           {...searchableSetting("privacy-policy")}
-          description="How we handle your data, including the anonymous usage data T3 Code collects."
+          description="How we handle your data, including the anonymous usage data Phoenix collects."
           control={
             <Button
               render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}
@@ -3311,6 +3336,7 @@ export function GeneralSettingsPanel() {
             </Button>
           }
         />
+        <UpstreamCreditRow />
       </SettingsSection>
       <SettingsSection title="Diagnostics">
         <SettingsRow
@@ -3334,7 +3360,7 @@ export function GeneralSettingsPanel() {
         />
         <SettingsRow
           {...searchableSetting("open-source-licenses")}
-          description="Notices for dependencies, assets, and optional tools used by T3 Code."
+          description="Notices for dependencies, assets, and optional tools used by Phoenix."
           control={
             <Button
               render={<Link to="/settings/open-source-licenses" />}
