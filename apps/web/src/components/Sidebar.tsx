@@ -2275,17 +2275,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               </div>
               <div className="flex h-4.5 min-w-0 items-center gap-1.5 text-xs leading-4.5 text-sidebar-muted-foreground">
                 {prBadge}
-                {/* A child session's project is its parent's, so it names
-                  its model where a root row names its branch. */}
-                {isNested ? (
-                  <span className="min-w-0 flex-1 truncate">{modelLabel}</span>
-                ) : thread.branch ? (
-                  <>
-                    <ThreadWorktreeIndicator thread={thread} />
-                    <span className="flex min-w-0 flex-1">
-                      <MiddleTruncate value={thread.branch} showTitle={false} />
-                    </span>
-                  </>
+                <ThreadWorktreeIndicator thread={thread} />
+                {thread.branch ? (
+                  <span className="flex min-w-0 flex-1">
+                    <MiddleTruncate value={thread.branch} showTitle={false} />
+                  </span>
                 ) : (
                   <span className="min-w-0 flex-1 truncate">
                     {showsScratchMachine ? props.scratchMachineLabel : "Local checkout"}
