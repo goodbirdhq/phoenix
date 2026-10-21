@@ -136,7 +136,8 @@ interface HomeScreenProps {
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
 }
 
-const ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT = 72;
+// Every row is at least 74pt with a 4pt gap below it.
+const ESTIMATED_THREAD_LIST_V2_ROW_HEIGHT = 78;
 // Rows away from the viewport skip their swipe actions (see
 // swipe-row-activation), so render further ahead: a fast fling then reaches
 // rows that are already built instead of rows still being rebuilt.
@@ -588,7 +589,6 @@ export function HomeScreen(props: HomeScreenProps) {
           }
           environmentMachine={machineByEnvironmentId.get(item.pendingTask.environmentId)}
           showPendingDivider={item.showPendingDivider}
-          showTrailingDivider={item.showTrailingDivider}
           onSelectPendingTask={props.onSelectPendingTask}
           onDeletePendingTask={props.onDeletePendingTask}
         />
@@ -640,7 +640,6 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozePresetMinute={item.snoozePresetMinute ?? ""}
         snoozeWakeLabelText={item.snoozeWakeLabelText}
         timeLabel={item.timeLabel}
-        showTrailingDivider={item.showTrailingDivider}
         project={projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null}
         projectTitle={v2ProjectTitleByProjectKey.get(
           scopedProjectKey(thread.environmentId, thread.projectId),

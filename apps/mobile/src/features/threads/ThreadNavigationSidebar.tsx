@@ -770,7 +770,7 @@ function ThreadNavigationSidebarPane(
               <LegendList
                 data={listItems}
                 drawDistance={500}
-                estimatedItemSize={64}
+                estimatedItemSize={78}
                 extraData={listExtraData}
                 getItemType={(item) => item.type}
                 itemsAreEqual={sidebarItemsAreEqual}
@@ -838,7 +838,7 @@ function ThreadNavigationSidebarPane(
               <LegendList
                 data={listItems}
                 drawDistance={500}
-                estimatedItemSize={64}
+                estimatedItemSize={78}
                 extraData={listExtraData}
                 getItemType={(item) => item.type}
                 itemsAreEqual={sidebarItemsAreEqual}

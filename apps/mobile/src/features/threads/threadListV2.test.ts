@@ -662,11 +662,6 @@ describe("buildThreadListV2ListItems", () => {
     expect(
       items.flatMap((item) => (item.type === "v2-pending" ? [item.showPendingDivider] : [])),
     ).toEqual([true, false, false]);
-    expect(
-      items.map((item) =>
-        item.type === "v2-thread" || item.type === "v2-pending" ? item.showTrailingDivider : null,
-      ),
-    ).toEqual([true, true, true, false, null, false]);
   });
 
   it("places queued tasks above active rows and a collapsed snoozed shelf", () => {
@@ -1242,44 +1237,6 @@ describe("threadListV2ListItemsAreEqual", () => {
     expect(rows(later).snoozeWakeLabelText).toBe("1h");
     expect(threadListV2ListItemsAreEqual(rows(earlier), rows(later))).toBe(false);
   });
-
-  it("notices a trailing-divider flip caused by a neighbour change", () => {
-    const threadA = makeThread({ id: ThreadId.make("flip-a"), title: "flip a" });
-    const threadB = makeThread({ id: ThreadId.make("flip-b"), title: "flip b" });
-    const bare = buildThreadListV2ListItems({
-      items: buildThreadListV2Items({
-        threads: [threadA, threadB],
-        environmentId: null,
-        searchQuery: "",
-        now: NOW,
-      }).items,
-      pendingTasks: [],
-      snoozeLabelNow: NOW,
-    });
-    const settledB = makeThread({
-      id: ThreadId.make("flip-b"),
-      title: "flip b",
-      settledOverride: "settled",
-      settledAt: NOW,
-    });
-    const withSettled = buildThreadListV2ListItems({
-      items: buildThreadListV2Items({
-        threads: [threadA, settledB],
-        environmentId: null,
-        searchQuery: "",
-        now: NOW,
-      }).items,
-      pendingTasks: [],
-      settledCount: 1,
-      settledShelfHeaderIndex: 1,
-      snoozeLabelNow: NOW,
-    });
-    const firstA = bare[0]!;
-    const secondA = withSettled[0]!;
-    expect(firstA.type === "v2-thread" && firstA.showTrailingDivider).toBe(true);
-    expect(secondA.type === "v2-thread" && secondA.showTrailingDivider).toBe(false);
-    expect(threadListV2ListItemsAreEqual(firstA, secondA)).toBe(false);
-  });
 });
 
 describe("thread list Woke marker", () => {
@@ -1371,7 +1328,6 @@ describe("thread list Woke marker", () => {
     const after = list(isoAt(BASE_MS + 37_500))[0]!;
     expect(before.type === "v2-thread" && before.item.wokeAt).toBeNull();
     expect(after.type === "v2-thread" && after.item.wokeAt).toBe(waking.snoozedUntil);
-    expect(after.type === "v2-thread" && after.timeLabel).toBe("");
     expect(threadListV2ListItemsAreEqual(before, after)).toBe(false);
   });
 });

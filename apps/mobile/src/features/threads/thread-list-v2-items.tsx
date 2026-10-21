@@ -1,13 +1,7 @@
 import * as Dialog from "../../components/ui/Dialog";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
-import {
-  THREAD_LIST_V2_MONO_FONT as MONO_FONT,
-  THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME,
-  THREAD_LIST_V2_ROW_DIVIDERS,
-  selectedThreadRowColors,
-  getThreadListV2NewBranchMenuTitle,
-  getThreadListV2RowAppearance,
-} from "./thread-list-v2-row-appearance";
+import { getThreadListV2NewBranchMenuTitle } from "./thread-list-v2-row-appearance";
+import { getThreadRowColors } from "./thread-row-colors";
 import { RowPressable } from "../../components/ui/RowPressable";
 import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -33,12 +27,13 @@ import { Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
-import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Menu } from "../../components/ui/Menu";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
-import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
+import { ThreadAvatar, ThreadAvatarMotionContext } from "../../components/ThreadAvatar";
+import { useNavigationColors } from "../../components/useNavigationColors";
 import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -58,65 +53,36 @@ import {
   resolveThreadListV2SnoozeMenuSelection,
   threadHasUnseenCompletion,
   resolveThreadListV2Status,
-  resolveThreadListV2ProviderDrivers,
   resolveThreadListV2SwipeActions,
   type ThreadListV2Status,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
-import { shouldRecedeThreadRow } from "./thread-row-emphasis";
+import { threadIdentityLabel } from "./thread-avatar-status";
+import {
+  buildThreadRowAccessibilityLabel,
+  pendingTaskRowAccessibility,
+} from "./thread-row-accessibility";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
 interface StatusLabel {
   readonly label: string;
-  readonly icon: AppSymbolName;
   readonly className: string;
-  readonly iconTintClassName: string;
 }
+// Status hues follow the system-wide convention (amber approval, indigo
+// input, sky working) so a thread reads the same color everywhere it surfaces.
 const STATUS_LABEL_BY_STATUS: Partial<Record<ThreadListV2Status, StatusLabel>> = {
-  approval: {
-    label: "Approval",
-    icon: "exclamationmark.shield",
-    className: "text-warning-foreground",
-    iconTintClassName: "accent-warning-foreground",
-  },
-  input: {
-    label: "Input",
-    icon: "questionmark.bubble",
-    className: "text-adaptive-indigo-600-300",
-    iconTintClassName: "accent-adaptive-indigo-600-300",
-  },
-  working: {
-    label: "Working",
-    icon: "circle.dashed",
-    className: "text-adaptive-sky-600-400",
-    iconTintClassName: "accent-adaptive-sky-600-400",
-  },
-  waiting: {
-    label: "Waiting",
-    icon: "circle.dashed.inset.filled",
-    className: "text-foreground-muted",
-    iconTintClassName: "accent-foreground-muted",
-  },
-  failed: {
-    label: "Failed",
-    icon: "exclamationmark.circle",
-    className: "text-danger-foreground",
-    iconTintClassName: "accent-danger-foreground",
-  },
-  limited: {
-    label: "Limited",
-    icon: "exclamationmark.circle",
-    className: "text-warning-foreground",
-    iconTintClassName: "accent-warning-foreground",
-  },
+  approval: { label: "Approval", className: "text-warning-foreground" },
+  input: { label: "Input", className: "text-adaptive-indigo-600-300" },
+  working: { label: "Working", className: "text-adaptive-sky-600-400" },
+  waiting: { label: "Waiting", className: "text-foreground-muted" },
+  failed: { label: "Failed", className: "text-danger-foreground" },
+  limited: { label: "Limited", className: "text-warning-foreground" },
 };
 const DONE_STATUS_LABEL: StatusLabel = {
   label: "Done",
-  icon: "checkmark.circle",
   className: "text-adaptive-emerald-700-300",
-  iconTintClassName: "accent-adaptive-emerald-700-300",
 };
 
 function ThreadListV2Duration(props: { readonly startedAt: string | null }) {
@@ -145,8 +111,6 @@ const LEGACY_MENU_ACTIONS: MenuAction[] = [
   { id: "archive", title: "Archive", image: "archivebox" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
-
-const SIDEBAR_V2_ROW_RADIUS = 12;
 
 function ThreadListV2Section(props: {
   readonly label: string;
@@ -314,6 +278,15 @@ const DRAFT_TASK_MENU_ACTIONS: MenuAction[] = [
   { id: "delete", title: "Discard", image: "trash", attributes: { destructive: true } },
 ];
 
+/** Rounded-row radius shared by thread, queued and draft rows. */
+const THREAD_ROW_RADIUS = 12;
+
+/**
+ * Unsent work, in the same two-line idiom as a thread row: it is work the
+ * user wrote, so it reads like the thread it will become. The status slot says
+ * what happens next: "Sends on reconnect" stays uncolored because nothing is
+ * asked of the user; "Draft" takes amber because this one waits on the user.
+ */
 export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props: {
   readonly pendingTask: PendingNewTask;
   readonly project: EnvironmentProject | null;
@@ -322,119 +295,31 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   readonly environmentMachine?: EnvironmentMachineKind;
   readonly pane?: "screen" | "sidebar";
   readonly showPendingDivider: boolean;
-  readonly showTrailingDivider?: boolean;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
 }) {
   const { pendingTask, onSelectPendingTask, onDeletePendingTask } = props;
+  const theme = useUniwindTheme();
+  const colors = useNavigationColors();
   const sidebarPane = props.pane === "sidebar";
+  const rowColors = getThreadRowColors(theme, sidebarPane, false);
   const isDraft = pendingTask.kind === "draft";
   const projectTitle = props.projectTitle ?? props.project?.title ?? pendingTask.projectTitle ?? "";
-  const branch = pendingTask.branch;
+  const detail = [pendingTask.branch ?? projectTitle, props.environmentLabel]
+    .filter(Boolean)
+    .join(" · ");
+  const accessibility = pendingTaskRowAccessibility({
+    kind: pendingTask.kind,
+    title: pendingTask.title,
+    projectTitle,
+    environmentLabel: props.environmentLabel,
+  });
 
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "delete") onDeletePendingTask(pendingTask);
     },
     [onDeletePendingTask, pendingTask],
-  );
-
-  const rowContent = (
-    <>
-      <View className="flex-row items-center gap-1.5">
-        {props.project ? (
-          <ProjectFavicon
-            environmentId={pendingTask.environmentId}
-            faviconPath={props.project.faviconPath}
-            projectIcon={props.project.projectIcon}
-            size={15}
-            projectTitle={props.project.title}
-            workspaceRoot={props.project.workspaceRoot}
-          />
-        ) : null}
-        <Text
-          className={cn(
-            "flex-1 text-sm font-t3-medium text-foreground-muted",
-            sidebarPane && "text-drawer-foreground-muted",
-          )}
-          numberOfLines={1}
-        >
-          {projectTitle}
-        </Text>
-        {isDraft ? (
-          <View className="flex-row items-center gap-1">
-            <SymbolView
-              name="square.and.pencil"
-              size={10}
-              tintColorClassName="accent-adaptive-amber-700-300"
-              type="monochrome"
-            />
-            <Text className="text-xs text-adaptive-amber-700-300">Draft</Text>
-          </View>
-        ) : (
-          <Text
-            className={cn(
-              "text-xs text-foreground-tertiary",
-              sidebarPane && "text-drawer-foreground-muted",
-            )}
-          >
-            Sends on reconnect
-          </Text>
-        )}
-      </View>
-      <Text
-        className={cn(
-          "mt-1 text-base font-t3-medium text-foreground",
-          sidebarPane && "text-drawer-foreground",
-        )}
-        numberOfLines={1}
-      >
-        {pendingTask.title}
-      </Text>
-      {branch || props.environmentLabel ? (
-        <View className="mt-1 flex-row items-center gap-1">
-          <Text
-            className={cn(
-              "shrink text-xs text-foreground-muted",
-              sidebarPane && "text-drawer-foreground-muted",
-            )}
-            numberOfLines={1}
-          >
-            {branch ? (
-              <Text
-                className={cn(
-                  "text-xs text-foreground-muted",
-                  sidebarPane && "text-drawer-foreground-muted",
-                )}
-                style={{ fontFamily: MONO_FONT }}
-              >
-                {branch}
-              </Text>
-            ) : null}
-            {branch && props.environmentLabel ? "  ·  " : null}
-            {props.environmentLabel ? (
-              <Text
-                className={cn(
-                  "text-xs text-foreground-tertiary",
-                  sidebarPane && "text-drawer-foreground-muted",
-                )}
-              >
-                {props.environmentLabel}
-              </Text>
-            ) : null}
-          </Text>
-          {props.environmentLabel && props.environmentMachine ? (
-            <EnvironmentMachineSymbol
-              kind={props.environmentMachine}
-              size={11}
-              tintColorClassName={
-                sidebarPane ? "accent-drawer-foreground-muted" : "accent-foreground-tertiary"
-              }
-            />
-          ) : null}
-        </View>
-      ) : null}
-    </>
   );
 
   return (
@@ -448,44 +333,114 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
         shouldOpenOnLongPress
       >
         <RowPressable
-          accessibilityHint={
-            isDraft
-              ? "Opens the draft in the new task composer"
-              : "Sends when the environment reconnects. Opens the task for editing"
-          }
-          accessibilityLabel={pendingTask.title}
+          accessibilityActions={[{ name: "delete", label: accessibility.deleteActionLabel }]}
+          accessibilityHint={accessibility.hint}
+          accessibilityLabel={accessibility.label}
           accessibilityRole="button"
+          onAccessibilityAction={({ nativeEvent }) => {
+            if (nativeEvent.actionName === "delete") onDeletePendingTask(pendingTask);
+          }}
           key={pendingTask.key}
-          className={sidebarPane ? "bg-drawer" : "bg-screen"}
-          interactionClassName={sidebarPane ? "bg-thread-hover" : "bg-row-hover"}
+          interactionClassName={rowColors.interactionClassName}
           onPress={() => onSelectPendingTask(pendingTask)}
-          style={
-            sidebarPane
-              ? {
-                  borderRadius: SIDEBAR_V2_ROW_RADIUS,
-                  paddingHorizontal: 12,
-                  paddingVertical: 10,
-                }
-              : undefined
-          }
+          style={{
+            minHeight: 74,
+            marginHorizontal: sidebarPane ? 0 : 14,
+            marginBottom: 4,
+            padding: 10,
+            gap: 10,
+            flexDirection: "row",
+            alignItems: "center",
+            borderRadius: THREAD_ROW_RADIUS,
+            backgroundColor: rowColors.backgroundColor,
+          }}
         >
-          {sidebarPane ? (
-            rowContent
-          ) : (
-            <View>
-              <View className="px-5 py-2.5">{rowContent}</View>
-              {props.showTrailingDivider !== false ? (
-                <View className="ml-5 h-px bg-border-subtle" />
+          <View style={{ width: 32, height: 30, alignItems: "center", justifyContent: "center" }}>
+            <View
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: colors.border,
+                backgroundColor: colors.surface,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {props.project ? (
+                <ProjectFavicon
+                  environmentId={pendingTask.environmentId}
+                  faviconPath={props.project.faviconPath}
+                  projectIcon={props.project.projectIcon}
+                  projectTitle={projectTitle}
+                  size={16}
+                  workspaceRoot={props.project.workspaceRoot}
+                />
               ) : null}
             </View>
-          )}
+          </View>
+          <View style={{ flex: 1, gap: 5 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              {/* A queued title is derived from the whole prompt rather than
+                  written as a title, so one line keeps the row's height. */}
+              <Text
+                className={cn("font-t3-medium", rowColors.foregroundClassName)}
+                numberOfLines={1}
+                style={{ flex: 1, fontSize: 15, lineHeight: 22 }}
+              >
+                {pendingTask.title}
+              </Text>
+              {isDraft ? (
+                <View className="flex-row items-center gap-1">
+                  <SymbolView
+                    name="square.and.pencil"
+                    size={10}
+                    tintColorClassName="accent-adaptive-amber-700-300"
+                    type="monochrome"
+                  />
+                  <Text
+                    className="text-adaptive-amber-700-300"
+                    style={{ fontSize: 12, lineHeight: 17 }}
+                  >
+                    Draft
+                  </Text>
+                </View>
+              ) : (
+                <Text
+                  className={rowColors.mutedForegroundClassName}
+                  style={{ fontSize: 12, lineHeight: 17 }}
+                >
+                  Sends on reconnect
+                </Text>
+              )}
+            </View>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 26 }}>
+              {detail ? (
+                <Text
+                  className={rowColors.mutedForegroundClassName}
+                  numberOfLines={1}
+                  style={{ flexShrink: 1, fontSize: 13, lineHeight: 19 }}
+                >
+                  {detail}
+                </Text>
+              ) : null}
+              {props.environmentLabel && props.environmentMachine ? (
+                <EnvironmentMachineSymbol
+                  kind={props.environmentMachine}
+                  size={11}
+                  tintColorClassName={rowColors.mutedIconTintClassName}
+                />
+              ) : null}
+            </View>
+          </View>
         </RowPressable>
       </Menu>
     </>
   );
 });
 
-export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
+interface ThreadListV2RowProps {
   readonly thread: EnvironmentThreadShell;
   readonly variant: "card" | "slim";
   readonly hasQueuedMessages?: boolean;
@@ -502,7 +457,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly environmentLabel: string | null;
   readonly environmentMachine?: EnvironmentMachineKind;
   readonly pane?: "screen" | "sidebar";
-  readonly showTrailingDivider?: boolean;
   readonly selected?: boolean;
   readonly fullSwipeWidth?: number;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
@@ -540,7 +494,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly searchMatch?: EnvironmentThreadSearchMatch;
   readonly searchQuery?: string;
   readonly simultaneousSwipeGesture?: ComponentProps<typeof ThreadSwipeable>["simultaneousWith"];
-}) {
+}
+
+/**
+ * Two lines beside the session avatar: title and time, then branch (or
+ * project) · machine with the PR and status word after
+ * it. A failed session's last error takes the branch slot so the height holds.
+ */
+export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2RowProps) {
   const { width: windowWidth } = useWindowDimensions();
   const {
     thread,
@@ -565,19 +526,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
 
-  const { providerDrivers, providerIconUrl } = useMemo(() => {
-    const provider = props.providers?.find(
-      (candidate) =>
-        candidate.instanceId ===
-        (thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId),
-    );
-    return {
-      providerDrivers: resolveThreadListV2ProviderDrivers(thread, props.providers),
-      providerIconUrl: provider?.iconUrl,
-    };
-  }, [thread, props.providers]);
-
   const providerInstance = props.providerInstance;
+  const providerIconUrl = useMemo(
+    () =>
+      props.providers?.find(
+        (candidate) =>
+          candidate.instanceId ===
+          (thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId),
+      )?.iconUrl,
+    [thread, props.providers],
+  );
   const pr = useThreadPr(thread);
   const prBadgeLabel = pr ? resolveThreadPrBadgeAction(pr).accessibilityLabel : null;
   const handleOpenPullRequests = useCallback(() => {
@@ -587,18 +545,18 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const theme = useUniwindTheme();
   const sidebarPane = props.pane === "sidebar";
   const selected = props.selected === true;
-  const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
+  const rowColors = getThreadRowColors(theme, sidebarPane, selected);
 
   const status = resolveThreadListV2Status(thread);
   const isUnread = status === "ready" && threadHasUnseenCompletion(thread);
-  const workingLabel = STATUS_LABEL_BY_STATUS[status];
   const showsWoke = status === "ready" && props.wokeAt !== null;
+  const baseStatusLabel = STATUS_LABEL_BY_STATUS[status];
   const statusLabel =
-    (status === "working" && workingLabel !== undefined && thread.goal?.status === "active"
-      ? { ...workingLabel, label: "Goal" }
-      : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
-  const recede = shouldRecedeThreadRow({ status, selected });
-  const timeLabel = props.timeLabel;
+    (status === "working" && baseStatusLabel !== undefined && thread.goal?.status === "active"
+      ? { ...baseStatusLabel, label: "Goal" }
+      : baseStatusLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
+  const failedError =
+    status === "failed" || status === "limited" ? (thread.runtime?.lastError ?? null) : null;
 
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const handleAcknowledgeWoke = useCallback(() => {
@@ -942,432 +900,290 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
       : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`;
 
-  const cardContent = (
-    <>
-      <View className="flex-row items-center gap-1.5">
-        {props.project ? (
-          <ProjectFavicon
-            environmentId={thread.environmentId}
-            faviconPath={props.project.faviconPath}
-            projectIcon={props.project.projectIcon}
-            size={15}
-            projectTitle={props.project.title}
-            workspaceRoot={props.project.workspaceRoot}
-          />
-        ) : null}
+  const detail = [
+    thread.branch ?? props.projectTitle ?? props.project?.title,
+    props.environmentLabel,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const rowBody = (
+    <View style={{ flex: 1, gap: 5 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
         <Text
           className={cn(
-            "flex-1 text-sm font-t3-medium",
-            selected
-              ? selectedThreadRowColors.mutedForegroundClassName
-              : rowAppearance.mutedForegroundClassName,
+            "font-t3-medium",
+            variant === "slim" ? rowColors.mutedForegroundClassName : rowColors.foregroundClassName,
           )}
           numberOfLines={1}
+          style={{ flex: 1, fontSize: 15, lineHeight: 22 }}
         >
-          {props.projectTitle ?? props.project?.title ?? ""}
+          {thread.title}
         </Text>
         {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
         {pinnedRow ? (
           <SymbolView
             name="pin"
             size={11}
-            tintColorClassName={rowAppearance.mutedIconTintClassName}
+            tintColorClassName={rowColors.mutedIconTintClassName}
             type="monochrome"
           />
         ) : null}
+        <Text
+          className={cn("tabular-nums", rowColors.mutedForegroundClassName)}
+          style={{ fontSize: 12, lineHeight: 17 }}
+        >
+          {snoozedRow && props.snoozeWakeLabelText !== undefined
+            ? props.snoozeWakeLabelText
+            : props.timeLabel}
+        </Text>
+      </View>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 26 }}>
+        {pr ? (
+          <SymbolView
+            name={
+              pr.kind === "stack"
+                ? PullRequestGlyph.stack
+                : pr.state === null
+                  ? PullRequestGlyph.pullRequest
+                  : pullRequestStatus({ state: pr.state, isDraft: pr.isDraft }).icon
+            }
+            size={14}
+            tintColorClassName={
+              pr.state === null || pr.isDraft
+                ? rowColors.mutedIconTintClassName
+                : pr.state === "open"
+                  ? "accent-adaptive-emerald-600-400"
+                  : pr.state === "closed"
+                    ? "accent-adaptive-rose-600-400"
+                    : "accent-adaptive-violet-600-400"
+            }
+          />
+        ) : null}
+        {/* The machine glyph hugs its label (it cannot live inside the Text
+            without breaking truncation), and the wrapper takes the slack so
+            the trailers stay pinned right. */}
+        <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <Text
+            className={
+              failedError && !selected
+                ? status === "limited"
+                  ? "text-warning-foreground"
+                  : "text-danger-foreground"
+                : rowColors.mutedForegroundClassName
+            }
+            numberOfLines={1}
+            style={{ flexShrink: 1, fontSize: 13, lineHeight: 19 }}
+          >
+            {failedError ?? detail}
+          </Text>
+          {!failedError && props.environmentLabel && props.environmentMachine ? (
+            <EnvironmentMachineSymbol
+              kind={props.environmentMachine}
+              size={11}
+              tintColorClassName={rowColors.mutedIconTintClassName}
+            />
+          ) : null}
+        </View>
+        {pr ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={prBadgeLabel ?? undefined}
+            // The number is ~13pt tall; reach 44pt vertically without moving
+            // the layout. Left slop stays inside the 6pt gap so the end of a
+            // long branch still opens the thread.
+            hitSlop={{ top: 16, bottom: 16, left: 6, right: 8 }}
+            onPress={(event) => {
+              event.stopPropagation();
+              handleOpenPullRequests();
+            }}
+            // Without a long-press handler a hold that opens the row's iOS
+            // context menu would also open the pull request on release.
+            onLongPress={() => undefined}
+          >
+            <Text className={rowColors.mutedForegroundClassName} style={{ fontSize: 11 }}>
+              {pr.kind === "stack" || pr.others > 0 ? pr.label : `#${pr.label}`}
+            </Text>
+          </Pressable>
+        ) : null}
         {showsWoke ? (
           <Pressable
-            className="-m-2.5 flex-row items-center gap-1 p-2.5"
             accessibilityRole="button"
             accessibilityLabel="Dismiss Woke notification"
-            onPress={handleAcknowledgeWoke}
+            hitSlop={{ top: 16, bottom: 16, left: 6, right: 8 }}
+            onPress={(event) => {
+              event.stopPropagation();
+              handleAcknowledgeWoke();
+            }}
             onLongPress={() => undefined}
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+            style={{ flexDirection: "row", alignItems: "center", gap: 3 }}
           >
             <SymbolView
               name="bell.badge"
-              size={13}
+              size={11}
               tintColorClassName={
-                selected ? selectedThreadRowColors.iconTintClassName : "accent-warning-foreground"
+                selected ? rowColors.mutedIconTintClassName : "accent-warning-foreground"
               }
               type="monochrome"
-              weight="semibold"
             />
             <Text
-              className={cn(
-                "text-xs font-t3-bold",
-                selected ? selectedThreadRowColors.foregroundClassName : "text-warning-foreground",
-              )}
+              className={selected ? rowColors.foregroundClassName : "text-warning-foreground"}
+              style={{ fontSize: 11 }}
             >
               Woke
             </Text>
           </Pressable>
         ) : statusLabel ? (
-          <View className="flex-row items-center gap-1">
-            <SymbolView
-              name={statusLabel.icon}
-              size={13}
-              tintColorClassName={
-                selected ? selectedThreadRowColors.iconTintClassName : statusLabel.iconTintClassName
-              }
-              type="monochrome"
-              weight="semibold"
-            />
-            <Text
-              className={cn(
-                "text-xs font-t3-bold",
-                (status === "working" || status === "waiting") && "tabular-nums",
-                selected ? selectedThreadRowColors.foregroundClassName : statusLabel.className,
-              )}
-            >
-              {statusLabel.label}
-              {status === "working" ? (
-                <ThreadListV2Duration startedAt={resolveThreadWorkingStartedAt(thread)} />
-              ) : status === "waiting" ? (
-                <ThreadListV2Duration startedAt={thread.latestRun?.completedAt ?? null} />
-              ) : null}
-            </Text>
-          </View>
-        ) : (
           <Text
             className={cn(
-              "text-xs tabular-nums",
-              selected
-                ? selectedThreadRowColors.foregroundClassName
-                : rowAppearance.tertiaryForegroundClassName,
+              (status === "working" || status === "waiting") && "tabular-nums",
+              selected ? rowColors.foregroundClassName : statusLabel.className,
             )}
+            style={{ fontSize: 11 }}
           >
-            {timeLabel}
+            {statusLabel.label}
+            {status === "working" ? (
+              <ThreadListV2Duration startedAt={resolveThreadWorkingStartedAt(thread)} />
+            ) : status === "waiting" ? (
+              <ThreadListV2Duration startedAt={thread.latestRun?.completedAt ?? null} />
+            ) : null}
           </Text>
-        )}
+        ) : null}
       </View>
-      <Text
-        className={cn(
-          "mt-1 text-base",
-          !recede && "font-t3-medium",
-          selected
-            ? selectedThreadRowColors.foregroundClassName
-            : rowAppearance.foregroundClassName,
-        )}
-        numberOfLines={2}
-      >
-        {thread.title}
-      </Text>
       {props.searchMatch ? (
-        <View className="mt-1">
-          <ThreadSearchMatchExcerpt
-            sidebar={sidebarPane}
-            match={props.searchMatch}
-            query={props.searchQuery ?? ""}
-            selected={selected}
-          />
-        </View>
+        <ThreadSearchMatchExcerpt
+          sidebar={sidebarPane}
+          match={props.searchMatch}
+          query={props.searchQuery ?? ""}
+          selected={selected}
+        />
       ) : null}
-      <View className="mt-1 flex-row items-center gap-2">
-        {(status === "failed" || status === "limited") && thread.runtime?.lastError ? (
-          <Text
-            className={cn(
-              "flex-1 text-xs",
-              selected
-                ? selectedThreadRowColors.mutedForegroundClassName
-                : status === "limited"
-                  ? "text-warning-foreground"
-                  : "text-danger-foreground",
-            )}
-            numberOfLines={1}
-          >
-            {thread.runtime.lastError}
-          </Text>
-        ) : thread.branch || props.environmentLabel ? (
-          <View className="min-w-0 flex-1 flex-row items-center gap-1">
-            <Text
-              className={cn(
-                "shrink text-xs",
-                selected
-                  ? selectedThreadRowColors.mutedForegroundClassName
-                  : rowAppearance.mutedForegroundClassName,
-              )}
-              numberOfLines={1}
-            >
-              {thread.branch ? (
-                <Text
-                  className={cn(
-                    "text-xs",
-                    selected
-                      ? selectedThreadRowColors.mutedForegroundClassName
-                      : rowAppearance.mutedForegroundClassName,
-                  )}
-                  style={{ fontFamily: MONO_FONT }}
-                >
-                  {thread.branch}
-                </Text>
-              ) : null}
-              {thread.branch && props.environmentLabel ? "  ·  " : null}
-              {props.environmentLabel ? (
-                <Text
-                  className={cn(
-                    "text-xs",
-                    selected
-                      ? selectedThreadRowColors.mutedForegroundClassName
-                      : rowAppearance.tertiaryForegroundClassName,
-                  )}
-                >
-                  {props.environmentLabel}
-                </Text>
-              ) : null}
-            </Text>
-            {props.environmentLabel && props.environmentMachine ? (
-              <EnvironmentMachineSymbol
-                kind={props.environmentMachine}
-                size={11}
-                tintColorClassName={
-                  selected
-                    ? selectedThreadRowColors.mutedIconTintClassName
-                    : rowAppearance.tertiaryIconTintClassName
-                }
-              />
-            ) : null}
-          </View>
-        ) : (
-          <View className="flex-1" />
-        )}
-        {pr ? (
-          <Pressable
-            // Padding cancelled by negative margin grows the touch target into
-            // the row padding without moving the badge.
-            className="-m-2.5 flex-row items-center gap-1 p-2.5"
-            accessibilityRole="button"
-            accessibilityLabel={prBadgeLabel ?? undefined}
-            onPress={handleOpenPullRequests}
-            // Without a long-press handler a hold that opens the row's iOS
-            // context menu would also open the pull request on release.
-            onLongPress={() => undefined}
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-          >
-            <SymbolView
-              name={
-                pr.kind === "stack"
-                  ? PullRequestGlyph.stack
-                  : pr.state === null
-                    ? PullRequestGlyph.pullRequest
-                    : pullRequestStatus({ state: pr.state, isDraft: pr.isDraft }).icon
-              }
-              size={12}
-              tintColorClassName={
-                pr.state === null || pr.isDraft
-                  ? rowAppearance.mutedIconTintClassName
-                  : pr.state === "open"
-                    ? "accent-adaptive-emerald-600-400"
-                    : pr.state === "closed"
-                      ? "accent-adaptive-rose-600-400"
-                      : "accent-adaptive-violet-600-400"
-              }
-            />
-            <Text
-              accessibilityLabel={pr.accessibilityLabel}
-              className={cn("text-xs", pr.textClassName)}
-              style={{ fontFamily: MONO_FONT }}
-            >
-              {pr.label}
-            </Text>
-          </Pressable>
-        ) : null}
-        {providerInstance ? (
-          <View className="flex-row items-center">
-            {providerDrivers.slice(0, -1).map((driver, index) => (
-              <View key={`${driver}:${index}`} className="-mr-1 opacity-30">
-                <ProviderIcon provider={driver} size={12} />
-              </View>
-            ))}
-            <ProviderInstanceIcon
-              iconUrl={providerIconUrl}
-              provider={providerInstance.driverKind}
-              size={14}
-              displayName={providerInstance.displayName}
-              accentColor={providerInstance.accentColor}
-              showBadge={providerInstance.showBadge}
-              surfaceColor={rowAppearance.providerIconSurfaceColor}
-            />
-          </View>
-        ) : null}
-      </View>
-    </>
+    </View>
   );
 
-  const fadedCardContent = recede ? (
-    <View style={{ opacity: 0.55 }}>{cardContent}</View>
-  ) : (
-    cardContent
+  const accessibilityLabel = buildThreadRowAccessibilityLabel({
+    title: thread.title,
+    hasQueuedMessages: props.hasQueuedMessages === true,
+    identityLabel: threadIdentityLabel(thread, {
+      snoozed: snoozedRow,
+      providerName: providerInstance?.displayName ?? null,
+    }),
+    failedError,
+    snoozeWakeLabel: snoozedRow ? props.snoozeWakeLabelText : undefined,
+  });
+  const rowContent = (close: () => void) => (
+    <RowPressable
+      key={`${thread.environmentId}:${thread.id}`}
+      interactionClassName={rowColors.interactionClassName}
+      interactionOpacity={rowColors.interactionOpacity}
+      accessibilityHint={
+        swipeAccessibilityHint +
+        (canOperateThread && props.pinningSupported ? " Swipe right to pin or unpin." : "")
+      }
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityActions={rowAccessibilityActions}
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName === "openPullRequests") handleOpenPullRequests();
+        if (event.nativeEvent.actionName === "dismissWoke") handleAcknowledgeWoke();
+      }}
+      onPress={() => {
+        close();
+        onSelectThread(thread);
+      }}
+      style={{
+        // Settled and snoozed rows keep both lines, so every row is one height:
+        // the lines (22 + 5 gap + 26) and 20 padding fit the 74 minimum.
+        minHeight: 74,
+        marginHorizontal: sidebarPane ? 0 : 14,
+        marginBottom: 4,
+        padding: 10,
+        gap: 10,
+        flexDirection: "row",
+        alignItems: "center",
+        borderRadius: THREAD_ROW_RADIUS,
+        backgroundColor: rowColors.backgroundColor,
+      }}
+    >
+      <ThreadAvatar
+        thread={thread}
+        project={props.project}
+        providerDriver={providerInstance?.driverKind ?? null}
+        providerIconUrl={providerIconUrl}
+        snoozed={snoozedRow}
+      />
+      {rowBody}
+    </RowPressable>
   );
-
-  const rowContent = (close: () => void) =>
-    variant === "card" ? (
-      <RowPressable
-        key={`${thread.environmentId}:${thread.id}`}
-        interactionClassName={rowAppearance.interactionClassName}
-        interactionOpacity={rowAppearance.interactionOpacity}
-        className={rowAppearance.className}
-        accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
-        accessibilityRole="button"
-        accessibilityState={{ selected }}
-        accessibilityActions={rowAccessibilityActions}
-        onAccessibilityAction={(event) => {
-          if (event.nativeEvent.actionName === "openPullRequests") handleOpenPullRequests();
-          if (event.nativeEvent.actionName === "dismissWoke") handleAcknowledgeWoke();
-        }}
-        onPress={() => {
-          close();
-          onSelectThread(thread);
-        }}
-        style={rowAppearance.cardStyle}
-      >
-        {sidebarPane ? (
-          fadedCardContent
-        ) : (
-          <View>
-            <View className={THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME}>{fadedCardContent}</View>
-            {THREAD_LIST_V2_ROW_DIVIDERS && props.showTrailingDivider !== false ? (
-              <View className="ml-5 h-px bg-border-subtle" />
-            ) : null}
-          </View>
-        )}
-      </RowPressable>
-    ) : (
-      <RowPressable
-        key={`${thread.environmentId}:${thread.id}`}
-        interactionClassName={rowAppearance.interactionClassName}
-        interactionOpacity={rowAppearance.interactionOpacity}
-        accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
-        accessibilityRole="button"
-        accessibilityState={{ selected }}
-        className={rowAppearance.className}
-        onPress={() => {
-          close();
-          onSelectThread(thread);
-        }}
-        style={rowAppearance.style}
-      >
-        <View
-          className={cn(
-            "min-h-[44px] flex-row items-center gap-2.5 py-2",
-            sidebarPane ? "px-3" : "px-5",
-          )}
-        >
-          {props.project ? (
-            <View className="opacity-40">
-              <ProjectFavicon
-                environmentId={thread.environmentId}
-                faviconPath={props.project.faviconPath}
-                projectIcon={props.project.projectIcon}
-                size={15}
-                projectTitle={props.project.title}
-                workspaceRoot={props.project.workspaceRoot}
-              />
-            </View>
-          ) : null}
-          <View className="min-w-0 flex-1">
-            <Text
-              className={cn(
-                "text-base",
-                selected
-                  ? selectedThreadRowColors.foregroundClassName
-                  : rowAppearance.mutedForegroundClassName,
-              )}
-              numberOfLines={1}
-            >
-              {thread.title}
-            </Text>
-            {props.searchMatch ? (
-              <ThreadSearchMatchExcerpt
-                sidebar={sidebarPane}
-                match={props.searchMatch}
-                query={props.searchQuery ?? ""}
-                selected={selected}
-              />
-            ) : null}
-          </View>
-          {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
-          <Text
-            className={cn(
-              "text-sm tabular-nums",
-              selected
-                ? selectedThreadRowColors.mutedForegroundClassName
-                : snoozedRow
-                  ? rowAppearance.mutedForegroundClassName
-                  : rowAppearance.tertiaryForegroundClassName,
-            )}
-            style={{ fontFamily: MONO_FONT }}
-          >
-            {snoozedRow && props.snoozeWakeLabelText !== undefined
-              ? props.snoozeWakeLabelText
-              : timeLabel}
-          </Text>
-        </View>
-      </RowPressable>
-    );
 
   if (!canOperateThread)
-    return <View style={rowAppearance.swipeContainerStyle}>{rowContent(() => {})}</View>;
+    return (
+      <ThreadAvatarMotionContext value={!dormant}>
+        <View
+          style={sidebarPane ? { borderRadius: THREAD_ROW_RADIUS, overflow: "hidden" } : undefined}
+        >
+          {rowContent(() => {})}
+        </View>
+      </ThreadAvatarMotionContext>
+    );
 
   return (
     <View collapsable={false}>
       {customSnoozeOpen && (
         <CustomSnoozeSheet onClose={() => setCustomSnoozeOpen(false)} onSnooze={handleSnooze} />
       )}
-      <ThreadSwipeable
-        dormant={dormant}
-        threadKey={`${thread.environmentId}:${thread.id}`}
-        backgroundColor={rowAppearance.swipeBackgroundColor}
-        compactActions={variant === "slim"}
-        containerStyle={rowAppearance.swipeContainerStyle}
-        enableTrackpadSwipe
-        fullSwipeAction="primary"
-        fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
-        onDelete={handleDelete}
-        onSwipeableClose={props.onSwipeableClose}
-        onSwipeableWillOpen={props.onSwipeableWillOpen}
-        primaryAction={primaryAction}
-        secondaryAction={secondaryAction}
-        resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}`}
-        simultaneousWith={props.simultaneousSwipeGesture}
-        threadTitle={thread.title}
-      >
-        {(close) => (
-          <Menu
-            actions={[
-              ...(thread.branch
-                ? [
-                    {
-                      id: "new-thread-on-branch",
-                      title: getThreadListV2NewBranchMenuTitle(thread.branch),
-                      image: "square.and.pencil",
-                    },
-                  ]
-                : []),
-              { id: "copy-thread-id", title: "Copy thread ID", image: "doc.on.doc" },
-              ...(snoozedRow
-                ? snoozedMenuActions
-                : !props.settlementSupported
-                  ? legacyMenuActions
-                  : canUnsettle
-                    ? slimMenuActions
-                    : swipeActions.secondary === "snooze"
-                      ? snoozableCardMenuActions
-                      : cardMenuActions),
-            ]}
-            onPressAction={handleMenuAction}
-            shouldOpenOnLongPress
-          >
-            {rowContent(close)}
-          </Menu>
-        )}
-      </ThreadSwipeable>
+      {/* Dormant rows sit outside the viewport; their working arcs hold still. */}
+      <ThreadAvatarMotionContext value={!dormant}>
+        <ThreadSwipeable
+          dormant={dormant}
+          threadKey={`${thread.environmentId}:${thread.id}`}
+          backgroundColor={rowColors.swipeBackgroundColor}
+          containerStyle={
+            sidebarPane ? { borderRadius: THREAD_ROW_RADIUS, overflow: "hidden" } : undefined
+          }
+          enableTrackpadSwipe
+          fullSwipeAction="primary"
+          fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
+          onDelete={handleDelete}
+          onSwipeableClose={props.onSwipeableClose}
+          onSwipeableWillOpen={props.onSwipeableWillOpen}
+          primaryAction={primaryAction}
+          secondaryAction={secondaryAction}
+          resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}`}
+          simultaneousWith={props.simultaneousSwipeGesture}
+          threadTitle={thread.title}
+        >
+          {(close) => (
+            <Menu
+              actions={[
+                ...(thread.branch
+                  ? [
+                      {
+                        id: "new-thread-on-branch",
+                        title: getThreadListV2NewBranchMenuTitle(thread.branch),
+                        image: "square.and.pencil",
+                      },
+                    ]
+                  : []),
+                { id: "copy-thread-id", title: "Copy thread ID", image: "doc.on.doc" },
+                ...(snoozedRow
+                  ? snoozedMenuActions
+                  : !props.settlementSupported
+                    ? legacyMenuActions
+                    : canUnsettle
+                      ? slimMenuActions
+                      : swipeActions.secondary === "snooze"
+                        ? snoozableCardMenuActions
+                        : cardMenuActions),
+              ]}
+              onPressAction={handleMenuAction}
+              shouldOpenOnLongPress
+            >
+              {rowContent(close)}
+            </Menu>
+          )}
+        </ThreadSwipeable>
+      </ThreadAvatarMotionContext>
     </View>
   );
 });

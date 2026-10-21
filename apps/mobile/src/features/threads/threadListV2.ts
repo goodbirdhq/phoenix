@@ -10,7 +10,6 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
   createInboxReturnTracker,
@@ -26,7 +25,6 @@ import {
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
-import type { ThreadListProvider } from "../../state/thread-list-environments";
 import type { ThreadMoveAvailability } from "./threadOrder";
 
 import { relativeTime } from "../../lib/time";
@@ -41,22 +39,6 @@ import {
 export { snoozeWakeLabel };
 
 export const threadListInboxReturns = createInboxReturnTracker();
-
-export function resolveThreadListV2ProviderDrivers(
-  thread: Pick<EnvironmentThreadShell, "providerInstanceHistory" | "modelSelection" | "runtime">,
-  providers: ReadonlyArray<ThreadListProvider> | undefined,
-): ReadonlyArray<string> {
-  if (providers === undefined) return [];
-  const stack = resolveThreadProviderStack(thread);
-  const drivers = stack.flatMap((instanceId) => {
-    const driver = providers.find((provider) => provider.instanceId === instanceId)?.driver;
-    return driver === undefined ? [] : [driver];
-  });
-  const currentDriver = providers.find(
-    (provider) => provider.instanceId === stack[stack.length - 1],
-  )?.driver;
-  return currentDriver === undefined ? [] : drivers;
-}
 
 export type ThreadListV2Status =
   | "approval"
@@ -288,7 +270,6 @@ export interface ThreadListV2ThreadListItem {
   readonly snoozeWakeLabelText: string | undefined;
   readonly timeLabel: string;
   readonly snoozePresetMinute: string | undefined;
-  readonly showTrailingDivider: boolean;
   /**
    * Carried on the item so an outbox write (which never touches the thread
    * shell) reaches the row through recycled-list equality instead of leaving a
@@ -304,7 +285,6 @@ export interface ThreadListV2PendingListItem {
   readonly key: string;
   readonly pendingTask: PendingNewTask;
   readonly showPendingDivider: boolean;
-  readonly showTrailingDivider: boolean;
 }
 
 export interface ThreadListV2WorkingShelfListItem {
@@ -377,7 +357,6 @@ export function threadListV2ListItemsAreEqual(
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&
-        previous.showTrailingDivider === item.showTrailingDivider &&
         previous.hasQueuedMessages === item.hasQueuedMessages &&
         previous.canMoveUp === item.canMoveUp &&
         previous.canMoveDown === item.canMoveDown
@@ -387,8 +366,7 @@ export function threadListV2ListItemsAreEqual(
         previous.type === "v2-pending" &&
         previous.key === item.key &&
         previous.pendingTask === item.pendingTask &&
-        previous.showPendingDivider === item.showPendingDivider &&
-        previous.showTrailingDivider === item.showTrailingDivider
+        previous.showPendingDivider === item.showPendingDivider
       );
     case "v2-working-shelf":
       return (
@@ -414,19 +392,17 @@ export function threadListV2ListItemsAreEqual(
   }
 }
 
+/**
+ * Line one's time: the settle stamp on settled rows, otherwise the latest
+ * activity. Every row draws one, status words live on line two. Blank only
+ * while the wake countdown owns the slot.
+ */
 function resolveThreadListV2ItemTimeLabel(
-  item: ThreadListV2Item,
+  item: Pick<ThreadListV2Item, "thread" | "variant" | "snoozed">,
   showSnoozeWakeLabel: boolean,
 ): string {
   const { thread, variant, snoozed } = item;
   if (showSnoozeWakeLabel) return "";
-  if (
-    variant === "card" &&
-    (resolveThreadListV2Status(thread) !== "ready" ||
-      item.wokeAt !== null ||
-      threadHasUnseenCompletion(thread))
-  )
-    return "";
   const settledTimestamp =
     variant === "slim" && !snoozed ? resolveSettledThreadTimestamp(thread) : null;
   return relativeTime(
@@ -479,7 +455,6 @@ export function buildThreadListV2ListItems(input: {
       snoozeWakeLabelText,
       timeLabel: resolveThreadListV2ItemTimeLabel(item, snoozeWakeLabelText !== undefined),
       snoozePresetMinute,
-      showTrailingDivider: false,
       hasQueuedMessages:
         queuedThreadKeys?.has(`${item.thread.environmentId}:${item.thread.id}`) === true,
       canMoveUp: move?.canMoveUp === true,
@@ -491,7 +466,6 @@ export function buildThreadListV2ListItems(input: {
     key: `v2-${pendingTask.key}`,
     pendingTask,
     showPendingDivider: index === 0,
-    showTrailingDivider: false,
   }));
   const workingCount = input.workingCount ?? 0;
   const workingShelfHeaderIndex = input.workingShelfHeaderIndex ?? null;
@@ -534,15 +508,7 @@ export function buildThreadListV2ListItems(input: {
     });
     result.push(...threadItems.slice(settledShelfHeaderIndex));
   }
-  return result.map((entry, index) => {
-    if (entry.type !== "v2-thread" && entry.type !== "v2-pending") return entry;
-    const next = result[index + 1];
-    const showTrailingDivider =
-      next?.type === "v2-thread" || (next?.type === "v2-pending" && !next.showPendingDivider);
-    return showTrailingDivider === entry.showTrailingDivider
-      ? entry
-      : { ...entry, showTrailingDivider };
-  });
+  return result;
 }
 
 // Shells are immutable and the settled sort reads only their own fields, so an
@@ -662,6 +628,11 @@ export function buildThreadListV2Items(input: {
     }
   }
 
+  const orderedPinned = applyPendingThreadOrder(
+    sortPinnedThreadsByOrderKey(pinned),
+    "pinned",
+    pending,
+  );
   const orderedActive = workingShelfEnabled
     ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
     : applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
@@ -703,11 +674,7 @@ export function buildThreadListV2Items(input: {
         );
 
   const items: ThreadListV2Item[] = [];
-  for (const thread of applyPendingThreadOrder(
-    sortPinnedThreadsByOrderKey(pinned),
-    "pinned",
-    pending,
-  )) {
+  for (const thread of orderedPinned) {
     items.push({
       thread,
       variant: "card",
