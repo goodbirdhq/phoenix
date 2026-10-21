@@ -36,6 +36,7 @@ import {
   MissingMacPasskeyProvisioningProfileError,
   packWindowsServerAsar,
   preflightWindowsDesktopBuild,
+  renderMacHardenedRuntimeEntitlements,
   renderMacPasskeyEntitlements,
   resolveMacWebAuthnEntitlements,
   resolveMacPasskeySigningConfiguration,
@@ -532,6 +533,25 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.equal((yield* macConfig(false)).identity, "-");
       assert.notProperty(yield* macConfig(true), "identity");
+    }),
+  );
+
+  it.effect("signs without restricted entitlements when no provisioning profile ships", () =>
+    Effect.gen(function* () {
+      const entitlements = renderMacHardenedRuntimeEntitlements();
+      // AMFI kills a Developer ID app at launch that claims these without a profile.
+      assert.notInclude(entitlements, "com.apple.application-identifier");
+      assert.notInclude(entitlements, "com.apple.developer.");
+      assert.notInclude(entitlements, "keychain-access-groups");
+      assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
+      assert.match(entitlements, /<key>com\.apple\.security\.device\.camera<\/key>\s*<true\/>/u);
+
+      const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
+        entitlementsPath: "/tmp/entitlements.mac.plist",
+      });
+      const mac = config.mac as Record<string, unknown>;
+      assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
+      assert.notProperty(mac, "provisioningProfile");
     }),
   );
 
