@@ -23,7 +23,7 @@ import {
 
 it("reads the served T3 home back out of a rendered unit or plist", () => {
   const plan = (baseDir: string) => ({
-    program: [`${baseDir}/runtime/versions/1.2.3/t3`, "__service-launcher"],
+    program: [`${baseDir}/runtime/versions/1.2.3/phoenix`, "__service-launcher"],
     baseDir,
     logPath: `${baseDir}/userdata/logs/boot-service.log`,
     unitPath: "/home/theo/.config/systemd/user/phoenix.service",
@@ -57,7 +57,7 @@ it.each([
       BootService.renderBootServicePlist(plan, { homeDir: "/Users/theo", environmentPath: "" }),
   ],
 ] as const)("reads the launcher back out of %s", (_, baseDir, render) => {
-  const program = `${baseDir}/runtime/versions/1.2.3/t3`;
+  const program = `${baseDir}/runtime/versions/1.2.3/phoenix`;
   expect(
     BootService.bootServiceProgramOf(
       render({ program: [program, "__service-launcher"], baseDir, logPath: "/log", unitPath: "" }),
@@ -65,7 +65,7 @@ it.each([
   ).toBe(program);
 });
 
-const macRuntime = "/Users/theo/.t3/runtime/versions/1.2.3/t3";
+const macRuntime = "/Users/theo/.t3/runtime/versions/1.2.3/phoenix";
 const macPlan = {
   program: [macRuntime, "__service-launcher"],
   baseDir: "/Users/theo/.t3",
@@ -484,7 +484,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           protocol: SERVICE_LAUNCHER_PROTOCOL,
           activeVersion: "1.2.4",
         });
-        expect(yield* fs.readFileString(plan.unitPath)).toContain("versions/1.2.4/t3");
+        expect(yield* fs.readFileString(plan.unitPath)).toContain("versions/1.2.4/phoenix");
         expect(
           commands.filter(
             (command) =>
