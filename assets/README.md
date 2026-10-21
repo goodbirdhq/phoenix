@@ -6,7 +6,7 @@ The three Icon Composer projects are the source of truth for full application ic
 - `nightly/app-icon.icon`
 - `prod/app-icon.icon`
 
-Each project uses `text.svg` for the T3 mark and `background.svg` when the background is a vector layer. Additional layers use semantic names that describe their role and placement.
+Production and development use `phoenix.png` as the full-bleed mark. Nightly still uses `text.svg` for the T3 mark and `background.svg` when the background is a vector layer. Additional layers use semantic names that describe their role and placement.
 
 Run `vp run icons:export` from the repository root to regenerate the tracked iOS, Linux, Windows, and web assets. The development web exports are also copied to `apps/web/public` for the browser favicon and splash screen. Run `vp run icons:check` to verify that the generated assets and public copies match their sources without changing files.
 
@@ -65,3 +65,10 @@ is instead rendered from the same Icon Composer SVG sources by `vp run icons:exp
 
 Rerun the export after changing a layer SVG. `android-icon-mark.png` remains a flat silhouette for
 Android's monochrome themed icon.
+
+`apps/mobile/assets/android-icon-mark.svg` is the Phoenix silhouette source for the themed
+launcher and notification icons. Render it at 432×432 for `android-icon-mark.png`.
+For `android-notification-icon.png`, crop the central 216×216 area (offset 108,108)
+and resize to 96×96. Both exports must retain white artwork on transparency.
+
+Changes to these assets require a native rebuild and installation, not an OTA update.
