@@ -119,7 +119,6 @@ import {
 } from "./features/settings/ScheduledTaskPickerScreens";
 import { ScheduledTaskEditorProvider } from "./features/settings/scheduled-task-editor";
 import { SettingsKeyboardRouteScreen } from "./features/settings/SettingsKeyboardRouteScreen";
-import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
 import { SettingsMicrophoneRouteScreen } from "./features/settings/SettingsMicrophoneRouteScreen";
 import {
   SettingsOpenSourceLicenseRouteScreen,
@@ -135,10 +134,6 @@ import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
 import { SettingsThreadsRouteScreen } from "./features/settings/SettingsThreadsRouteScreen";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
-import {
-  SettingsLegalDocumentCloseHeaderButton,
-  SettingsLegalDocumentExternalHeaderButton,
-} from "./features/settings/components/SettingsLegalDocumentRouteScreen";
 import { useAppShortcuts } from "./features/shortcuts/useAppShortcuts";
 import { useIncomingShare } from "./features/sharing/IncomingShareProvider";
 import {
@@ -198,14 +193,6 @@ const SHEET_SOLID_HEADER_OPTIONS: AppScreenOptions = {
 const SHEET_GLASS_HEADER_OPTIONS: AppScreenOptions = {
   ...GLASS_HEADER_OPTIONS,
   unstable_navigationItemStyle: undefined,
-};
-
-const LEGAL_DOCUMENT_HEADER_OPTIONS: AppScreenOptions = {
-  ...SHEET_SOLID_HEADER_OPTIONS,
-  headerBackVisible: false,
-  headerLeft: SettingsLegalDocumentCloseHeaderButton,
-  headerRight: () => <SettingsLegalDocumentExternalHeaderButton />,
-  presentation: "fullScreenModal",
 };
 
 const NESTED_NAVIGATOR_OPTIONS = { nativeContentInsetHorizontally: false, headerShown: false };
@@ -277,7 +264,7 @@ const SettingsContentStack = createV5SheetStackNavigator({
     SettingsAbout: createNativeStackScreen({
       screen: SettingsAboutRouteScreen,
       linking: "about",
-      options: { title: "About T3 Code" },
+      options: { title: "About Phoenix" },
     }),
     SettingsEnvironmentNew: createNativeStackScreen({
       screen: ConnectionsNewRouteScreen,
@@ -556,7 +543,6 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "GitConfirm",
   "GitOverview",
   "NewTaskSheet",
-  "SettingsLegal",
   "SettingsSheet",
   "ThreadAgents",
   "ThreadBackgroundWork",
@@ -945,14 +931,6 @@ const RootStackConfig = createWorkspaceStackNavigator({
         headerShown: false,
         // Android opens Settings as a top-level tab, so it swaps like the other tabs.
         ...(Platform.OS === "android" ? { animation: "none" as const } : null),
-      },
-    }),
-    SettingsLegal: createNativeStackScreen({
-      screen: SettingsLegalRouteScreen,
-      linking: "settings/legal",
-      options: {
-        ...LEGAL_DOCUMENT_HEADER_OPTIONS,
-        title: "Legal",
       },
     }),
     ConnectOnboarding: createNativeStackScreen({

@@ -21,5 +21,3 @@ export type SettingsSheetTarget =
   | "SettingsDiagnostics"
   | "SettingsOpenSourceLicenses"
   | "SettingsUsage";
-
-export type SettingsLegalDocumentTarget = "SettingsLegal";
