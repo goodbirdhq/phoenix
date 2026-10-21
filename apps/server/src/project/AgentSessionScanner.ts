@@ -1133,7 +1133,10 @@ export const make = Effect.gen(function* () {
         } else {
           const config = decodeCodexSettings(instance.config ?? {});
           if (Option.isNone(config)) continue;
+          // A managed (Connect with ChatGPT) instance owns its home and never adopts an
+          // inherited CODEX_HOME, so the user's own CLI login stays separate from it.
           const codexSettings =
+            config.value.setupMode !== "managed" &&
             config.value.homePath.trim().length === 0 &&
             config.value.shadowHomePath.trim().length === 0 &&
             environmentHome?.trim()

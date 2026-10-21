@@ -608,6 +608,43 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
+    it.effect("a managed Codex instance never adopts an inherited CODEX_HOME", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
+        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
+        const codexEnvironmentHome = yield* makeTempDir("t3code-codex-env-");
+        const codexWorkspace = yield* makeTempDir("t3code-workspace-codex-");
+
+        yield* writeTranscript({
+          filePath: path.join(
+            codexEnvironmentHome,
+            "sessions",
+            "2026",
+            "01",
+            "01",
+            "rollout-session.jsonl",
+          ),
+          contents: codexRolloutLine(codexWorkspace),
+          mtimeMs: Date.parse("2026-01-02T00:00:00.000Z"),
+        });
+
+        const result = yield* runScan({
+          claudeHomePath,
+          codexHomePath,
+          providerInstances: {
+            [ProviderInstanceId.make("codex")]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [{ name: "CODEX_HOME", value: codexEnvironmentHome, sensitive: false }],
+              config: { setupMode: "managed" },
+            },
+          },
+        });
+
+        expect(result.candidates.map((candidate) => candidate.path)).not.toContain(codexWorkspace);
+      }),
+    );
+
     it.effect("does not scan provider instances disabled by the envelope or config", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
