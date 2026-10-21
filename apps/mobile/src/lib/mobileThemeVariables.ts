@@ -21,8 +21,10 @@ export function getMobileThemeRuntimeVariables(
   const variables = usesDefaultPalette
     ? defaults[appearance]
     : getMobileThemeVariables(themeId, appearance);
+  // Phoenix's zinc row hover is a bright border tone, too light to frame the
+  // default palette's header; the grouped-card fill keeps muted labels readable.
   const frame = themeColorWithAlpha(
-    variables[usesDefaultPalette ? "--color-row-hover" : "--color-drawer"],
+    variables[usesDefaultPalette ? "--color-grouped-card" : "--color-drawer"],
     1,
   );
   if (platform === "ios" && usesDefaultPalette && appearance === "light") {
