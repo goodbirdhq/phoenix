@@ -75,7 +75,7 @@ struct ScriptReply {
     owner: String,
     result: mpsc::SyncSender<String>,
 }
-#[zbus::interface(name = "com.t3tools.KdeCapture")]
+#[zbus::interface(name = "com.goodbird.Phoenix.KdeCapture")]
 impl ScriptReply {
     fn reply(
         &self,
@@ -101,7 +101,7 @@ fn script(connection: &Connection, directory: &Path, body: &str) -> Result<Strin
     let owner = dbus.get_name_owner("org.kde.KWin".try_into()?)?.to_string();
     let (send, receive) = mpsc::sync_channel(1);
     connection.object_server().at(
-        "/com/t3tools/KdeCapture",
+        "/com/goodbird/Phoenix/KdeCapture",
         ScriptReply {
             owner,
             result: send,
@@ -116,7 +116,7 @@ fn script(connection: &Connection, directory: &Path, body: &str) -> Result<Strin
             .as_str(),
     )?;
     let source = format!(
-        "function reply(value) {{ callDBus({destination}, '/com/t3tools/KdeCapture', 'com.t3tools.KdeCapture', 'Reply', JSON.stringify(value)); }}\ntry {{ {body} }} catch (error) {{ reply({{error: String(error)}}); }}"
+        "function reply(value) {{ callDBus({destination}, '/com/goodbird/Phoenix/KdeCapture', 'com.goodbird.Phoenix.KdeCapture', 'Reply', JSON.stringify(value)); }}\ntry {{ {body} }} catch (error) {{ reply({{error: String(error)}}); }}"
     );
     std::fs::write(&path, source)?;
     let scripting = Proxy::new(
@@ -149,7 +149,7 @@ fn script(connection: &Connection, directory: &Path, body: &str) -> Result<Strin
     })();
     connection
         .object_server()
-        .remove::<ScriptReply, _>("/com/t3tools/KdeCapture")?;
+        .remove::<ScriptReply, _>("/com/goodbird/Phoenix/KdeCapture")?;
     let _ = std::fs::remove_file(path);
     result
 }
@@ -348,7 +348,7 @@ fn run() -> Result<()> {
                 ),
             )?;
             if serde_json::from_str::<serde_json::Value>(&value)?["activated"] != true {
-                return Err("KDE could not identify the T3 Code window to activate".into());
+                return Err("KDE could not identify the Phoenix window to activate".into());
             }
             println!("{{\"activated\":true}}");
         }

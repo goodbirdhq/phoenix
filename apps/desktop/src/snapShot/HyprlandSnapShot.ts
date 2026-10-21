@@ -12,10 +12,10 @@ import { startNativeCaptureFeedback } from "./NativeCaptureFeedback.ts";
 import { HYPRLAND_CAPTURE_ACTION } from "./linuxCaptureSession.ts";
 export { isHyprlandCaptureSession } from "./linuxCaptureSession.ts";
 
-export const HYPRLAND_CAPTURE_EXECUTABLE = "t3-hyprland-snap-shot";
+export const HYPRLAND_CAPTURE_EXECUTABLE = "phoenix-hyprland-snap-shot";
 export type HyprlandCapturePaths = { readonly bundle: string; readonly dataHome: string };
 export function hyprlandCaptureExecutable(paths: HyprlandCapturePaths) {
-  return NodePath.join(paths.dataHome, "t3code", "hyprland-capture", HYPRLAND_CAPTURE_EXECUTABLE);
+  return NodePath.join(paths.dataHome, "phoenix", "hyprland-capture", HYPRLAND_CAPTURE_EXECUTABLE);
 }
 
 function hyprlandCaptureBinding(appId: string, lua: boolean): string {
@@ -96,7 +96,7 @@ export class HyprlandCaptureSetup {
       const bundle = await regularFile(this.paths.bundle);
       if (!bundle)
         throw new Error(
-          "The Hyprland capture helper is missing from this build. Update or reinstall T3 Code.",
+          "The Hyprland capture helper is missing from this build. Update or reinstall Phoenix.",
         );
       if (!installed.equals(bundle))
         return {
