@@ -49,12 +49,6 @@
         "image": "macos-tahoe-26.6-xcode-27.1"
       }
     },
-    "testflight": {
-      "extends": "production",
-      "env": {
-        "T3CODE_MOBILE_VERSION": "3.0.0"
-      }
-    },
     "production": {
       "corepack": true,
       "env": {
@@ -67,15 +61,19 @@
       "ios": {
         "image": "macos-tahoe-26.6-xcode-27.1"
       }
+    },
+    "production:apk": {
+      "extends": "production",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {
-    "testflight": {
-      "extends": "production"
-    },
     "production": {
       "ios": {
-        "ascAppId": "6787819824"
+        "ascAppId": "6807867658"
       },
       "android": {
         "track": "internal"
