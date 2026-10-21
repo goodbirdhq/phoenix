@@ -521,7 +521,7 @@ function ConnectAccountOption({
             <p className="text-sm text-muted-foreground">
               Run this on each computer you want to connect.
             </p>
-            <CommandBlock command="npx t3 connect" className="mt-3" />
+            <CommandBlock command="npx @goodbirdhq/phoenix connect" className="mt-3" />
             <p className="mt-3 text-xs text-muted-foreground">
               Keep Phoenix running. Select the computers you want to set up above.
             </p>
@@ -630,9 +630,10 @@ function PairingForm({
             <p className="pt-3 text-sm text-muted-foreground">
               Run this on the computer with your code.
             </p>
-            <CommandBlock command="npx t3 pair" className="mt-2" />
+            <CommandBlock command="npx @goodbirdhq/phoenix pair" className="mt-2" />
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Start Phoenix first, or run <code className="font-mono">npx t3 serve</code>. Add{" "}
+              Start Phoenix first, or run{" "}
+              <code className="font-mono">npx @goodbirdhq/phoenix serve</code>. Add{" "}
               <code className="font-mono">--tailscale</code> to use your tailnet.
             </p>
           </CollapsiblePanel>
