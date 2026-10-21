@@ -1,5 +1,8 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
-import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
+import {
+  limitRecoveryCommand,
+  makeSweep as makeLimitRecoverySweep,
+} from "./UsageLimitRecoveryWorker.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -6589,6 +6592,38 @@ const codexFailoverGroup = {
   onUsageLimit: "switch" as const,
 };
 
+const thirdInstanceId = ProviderInstanceId.make("codex_third");
+// Registered but switched off at the instance level, so ProviderSwitchService
+// refuses to plan a move onto it while project settings still allow it.
+const refusedInstanceId = ProviderInstanceId.make("codex_refused");
+const failoverProviderInstances = [
+  providerInstance,
+  alternateProviderInstance,
+  ...[thirdInstanceId, refusedInstanceId].map(
+    (instanceId) =>
+      ({
+        ...providerInstance,
+        instanceId,
+        continuationIdentity: { driverKind: driver, continuationKey: `codex:test:${instanceId}` },
+        enabled: instanceId !== refusedInstanceId,
+        orchestrationAdapter: { ...orchestrationAdapter, instanceId },
+      }) satisfies ProviderInstance,
+  ),
+];
+const layerFailoverProviderInstanceRegistry = Layer.succeed(
+  ProviderInstanceRegistry.ProviderInstanceRegistry,
+  {
+    getInstance: (instanceId) =>
+      Effect.succeed(
+        failoverProviderInstances.find((instance) => instanceId === instance.instanceId),
+      ),
+    listInstances: Effect.succeed(failoverProviderInstances),
+    listUnavailable: Effect.succeed([]),
+    streamChanges: Stream.empty,
+    subscribeChanges: Effect.never,
+  },
+);
+
 const layerUsageLimitFailoverTest = Layer.mergeAll(
   RuntimeLayer.layer,
   RuntimeLayer.layerEventSink,
@@ -6603,7 +6638,7 @@ const layerUsageLimitFailoverTest = Layer.mergeAll(
   Layer.provide(layerCheckpointStoreTest),
   Layer.provide(layerServerConfig),
   Layer.provideMerge(ServerSettings.layerTest()),
-  Layer.provide(layerTestProviderInstanceRegistry),
+  Layer.provide(layerFailoverProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerProjectServiceTest),
   Layer.provide(layerPlatformTest),
@@ -6705,11 +6740,21 @@ it.layer(layerUsageLimitFailoverTest)("usage-limit failover groups", (it) => {
       return threadId;
     });
 
-  const useGroups = (failoverGroups: ReadonlyArray<typeof codexFailoverGroup | object>) =>
+  const useGroups = (
+    failoverGroups: ReadonlyArray<typeof codexFailoverGroup | object>,
+    recovery: { readonly autoResume?: boolean; readonly snooze?: boolean } = {},
+  ) =>
     Effect.flatMap(ServerSettings.ServerSettingsService, (settings) =>
       settings.updateSettings({
         failoverGroups: failoverGroups as (typeof codexFailoverGroup)[],
-        providerInstances: { [alternateInstanceId]: { driver, enabled: true } },
+        providerInstances: Object.fromEntries(
+          [alternateInstanceId, thirdInstanceId, refusedInstanceId].map((instanceId) => [
+            instanceId,
+            { driver, enabled: true },
+          ]),
+        ),
+        autoResumeLimitedThreads: recovery.autoResume ?? false,
+        snoozeLimitedThreads: recovery.snooze ?? false,
       }),
     );
 
@@ -6850,6 +6895,99 @@ it.layer(layerUsageLimitFailoverTest)("usage-limit failover groups", (it) => {
         ["exhausted"],
       );
       assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+    }),
+  );
+
+  it.effect("skips a member the switch plan refuses and keeps walking the group", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const failover = yield* UsageLimitFailoverService.UsageLimitFailoverService;
+      yield* useGroups([
+        {
+          ...codexFailoverGroup,
+          instanceIds: [modelSelection.instanceId, refusedInstanceId, thirdInstanceId],
+        },
+      ]);
+      const threadId = yield* seedFailedThread("refused-member");
+
+      assert.deepEqual(
+        (yield* failover.sweep())
+          .filter((outcome) => outcome.threadId === threadId)
+          .map((outcome) => outcome.type === "switched" && outcome.toInstanceId),
+        [thirdInstanceId],
+      );
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(after.thread.modelSelection.instanceId, thirdInstanceId);
+      assert.deepEqual(
+        after.runs.map((run) => run.providerInstanceId),
+        [modelSelection.instanceId, thirdInstanceId],
+      );
+    }),
+  );
+
+  it.effect("walks on from a switched account without revisiting one in the episode", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const failover = yield* UsageLimitFailoverService.UsageLimitFailoverService;
+      yield* useGroups([
+        {
+          ...codexFailoverGroup,
+          instanceIds: [modelSelection.instanceId, alternateInstanceId, thirdInstanceId],
+        },
+      ]);
+      const threadId = yield* seedFailedThread("walk");
+      const switchedTo = Effect.map(failover.sweep(), (outcomes) =>
+        outcomes
+          .filter((outcome) => outcome.threadId === threadId)
+          .map((outcome) => (outcome.type === "switched" ? outcome.toInstanceId : outcome.type)),
+      );
+      const failLatest = Effect.gen(function* () {
+        const runs = (yield* orchestrator.getThreadProjection(threadId)).runs;
+        yield* failRun(runs.at(-1)!, "usage_limit");
+      });
+
+      assert.deepEqual(yield* switchedTo, [alternateInstanceId]);
+      yield* failLatest;
+      // Group order wraps to the original account, which is still limited.
+      assert.deepEqual(yield* switchedTo, [thirdInstanceId]);
+      yield* failLatest;
+      assert.deepEqual(yield* switchedTo, ["exhausted"]);
+      assert.deepEqual(
+        (yield* orchestrator.getThreadProjection(threadId)).runs.map(
+          (run) => run.providerInstanceId,
+        ),
+        [modelSelection.instanceId, alternateInstanceId, thirdInstanceId],
+      );
+    }),
+  );
+
+  it.effect("falls back to upstream arming and auto-resume when the group is exhausted", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sweep = yield* makeLimitRecoverySweep;
+      yield* useGroups(
+        [{ ...codexFailoverGroup, instanceIds: [modelSelection.instanceId, refusedInstanceId] }],
+        { autoResume: true },
+      );
+      const threadId = yield* seedFailedThread("fallback");
+      const [limited] = (yield* orchestrator.getThreadProjection(threadId)).runs;
+
+      yield* sweep();
+
+      const armed = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(armed.thread.modelSelection.instanceId, modelSelection.instanceId);
+      assert.lengthOf(armed.runs, 1);
+      assert.include(armed.thread.limitRecovery, { runId: limited!.id, autoResume: true });
+
+      yield* TestClock.adjust("61 minutes");
+      yield* sweep();
+
+      const resumed = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(
+        resumed.runs.map((run) => run.providerInstanceId),
+        [modelSelection.instanceId, modelSelection.instanceId],
+      );
+      assert.notEqual(resumed.runs[1]?.status, "failed");
     }),
   );
 });
