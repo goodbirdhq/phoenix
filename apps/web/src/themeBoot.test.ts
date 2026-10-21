@@ -4,6 +4,7 @@ import indexHtml from "../index.html?raw";
 import {
   CUSTOM_THEMES_STORAGE_KEY,
   getDefaultThemeColors,
+  getStandardThemeColors,
   getThemeColorsForMode,
   invalidateCustomThemes,
   isKnownThemePreference,
@@ -15,6 +16,7 @@ import {
   OCEAN_THEME,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
+  themeColorToHex,
   toCanonicalThemeColor,
 } from "./themePalette";
 
@@ -369,6 +371,20 @@ describe("index.html boot script", () => {
     expect(boot.bootVariables["--boot-accent"]).toBe(getDefaultThemeColors("dark").accent);
     expect(boot.backgroundColor).toBe(DEFAULT_DARK_CHROME);
     expect(boot.metaContent).toBe(DEFAULT_DARK_CHROME);
+  });
+
+  it("paints the standard palette's chrome before an unthemed app mounts", () => {
+    for (const prefersDark of [false, true]) {
+      const chrome = themeColorToHex(getStandardThemeColors(prefersDark ? "dark" : "light").chrome);
+      for (const boot of [
+        runBootScript({ storage: {}, prefersDark }),
+        runBootScript({ storageThrows: true, prefersDark }),
+      ]) {
+        expect(boot.themeId).toBeUndefined();
+        expect(boot.backgroundColor).toBe(chrome);
+        expect(boot.metaContent).toBe(chrome);
+      }
+    }
   });
 
   it("follows the OS appearance when storage is unavailable", () => {
