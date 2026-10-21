@@ -1189,6 +1189,23 @@ describe("child sessions", () => {
     ).toEqual([root.id]);
   });
 
+  it("show their own attention while the parent keeps the roll-up", () => {
+    const waiting = childOf("waiting", root, { hasPendingApprovals: true });
+    const quiet = childOf("quiet", root);
+    const asked = { ...root, pendingSubagentRequest: "user_input" as const };
+    const layout = build([asked, waiting, quiet]);
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["root"]);
+    expect(resolveThreadListV2Status(asked)).toBe("input");
+    const statuses = new Map(
+      layout.items[0]?.agentThreads?.map((thread) => [
+        thread.id,
+        resolveThreadListV2Status(thread),
+      ]),
+    );
+    expect(statuses.get(waiting.id)).toBe("approval");
+    expect(statuses.get(quiet.id)).toBe("ready");
+  });
+
   it("carry each child's own time and queued stamp, so an older parent never lends its own", () => {
     const oldRoot = { ...root, latestUserMessageAt: isoAt(BASE_MS - 3 * 24 * 60 * MINUTE_MS) };
     const youngChild = childOf("young", oldRoot, {
