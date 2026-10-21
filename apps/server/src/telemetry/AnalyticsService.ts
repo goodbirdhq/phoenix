@@ -72,9 +72,8 @@ function retryDelayMs(failures: number, random: number): number {
 }
 
 const TelemetryEnvConfig = Config.all({
-  posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(
-    Config.withDefault("phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m"),
-  ),
+  // No default project: telemetry stays off unless the operator supplies their own key.
+  posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(Config.option),
   posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(
     Config.withDefault("https://ingest.t3.codes"),
   ),
@@ -136,6 +135,17 @@ function serverOsFromNodePlatform(platform: string): ClientOs {
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
+  const posthogKey = telemetryConfig.enabled
+    ? Option.getOrUndefined(telemetryConfig.posthogKey)
+    : undefined;
+  // Without a key nothing can be sent, so skip identity lookup and the flush loop entirely.
+  if (posthogKey === undefined) {
+    return AnalyticsService.of({
+      record: () => Effect.void,
+      flush: Effect.void,
+      recordOwners: () => Effect.void,
+    });
+  }
   const httpClient = yield* HttpClient.HttpClient;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const { distinctId, installId } = yield* getTelemetryIdentity;
@@ -193,10 +203,10 @@ export const make = Effect.gen(function* () {
   const sendBatch = Effect.fn("AnalyticsService.sendBatch")(function* (
     events: ReadonlyArray<BufferedAnalyticsEvent>,
   ) {
-    if (!telemetryConfig.enabled || !distinctId) return;
+    if (!distinctId) return;
 
     const payload = {
-      api_key: telemetryConfig.posthogKey,
+      api_key: posthogKey,
       batch: events.map((event) => ({
         uuid: event.uuid,
         event: event.event,
@@ -286,7 +296,7 @@ export const make = Effect.gen(function* () {
 
   const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
     function* (event, properties) {
-      if (!telemetryConfig.enabled || !distinctId) return;
+      if (!distinctId) return;
 
       // Telemetry is best effort: an event without a uuid is not sent. The
       // Node implementation throws (a defect) rather than failing, so catch both.

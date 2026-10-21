@@ -272,6 +272,49 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
     }),
   );
 
+  it.effect("sends nothing without a PostHog key", () =>
+    Effect.gen(function* () {
+      const capturedPaths: Array<string> = [];
+      const layerServerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
+        prefix: "t3-telemetry-no-key-",
+      });
+      const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
+      const layerConfig = ConfigProvider.layer(
+        ConfigProvider.fromUnknown({
+          T3CODE_TELEMETRY_ENABLED: true,
+          T3CODE_POSTHOG_HOST: "http://localhost",
+        }),
+      );
+      const layerBatchServer = HttpServer.serve(
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          capturedPaths.push(request.url);
+          return HttpServerResponse.jsonUnsafe({});
+        }),
+      );
+      const layerRuntime = layerTelemetry.pipe(
+        Layer.provide(layerConfig),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(HostProcess.Platform, "linux"),
+            Layer.succeed(HostProcess.Architecture, "arm64"),
+          ),
+        ),
+        Layer.provideMerge(NodeHttpServer.layerTest),
+      );
+
+      yield* Effect.gen(function* () {
+        yield* Layer.launch(layerBatchServer).pipe(Effect.forkScoped);
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        yield* analytics.record("test.no-key", { index: 1 });
+        yield* analytics.recordOwners([{ source: "connect", ownerId: "a".repeat(64) }], "server");
+        yield* analytics.flush;
+      }).pipe(Effect.provide(layerRuntime));
+
+      assert.deepEqual(capturedPaths, []);
+    }),
+  );
+
   it.effect("does not send batch requests when telemetry is disabled", () =>
     Effect.gen(function* () {
       const capturedPaths: Array<string> = [];
