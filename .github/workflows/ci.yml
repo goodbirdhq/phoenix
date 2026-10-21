@@ -229,7 +229,7 @@ jobs:
         run: python3 -B .github/scripts/stage-preview-bundle.test.py
 
       - name: Test release checks
-        run: node --test .github/scripts/check-release-source.test.cjs
+        run: node --test .github/scripts/check-release-source.test.cjs .github/scripts/release-public-config.test.cjs
 
       - name: Finish installing browser secret helper build libraries
         timeout-minutes: 5

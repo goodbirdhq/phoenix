@@ -114,7 +114,7 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
         const manifest = yield* decodeManifest(
           yield* fs.readFileString(path.join(output.packageDir, "package.json")),
         );
-        assert.equal(manifest.name, "t3");
+        assert.equal(manifest.name, "@goodbirdhq/phoenix");
         assert.equal(manifest.version, VERSION);
         assert.deepStrictEqual(manifest.bin, { t3: "./bin/t3.mjs" });
         // Nothing for npm to resolve, so nothing that can lag behind the launcher.

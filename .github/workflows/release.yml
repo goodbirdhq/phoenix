@@ -19,6 +19,10 @@ on:
         description: "Stable version (for example 1.2.3 or v1.2.3). Required for stable."
         required: false
         type: string
+      publish_npm:
+        description: "Publish the @goodbirdhq/phoenix npm launcher (requires trusted publishing)"
+        type: boolean
+        default: false
 
 # Keep pending requests instead of replacing the previous pending run, and
 # never cancel an active publisher. Stable gets its own group so a nightly or
@@ -147,6 +151,22 @@ jobs:
         with:
           name: release-dependency-verification
           path: ${{ runner.temp }}/pnpm-metadata/lockfile-verified.jsonl
+
+  # Fails a requested publication before anything is built rather than after
+  # the GitHub Release is out.
+  public_config:
+    name: Validate requested publishers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/scripts
+      - name: Validate requested publishers
+        env:
+          PUBLISH_NPM: ${{ inputs.publish_npm }}
+          NPM_TRUSTED_PUBLISHING: ${{ vars.NPM_TRUSTED_PUBLISHING }}
+        run: node .github/scripts/release-public-config.cjs
 
   quality:
     name: Release quality checks
@@ -458,6 +478,7 @@ jobs:
     needs:
       [
         preflight,
+        public_config,
         quality,
         test,
         test_web,
@@ -467,7 +488,7 @@ jobs:
         cli_linux_arm64,
         desktop_win_x64,
       ]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && needs.test.result == 'success' && needs.test_web.result == 'success' && needs.test_server.result == 'success' && needs.desktop_mac_arm64.result == 'success' && needs.cli_linux_x64.result == 'success' && needs.cli_linux_arm64.result == 'success' && needs.desktop_win_x64.result == 'success' }}
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.public_config.result == 'success' && needs.quality.result == 'success' && needs.test.result == 'success' && needs.test_web.result == 'success' && needs.test_server.result == 'success' && needs.desktop_mac_arm64.result == 'success' && needs.cli_linux_x64.result == 'success' && needs.cli_linux_arm64.result == 'success' && needs.desktop_win_x64.result == 'success' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     permissions:
@@ -682,6 +703,51 @@ jobs:
             args+=(--prerelease)
           fi
           gh release create "$TAG" "${assets[@]}" "${args[@]}"
+
+  # The npm package is a launcher that downloads this version's CLI archive
+  # from the GitHub Release, so it publishes only once that release exists.
+  # Off unless requested. Preview publishes under the `preview` dist-tag,
+  # which nothing resolves unless asked for by name.
+  publish_cli:
+    name: Publish CLI to npm
+    needs: [preflight, release]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && inputs.publish_npm }}
+    # GitHub-hosted: npm rejects provenance from self-hosted runners, and
+    # Blacksmith registers as self-hosted.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=t3...
+              - --filter=@t3tools/scripts...
+
+      - name: Build the npm launcher
+        run: node scripts/build-npm-launcher.ts --version "${{ needs.preflight.outputs.version }}" --output-dir npm-packages
+
+      - name: Publish the npm launcher
+        run: |
+          if ! node apps/server/scripts/cli.ts publish --packages-dir npm-packages --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --provenance --verbose; then
+            echo "::error::npm publish failed. Make sure @goodbirdhq/phoenix has a trusted publisher registered for .github/workflows/release.yml (see docs/operations/release.md)." >&2
+            exit 1
+          fi
 
   finalize:
     name: Finalize release
