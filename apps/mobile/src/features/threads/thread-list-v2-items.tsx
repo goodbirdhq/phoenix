@@ -577,13 +577,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
   const failedError =
     status === "failed" || status === "limited" ? (thread.runtime?.lastError ?? null) : null;
 
-  const [groupExpanded, setGroupExpanded] = useState(
-    () =>
-      props.selectedThreadKey != null &&
-      (props.agentThreads ?? []).some(
-        (child) => `${child.environmentId}:${child.id}` === props.selectedThreadKey,
-      ),
-  );
+  const [groupExpanded, setGroupExpanded] = useState(true);
   const canExpandAgents = useMemo(
     () =>
       buildThreadAgentGroupHierarchy(props.agentThreads ?? []).some(
