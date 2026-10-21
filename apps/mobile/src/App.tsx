@@ -41,7 +41,7 @@ if (process.env.EXPO_PUBLIC_SHOWCASE === "1") {
 void SplashScreen.preventAutoHideAsync().catch(() => {});
 
 const appLinking = {
-  prefixes: [Linking.createURL("/"), "t3code://", "t3code-dev://", "t3code-preview://"],
+  prefixes: [Linking.createURL("/"), "phoenix://", "phoenix-dev://", "phoenix-preview://"],
   config: { initialRouteName: "Home" },
   filter: shouldHandleAppLink,
 };
