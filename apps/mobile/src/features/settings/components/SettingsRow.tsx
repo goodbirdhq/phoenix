@@ -3,7 +3,7 @@ import type { ComponentProps } from "react";
 import { Platform } from "react-native";
 
 import { ListRow } from "../../../components/ui/ListRow";
-import type { SettingsLegalDocumentTarget, SettingsSheetTarget } from "./settings-sheet-targets";
+import type { SettingsSheetTarget } from "./settings-sheet-targets";
 
 export function SettingsRow(props: {
   readonly disabled?: boolean;
@@ -12,7 +12,6 @@ export function SettingsRow(props: {
   readonly value?: string;
   readonly valuePosition?: "below" | "trailing";
   readonly target?: SettingsSheetTarget;
-  readonly fullScreenTarget?: SettingsLegalDocumentTarget;
   readonly onPress?: () => void;
 }) {
   const navigation = useNavigation();
@@ -32,8 +31,6 @@ export function SettingsRow(props: {
             screen: "SettingsContent",
             params: { screen: props.target },
           });
-        } else if (props.fullScreenTarget) {
-          navigation.navigate(props.fullScreenTarget);
         } else {
           props.onPress?.();
         }
