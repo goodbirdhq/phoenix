@@ -1,4 +1,4 @@
-import { CommandId } from "@t3tools/contracts";
+import { CommandId, type ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -55,6 +55,53 @@ function isNonRetryableProviderTurnControlFailure(effectType: string, errorText:
     /treating as already stopped/i.test(errorText)
   );
 }
+
+/**
+ * Settles or archives the child sessions an agent delegated from this thread.
+ * Provider-native subagents are left to their provider. Command ids derive
+ * from the parent's command, so a retried effect replays receipts instead of
+ * emitting again.
+ */
+const organizeDelegatedTasks = Effect.fn("EffectWorker.organizeDelegatedTasks")(function* (
+  threads: ThreadManagementService.ThreadManagementService["Service"],
+  input: {
+    readonly threadId: ThreadId;
+    readonly commandId: CommandId;
+    readonly action: "settle" | "archive";
+  },
+) {
+  const { subagents } = yield* threads.getThreadRecords(input.threadId, ["subagents"]);
+  const childThreadIds = new Set(
+    subagents.flatMap((task) =>
+      task.origin === "app_owned" && task.childThreadId !== null ? [task.childThreadId] : [],
+    ),
+  );
+  for (const childThreadId of childThreadIds) {
+    const { thread } = yield* threads.getThreadRecords(childThreadId, []);
+    if (thread.deletedAt !== null || thread.archivedAt !== null) continue;
+    if (input.action === "settle" && thread.settledOverride === "settled") continue;
+    yield* threads
+      .dispatch({
+        type: input.action === "settle" ? "thread.settle" : "thread.archive",
+        commandId: CommandId.make(`${input.commandId}:${input.action}:${childThreadId}`),
+        threadId: childThreadId,
+      })
+      .pipe(
+        // A child settle refuses a running or blocked child, as it would for
+        // the user; that child stays active rather than being stopped.
+        Effect.catchTags({
+          OrchestratorDispatchError: (error) =>
+            Effect.logInfo("Left a delegated child session as it was", {
+              parentThreadId: input.threadId,
+              threadId: childThreadId,
+              action: input.action,
+              error,
+            }),
+          OrchestratorCommandPreviouslyRejectedError: () => Effect.void,
+        }),
+      );
+  }
+});
 
 export interface OrchestrationEffectExecutorV2Shape {
   readonly execute: (
@@ -520,6 +567,21 @@ export const layerExecutor: Layer.Layer<
                     }),
                 ),
               );
+          case "delegated-tasks.organize":
+            return organizeDelegatedTasks(threads, {
+              threadId: effect.threadId,
+              commandId: effect.commandId,
+              action: effect.request.action,
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
           case "delegated-tasks.stop":
             return threads
               .stopDelegatedTasks({

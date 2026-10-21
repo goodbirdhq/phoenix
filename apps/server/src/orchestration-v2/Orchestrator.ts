@@ -3726,6 +3726,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         } satisfies PendingOrchestrationEffectV2,
       ]);
     }
+
+    // Child sessions belong to the work their parent finished, so settling or
+    // archiving the parent does the same to them. Each child's own command
+    // enqueues this again, which carries it down to grandchildren.
+    if (command.type === "thread.settle" || command.type === "thread.archive") {
+      const { subagents } = yield* loadProjectionForCommand(command, ["subagents"]);
+      if (subagents.some((task) => task.origin === "app_owned" && task.childThreadId !== null)) {
+        yield* Ref.update(effects, (existing) => [
+          ...existing,
+          {
+            id: `effect:${command.commandId}:delegated-tasks.organize`,
+            commandId: command.commandId,
+            threadId: command.threadId,
+            request: {
+              type: "delegated-tasks.organize",
+              action: command.type === "thread.settle" ? "settle" : "archive",
+            },
+          } satisfies PendingOrchestrationEffectV2,
+        ]);
+      }
+    }
   });
 
   const dispatchProviderSessionDetach = Effect.fn("orchestrationV2.dispatch.providerSessionDetach")(
