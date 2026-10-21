@@ -100,8 +100,6 @@ export function createSidebarSortingStrategy(input: {
   settledVisibleCount?: number;
   routeThreadKey?: string | null;
   snoozedThreadCount?: number;
-  cardHeight?: number;
-  slimHeight?: number;
   boundaryLabelHeight?: number;
 }): SortingStrategy {
   if (input.enabled === false) return () => stationary;
@@ -123,8 +121,6 @@ export function createSidebarSortingStrategy(input: {
       snoozed: [],
       settled: [],
     };
-    let cardHeight = input.cardHeight;
-    let slimHeight = input.slimHeight;
     let headerScale: number | undefined;
     for (const [index, item] of items.entries()) {
       if (item.kind === "marker") {
@@ -134,15 +130,14 @@ export function createSidebarSortingStrategy(input: {
         }
         continue;
       }
-      if (item.section === "pinned" || item.section === "active" || item.section === "working")
-        cardHeight ??= rects[index]?.height;
-      else slimHeight ??= rects[index]?.height;
       if (item.key !== active.key) groups[item.section].push(item);
     }
-    const scale =
-      slimHeight !== undefined ? slimHeight / 36 : (headerScale ?? (cardHeight ?? 82) / 82);
-    cardHeight ??= 82 * scale;
-    slimHeight ??= 36 * scale;
+    // Every section shares one row (66px plus 7px padding), so the lifted row
+    // measures the slot it opens anywhere, its expanded child sessions
+    // included. Placeholders are h-9.
+    const rowHeight = rects[activeIndex]?.height ?? 73;
+    const scale = headerScale ?? rowHeight / 73;
+    const placeholderHeight = 36 * scale;
     const labelHeight = (input.boundaryLabelHeight ?? 0) * scale;
     const group = groups[target.section];
     const order =
@@ -194,21 +189,11 @@ export function createSidebarSortingStrategy(input: {
     section("settled");
     const heights = projected.map((item) => {
       const index = indices.get(sidebarListItemId(item));
-      const rect = index === undefined ? undefined : rects[index];
-      const fallback =
-        item.kind === "thread" &&
-        (item.section === "pinned" || item.section === "active" || item.section === "working")
-          ? cardHeight
-          : slimHeight;
-      const moved = item.kind === "thread" && item.key === active.key;
-      return item.kind === "marker" &&
-        (item.marker === "pinned-header" || item.marker === "pinned-divider")
-        ? labelHeight
-        : item.kind === "marker" && item.marker.endsWith("placeholder")
-          ? slimHeight
-          : moved
-            ? fallback
-            : (rect?.height ?? fallback);
+      const measured = index === undefined ? undefined : rects[index]?.height;
+      if (item.kind === "thread") return measured ?? rowHeight;
+      if (item.marker === "pinned-header" || item.marker === "pinned-divider") return labelHeight;
+      if (item.marker.endsWith("placeholder")) return placeholderHeight;
+      return measured ?? 32 * scale;
     });
     const firstShelf = items.findIndex(isShelfHeader);
     const shelfRect = rects[firstShelf];
