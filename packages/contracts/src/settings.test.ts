@@ -144,6 +144,12 @@ describe("ClientSettings notifications", () => {
   });
 });
 
+describe("ClientSettings glass opacity", () => {
+  it("defaults to opaque surfaces so the default palette paints flat", () => {
+    expect(decodeClientSettings({}).glassOpacity).toBe(100);
+  });
+});
+
 describe("ClientSettings quit confirmation", () => {
   it.each([
     [true, "hold"],

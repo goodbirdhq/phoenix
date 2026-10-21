@@ -115,7 +115,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      previewMiniPlayerLayout.ts), then dialogs and popovers (50 and up). */
   --z-sheet: 46;
   --glass-blur: 12px;
-  --glass-opacity: 80%;
+  --glass-opacity: 100%;
   --glass-saturation: 1.14;
   --desktop-window-right-resize-inset: 0px;
   --workspace-topbar-height: 52px;
