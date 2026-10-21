@@ -523,6 +523,18 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("ad-hoc signs unsigned macOS builds so macOS will launch them", () =>
+    Effect.gen(function* () {
+      const macConfig = (signed: boolean) =>
+        createBuildConfig("mac", "dmg", "1.2.3", signed, false, undefined, undefined).pipe(
+          Effect.map((config) => config.mac as Record<string, unknown>),
+        );
+
+      assert.equal((yield* macConfig(false)).identity, "-");
+      assert.notProperty(yield* macConfig(true), "identity");
+    }),
+  );
+
   // pnpm writes "set this to true or false" placeholders into allowBuilds when a
   // tarball changes. pnpm ignores them, but the release build decode rejects them.
   it.effect("decodes the repo allowBuilds and every file: tarball it names exists", () =>

@@ -2884,6 +2884,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
+      // Ad-hoc sign unsigned builds. Skipping signing leaves Electron's stock
+      // linker signature, which claims sealed resources the rewritten bundle no
+      // longer matches, and macOS refuses to launch it as "damaged". "-" needs
+      // no certificate, and electron-builder signs inside-out, which a later
+      // `codesign --deep` does not.
+      ...(signed ? {} : { identity: "-" }),
       extendInfo: {
         // macOS 26 offers Messages/Mail codes in every text field unless opted out.
         NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true,
@@ -4029,7 +4035,11 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     delete buildEnv.CSC_KEY_PASSWORD;
   }
   if (!options.signed) {
-    buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+    // Disabling discovery on macOS makes electron-builder skip signing even
+    // with the ad-hoc identity above; there is no certificate to discover.
+    if (options.platform !== "mac") {
+      buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+    }
     delete buildEnv.CSC_LINK;
     delete buildEnv.CSC_KEY_PASSWORD;
     delete buildEnv.APPLE_API_KEY;
