@@ -470,9 +470,9 @@ function useSidebarThreads(input: {
             ),
           ),
         );
-  // Teams start collapsed. Expansion lives with this sidebar instance and
+  // Teams start expanded. Collapsing lives with this sidebar instance and
   // forgets threads that leave the list.
-  const [expandedTeamKeys, setExpandedTeamKeys] = useState<ReadonlySet<string>>(
+  const [collapsedTeamKeys, setCollapsedTeamKeys] = useState<ReadonlySet<string>>(
     () => new Set<string>(),
   );
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
@@ -530,6 +530,11 @@ function useSidebarThreads(input: {
     settledThreads,
     childThreadsByKey,
   } = partition;
+  const teamKeys = new Set(childThreadsByKey.keys());
+  if ([...collapsedTeamKeys].some((key) => !teamKeys.has(key))) {
+    setCollapsedTeamKeys(new Set([...collapsedTeamKeys].filter((key) => teamKeys.has(key))));
+  }
+  const expandedTeamKeys = new Set([...teamKeys].filter((key) => !collapsedTeamKeys.has(key)));
   // A child session's row stands for it while its team is open; a collapsed
   // team's parent row stands in, the way a provider subagent's parent does.
   const parentKeyByChildKey = new Map<string, string>();
@@ -604,15 +609,11 @@ function useSidebarThreads(input: {
     }
   }
   const toggleTeam = (key: string) =>
-    setExpandedTeamKeys((current) => {
+    setCollapsedTeamKeys((current) => {
       const next = new Set(current);
       if (!next.delete(key)) next.add(key);
       return next;
     });
-  const teamKeys = new Set(childThreadsByKey.keys());
-  if ([...expandedTeamKeys].some((key) => !teamKeys.has(key))) {
-    setExpandedTeamKeys(new Set([...expandedTeamKeys].filter((key) => teamKeys.has(key))));
-  }
   return {
     routeRowThreadKey,
     ...partition,
@@ -2106,8 +2107,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             // A nested row sits inside its parent's sortable item; its
             // pointer must not pick the parent up.
             onPointerDown: (event: ReactPointerEvent) => event.stopPropagation(),
-            // Each level steps 20px, keeping at least 244px for the row.
-            style: { paddingLeft: `min(${props.depth * 20}px, max(0px, calc(100% - 244px)))` },
+            // Nested inside the parent's item, so each level adds one 20px
+            // step while keeping at least 244px for the row.
+            style: { paddingLeft: "min(20px, max(0px, calc(100% - 244px)))" },
           }
         : {})}
       className={cn(
