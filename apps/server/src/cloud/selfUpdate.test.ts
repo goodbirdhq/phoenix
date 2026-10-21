@@ -39,7 +39,7 @@ const releaseHttpClient = (order: string[], beforeDownload?: Effect.Effect<void>
         ).join("");
         return HttpClientResponse.fromWeb(
           request,
-          new Response(`${hex}  t3-1.1.0-linux-x64.tar.gz\n`),
+          new Response(`${hex}  phoenix-1.1.0-linux-x64.tar.gz\n`),
         );
       }
       if (beforeDownload) yield* beforeDownload;
@@ -62,7 +62,9 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
           order.push("extract");
           const stagingDir = input.args[input.args.indexOf("-C") + 1];
           if (stagingDir === undefined) return yield* Effect.die("missing tar target");
-          yield* fs.writeFileString(path.join(stagingDir, "t3"), "#!/bin/sh\n").pipe(Effect.orDie);
+          yield* fs
+            .writeFileString(path.join(stagingDir, "phoenix"), "#!/bin/sh\n")
+            .pipe(Effect.orDie);
           return {
             stdout: "",
             stderr: "",
