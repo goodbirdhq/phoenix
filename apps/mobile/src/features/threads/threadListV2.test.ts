@@ -1093,32 +1093,122 @@ describe("cross-section thread drops", () => {
   });
 });
 
-it("excludes subagents from navigation, search and ordering while retaining user forks", () => {
+describe("child sessions", () => {
+  const childOf = (
+    id: string,
+    parent: EnvironmentThreadShell,
+    overrides: Partial<EnvironmentThreadShell> = {},
+    creationSource: "mcp" | "provider" = "mcp",
+  ): EnvironmentThreadShell => {
+    const thread = makeThread({
+      id: ThreadId.make(id),
+      title: id,
+      lineage: {
+        parentThreadId: parent.id,
+        rootThreadId: parent.lineage.rootThreadId,
+        relationshipToParent: "subagent",
+      },
+      ...overrides,
+    });
+    return { ...thread, source: { ...thread.source, creationSource } };
+  };
   const root = makeThread({ id: ThreadId.make("root"), title: "Root" });
-  const child = makeThread({
-    id: ThreadId.make("child"),
-    title: "Child",
-    lineage: { parentThreadId: root.id, rootThreadId: root.id, relationshipToParent: "subagent" },
+  const child = childOf("child", root);
+  const grandchild = childOf("grandchild", child);
+  const build = (
+    threads: ReadonlyArray<EnvironmentThreadShell>,
+    input: Partial<Parameters<typeof buildThreadListV2Items>[0]> = {},
+  ) =>
+    buildThreadListV2Items({ threads, environmentId: null, searchQuery: "", now: NOW, ...input });
+  const rows = (layout: ReturnType<typeof buildThreadListV2Items>) =>
+    layout.items.map((item) => [item.thread.id, item.agentThreads?.map((thread) => thread.id)]);
+
+  it("nest every depth under the visible root and leave forks as rows", () => {
+    const fork = makeThread({
+      id: ThreadId.make("fork"),
+      title: "Fork",
+      lineage: { parentThreadId: root.id, rootThreadId: root.id, relationshipToParent: "fork" },
+    });
+    expect(rows(build([root, child, grandchild, fork]))).toEqual([
+      ["fork", undefined],
+      ["root", ["child", "grandchild"]],
+    ]);
   });
-  const fork = makeThread({
-    id: ThreadId.make("fork"),
-    title: "Fork",
-    lineage: { parentThreadId: root.id, rootThreadId: root.id, relationshipToParent: "fork" },
+
+  it("keep provider-native subagents hidden", () => {
+    const native = childOf("native", root, {}, "provider");
+    expect(rows(build([root, native]))).toEqual([["root", undefined]]);
   });
-  const threads = [root, child, fork];
-  expect(
-    buildThreadListV2Items({ threads, environmentId: null, searchQuery: "", now: NOW }).items.map(
-      (item) => item.thread.id,
-    ),
-  ).toEqual([fork.id, root.id]);
-  expect(
-    buildThreadListV2Items({ threads, environmentId: null, searchQuery: "Child", now: NOW }).items,
-  ).toEqual([]);
-  expect(
-    getThreadListV2OrderedSection({ threads, section: "active", now: NOW }).map(
-      (thread) => thread.id,
-    ),
-  ).toEqual([fork.id, root.id]);
+
+  it("stay their own row when the parent is settled, filtered out, or in a loop", () => {
+    const settledRoot = { ...root, settledOverride: "settled" as const };
+    expect(rows(build([settledRoot, child]))).toEqual([
+      ["child", undefined],
+      ["root", undefined],
+    ]);
+    expect(rows(build([root, child], { searchQuery: "child" }))).toEqual([["child", undefined]]);
+    const loopA = childOf("loop-a", makeThread({ id: ThreadId.make("loop-b"), title: "b" }));
+    const loopB = childOf("loop-b", loopA);
+    expect(
+      rows(build([loopA, loopB]))
+        .map(([id]) => id)
+        .toSorted(),
+    ).toEqual(["loop-a", "loop-b"]);
+  });
+
+  it("keep a pinned child in the pinned block and list it on the root too", () => {
+    const pinnedChild = childOf("pinned-child", root, { pinnedAt: NOW });
+    expect(rows(build([root, pinnedChild]))).toEqual([
+      ["pinned-child", undefined],
+      ["root", ["pinned-child"]],
+    ]);
+  });
+
+  it("join their parent instead of the Working section", () => {
+    const running = {
+      status: "running" as const,
+      activeRunId: null,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerName: "Codex",
+      lastError: null,
+      updatedAt: NOW,
+    };
+    const layout = build([root, childOf("busy", root, { runtime: running })], {
+      workingShelfEnabled: true,
+      workingShelfExpanded: true,
+    });
+    expect(rows(layout)).toEqual([["root", ["busy"]]]);
+    expect(layout.workingCount).toBe(0);
+  });
+
+  it("are left out of manual ordering", () => {
+    expect(
+      getThreadListV2OrderedSection({ threads: [root, child], section: "active", now: NOW }).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual([root.id]);
+  });
+
+  it("carry each child's own time and queued stamp, so an older parent never lends its own", () => {
+    const oldRoot = { ...root, latestUserMessageAt: isoAt(BASE_MS - 3 * 24 * 60 * MINUTE_MS) };
+    const youngChild = childOf("young", oldRoot, {
+      latestUserMessageAt: isoAt(BASE_MS - 2 * MINUTE_MS),
+    });
+    const list = (queued: ReadonlySet<string>) =>
+      buildTickList([oldRoot, youngChild], BASE_MS, [], { queuedThreadKeys: queued });
+    const plain = list(new Set());
+    const queued = list(new Set([`${environmentId}:young`]));
+    const rootRow = plain.find((item) => item.type === "v2-thread")!;
+    expect(
+      rootRow.type === "v2-thread" && rootRow.agentRowStamps?.get(`${environmentId}:young`),
+    ).toMatchObject({ hasQueuedMessages: false });
+    const queuedRow = queued.find((item) => item.type === "v2-thread")!;
+    expect(
+      queuedRow.type === "v2-thread" &&
+        queuedRow.agentRowStamps?.get(`${environmentId}:young`)?.hasQueuedMessages,
+    ).toBe(true);
+    expect(threadListV2ListItemsAreEqual(rootRow, queuedRow)).toBe(false);
+  });
 });
 
 const BASE_MS = Date.parse(NOW);

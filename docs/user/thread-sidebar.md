@@ -223,6 +223,11 @@ Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
 thread asks for it.
 
+On mobile, child sessions a thread delegates are grouped under it. Tap the avatar
+stack on the parent row to show or hide them. A child row shows its own approval
+or question, and the parent row flags it too. A child whose parent is settled or
+snoozed appears as a row of its own.
+
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.

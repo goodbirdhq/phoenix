@@ -1,5 +1,8 @@
 import * as Dialog from "../../components/ui/Dialog";
-import type { ThreadRowProviderInstance } from "./thread-provider-instance";
+import {
+  resolveThreadProviderInstance,
+  type ThreadRowProviderInstance,
+} from "./thread-provider-instance";
 import { getThreadListV2NewBranchMenuTitle } from "./thread-list-v2-row-appearance";
 import { getThreadRowColors } from "./thread-row-colors";
 import { RowPressable } from "../../components/ui/RowPressable";
@@ -37,6 +40,7 @@ import { useNavigationColors } from "../../components/useNavigationColors";
 import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
+import { useProject } from "../../state/entities";
 import { useEnvironmentScope } from "../../state/session";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
@@ -49,14 +53,18 @@ import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
+  buildThreadAgentGroupHierarchy,
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2SnoozeMenuSelection,
   threadHasUnseenCompletion,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
+  type ThreadAgentGroupNode,
+  type ThreadListV2AgentRowStamp,
   type ThreadListV2Status,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
+import { ThreadAgentGroup } from "./ThreadAgentGroup";
 import { threadIdentityLabel } from "./thread-avatar-status";
 import {
   buildThreadRowAccessibilityLabel,
@@ -447,6 +455,17 @@ interface ThreadListV2RowProps {
   readonly snoozed?: boolean;
   readonly pinned?: boolean;
   readonly wokeAt: string | null;
+  /** Child sessions grouped under this row (see groupChildSessions). */
+  readonly agentThreads?: ReadonlyArray<EnvironmentThreadShell> | undefined;
+  /** The root row's per-child stamps, handed down unchanged so every nesting
+      level reads its own entry. */
+  readonly agentRowStamps?: ReadonlyMap<string, ThreadListV2AgentRowStamp> | undefined;
+  /** Nesting level of an expanded child row; the root row is 0. */
+  readonly hierarchyDepth?: number;
+  /** The parent's project: a child in the same project leads with its provider. */
+  readonly parentProjectId?: EnvironmentThreadShell["projectId"];
+  /** Key of the thread open in the detail pane, for nested child rows. */
+  readonly selectedThreadKey?: string | null;
   readonly snoozeWakeLabelText?: string;
   readonly timeLabel: string;
   readonly snoozePresetMinute: string;
@@ -498,7 +517,7 @@ interface ThreadListV2RowProps {
 
 /**
  * Two lines beside the session avatar: title and time, then branch (or
- * project) · machine with the PR and status word after
+ * project) · machine with the PR, child-session group and status word after
  * it. A failed session's last error takes the branch slot so the height holds.
  */
 export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2RowProps) {
@@ -558,6 +577,24 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
   const failedError =
     status === "failed" || status === "limited" ? (thread.runtime?.lastError ?? null) : null;
 
+  const [groupExpanded, setGroupExpanded] = useState(
+    () =>
+      props.selectedThreadKey != null &&
+      (props.agentThreads ?? []).some(
+        (child) => `${child.environmentId}:${child.id}` === props.selectedThreadKey,
+      ),
+  );
+  const canExpandAgents = useMemo(
+    () =>
+      buildThreadAgentGroupHierarchy(props.agentThreads ?? []).some(
+        (node) => node.thread.pinnedAt == null,
+      ),
+    [props.agentThreads],
+  );
+  const toggleAgents = () => {
+    if (canExpandAgents) setGroupExpanded((value) => !value);
+  };
+
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const handleAcknowledgeWoke = useCallback(() => {
     if (props.wokeAt === null) return;
@@ -571,9 +608,24 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
     () => [
       ...(prBadgeLabel ? [{ name: "openPullRequests", label: prBadgeLabel }] : []),
       ...(showsWoke ? [{ name: "dismissWoke", label: "Dismiss Woke notification" }] : []),
+      ...(canExpandAgents
+        ? [
+            {
+              name: "toggleAgents",
+              label: groupExpanded ? "Collapse child sessions" : "Expand child sessions",
+            },
+          ]
+        : []),
     ],
-    [prBadgeLabel, showsWoke],
+    [canExpandAgents, groupExpanded, prBadgeLabel, showsWoke],
   );
+  // A recycled cell keeps this row mounted for another thread.
+  const groupIdentity = `${thread.environmentId}:${thread.id}`;
+  const [boundGroupIdentity, setBoundGroupIdentity] = useState(groupIdentity);
+  if (boundGroupIdentity !== groupIdentity) {
+    setBoundGroupIdentity(groupIdentity);
+    setGroupExpanded(false);
+  }
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
   const handleRename = useCallback(() => onRenameThread(thread), [onRenameThread, thread]);
@@ -1005,6 +1057,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
             </Text>
           </Pressable>
         ) : null}
+        {props.agentThreads?.length ? (
+          <ThreadAgentGroup
+            threads={props.agentThreads}
+            providers={props.providers}
+            expanded={groupExpanded}
+            canExpand={canExpandAgents}
+            onToggle={toggleAgents}
+            parentProjectId={thread.projectId}
+          />
+        ) : null}
         {showsWoke ? (
           <Pressable
             accessibilityRole="button"
@@ -1081,11 +1143,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
       }
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
-      accessibilityState={{ selected }}
+      accessibilityState={{ selected, ...(canExpandAgents ? { expanded: groupExpanded } : {}) }}
       accessibilityActions={rowAccessibilityActions}
       onAccessibilityAction={(event) => {
         if (event.nativeEvent.actionName === "openPullRequests") handleOpenPullRequests();
         if (event.nativeEvent.actionName === "dismissWoke") handleAcknowledgeWoke();
+        if (event.nativeEvent.actionName === "toggleAgents") toggleAgents();
       }}
       onPress={() => {
         close();
@@ -1098,6 +1161,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
         marginHorizontal: sidebarPane ? 0 : 14,
         marginBottom: 4,
         padding: 10,
+        paddingLeft: 10 + Math.min(props.hierarchyDepth ?? 0, 4) * 20,
         gap: 10,
         flexDirection: "row",
         alignItems: "center",
@@ -1107,7 +1171,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
     >
       <ThreadAvatar
         thread={thread}
-        project={props.project}
+        // A child in its parent's project leads with its provider instead.
+        project={props.parentProjectId === thread.projectId ? null : props.project}
         providerDriver={providerInstance?.driverKind ?? null}
         providerIconUrl={providerIconUrl}
         snoozed={snoozedRow}
@@ -1115,6 +1180,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
       {rowBody}
     </RowPressable>
   );
+
+  const nested =
+    props.agentThreads?.length && canExpandAgents && groupExpanded ? (
+      <ExpandedThreadAgentRows
+        parentProps={props}
+        threads={props.agentThreads}
+        onCollapse={() => setGroupExpanded(false)}
+      />
+    ) : null;
 
   if (!canOperateThread)
     return (
@@ -1124,6 +1198,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
         >
           {rowContent(() => {})}
         </View>
+        {nested}
       </ThreadAvatarMotionContext>
     );
 
@@ -1183,7 +1258,109 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
             </Menu>
           )}
         </ThreadSwipeable>
+        {nested}
       </ThreadAvatarMotionContext>
     </View>
   );
 });
+
+/** The expanded group: a count line, then each unpinned child as a nested row. */
+function ExpandedThreadAgentRows({
+  parentProps,
+  threads,
+  onCollapse,
+}: {
+  readonly parentProps: ThreadListV2RowProps;
+  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly onCollapse: () => void;
+}) {
+  const hierarchy = useMemo(() => buildThreadAgentGroupHierarchy(threads), [threads]);
+  const colors = useNavigationColors();
+  const grandchildren = hierarchy.reduce((count, node) => count + node.children.length, 0);
+  const deeperCount = threads.length - hierarchy.length - grandchildren;
+  return (
+    <>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          paddingLeft:
+            (parentProps.pane === "sidebar" ? 12 : 26) +
+            Math.min(parentProps.hierarchyDepth ?? 0, 4) * 20,
+          paddingRight: 24,
+        }}
+      >
+        <Text style={{ flex: 1, fontSize: 12, lineHeight: 18, color: colors.muted }}>
+          {hierarchy.length} {hierarchy.length === 1 ? "child session" : "child sessions"}
+          {grandchildren ? ` · ${grandchildren} nested` : ""}
+          {deeperCount ? ` · ${deeperCount} deeper` : ""}
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Collapse child sessions under ${parentProps.thread.title}`}
+          onPress={onCollapse}
+          style={{ minHeight: 44, justifyContent: "center" }}
+        >
+          <Text style={{ fontSize: 12, color: colors.muted }}>Collapse</Text>
+        </Pressable>
+      </View>
+      {hierarchy
+        .filter((node) => node.thread.pinnedAt == null)
+        .map((node) => (
+          <NestedThreadRow
+            key={`${node.thread.environmentId}:${node.thread.id}`}
+            parentProps={parentProps}
+            node={node}
+          />
+        ))}
+    </>
+  );
+}
+
+function NestedThreadRow({
+  parentProps,
+  node,
+}: {
+  readonly parentProps: ThreadListV2RowProps;
+  readonly node: ThreadAgentGroupNode;
+}) {
+  const thread = node.thread;
+  const key = `${thread.environmentId}:${thread.id}`;
+  const stamp = parentProps.agentRowStamps?.get(key);
+  const project = useProject({ environmentId: thread.environmentId, projectId: thread.projectId });
+  const descendants = useMemo(() => {
+    const result: EnvironmentThreadShell[] = [];
+    const visit = (child: ThreadAgentGroupNode) => {
+      result.push(child.thread);
+      child.children.forEach(visit);
+    };
+    node.children.forEach(visit);
+    return result;
+  }, [node]);
+  return (
+    <ThreadListV2Row
+      {...parentProps}
+      thread={thread}
+      agentThreads={descendants}
+      hierarchyDepth={(parentProps.hierarchyDepth ?? 0) + 1}
+      parentProjectId={parentProps.thread.projectId}
+      project={project}
+      projectTitle={project?.title}
+      // Children share their parent's environment, so its provider list applies.
+      providerInstance={resolveThreadProviderInstance(parentProps.providers, thread)}
+      selected={parentProps.selectedThreadKey === key}
+      variant="card"
+      pinned={false}
+      snoozed={false}
+      wokeAt={null}
+      snoozeWakeLabelText={undefined}
+      timeLabel={stamp?.timeLabel ?? ""}
+      hasQueuedMessages={stamp?.hasQueuedMessages === true}
+      snoozePresetMinute={stamp?.snoozePresetMinute ?? ""}
+      canMoveUp={false}
+      canMoveDown={false}
+      reorderSupported={false}
+      searchMatch={undefined}
+    />
+  );
+}

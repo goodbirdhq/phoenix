@@ -10,6 +10,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { isChildSessionThread } from "@t3tools/client-runtime/state/models";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
   createInboxReturnTracker,
@@ -210,6 +211,7 @@ export function getThreadListV2OrderedSection(input: {
 }): EnvironmentThreadShell[] {
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
   const threads = input.threads.filter((thread) => {
+    // Child sessions move with their parent, so only top-level rows are arranged.
     if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent")
       return false;
     if (
@@ -240,6 +242,8 @@ export function getThreadListV2OrderedSection(input: {
 
 export interface ThreadListV2Item {
   readonly thread: EnvironmentThreadShell;
+  /** Child sessions grouped under this row, every depth, in list order. */
+  readonly agentThreads?: ReadonlyArray<EnvironmentThreadShell> | undefined;
   readonly variant: "card" | "slim";
   readonly snoozed: boolean;
   readonly pinned: boolean;
@@ -263,10 +267,23 @@ export interface ThreadListV2Layout {
   readonly nextSnoozeWakeAt: string | null;
 }
 
+/** The per-row stamps an expanded child row needs from its own list item. */
+export type ThreadListV2AgentRowStamp = Pick<
+  ThreadListV2ThreadListItem,
+  "timeLabel" | "hasQueuedMessages" | "snoozePresetMinute"
+>;
+
 export interface ThreadListV2ThreadListItem {
   readonly type: "v2-thread";
   readonly key: string;
   readonly item: ThreadListV2Item;
+  /**
+   * Each grouped child's own stamps, keyed `environmentId:threadId`, from the
+   * same clock as this row's. Expanded child rows read theirs here instead of
+   * inheriting the parent's, and a change to any reaches the child through the
+   * parent row's equality.
+   */
+  readonly agentRowStamps?: ReadonlyMap<string, ThreadListV2AgentRowStamp>;
   readonly snoozeWakeLabelText: string | undefined;
   readonly timeLabel: string;
   readonly snoozePresetMinute: string | undefined;
@@ -354,6 +371,12 @@ export function threadListV2ListItemsAreEqual(
         previous.item.snoozed === item.item.snoozed &&
         previous.item.pinned === item.item.pinned &&
         previous.item.wokeAt === item.item.wokeAt &&
+        previous.item.agentThreads?.length === item.item.agentThreads?.length &&
+        (previous.item.agentThreads?.every(
+          (thread, index) => thread === item.item.agentThreads?.[index],
+        ) ??
+          true) &&
+        agentRowStampsAreEqual(previous.agentRowStamps, item.agentRowStamps) &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&
@@ -390,6 +413,25 @@ export function threadListV2ListItemsAreEqual(
         previous.disabled === item.disabled
       );
   }
+}
+
+function agentRowStampsAreEqual(
+  previous: ReadonlyMap<string, ThreadListV2AgentRowStamp> | undefined,
+  next: ReadonlyMap<string, ThreadListV2AgentRowStamp> | undefined,
+): boolean {
+  if (previous === next) return true;
+  if (previous === undefined || next === undefined || previous.size !== next.size) return false;
+  for (const [key, stamp] of previous) {
+    const other = next.get(key);
+    if (
+      other?.timeLabel !== stamp.timeLabel ||
+      other.hasQueuedMessages !== stamp.hasQueuedMessages ||
+      other.snoozePresetMinute !== stamp.snoozePresetMinute
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -429,6 +471,13 @@ export function buildThreadListV2ListItems(input: {
   readonly shelfPreferencesLoading?: boolean;
 }): ThreadListV2ListItem[] {
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
+  const snoozePresetMinuteFor = (thread: EnvironmentThreadShell, snoozed: boolean) =>
+    !snoozed &&
+    input.snoozeLabelNow !== undefined &&
+    (input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true) &&
+    canSnooze(thread, { now: input.snoozeLabelNow })
+      ? input.snoozeLabelNow
+      : undefined;
   const threadItems = input.items.map((item): ThreadListV2ListItem => {
     const snoozeWakeLabelText =
       item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
@@ -437,13 +486,7 @@ export function buildThreadListV2ListItems(input: {
     // The minute clock belongs on the item, not the list's extraData, so the
     // recycler's equality can confine the per-minute re-render to rows whose
     // snooze menu actually shows preset times.
-    const snoozePresetMinute =
-      !item.snoozed &&
-      input.snoozeLabelNow !== undefined &&
-      (input.snoozeEnvironmentIds?.has(item.thread.environmentId) ?? true) &&
-      canSnooze(item.thread, { now: input.snoozeLabelNow })
-        ? input.snoozeLabelNow
-        : undefined;
+    const snoozePresetMinute = snoozePresetMinuteFor(item.thread, item.snoozed);
     const move =
       item.variant === "card"
         ? input.moveAvailability?.get(`${item.thread.environmentId}:${item.thread.id}`)
@@ -459,6 +502,26 @@ export function buildThreadListV2ListItems(input: {
         queuedThreadKeys?.has(`${item.thread.environmentId}:${item.thread.id}`) === true,
       canMoveUp: move?.canMoveUp === true,
       canMoveDown: move?.canMoveDown === true,
+      ...(item.agentThreads?.length
+        ? {
+            agentRowStamps: new Map(
+              item.agentThreads.map((thread) => {
+                const key = `${thread.environmentId}:${thread.id}`;
+                return [
+                  key,
+                  {
+                    timeLabel: resolveThreadListV2ItemTimeLabel(
+                      { thread, variant: "card", snoozed: false },
+                      false,
+                    ),
+                    hasQueuedMessages: queuedThreadKeys?.has(key) === true,
+                    snoozePresetMinute: snoozePresetMinuteFor(thread, false),
+                  },
+                ] as const;
+              }),
+            ),
+          }
+        : {}),
     };
   });
   const pendingItems = input.pendingTasks.map((pendingTask, index): ThreadListV2ListItem => ({
@@ -509,6 +572,103 @@ export function buildThreadListV2ListItems(input: {
     result.push(...threadItems.slice(settledShelfHeaderIndex));
   }
   return result;
+}
+
+const keyOf = (thread: Pick<EnvironmentThreadShell, "environmentId" | "id">) =>
+  `${thread.environmentId}:${thread.id}`;
+
+/**
+ * Groups live child sessions under their topmost live ancestor, in list order.
+ * A pinned child keeps its own row in the pinned block, and a pinned ancestor
+ * also lists the children below it. A child whose parent is not live (settled,
+ * snoozed, filtered out) or whose lineage loops stays a row of its own.
+ */
+export function groupChildSessions(ordered: ReadonlyArray<EnvironmentThreadShell>): {
+  readonly grouped: ReadonlySet<string>;
+  readonly agentThreadsByKey: ReadonlyMap<string, ReadonlyArray<EnvironmentThreadShell>>;
+} {
+  const live = new Map(ordered.map((thread) => [keyOf(thread), thread]));
+  const grouped = new Set<string>();
+  const agentThreadsByKey = new Map<string, EnvironmentThreadShell[]>();
+  for (const thread of ordered) {
+    const ownKey = keyOf(thread);
+    const visited = new Set([ownKey]);
+    const ancestors: EnvironmentThreadShell[] = [];
+    let current = thread;
+    let cyclic = false;
+    while (isChildSessionThread(current) && current.lineage.parentThreadId !== null) {
+      const parentKey = `${current.environmentId}:${current.lineage.parentThreadId}`;
+      const parent = live.get(parentKey);
+      if (parent === undefined) break;
+      if (visited.has(parentKey)) {
+        cyclic = true;
+        break;
+      }
+      visited.add(parentKey);
+      ancestors.push(parent);
+      current = parent;
+    }
+    if (cyclic || ancestors.length === 0) continue;
+    const root = ancestors.at(-1)!;
+    for (const ancestor of ancestors) {
+      if (ancestor !== root && ancestor.pinnedAt == null) continue;
+      const key = keyOf(ancestor);
+      const group = agentThreadsByKey.get(key);
+      if (group) group.push(thread);
+      else agentThreadsByKey.set(key, [thread]);
+    }
+    if (thread.pinnedAt == null) grouped.add(ownKey);
+  }
+  return { grouped, agentThreadsByKey };
+}
+
+/** A visible root's grouped descendants, retaining their immediate-parent shape. */
+export interface ThreadAgentGroupNode {
+  readonly thread: EnvironmentThreadShell;
+  readonly children: ReadonlyArray<ThreadAgentGroupNode>;
+}
+
+/**
+ * Rebuilds immediate parent/child links for the descendants attached to one
+ * row. The row itself is absent from `threads`, so descendants whose parent is
+ * not in the collection start a tree; a cycle stays at the top level rather
+ * than being dropped or rendered forever.
+ */
+export function buildThreadAgentGroupHierarchy(
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+): ReadonlyArray<ThreadAgentGroupNode> {
+  type MutableNode = {
+    readonly thread: EnvironmentThreadShell;
+    readonly children: MutableNode[];
+  };
+  const nodes = new Map<string, MutableNode>();
+  for (const thread of threads) nodes.set(keyOf(thread), { thread, children: [] });
+  const parentByChildKey = new Map<string, string>();
+  for (const thread of threads) {
+    if (thread.lineage.parentThreadId === null) continue;
+    const childKey = keyOf(thread);
+    const parentKey = `${thread.environmentId}:${thread.lineage.parentThreadId}`;
+    if (parentKey !== childKey && nodes.has(parentKey)) parentByChildKey.set(childKey, parentKey);
+  }
+  const hasAncestorCycle = (startKey: string): boolean => {
+    const visited = new Set<string>();
+    let currentKey: string | undefined = startKey;
+    while (currentKey !== undefined) {
+      if (visited.has(currentKey)) return true;
+      visited.add(currentKey);
+      currentKey = parentByChildKey.get(currentKey);
+    }
+    return false;
+  };
+  const roots: MutableNode[] = [];
+  for (const thread of threads) {
+    const childKey = keyOf(thread);
+    const parentKey = parentByChildKey.get(childKey);
+    const parent = parentKey === undefined ? undefined : nodes.get(parentKey);
+    if (parent === undefined || hasAncestorCycle(childKey)) roots.push(nodes.get(childKey)!);
+    else parent.children.push(nodes.get(childKey)!);
+  }
+  return roots;
 }
 
 // Shells are immutable and the settled sort reads only their own fields, so an
@@ -582,7 +742,11 @@ export function buildThreadListV2Items(input: {
   let nextSnoozeWakeAt: string | null = null;
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
   for (const thread of input.threads) {
-    if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent") continue;
+    if (
+      thread.archivedAt !== null ||
+      (thread.lineage.relationshipToParent === "subagent" && !isChildSessionThread(thread))
+    )
+      continue;
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
     if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
       continue;
@@ -633,10 +797,17 @@ export function buildThreadListV2Items(input: {
     "pinned",
     pending,
   );
-  const orderedActive = workingShelfEnabled
+  const sortedActive = workingShelfEnabled
     ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
     : applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
-  const orderedWorking = sortWorkingThreadsBySend(working);
+  const sortedWorking = sortWorkingThreadsBySend(working);
+  const childSessions = groupChildSessions([...orderedPinned, ...sortedActive, ...sortedWorking]);
+  const orderedActive = sortedActive.filter((thread) => !childSessions.grouped.has(keyOf(thread)));
+  const orderedWorking = sortedWorking.filter(
+    (thread) => !childSessions.grouped.has(keyOf(thread)),
+  );
+  const agentThreadsOf = (thread: EnvironmentThreadShell) =>
+    childSessions.agentThreadsByKey.get(keyOf(thread));
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
@@ -677,6 +848,7 @@ export function buildThreadListV2Items(input: {
   for (const thread of orderedPinned) {
     items.push({
       thread,
+      agentThreads: agentThreadsOf(thread),
       variant: "card",
       snoozed: false,
       pinned: true,
@@ -687,6 +859,7 @@ export function buildThreadListV2Items(input: {
   for (const thread of orderedActive) {
     items.push({
       thread,
+      agentThreads: agentThreadsOf(thread),
       variant: "card",
       snoozed: false,
       pinned: false,
@@ -698,6 +871,7 @@ export function buildThreadListV2Items(input: {
   for (const thread of visibleWorking) {
     items.push({
       thread,
+      agentThreads: agentThreadsOf(thread),
       variant: "card",
       snoozed: false,
       pinned: false,

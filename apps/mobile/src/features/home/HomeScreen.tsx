@@ -640,6 +640,10 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozePresetMinute={item.snoozePresetMinute ?? ""}
         snoozeWakeLabelText={item.snoozeWakeLabelText}
         timeLabel={item.timeLabel}
+        agentThreads={item.item.agentThreads}
+        agentRowStamps={item.agentRowStamps}
+        // Only grouping rows read it, so a selection change re-renders just those.
+        selectedThreadKey={item.item.agentThreads ? selectedThreadKey : undefined}
         project={projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null}
         projectTitle={v2ProjectTitleByProjectKey.get(
           scopedProjectKey(thread.environmentId, thread.projectId),

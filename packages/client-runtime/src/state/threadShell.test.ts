@@ -76,34 +76,40 @@ describe("v2 thread shell lists", () => {
     registry.dispose();
   });
 
-  it("keeps navigation stable on hidden subagent updates and retains user forks", () => {
+  it("keeps child sessions and forks in navigation but hides provider-native subagents", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const root = v2ThreadShell;
     const child = {
       ...root,
       id: ThreadId.make("child"),
+      creationSource: "provider" as const,
       lineage: {
         ...root.lineage,
         parentThreadId: root.id,
         relationshipToParent: "subagent" as const,
       },
     };
+    const delegated = {
+      ...child,
+      id: ThreadId.make("delegated"),
+      creationSource: "mcp" as const,
+    };
     const fork = {
       ...child,
       id: ThreadId.make("fork"),
       lineage: { ...child.lineage, relationshipToParent: "fork" as const },
     };
-    const snapshot = { ...v2ShellSnapshot, threads: [root, child, fork] };
+    const snapshot = { ...v2ShellSnapshot, threads: [root, child, delegated, fork] };
     registry.set(snapshotAtom(environmentId), snapshot);
     const dispose = registry.mount(threads.navigationThreadShellsAtom);
     const before = registry.get(threads.navigationThreadShellsAtom);
-    expect(before.map((thread) => thread.id)).toEqual([root.id, fork.id]);
+    expect(before.map((thread) => thread.id)).toEqual([root.id, delegated.id, fork.id]);
     registry.set(snapshotAtom(environmentId), {
       ...snapshot,
-      threads: [root, { ...child, title: "Child streaming" }, fork],
+      threads: [root, { ...child, title: "Child streaming" }, delegated, fork],
     });
     expect(registry.get(threads.navigationThreadShellsAtom)).toBe(before);
-    expect(registry.get(threads.threadShellsAtom)).toHaveLength(3);
+    expect(registry.get(threads.threadShellsAtom)).toHaveLength(4);
     dispose();
     registry.dispose();
   });

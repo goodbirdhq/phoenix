@@ -64,6 +64,20 @@ export interface ThreadRuntimeSummary {
   readonly updatedAt: string;
 }
 
+/**
+ * A thread delegated by another session (`delegate_task`), shown grouped under
+ * its parent. Provider-native subagents are excluded: their provider owns the
+ * conversation, so they surface on the parent instead of as rows.
+ */
+export function isChildSessionThread(
+  thread: Pick<EnvironmentThreadShell, "lineage" | "source">,
+): boolean {
+  return (
+    thread.lineage.relationshipToParent === "subagent" &&
+    thread.source.creationSource !== "provider"
+  );
+}
+
 export function threadRuntimeIsActive(runtime: ThreadRuntimeSummary | null | undefined): boolean {
   return runtime !== null && runtime !== undefined && threadRunStatusIsActive(runtime.status);
 }

@@ -394,8 +394,8 @@ export function createEnvironmentThreadShellAtoms(input: {
     for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const subagentRequests = get(pendingSubagentRequestsAtom(environmentId));
       for (const thread of get(environmentThreadsAtom(environmentId))) {
-        if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent")
-          continue;
+        // Child sessions stay in so lists can group them under their parent.
+        if (thread.archivedAt !== null || isProviderNativeSubagentThread(thread)) continue;
         next.push(scopedThread(environmentId, thread, subagentRequests));
       }
     }

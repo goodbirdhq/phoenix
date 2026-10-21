@@ -603,6 +603,10 @@ function ThreadNavigationSidebarPane(
             snoozePresetMinute={item.snoozePresetMinute ?? ""}
             snoozeWakeLabelText={item.snoozeWakeLabelText}
             timeLabel={item.timeLabel}
+            agentThreads={item.item.agentThreads}
+            agentRowStamps={item.agentRowStamps}
+            // Only grouping rows read it, so a selection change re-renders just those.
+            selectedThreadKey={item.item.agentThreads ? props.selectedThreadKey : undefined}
             project={projectByKey.get(scopeKey) ?? null}
             projectTitle={projectTitleByProjectKey.get(scopeKey)}
             providerInstance={resolveProviderInstance(thread)}
