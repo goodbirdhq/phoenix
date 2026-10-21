@@ -220,6 +220,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --animate-skeleton: skeleton 2.4s infinite;
   /* Duty-cycled indicator animations: long holds with stepped ramps, so the
      compositor updates discrete frames instead of every vsync. */
+  --animate-session-working: session-working 1.5s steps(12) infinite;
   --animate-status-pulse: status-pulse 2s infinite;
   --animate-status-ping: status-ping 2s infinite;
   --color-warning-foreground: var(--warning-foreground);
@@ -2277,6 +2278,13 @@ code {
 
   .preview-loading-progress[data-loading="true"] {
     transform: scaleX(0.9);
+  }
+}
+
+/* Rotate only the working ring, at eight steps per second. */
+@keyframes session-working {
+  to {
+    transform: rotate(360deg);
   }
 }
 

@@ -40,9 +40,7 @@ export function sessionAvatarLabel(status: SessionAvatarStatus): string {
 }
 
 /** Identity stays central, the provider account rides bottom-right, and
- * attention sits bottom-left so it stays visible at the left of a stack. The
- * working ring is static: a spinning one repaints every frame for as long as
- * an agent runs. */
+ * attention sits bottom-left so it stays visible at the left of a stack. */
 export function SessionAvatar({
   status,
   children,
@@ -83,6 +81,7 @@ export function SessionAvatar({
         className={cn(
           "pointer-events-none absolute inset-0 size-full transition-colors motion-reduce:transition-none",
           state.color,
+          working && "motion-safe:animate-session-working",
         )}
       >
         <circle
