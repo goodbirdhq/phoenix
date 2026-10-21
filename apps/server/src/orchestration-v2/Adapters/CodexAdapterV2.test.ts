@@ -4692,12 +4692,35 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       notification: false,
       expectedClass: "provider_error",
     },
+    {
+      name: "managed-allowance",
+      code: "other",
+      message:
+        'unexpected status 403: {"error":{"code":"subscription_sharing_usage_limit_exceeded"}}',
+      notification: false,
+      expectedClass: "usage_limit",
+    },
+    {
+      name: "managed-allowance-notification",
+      code: "other",
+      message:
+        'unexpected status 403: {"error":{"code":"subscription_sharing_usage_limit_exceeded"}}',
+      notification: true,
+      expectedClass: "usage_limit",
+    },
+    {
+      name: "managed-unavailable",
+      code: "other",
+      message: 'unexpected status 503: {"error":{"code":"subscription_sharing_usage_unavailable"}}',
+      notification: false,
+      expectedClass: "provider_error",
+    },
   ] as const)("classifies Codex terminal failures from $name evidence", (scenario) =>
     Effect.scoped(
       Effect.gen(function* () {
         const nativeThreadId = `native-limit-${scenario.name}`;
         const nativeTurnId = `turn-limit-${scenario.name}`;
-        const message = "Provider stopped this request.";
+        const message = "message" in scenario ? scenario.message : "Provider stopped this request.";
         const errorInfo = "errorInfo" in scenario ? scenario.errorInfo : scenario.code;
         const resetAt = "2033-05-19T07:20:00.000Z";
         const snapshot = {

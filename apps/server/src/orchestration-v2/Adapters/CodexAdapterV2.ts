@@ -115,6 +115,7 @@ import {
 } from "../../provider/EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "../../provider/codexLaunchArgs.ts";
+import { classifyCodexManagedError } from "../../provider/CodexManagedErrors.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -1126,11 +1127,19 @@ function codexExhaustionHttpStatus(errorInfo: CodexErrorInfo | null | undefined)
 function codexUsageLimitError(
   code: string | null,
   errorInfo: CodexErrorInfo | null | undefined,
+  messages: ReadonlyArray<string | null | undefined>,
 ): boolean {
   return (
     code === "usageLimitExceeded" ||
     code === "rateLimitExceeded" ||
-    codexExhaustionHttpStatus(errorInfo) === 429
+    codexExhaustionHttpStatus(errorInfo) === 429 ||
+    // A managed ChatGPT connection reports its spent allowance only in the
+    // error text, with no usage-limit code.
+    messages.some(
+      (message) =>
+        message != null &&
+        classifyCodexManagedError(message)?.code === "subscription_sharing_usage_limit_exceeded",
+    )
   );
 }
 
@@ -4560,7 +4569,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 failure: makeProviderFailure({
                   message: payload.error.additionalDetails?.trim() || payload.error.message,
                   code: notificationCode,
-                  class: codexUsageLimitError(notificationCode, payload.error.codexErrorInfo)
+                  class: codexUsageLimitError(notificationCode, payload.error.codexErrorInfo, [
+                    payload.error.message,
+                    payload.error.additionalDetails,
+                  ])
                     ? "usage_limit"
                     : "provider_error",
                 }),
@@ -4583,7 +4595,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ? payload.error.message
                   : additionalDetails,
               code,
-              class: codexUsageLimitError(code, payload.error.codexErrorInfo)
+              class: codexUsageLimitError(code, payload.error.codexErrorInfo, [
+                payload.error.message,
+                additionalDetails,
+              ])
                 ? "usage_limit"
                 : code?.startsWith("http") === true || code?.startsWith("responseStream") === true
                   ? "transport_error"
@@ -5639,7 +5654,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 input.failureErrorInfo === undefined
                   ? undefined
                   : codexErrorInfoCode(input.failureErrorInfo);
-              const failureClass = codexUsageLimitError(failureCode ?? null, input.failureErrorInfo)
+              const failureClass = codexUsageLimitError(
+                failureCode ?? null,
+                input.failureErrorInfo,
+                [input.failureMessage],
+              )
                 ? "usage_limit"
                 : "provider_error";
               // The notification carries the richer message, so it wins when the

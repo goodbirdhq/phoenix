@@ -44,6 +44,7 @@ import {
   type SDKRateLimitInfo,
   type SDKResultMessage,
   type SDKUserMessage,
+  USAGE_LIMIT_ERROR_PREFIXES,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AskUserQuestionInput,
@@ -3072,6 +3073,17 @@ const isClaudeBlockedAssistantRateLimit = Schema.is(
     }),
   }),
 );
+
+// A spent org, seat, or credit allowance can fail the turn with only the CLI's
+// canned sentence: no rejected rate_limit_event and no 429. The SDK publishes
+// those sentences so they can be recognised without matching generic errors.
+function claudeUsageLimitText(message: SDKResultMessage): string | undefined {
+  const texts =
+    message.subtype === "success" ? (message.is_error ? [message.result] : []) : message.errors;
+  return texts.find((text) =>
+    USAGE_LIMIT_ERROR_PREFIXES.some((prefix) => text.trimStart().startsWith(prefix)),
+  );
+}
 
 function claudeUsageLimitResetAt(resetsAt: unknown): string | null {
   const resetMs = typeof resetsAt === "number" ? resetsAt * 1000 : NaN;
@@ -8423,16 +8435,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               next.delete(context.providerTurnId);
               return next;
             });
+            const usageLimitText = claudeUsageLimitText(message);
             const usageLimited =
               context.authenticationFailureMessage === undefined &&
-              (context.rejectedRateLimitTypes.size > 0 ||
-                context.latestAssistantRateLimit !== null) &&
-              (message.subtype !== "success" ||
-                message.api_error_status == null ||
-                message.api_error_status === 429) &&
-              (message.terminal_reason == null ||
-                message.terminal_reason === "api_error" ||
-                message.terminal_reason === "blocking_limit");
+              (usageLimitText !== undefined ||
+                ((context.rejectedRateLimitTypes.size > 0 ||
+                  context.latestAssistantRateLimit !== null) &&
+                  (message.subtype !== "success" ||
+                    message.api_error_status == null ||
+                    message.api_error_status === 429) &&
+                  (message.terminal_reason == null ||
+                    message.terminal_reason === "api_error" ||
+                    message.terminal_reason === "blocking_limit")));
             // The CLI also labels a 403 authentication_failed. Logging in again
             // can't grant a permission, so show the CLI's own text instead.
             const permissionDenied =
@@ -8440,6 +8454,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const failureHint = permissionDenied
               ? message.result
               : (context.authenticationFailureMessage ??
+                usageLimitText ??
                 (usageLimited
                   ? "Claude usage limit reached. Send the message again once the limit resets."
                   : undefined));

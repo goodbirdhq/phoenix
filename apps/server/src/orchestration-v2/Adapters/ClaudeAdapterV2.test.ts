@@ -4562,6 +4562,64 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect.each([
+    {
+      name: "an errored result",
+      frame: {
+        result: "Your org is out of usage · add funds to continue",
+        isError: true,
+        terminalReason: "api_error",
+      },
+      expected: "usage_limit",
+    },
+    {
+      name: "an error subtype",
+      frame: {
+        result: "",
+        subtype: "error_during_execution",
+        isError: true,
+        errors: ["You're out of extra usage · resets 4pm"],
+      },
+      expected: "usage_limit",
+    },
+    {
+      name: "a successful answer that happens to match",
+      frame: { result: "You've hit your target: the build is green." },
+      expected: null,
+    },
+  ] as const)("classifies a canned limit sentence in $name", ({ frame, expected }) =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-limit-text"),
+          text: "Continue.",
+          attachments: [],
+        }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000670", ...frame }),
+      );
+      const terminal = yield* Queue.take(harness.terminalReceipts);
+      if (expected === null) {
+        assert.equal(terminal.status, "completed");
+        return;
+      }
+      assert.equal(terminal.status, "failed");
+      if (terminal.status !== "failed") return;
+      assert.equal(terminal.failure.class, expected);
+      assert.include(terminal.failure.message, "out of");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
   it.effect("keeps the measured context when a usage limit ends the turn", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;
