@@ -182,3 +182,26 @@ it.effect("starts fresh without V1 and never imports over existing V2 state", ()
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true }))),
   );
 });
+
+it.effect("starts fresh when state.sqlite came from a Phoenix V1 build", () => {
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-v1-phoenix-"));
+  const sourcePath = NodePath.join(directory, "state.sqlite");
+  const destinationPath = NodePath.join(directory, "statev2.sqlite");
+  const seed = Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 52 });
+    // Phoenix V1 numbered its own migrations from 55, colliding with V2's ids.
+    yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at)
+    VALUES (55, 'ProjectionThreadLinkedPullRequest', '2026-01-01T00:00:00.000Z')`;
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: sourcePath })));
+  return Effect.gen(function* () {
+    yield* seed;
+    const original = NodeFS.readFileSync(sourcePath);
+    yield* initializeV2Database(destinationPath);
+    assert.isFalse(NodeFS.existsSync(destinationPath));
+    assert.isTrue(original.equals(NodeFS.readFileSync(sourcePath)));
+  }).pipe(
+    Effect.provide(NodeServices.layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true }))),
+  );
+});

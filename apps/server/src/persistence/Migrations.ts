@@ -153,7 +153,11 @@ const makeMigrationLoader = (throughId?: number) =>
     ),
   );
 
-const FIRST_V2_MIGRATION_ID = 55;
+/**
+ * Also the fence for the V1 import: a `state.sqlite` whose ledger reaches this id
+ * was written by a Phoenix V1 build, whose own migrations took these ids.
+ */
+export const FIRST_V2_MIGRATION_ID = 55;
 
 /**
  * Fail before migrating when the migrator would skip one of V2's own

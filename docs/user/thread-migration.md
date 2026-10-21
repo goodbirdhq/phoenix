@@ -1,5 +1,10 @@
 # Threads from older T3 Code versions
 
+> Phoenix note: a database written by a Phoenix release before the V2 switch is not imported.
+> Phoenix starts with an empty V2 database and leaves the old `state.sqlite` in place, so the
+> release that wrote it can still open it. The rest of this page describes importing a T3 Code V1
+> database.
+
 On your first V2 launch, T3 Code copies the V1 database, `state.sqlite`, into `statev2.sqlite`
 in the same data directory and migrates the copy. Your threads appear automatically, with full
 transcripts imported as needed. You do not need to run an import command.
