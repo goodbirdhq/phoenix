@@ -13,7 +13,9 @@ import { DEFAULT_SIGNAL_EXPORT, type SignalExport } from "@t3tools/shared/observ
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import packageJson from "../package.json" with { type: "json" };
 
-export const DEFAULT_PORT = 3773;
+// 3873, not upstream's 3773: Phoenix is expected to run alongside T3 Code, so each
+// app gets a deterministic default port instead of racing for the same one.
+export const DEFAULT_PORT = 3873;
 
 export const RuntimeMode = Schema.Literals(["web", "desktop"]);
 export type RuntimeMode = typeof RuntimeMode.Type;
