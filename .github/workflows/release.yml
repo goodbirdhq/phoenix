@@ -399,7 +399,7 @@ jobs:
   # bundle. Phoenix ships macOS Apple Silicon and Windows x64 desktop apps;
   # Intel macOS, Windows arm64, and the Linux desktop app are not built. Every
   # job also builds its platform's CLI archive, which the npm launcher, the
-  # install scripts, and `t3 update` download from the release.
+  # install scripts, and `phoenix update` download from the release.
   desktop_mac_arm64:
     name: Desktop macOS arm64
     needs: [preflight, build_bundle]
@@ -614,7 +614,7 @@ jobs:
       # Every target's installers, CLI archive, and, for channels an updater
       # follows, blockmaps and exact feed. A release missing one platform's
       # feed silently strands that platform's updates, and a missing CLI
-      # archive breaks `t3 update` and the installers there. Keep in step with
+      # archive breaks `phoenix update` and the installers there. Keep in step with
       # the targets above. Names are matched by version and platform, not
       # product name.
       - name: Check required release assets

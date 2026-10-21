@@ -293,7 +293,7 @@ jobs:
 
   # Release assets download without a GitHub account, unlike workflow
   # artifacts. All preview DMGs live on one rolling prerelease tagged
-  # "desktop-preview" (release.yml only matches v*.*.* tags), so publishing a
+  # "desktop-preview" (release.yml is dispatch-only and creates v*.*.* tags), so publishing a
   # build never notifies release watchers.
   publish:
     name: Publish anonymous download
@@ -434,7 +434,7 @@ jobs:
               `Version: ${process.env.PREVIEW_VERSION}`,
               `Commit: ${process.env.HEAD_SHA.slice(0, 7)}`,
               "",
-              "Signed and notarized, with T3 Connect enabled. The app bundle (server, web client, Electron main) is built from this PR; packaging, native helpers, and desktop dependencies come from `main`.",
+              "Signed and notarized when the repository has Apple signing secrets, otherwise ad-hoc signed (open it with right-click, Open). Built without T3 Connect. The app bundle (server, web client, Electron main) is built from this PR; packaging, native helpers, and desktop dependencies come from `main`.",
               "",
               "No GitHub sign-in is needed. The download stays available until this PR closes. The `preview:mac` label was consumed by this build; a maintainer applies it again to build a newer commit.",
             ].join("\n");
