@@ -40,6 +40,15 @@ function canonical(value: string): string {
   return color;
 }
 
+function expectThemeColors(
+  colors: Readonly<Record<string, string>>,
+  expected: Readonly<Record<string, string>>,
+): void {
+  for (const [role, value] of Object.entries(expected)) {
+    expect(asHex(colors[role]!)).toBe(value);
+  }
+}
+
 function contrastRatio(first: string, second: string): number {
   const toRgb = (value: string) => {
     const hex = asHex(value).slice(1);
@@ -83,6 +92,34 @@ describe("theme files", () => {
         expect(distance(colors.searchMatchBackground, background)).toBeGreaterThan(0.08);
         expect(distance(colors.searchMatchActiveBackground, background)).toBeGreaterThan(0.08);
       }
+    }
+  });
+
+  it("uses the approved default canvas and sidebar hierarchy", () => {
+    expectThemeColors(getStandardThemeColors("light"), {
+      canvas: "#fcfcfc",
+      sidebar: "#fafafa",
+      sidebarRowHover: "#ffffff",
+      messageAction: "#027cbd",
+    });
+    expectThemeColors(getStandardThemeColors("dark"), {
+      canvas: "#101012",
+      sidebar: "#18181b",
+      surface: "#18181b",
+      surfaceRaised: "#27272a",
+      surfaceOverlay: "#27272a",
+      toolbarControl: "#27272a",
+      sidebarRowHover: "#27272a",
+      messageAction: "#027cbd",
+    });
+    for (const mode of ["light", "dark"] as const) {
+      const colors = getStandardThemeColors(mode);
+      expect(
+        contrastRatio(colors.messageActionForeground, colors.messageAction),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(colors.sidebarMutedForeground, colors.sidebar)).toBeGreaterThanOrEqual(
+        4.5,
+      );
     }
   });
 
