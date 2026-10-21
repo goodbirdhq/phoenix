@@ -37,7 +37,9 @@ import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
-const DEFAULT_DESKTOP_BACKEND_PORT = 3773;
+// Matches ServerConfig.DEFAULT_PORT. Leaving upstream's 3773 here would make Phoenix
+// claim T3 Code's port when it started first.
+const DEFAULT_DESKTOP_BACKEND_PORT = 3873;
 const MAX_TCP_PORT = 65_535;
 const DESKTOP_BACKEND_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::"] as const;
 
@@ -64,7 +66,7 @@ export class DesktopDevelopmentBackendPortRequiredError extends Schema.TaggedErr
   {},
 ) {
   override get message(): string {
-    return "T3CODE_PORT is required in desktop development.";
+    return "PHOENIX_PORT is required in desktop development.";
   }
 }
 
@@ -136,7 +138,7 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
   if (!wasQuitting) {
     yield* electronDialog.showErrorBox(
-      "T3 Code failed to start",
+      "Phoenix failed to start",
       `Stage: ${stage}\n${message}${detail}`,
     );
   }

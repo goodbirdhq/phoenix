@@ -39,11 +39,12 @@ export const resolveUserDataPath = Effect.fn("desktop.userData.resolveUserDataPa
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const names = input.isDevelopment
-      ? { current: "t3code-dev", legacy: "T3 Code (Dev)" }
-      : { current: "t3code-v2", legacy: "T3 Code (Alpha)" };
-    const destinationPath = path.join(input.appDataDirectory, names.current);
-    const legacyPath = path.join(input.appDataDirectory, names.legacy);
+    // Only Phoenix's own V1 profile is ever read. Upstream also adopts T3 Code's
+    // pre-rename directories; Phoenix runs alongside T3 Code, so it must not.
+    const destinationPath = path.join(
+      input.appDataDirectory,
+      input.isDevelopment ? "phoenix-dev" : "phoenix-v2",
+    );
     const inspect = (resourcePath: string) =>
       fs
         .exists(resourcePath)
@@ -52,17 +53,12 @@ export const resolveUserDataPath = Effect.fn("desktop.userData.resolveUserDataPa
             DesktopUserDataInitializationError.fromFileSystem(cause, "inspect", resourcePath),
           ),
         );
-    if (input.isDevelopment) {
-      return (yield* inspect(legacyPath)) ? legacyPath : destinationPath;
-    }
+    if (input.isDevelopment) return destinationPath;
     // Chromium databases require their own profile for each running version.
     if (input.platform !== "win32") return destinationPath;
     const destinationState = path.join(destinationPath, "Local State");
     if (yield* inspect(destinationState)) return destinationPath;
-    const legacyState = path.join(legacyPath, "Local State");
-    const sourceState = (yield* inspect(legacyState))
-      ? legacyState
-      : path.join(input.appDataDirectory, "t3code", "Local State");
+    const sourceState = path.join(input.appDataDirectory, "phoenix", "Local State");
     if (!(yield* inspect(sourceState))) return destinationPath;
     // Windows safeStorage keys live here. Copy only these preferences, never locked databases.
     const state = yield* fs

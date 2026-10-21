@@ -1,20 +1,11 @@
-# AUR packaging
+# Upstream AUR packaging reference
 
-This directory maintains the [`t3code-bin`](https://aur.archlinux.org/packages/t3code-bin) and
-[`t3code-nightly-bin`](https://aur.archlinux.org/packages/t3code-nightly-bin) packages. Both
-repackage the official x86_64 AppImage from GitHub Releases.
+These files are inherited from T3 Code and remain configured for the upstream
+[`t3code-bin`](https://aur.archlinux.org/packages/t3code-bin) and
+[`t3code-nightly-bin`](https://aur.archlinux.org/packages/t3code-nightly-bin) packages. They do
+not package or publish Phoenix, and the Phoenix release workflow deliberately does not invoke
+them.
 
-## Publishing
-
-The release workflow calls `.github/workflows/publish-aur.yml` after publishing a GitHub release;
-the workflow can also be run manually for a specific tag. It selects the stable or nightly
-package, then updates its version and checksums, builds it, regenerates `.SRCINFO`, and pushes it
-to the AUR.
-
-To validate a release on Arch Linux:
-
-```bash
-sudo pacman -Syu --needed base-devel github-cli jq namcap
-GH_TOKEN=$(gh auth token) RELEASE_TAG=v0.0.33 \
-  packaging/aur/scripts/release.sh
-```
+Treat this directory as a reference for a future Phoenix AUR integration. Before enabling it,
+adapt the repository, asset, package, icon, desktop-file, executable, and AUR credential
+identities together and add the resulting workflow as an explicit Phoenix release surface.
