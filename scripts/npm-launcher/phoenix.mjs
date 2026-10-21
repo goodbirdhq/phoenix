@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// The `t3` npm package. Downloads this version's CLI archive from the GitHub
-// Release into <T3 home>/runtime/versions/<version> (the folder the install
-// scripts and `t3 update` use), verifies it against the release's SHA256SUMS,
+// The `@goodbirdhq/phoenix` npm package. Downloads this version's CLI archive from the GitHub
+// Release into <Phoenix home>/runtime/versions/<version> (the folder the install
+// scripts and `phoenix update` use), verifies it against the release's SHA256SUMS,
 // then runs it. `dist/bin.mjs` re-enters here for background services
 // installed before 0.0.41, which start the npm package with Node and talk to
 // it over an IPC channel.
@@ -17,9 +17,9 @@ const { version } = JSON.parse(
 
 const SUPPORTED = ["darwin-arm64", "linux-arm64", "linux-x64", "win32-x64"];
 
-function t3Home() {
-  const raw = (process.env.T3CODE_HOME || "").trim();
-  if (raw === "") return path.join(os.homedir(), ".t3");
+function phoenixHome() {
+  const raw = (process.env.PHOENIX_HOME || "").trim();
+  if (raw === "") return path.join(os.homedir(), ".phoenix");
   if (raw === "~") return os.homedir();
   if (raw.startsWith("~/") || raw.startsWith("~\\")) return path.join(os.homedir(), raw.slice(2));
   return path.resolve(raw);
@@ -56,7 +56,7 @@ async function download(url, file) {
         shown = step;
         const percent = total ? ` ${step}%` : "";
         process.stderr.write(
-          `\r\x1b[2Kt3: downloading T3 Code ${version}${percent} (${(received / 1048576).toFixed(1)} MB)`,
+          `\r\x1b[2Kphoenix: downloading Phoenix ${version}${percent} (${(received / 1048576).toFixed(1)} MB)`,
         );
       }
     }
@@ -68,7 +68,7 @@ async function download(url, file) {
 }
 
 async function install(dir, key) {
-  const archive = `t3-${version}-${key}.${process.platform === "win32" ? "zip" : "tar.gz"}`;
+  const archive = `phoenix-${version}-${key}.${process.platform === "win32" ? "zip" : "tar.gz"}`;
   const base = (
     process.env.T3CODE_RELEASE_BASE_URL || "https://github.com/goodbirdhq/phoenix/releases/download"
   ).replace(/\/+$/, "");
@@ -114,7 +114,7 @@ const isComplete = (dir) => {
 
 /**
  * Moves a finished staging folder to `dir`. Rename never replaces an existing
- * folder, so a complete install another launcher (or `t3 update`) published
+ * folder, so a complete install another launcher (or `phoenix update`) published
  * first is kept, never deleted from under a running process. Only a folder
  * without the completion marker, left by an interrupted older installer, is
  * cleared before trying again.
@@ -134,11 +134,11 @@ async function main() {
   const key = `${process.platform}-${process.arch}`;
   if (!SUPPORTED.includes(key)) {
     throw new Error(
-      `no T3 Code CLI build is available for ${key} (supported: ${SUPPORTED.join(", ")}).\n` +
+      `no Phoenix CLI build is available for ${key} (supported: ${SUPPORTED.join(", ")}).\n` +
         "The desktop app is at https://github.com/goodbirdhq/phoenix/releases",
     );
   }
-  const dir = path.join(t3Home(), "runtime", "versions", version);
+  const dir = path.join(phoenixHome(), "runtime", "versions", version);
   if (!isComplete(dir)) await install(dir, key);
 
   // A service launcher talks to its server over IPC; pass that channel and
@@ -146,11 +146,11 @@ async function main() {
   // so forwarding SIGINT too would deliver it twice.
   const ipc = process.send !== undefined;
   const child = spawn(
-    path.join(dir, process.platform === "win32" ? "t3.exe" : "t3"),
+    path.join(dir, process.platform === "win32" ? "phoenix.exe" : "phoenix"),
     process.argv.slice(2),
     {
       stdio: ipc ? ["inherit", "inherit", "inherit", "ipc"] : "inherit",
-      // The executable lives in the T3 home, so this is how it knows npm launched it.
+      // The executable lives in the Phoenix home, so this is how it knows npm launched it.
       env: { ...process.env, T3CODE_NPM_LAUNCHER_PATH: import.meta.filename },
     },
   );
@@ -169,7 +169,7 @@ async function main() {
 }
 
 function fail(error) {
-  process.stderr.write(`t3: ${error.message}\n`);
+  process.stderr.write(`phoenix: ${error.message}\n`);
   process.exit(1);
 }
 
