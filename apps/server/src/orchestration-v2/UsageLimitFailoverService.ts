@@ -14,6 +14,7 @@ import {
 } from "@t3tools/contracts";
 import { latestRootProviderFailure, runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -178,10 +179,15 @@ const make = Effect.gen(function* () {
     const candidates = yield* projections.getLimitFailoverCandidates(
       switching.flatMap((group) => group.instanceIds),
     );
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const judged = yield* Ref.get(exhausted);
     const next = new Map<RunId, string>();
     const outcomes: Array<UsageLimitFailoverOutcome> = [];
     for (const candidate of candidates) {
+      // A snoozed thread is set aside until it wakes; moving it would start
+      // work the user asked not to see yet.
+      const { snoozedUntil } = candidate.thread;
+      if (snoozedUntil != null && DateTime.toEpochMillis(snoozedUntil) > nowMs) continue;
       // The first group naming an account decides, as everywhere else.
       const group = providerFailoverGroupFor(
         preferences.failoverGroups,

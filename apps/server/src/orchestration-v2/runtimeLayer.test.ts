@@ -6990,4 +6990,38 @@ it.layer(layerUsageLimitFailoverTest)("usage-limit failover groups", (it) => {
       assert.notEqual(resumed.runs[1]?.status, "failed");
     }),
   );
+
+  it.effect("leaves a snoozed limited thread on its account until it wakes", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sweep = yield* makeLimitRecoverySweep;
+      yield* useGroups([codexFailoverGroup]);
+      const threadId = yield* seedFailedThread("snoozed");
+      yield* orchestrator.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make("failover:snoozed:snooze"),
+        threadId,
+        snoozedUntil: DateTime.formatIso(DateTime.add(yield* DateTime.now, { days: 1 })),
+      });
+
+      yield* sweep();
+
+      const snoozed = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(snoozed.thread.modelSelection.instanceId, modelSelection.instanceId);
+      assert.lengthOf(snoozed.runs, 1);
+
+      yield* orchestrator.dispatch({
+        type: "thread.unsnooze",
+        commandId: CommandId.make("failover:snoozed:unsnooze"),
+        threadId,
+        reason: "user",
+      });
+      yield* sweep();
+
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).thread.modelSelection.instanceId,
+        alternateInstanceId,
+      );
+    }),
+  );
 });
