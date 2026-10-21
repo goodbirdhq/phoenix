@@ -474,6 +474,7 @@ interface MessagesTimelineProps {
   parentThreadLink?: {
     readonly threadId: ThreadId;
     readonly title: string;
+    readonly label: string;
   } | null;
   /** Set on a workflow coordinator's thread: its script message renders as this opening. */
   workflowOpening?: WorkflowOpening | null;
@@ -1350,7 +1351,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       <div className="messages-timeline-row-frame">
         <div className="chat-content-lane pt-1 sm:pt-2">
           <TimelineSystemDivider
-            label="Subagent of"
+            label={parentThreadLink.label}
             detail={parentThreadLink.title}
             icon={BotIcon}
             actionLabel="Open parent thread"

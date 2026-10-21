@@ -1700,13 +1700,20 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   // The avatar ring carries working, input, approval and failure. The time
   // slot only speaks for finished work: its age, or the Woke notice.
   const isWokeStatus = status === "ready" && isWoke;
+  // The request may be a child session's, rolled up by upstream or by a
+  // collapsed team; the row then says whose it is.
+  const isChildAttention =
+    (status === "approval" && !thread.hasPendingApprovals) ||
+    (status === "input" && !thread.hasPendingUserInput);
   const statusLabel = isWokeStatus
     ? "Woke"
     : status === "ready"
       ? isUnread
         ? "Done"
         : null
-      : sessionAvatarLabel(status);
+      : isChildAttention
+        ? `Child session needs ${status}`
+        : sessionAvatarLabel(status);
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",

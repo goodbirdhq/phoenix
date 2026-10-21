@@ -1602,6 +1602,7 @@ export default function ChatView(props: ChatViewProps) {
       : {
           threadId: parentSubagentThreadRef.threadId,
           title: parentSubagentThread?.title ?? "Parent thread",
+          label: isProviderSubagent ? "Subagent of" : "Child session of",
         };
   const threadError = isServerThread
     ? (localServerError ?? serverRuntime?.lastError ?? null)
