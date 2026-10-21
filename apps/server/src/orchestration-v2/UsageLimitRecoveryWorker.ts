@@ -7,6 +7,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import * as UsageLimitFailover from "./UsageLimitFailoverService.ts";
 
 export function limitRecoveryCommand(
   thread: ProjectionStore.ProjectionLimitRecoveryCandidate,
@@ -76,7 +77,11 @@ const makeSweep = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const settings = yield* ServerSettings.ServerSettingsService;
+  const failover = yield* UsageLimitFailover.UsageLimitFailoverService;
   return Effect.fn("UsageLimitRecoveryWorker.sweep")(function* () {
+    // A thread failover moves is running again before the recovery candidates
+    // are read, so only threads it could not move wait for their reset.
+    yield* failover.sweep();
     const preferences = yield* settings.getSettings;
     const now = yield* DateTime.now;
     const candidates = yield* projections.getLimitRecoveryCandidates({

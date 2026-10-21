@@ -1,4 +1,5 @@
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
+import * as UsageLimitFailoverService from "./UsageLimitFailoverService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Layer from "effect/Layer";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -258,6 +259,16 @@ const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImp
     ),
   ),
 );
+const layerUsageLimitFailoverProvided = UsageLimitFailoverService.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      ProjectionStore.layer,
+      layerThreadManagementProvided,
+      layerProviderAdapterRegistryProvided,
+      layerProviderSwitchServiceProvided,
+    ),
+  ),
+);
 export const layerProjectSetupScriptRunner = ProjectSetupScriptRunner.layer.pipe(
   Layer.provide(layerProjectService),
 );
@@ -357,6 +368,7 @@ export const layer = Layer.mergeAll(
   layerProviderRuntimeRecoveryProvided,
   layerProjectionMaintenanceProvided,
   layerLegacyV1ThreadImporterProvided,
+  layerUsageLimitFailoverProvided,
 );
 
 export const layerProduction = Layer.mergeAll(
@@ -373,6 +385,7 @@ export const layerProduction = Layer.mergeAll(
         ProjectionStore.layer,
         layerThreadManagementProvided,
         layerOrchestratorProvided,
+        layerUsageLimitFailoverProvided,
       ),
     ),
   ),

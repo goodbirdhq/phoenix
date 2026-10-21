@@ -8,6 +8,7 @@ import type {
   OrchestrationV2ThreadHistoryPage,
 } from "@t3tools/contracts";
 import {
+  latestExecutedRun,
   latestRootProviderFailure,
   latestUnheldRun,
   threadErrorSummary,
@@ -174,6 +175,12 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "limitRecovery"
   | "snoozedUntil"
 >;
+
+/** A thread whose latest run failed on a usage limit of the account it is still on. */
+export interface ProjectionLimitFailoverCandidate {
+  readonly thread: OrchestrationV2AppThread;
+  readonly runId: RunId;
+}
 
 export type ProjectionThreadPullRequests = Pick<
   OrchestrationV2AppThread,
@@ -445,6 +452,9 @@ export interface ProjectionStoreV2Shape {
     readonly autoResume: boolean;
     readonly snooze: boolean;
   }) => Effect.Effect<ReadonlyArray<ProjectionLimitRecoveryCandidate>, ProjectionStoreV2Error>;
+  readonly getLimitFailoverCandidates: (
+    instanceIds: ReadonlyArray<ProviderInstanceId>,
+  ) => Effect.Effect<ReadonlyArray<ProjectionLimitFailoverCandidate>, ProjectionStoreV2Error>;
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionSettlementCandidate>, ProjectionStoreV2Error>;
@@ -3867,6 +3877,80 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
     );
 
+    const getLimitFailoverCandidates = Effect.fn("ProjectionStore.getLimitFailoverCandidates")(
+      function* (instanceIds: ReadonlyArray<ProviderInstanceId>) {
+        if (instanceIds.length === 0) return [];
+        const rows = yield* sql<{
+          readonly payload_json: string;
+          readonly run_id: string;
+          readonly run_instance_id: string | null;
+          readonly failure_payload_json: string;
+          readonly last_error: string | null;
+        }>`
+          SELECT t.payload_json, r.run_id,
+            json_extract(r.payload_json, '$.providerInstanceId') AS run_instance_id,
+            item.payload_json AS failure_payload_json,
+            (
+              SELECT json_extract(session.payload_json, '$.lastError')
+              FROM orchestration_v2_projection_provider_session_bindings binding
+              CROSS JOIN orchestration_v2_projection_provider_sessions session
+                ON session.provider_session_id = binding.provider_session_id
+              WHERE binding.thread_id = t.thread_id
+                AND session.provider_instance_id = t.provider_instance_id
+              ORDER BY session.updated_at DESC, session.provider_session_id DESC
+              LIMIT 1
+            ) AS last_error
+          FROM orchestration_v2_projection_threads t
+          INNER JOIN orchestration_v2_projection_runs r ON r.run_id = (
+            SELECT latest.run_id FROM orchestration_v2_projection_runs latest
+            WHERE latest.thread_id = t.thread_id
+              AND latest.status <> 'queued'
+              AND NOT (
+                latest.status = 'cancelled'
+                AND json_extract(latest.payload_json, '$.startedAt') IS NULL
+              )
+            -- latestExecutedRun, as in getLimitRecoveryCandidates.
+            ORDER BY latest.completed_at IS NULL DESC, latest.completed_at DESC,
+              latest.ordinal DESC, latest.run_id DESC
+            LIMIT 1
+          ) AND r.status = 'failed'
+          INNER JOIN orchestration_v2_projection_turn_items item ON item.turn_item_id = (
+            SELECT error.turn_item_id FROM orchestration_v2_projection_turn_items error
+            WHERE error.thread_id = t.thread_id AND error.run_id = r.run_id
+              AND error.type = 'error' AND error.status = 'failed'
+              AND error.node_id IS json_extract(r.payload_json, '$.rootNodeId')
+            ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
+            LIMIT 1
+          )
+          WHERE t.deleted_at IS NULL
+            AND t.provider_instance_id IN ${sql.in(instanceIds)}
+            AND json_extract(t.payload_json, '$.archivedAt') IS NULL
+            AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
+            AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
+            AND NOT EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_runtime_requests request
+              WHERE request.thread_id = t.thread_id AND request.status = 'pending'
+            )
+          ORDER BY t.thread_id
+        `;
+        const candidates: Array<ProjectionLimitFailoverCandidate> = [];
+        for (const row of rows) {
+          const thread = yield* decodeThreadPayload(row.payload_json);
+          const item = yield* decodeTurnItemPayload(row.failure_payload_json);
+          // A thread already moved off the limited account is no longer blocked by it.
+          if (row.run_instance_id !== thread.providerInstanceId) continue;
+          const summary = threadErrorSummary(
+            item.type === "error" ? item.failure : null,
+            row.last_error,
+          );
+          if (summary.lastErrorClass !== "usage_limit") continue;
+          candidates.push({ thread, runId: RunId.make(row.run_id) });
+        }
+        return candidates;
+      },
+      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+    );
+
     const getRecoveryThreadIds = Effect.fn("ProjectionStore.getRecoveryThreadIds")(
       function* (kind: ProjectionRecoveryKind) {
         const candidates = (() => {
@@ -6490,6 +6574,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getPlan,
       getProviderControlContext,
       getLimitRecoveryCandidates,
+      getLimitFailoverCandidates,
       getRecoveryThreadIds,
       getUnreadableThreadIds,
       getThreadSnapshot,
@@ -6696,6 +6781,28 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 );
               })
               .toSorted((left, right) => left.id.localeCompare(right.id)),
+          ),
+        ),
+      getLimitFailoverCandidates: (instanceIds) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .flatMap((projection) => {
+                const { thread } = projection;
+                const run = latestExecutedRun(projection.runs);
+                const shell = threadShellFromProjection(projection);
+                return thread.deletedAt === null &&
+                  thread.archivedAt === null &&
+                  thread.settledOverride !== "settled" &&
+                  instanceIds.includes(thread.providerInstanceId) &&
+                  run?.providerInstanceId === thread.providerInstanceId &&
+                  shell.status === "failed" &&
+                  shell.lastErrorClass === "usage_limit" &&
+                  shell.pendingRuntimeRequest === null
+                  ? [{ thread, runId: run.id }]
+                  : [];
+              })
+              .toSorted((left, right) => left.thread.id.localeCompare(right.thread.id)),
           ),
         ),
       getRecoveryThreadIds: Effect.fn("ProjectionStore.getRecoveryThreadIds")(function* (kind) {

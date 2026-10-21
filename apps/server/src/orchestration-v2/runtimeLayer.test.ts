@@ -75,6 +75,7 @@ import * as RuntimeLayer from "./runtimeLayer.ts";
 import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as UsageLimitFailoverService from "./UsageLimitFailoverService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -6581,3 +6582,274 @@ it.layer(layerQueueResumeDisabledInstanceTest)(
     );
   },
 );
+
+const codexFailoverGroup = {
+  name: "Codex",
+  instanceIds: [modelSelection.instanceId, alternateInstanceId],
+  onUsageLimit: "switch" as const,
+};
+
+const layerUsageLimitFailoverTest = Layer.mergeAll(
+  RuntimeLayer.layer,
+  RuntimeLayer.layerEventSink,
+  ProjectStore.layer,
+  ProjectionStore.layer,
+  EffectOutbox.layer,
+  ThreadCommandExecutor.layer,
+).pipe(
+  Layer.provide(McpSessionRegistryTestkit.layer),
+  Layer.provide(McpProviderSessions.layer),
+  Layer.provide(SqlitePersistence.layerMemory),
+  Layer.provide(layerCheckpointStoreTest),
+  Layer.provide(layerServerConfig),
+  Layer.provideMerge(ServerSettings.layerTest()),
+  Layer.provide(layerTestProviderInstanceRegistry),
+  Layer.provide(layerGitWorkflowTest),
+  Layer.provide(layerProjectServiceTest),
+  Layer.provide(layerPlatformTest),
+);
+
+it.layer(layerUsageLimitFailoverTest)("usage-limit failover groups", (it) => {
+  const failRun = (run: OrchestrationV2Run, failureClass: "usage_limit" | "provider_error") =>
+    Effect.gen(function* () {
+      const events = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      yield* events.write({
+        events: [
+          {
+            id: EventId.make(`failover:failed:${run.id}`),
+            type: "run.updated",
+            threadId: run.threadId,
+            occurredAt: now,
+            payload: { ...run, status: "failed", completedAt: now },
+          },
+          {
+            id: EventId.make(`failover:error:${run.id}`),
+            type: "turn-item.updated",
+            threadId: run.threadId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make(`failover:error:${run.id}`),
+              type: "error",
+              threadId: run.threadId,
+              runId: run.id,
+              nodeId: run.rootNodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 2,
+              status: "failed",
+              title: "Turn failed",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              failure: {
+                class: failureClass,
+                message: "Plan limit reached.",
+                code: "usageLimitExceeded",
+                retryable: null,
+                resetAt:
+                  failureClass === "usage_limit"
+                    ? DateTime.formatIso(DateTime.add(now, { hours: 1 }))
+                    : null,
+              },
+            },
+          },
+        ],
+      });
+    });
+
+  const seedFailedThread = (
+    label: string,
+    failureClass: "usage_limit" | "provider_error" = "usage_limit",
+  ) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make(`failover:${label}`);
+      const projectId = ProjectId.make(`failover:project:${label}`);
+      yield* seedProject({
+        projectId,
+        title: "Failover project",
+        workspaceRoot: process.cwd(),
+        defaultModelSelection: modelSelection,
+        createdAt: DateTime.formatIso(yield* DateTime.now),
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`failover:create:${label}`),
+        threadId,
+        projectId,
+        title: "Limited thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`failover:start:${label}`),
+        threadId,
+        messageId: MessageId.make(`failover:start:${label}`),
+        text: "Start work.",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const [run] = (yield* orchestrator.getThreadProjection(threadId)).runs;
+      yield* failRun(run!, failureClass);
+      return threadId;
+    });
+
+  const useGroups = (failoverGroups: ReadonlyArray<typeof codexFailoverGroup | object>) =>
+    Effect.flatMap(ServerSettings.ServerSettingsService, (settings) =>
+      settings.updateSettings({
+        failoverGroups: failoverGroups as (typeof codexFailoverGroup)[],
+        providerInstances: { [alternateInstanceId]: { driver, enabled: true } },
+      }),
+    );
+
+  it.effect("switches a limited thread to the next account and continues the failed run", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const failover = yield* UsageLimitFailoverService.UsageLimitFailoverService;
+      yield* useGroups([codexFailoverGroup]);
+      const threadId = yield* seedFailedThread("switch");
+      const [limited] = (yield* orchestrator.getThreadProjection(threadId)).runs;
+
+      const outcomes = yield* failover.sweep();
+
+      assert.deepEqual(
+        outcomes.filter((outcome) => outcome.threadId === threadId),
+        [
+          {
+            type: "switched",
+            threadId,
+            runId: limited!.id,
+            fromInstanceId: modelSelection.instanceId,
+            toInstanceId: alternateInstanceId,
+          },
+        ],
+      );
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(after.thread.modelSelection.instanceId, alternateInstanceId);
+      assert.equal(after.thread.modelSelection.model, modelSelection.model);
+      assert.lengthOf(after.runs, 2);
+      assert.equal(after.runs[1]?.providerInstanceId, alternateInstanceId);
+      assert.equal(after.runs[1]?.status, "starting");
+      // A second sweep finds the thread running and leaves it alone.
+      assert.isEmpty((yield* failover.sweep()).filter((outcome) => outcome.threadId === threadId));
+    }),
+  );
+
+  it.effect("leaves the last limited account in the group to wait for its reset", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const failover = yield* UsageLimitFailoverService.UsageLimitFailoverService;
+      yield* useGroups([codexFailoverGroup]);
+      const threadId = yield* seedFailedThread("exhausted");
+      yield* failover.sweep();
+      const continued = (yield* orchestrator.getThreadProjection(threadId)).runs[1]!;
+      yield* failRun(continued, "usage_limit");
+
+      // The account it came from is still inside the same limit episode.
+      assert.deepEqual(
+        (yield* failover.sweep()).filter((outcome) => outcome.threadId === threadId),
+        [
+          {
+            type: "exhausted",
+            threadId,
+            runId: continued.id,
+            fromInstanceId: alternateInstanceId,
+          },
+        ],
+      );
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+      // Judged once per episode rather than every tick.
+      assert.isEmpty((yield* failover.sweep()).filter((outcome) => outcome.threadId === threadId));
+      const now = yield* DateTime.now;
+      const shell = (yield* projections.getLimitRecoveryCandidates({
+        now,
+        autoResume: true,
+        snooze: false,
+      })).find((candidate) => candidate.id === threadId);
+      assert.isDefined(shell);
+      assert.equal(
+        limitRecoveryCommand(shell!, true, DateTime.toEpochMillis(now))?.type,
+        "thread.metadata.update",
+      );
+    }),
+  );
+
+  it.effect.each([
+    { name: "no group", groups: [] },
+    { name: "a waiting group", groups: [{ ...codexFailoverGroup, onUsageLimit: "wait" }] },
+    {
+      name: "a group without its account",
+      groups: [{ ...codexFailoverGroup, instanceIds: [alternateInstanceId] }],
+    },
+  ])("leaves a limited thread on $name to upstream recovery", ({ name, groups }) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const failover = yield* UsageLimitFailoverService.UsageLimitFailoverService;
+      yield* useGroups(groups);
+      const threadId = yield* seedFailedThread(`ungrouped:${name}`);
+
+      assert.isEmpty((yield* failover.sweep()).filter((outcome) => outcome.threadId === threadId));
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(after.thread.modelSelection.instanceId, modelSelection.instanceId);
+      assert.lengthOf(after.runs, 1);
+    }),
+  );
+
+  it.effect("does not move a thread the limit does not block", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const failover = yield* UsageLimitFailoverService.UsageLimitFailoverService;
+      yield* useGroups([codexFailoverGroup]);
+      const otherError = yield* seedFailedThread("provider-error", "provider_error");
+      const movedByUser = yield* seedFailedThread("moved-by-user");
+      yield* orchestrator.dispatch({
+        type: "provider.switch",
+        commandId: CommandId.make("failover:moved-by-user:switch"),
+        threadId: movedByUser,
+        modelSelection: { ...modelSelection, instanceId: alternateInstanceId },
+      });
+
+      const outcomes = yield* failover.sweep();
+
+      for (const threadId of [otherError, movedByUser]) {
+        assert.isEmpty(outcomes.filter((outcome) => outcome.threadId === threadId));
+        assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+      }
+    }),
+  );
+
+  it.effect("skips a member the project has turned off", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const failover = yield* UsageLimitFailoverService.UsageLimitFailoverService;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* useGroups([codexFailoverGroup]);
+      yield* settings.updateSettings({
+        providerInstances: {
+          [alternateInstanceId]: { driver: driver, enabled: false },
+        },
+      });
+      const threadId = yield* seedFailedThread("disabled-member");
+
+      assert.deepEqual(
+        (yield* failover.sweep())
+          .filter((outcome) => outcome.threadId === threadId)
+          .map((outcome) => outcome.type),
+        ["exhausted"],
+      );
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+    }),
+  );
+});
