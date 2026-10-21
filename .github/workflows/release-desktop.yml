@@ -4,7 +4,9 @@ name: Release desktop build
 # each target is its own job with its own `needs`. The JS bundle (server, web
 # client, Electron main) comes from the `js-bundle` artifact that build_bundle
 # produced; this job only packages it, builds the native helpers, and, where
-# `cli_archive` is set, the self-contained CLI archive for its platform.
+# `cli_archive` is set, the self-contained CLI archive for its platform. With
+# `desktop` off it builds only that archive (Phoenix ships no Linux desktop app,
+# but the Windows WSL runtime and Linux installs need the Linux CLI archive).
 
 on:
   workflow_call:
@@ -64,6 +66,10 @@ on:
         required: false
         default: false
         type: boolean
+      desktop:
+        required: false
+        default: true
+        type: boolean
       # A runner of the target's own platform and architecture, for a `runner`
       # that cannot execute the target. The build job skips everything that
       # runs the packaged binaries, and a second job runs it there.
@@ -78,24 +84,6 @@ on:
         required: true
         type: string
       release_channel:
-        required: true
-        type: string
-      # Whether a `relay-client-tracing-config` artifact from the production
-      # relay state is expected. PR previews carry no tracing config.
-      relay_client_tracing:
-        required: false
-        default: true
-        type: boolean
-      clerk_publishable_key:
-        required: true
-        type: string
-      clerk_jwt_template:
-        required: true
-        type: string
-      clerk_cli_oauth_client_id:
-        required: true
-        type: string
-      relay_url:
         required: true
         type: string
 
@@ -116,11 +104,6 @@ jobs:
     # Windows waits for the Linux CLI archive inside its own budget (see
     # "Wait for Linux CLI archive"), so it gets that wait on top of the usual 30.
     timeout-minutes: ${{ inputs.platform == 'win' && 70 || 30 }}
-    env:
-      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ inputs.clerk_publishable_key }}
-      T3CODE_CLERK_JWT_TEMPLATE: ${{ inputs.clerk_jwt_template }}
-      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ inputs.clerk_cli_oauth_client_id }}
-      T3CODE_RELAY_URL: ${{ inputs.relay_url }}
     steps:
       # This repository is public, so Git needs no credentials. checkout's
       # credential cleanup runs submodule foreach even with submodules disabled,
@@ -170,7 +153,7 @@ jobs:
           key: resource-monitor-${{ inputs.rust_target }}-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
 
       - name: Cache Linux capture helpers
-        if: inputs.platform == 'linux'
+        if: inputs.desktop && inputs.platform == 'linux'
         id: capture_helper_cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -180,27 +163,11 @@ jobs:
           key: linux-capture-helpers-${{ inputs.rust_target }}-${{ hashFiles('native/kde-snap-shot/Cargo.lock', 'native/kde-snap-shot/Cargo.toml', 'native/kde-snap-shot/src/**', 'native/hyprland-snap-shot/Cargo.lock', 'native/hyprland-snap-shot/Cargo.toml', 'native/hyprland-snap-shot/src/**', 'native/hyprland-snap-shot/protocols/**') }}
 
       - name: Setup Rust
-        if: steps.resource_monitor_cache.outputs.cache-hit != 'true' || (inputs.platform == 'linux' && steps.capture_helper_cache.outputs.cache-hit != 'true')
+        if: steps.resource_monitor_cache.outputs.cache-hit != 'true' || (inputs.desktop && inputs.platform == 'linux' && steps.capture_helper_cache.outputs.cache-hit != 'true')
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
           targets: ${{ inputs.rust_target }}
-
-      - name: Download relay client tracing config
-        if: inputs.relay_client_tracing
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: relay-client-tracing-config
-          path: ${{ runner.temp }}/relay-client-tracing
-
-      - name: Load relay client tracing config
-        if: inputs.relay_client_tracing
-        shell: bash
-        run: |
-          config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
-          tracing_token="$(sed -n 's/^T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN=//p' "$config_path")"
-          echo "::add-mask::$tracing_token"
-          cat "$config_path" >> "$GITHUB_ENV"
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ inputs.version }}"
@@ -346,6 +313,33 @@ jobs:
         shell: bash
         run: node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "${{ inputs.version }}"
 
+      # The Linux archive is also the Windows WSL runtime, which must load on
+      # older distros: glibc 2.28 is the floor of the embedded Node. fff's
+      # prebuilt gnu library needs 2.30 (gettid); only workspace file search
+      # depends on it. Callers build the resource monitor for musl to stay
+      # under the floor.
+      - name: Check CLI archive glibc floor
+        if: inputs.cli_archive && inputs.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d)"
+          tar -xzf release-cli/*.tar.gz -C "$root"
+          failed=0
+          while IFS= read -r -d '' file; do
+            [[ "$(head -c 4 "$file" | od -An -tx1 | tr -d ' \n')" == 7f454c46 ]] || continue
+            rel="${file#"$root"/}"
+            limit=2.28
+            [[ "$rel" == */@ff-labs/fff-bin-linux-*-gnu/* ]] && limit=2.30
+            need="$(objdump -T "$file" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n 1 || true)"
+            echo "${need:-none} (max $limit) $rel"
+            if [[ -n "$need" && "$(printf '%s\n' "$need" "$limit" | sort -V | tail -n 1)" != "$limit" ]]; then
+              echo "::error::$rel needs glibc $need, above $limit"
+              failed=1
+            fi
+          done < <(find "$root" -type f -print0)
+          exit "$failed"
+
       - name: Upload CLI archive
         if: inputs.cli_archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -355,10 +349,10 @@ jobs:
           if-no-files-found: error
 
       - uses: ./.github/actions/setup-apt-mirrors
-        if: inputs.platform == 'linux'
+        if: inputs.desktop && inputs.platform == 'linux'
 
       - name: Install Linux desktop build libraries
-        if: inputs.platform == 'linux'
+        if: inputs.desktop && inputs.platform == 'linux'
         shell: bash
         run: |
           sudo apt-get update
@@ -435,6 +429,7 @@ jobs:
           path: wsl-runtime
 
       - name: Build desktop artifact
+        if: inputs.desktop
         shell: bash
         env:
           pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-metadata
@@ -557,6 +552,7 @@ jobs:
           compression-level: 1
 
       - name: Collect release assets
+        if: inputs.desktop
         shell: bash
         run: |
           set -euo pipefail
@@ -615,6 +611,7 @@ jobs:
           cp "$source_path" "$target_dir/$binary_name"
 
       - name: Upload build artifacts
+        if: inputs.desktop
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: desktop-${{ inputs.platform }}-${{ inputs.arch }}

@@ -300,11 +300,6 @@ jobs:
       version: ${{ needs.resolve.outputs.version }}
       ref: ${{ github.sha }}
       release_channel: preview
-      relay_client_tracing: false
-      clerk_publishable_key: ${{ needs.resolve.outputs.clerk_publishable_key }}
-      clerk_jwt_template: ${{ needs.resolve.outputs.clerk_jwt_template }}
-      clerk_cli_oauth_client_id: ${{ needs.resolve.outputs.clerk_cli_oauth_client_id }}
-      relay_url: ${{ needs.resolve.outputs.relay_url }}
       label: macOS arm64 preview
       runner: blacksmith-12vcpu-macos-26
       platform: mac
