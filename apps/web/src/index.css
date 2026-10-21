@@ -220,7 +220,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --animate-skeleton: skeleton 2.4s infinite;
   /* Duty-cycled indicator animations: long holds with stepped ramps, so the
      compositor updates discrete frames instead of every vsync. */
-  --animate-session-working: session-working 1.5s steps(12) infinite;
+  --animate-session-working: session-working 1.5s linear infinite;
   --animate-status-pulse: status-pulse 2s infinite;
   --animate-status-ping: status-ping 2s infinite;
   --color-warning-foreground: var(--warning-foreground);
@@ -2281,7 +2281,7 @@ code {
   }
 }
 
-/* Rotate only the working ring, at eight steps per second. */
+/* Transform-only on the ring svg, so it composites without repainting. */
 @keyframes session-working {
   to {
     transform: rotate(360deg);
