@@ -23,6 +23,10 @@ on:
         description: "Publish the @goodbirdhq/phoenix npm launcher (requires trusted publishing)"
         type: boolean
         default: false
+      publish_web:
+        description: "Deploy the hosted web app to the configured Phoenix Vercel domains"
+        type: boolean
+        default: false
 
 # Keep pending requests instead of replacing the previous pending run, and
 # never cancel an active publisher. Stable gets its own group so a nightly or
@@ -154,18 +158,29 @@ jobs:
 
   # Fails a requested publication before anything is built rather than after
   # the GitHub Release is out.
+  # Hosted web targets must be explicit Phoenix hosts; there is no fallback to
+  # upstream's t3.codes domains.
   public_config:
     name: Validate requested publishers
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      web_router_url: ${{ steps.config.outputs.web_router_url }}
+      web_latest_domain: ${{ steps.config.outputs.web_latest_domain }}
+      web_nightly_domain: ${{ steps.config.outputs.web_nightly_domain }}
     steps:
       - uses: actions/checkout@v6
         with:
           sparse-checkout: .github/scripts
-      - name: Validate requested publishers
+      - id: config
+        name: Validate requested publishers and hosted web targets
         env:
           PUBLISH_NPM: ${{ inputs.publish_npm }}
           NPM_TRUSTED_PUBLISHING: ${{ vars.NPM_TRUSTED_PUBLISHING }}
+          PUBLISH_WEB: ${{ inputs.publish_web }}
+          T3CODE_WEB_ROUTER_URL: ${{ vars.T3CODE_WEB_ROUTER_URL }}
+          T3CODE_WEB_LATEST_DOMAIN: ${{ vars.T3CODE_WEB_LATEST_DOMAIN }}
+          T3CODE_WEB_NIGHTLY_DOMAIN: ${{ vars.T3CODE_WEB_NIGHTLY_DOMAIN }}
         run: node .github/scripts/release-public-config.cjs
 
   quality:
@@ -747,6 +762,100 @@ jobs:
           if ! node apps/server/scripts/cli.ts publish --packages-dir npm-packages --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --provenance --verbose; then
             echo "::error::npm publish failed. Make sure @goodbirdhq/phoenix has a trusted publisher registered for .github/workflows/release.yml (see docs/operations/release.md)." >&2
             exit 1
+          fi
+
+  # Deploys after the release and any requested npm publish, so the hosted
+  # client never runs ahead of the server users can install. Preview never
+  # deploys. apps/web/vercel.ts reads the same three targets for its channel
+  # routing.
+  deploy_web:
+    name: Deploy hosted web app
+    needs: [preflight, public_config, release, publish_cli]
+    if: ${{ !failure() && !cancelled() && inputs.publish_web && needs.preflight.outputs.release_channel != 'preview' && needs.public_config.result == 'success' && needs.release.result == 'success' && (needs.publish_cli.result == 'success' || needs.publish_cli.result == 'skipped') }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 10
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TEAM_SLUG: ${{ vars.VERCEL_TEAM_SLUG }}
+      T3CODE_WEB_ROUTER_URL: ${{ needs.public_config.outputs.web_router_url }}
+      T3CODE_WEB_LATEST_DOMAIN: ${{ needs.public_config.outputs.web_latest_domain }}
+      T3CODE_WEB_NIGHTLY_DOMAIN: ${{ needs.public_config.outputs.web_nightly_domain }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/scripts...
+              - --filter=@t3tools/web...
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Refresh release lockfile
+        run: vp install --lockfile-only --ignore-scripts
+
+      - name: Deploy and alias channel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${VERCEL_TOKEN:-}" || -z "${VERCEL_ORG_ID:-}" || -z "${VERCEL_PROJECT_ID:-}" ]]; then
+            echo "Missing one or more required Vercel secrets: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID." >&2
+            exit 1
+          fi
+
+          router_domain="${T3CODE_WEB_ROUTER_URL#https://}"
+          router_domain="${router_domain%%/*}"
+          if [[ "${{ needs.preflight.outputs.release_channel }}" == "stable" ]]; then
+            channel_domain="$T3CODE_WEB_LATEST_DOMAIN"
+            channel_name="latest"
+          else
+            channel_domain="$T3CODE_WEB_NIGHTLY_DOMAIN"
+            channel_name="nightly"
+          fi
+          vercel_scope_args=(--scope "${VERCEL_TEAM_SLUG:-$VERCEL_ORG_ID}")
+
+          echo "Deploying hosted web app for $channel_name channel."
+          deployment_url="$(
+            vp dlx vercel@53.1.1 deploy \
+              --archive=tgz \
+              --prod \
+              --skip-domain \
+              --yes \
+              --token "$VERCEL_TOKEN" \
+              "${vercel_scope_args[@]}" \
+              --build-env "APP_VERSION=${{ needs.preflight.outputs.version }}" \
+              --build-env "T3CODE_WEB_ROUTER_URL=$T3CODE_WEB_ROUTER_URL" \
+              --build-env "T3CODE_WEB_LATEST_DOMAIN=$T3CODE_WEB_LATEST_DOMAIN" \
+              --build-env "T3CODE_WEB_NIGHTLY_DOMAIN=$T3CODE_WEB_NIGHTLY_DOMAIN" \
+              --build-env "VITE_HOSTED_APP_URL=$T3CODE_WEB_ROUTER_URL" \
+              --build-env "VITE_HOSTED_APP_CHANNEL=$channel_name"
+          )"
+
+          echo "Aliasing $deployment_url to $channel_domain."
+          vp dlx vercel@53.1.1 alias set "$deployment_url" "$channel_domain" \
+            --token "$VERCEL_TOKEN" \
+            "${vercel_scope_args[@]}"
+
+          if [[ "$channel_name" == "latest" && "$router_domain" != "$channel_domain" ]]; then
+            echo "Aliasing $deployment_url to router domain $router_domain."
+            vp dlx vercel@53.1.1 alias set "$deployment_url" "$router_domain" \
+              --token "$VERCEL_TOKEN" \
+              "${vercel_scope_args[@]}"
           fi
 
   finalize:
