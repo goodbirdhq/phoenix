@@ -1,4 +1,4 @@
-// Measures React renders in a running T3 Code Dev client. See
+// Measures React renders in a running Phoenix Dev client. See
 // docs/internals/mobile-development.md#measuring-renders.
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -86,9 +86,9 @@ const connectInspector = Effect.fn("measure.connectInspector")(function* (metro:
   const targets = yield* http
     .get(`${metro}/json/list`)
     .pipe(Effect.flatMap(HttpClientResponse.schemaBodyJson(InspectorTargets)));
-  const target = targets.find((entry) => entry.appId.startsWith("com.t3tools.t3code"));
+  const target = targets.find((entry) => entry.appId.startsWith("com.goodbird.phoenix"));
   if (!target)
-    return yield* new MeasureError({ message: `No T3 Code app is attached to Metro at ${metro}.` });
+    return yield* new MeasureError({ message: `No Phoenix app is attached to Metro at ${metro}.` });
   // Expo terminates inspector sockets whose Origin differs from the URL Metro
   // advertises (the LAN address with `--lan`), so pass that URL as `--metro`.
   const socket = yield* Socket.makeWebSocket(target.webSocketDebuggerUrl, {
@@ -359,7 +359,7 @@ const command = Command.make(
       Flag.optional,
     ),
     metro: Flag.String("metro").pipe(Flag.withDefault("http://127.0.0.1:8081")),
-    scheme: Flag.String("scheme").pipe(Flag.withDefault("t3code-dev")),
+    scheme: Flag.String("scheme").pipe(Flag.withDefault("phoenix-dev")),
     runs: Flag.Int("runs").pipe(Flag.withDefault(3)),
     window: Flag.Int("window").pipe(
       Flag.withDescription("Seconds to record; defaults to 12 for a reply and 6 for --route."),

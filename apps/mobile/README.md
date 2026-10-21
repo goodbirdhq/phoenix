@@ -1,7 +1,7 @@
-# T3 Code Mobile
+# Phoenix Mobile
 
 > [!WARNING]
-> T3 Code Mobile is currently in development and is not distributed yet. If you want to try it out, you can build it from source.
+> Phoenix Mobile is currently in development and is not distributed yet. If you want to try it out, you can build it from source.
 
 ## Quickstart
 
@@ -10,9 +10,9 @@
 
 This app has three variants:
 
-- `development`: Expo dev client, installable side-by-side as `T3 Code Dev`
-- `preview`: persistent internal preview build, installable side-by-side as `T3 Code Preview`
-- `production`: store/release build as `T3 Code`
+- `development`: Expo dev client, installable side-by-side as `Phoenix Dev`
+- `preview`: persistent internal preview build, installable side-by-side as `Phoenix Preview`
+- `production`: store/release build as `Phoenix`
 
 Run commands from `apps/mobile`.
 
@@ -72,7 +72,7 @@ entitlement, and native Sign in with Apple entitlement; builds without this opt-
 
 ```bash
 T3CODE_IOS_PERSONAL_TEAM=1 \
-T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.t3code.dev \
+T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.phoenix.dev \
 vp run ios:dev
 ```
 
@@ -86,7 +86,7 @@ The Personal Team equivalent also needs a unique bundle identifier:
 
 ```bash
 T3CODE_IOS_PERSONAL_TEAM=1 \
-T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.t3code \
+T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.phoenix \
 vp run ios:release
 ```
 
