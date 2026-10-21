@@ -52,6 +52,32 @@ describe("fallbackTextGenerationModelSelection", () => {
 });
 
 describe("serverSettings helpers", () => {
+  it("replaces failover groups whole so a removed account leaves its group", () => {
+    const grouped = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      failoverGroups: [
+        {
+          name: "Claude",
+          instanceIds: [
+            ProviderInstanceId.make("claude"),
+            ProviderInstanceId.make("claude_2"),
+            ProviderInstanceId.make("claude_3"),
+          ],
+          onUsageLimit: "switch",
+        },
+      ],
+    });
+    expect(
+      applyServerSettingsPatch(grouped, {
+        failoverGroups: [
+          {
+            name: "Claude",
+            instanceIds: [ProviderInstanceId.make("claude_3")],
+            onUsageLimit: "wait",
+          },
+        ],
+      }).failoverGroups,
+    ).toEqual([{ name: "Claude", instanceIds: ["claude_3"], onUsageLimit: "wait" }]);
+  });
   it("changes a cleanup rule without replacing the machine's other rules", () => {
     const enabled = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       storageCleanup: { worktreeAfterDays: 8, worktreeOnMerge: true, logsAfterDays: 30 },

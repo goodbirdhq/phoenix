@@ -959,6 +959,60 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
 ] as const;
 export type ProjectScopedServerSettingKey = (typeof PROJECT_SCOPED_SERVER_SETTING_KEYS)[number];
 
+/**
+ * What a group does when a member's run fails on a usage limit: `switch` moves
+ * the thread to the next member, `wait` keeps the group but leaves its threads
+ * to the wait-for-reset behaviour every ungrouped account gets.
+ */
+export const ProviderFailoverPolicy = Schema.Literals(["switch", "wait"]);
+export type ProviderFailoverPolicy = typeof ProviderFailoverPolicy.Type;
+
+/**
+ * Interchangeable accounts a usage-limited thread may move between without
+ * asking, tried in `instanceIds` order after the limited one. Accounts in no
+ * group never move automatically.
+ */
+export const ProviderFailoverGroup = Schema.Struct({
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  instanceIds: Schema.Array(ProviderInstanceId),
+  onUsageLimit: ProviderFailoverPolicy.pipe(Schema.withDecodingDefault(Effect.succeed("switch"))),
+});
+export type ProviderFailoverGroup = typeof ProviderFailoverGroup.Type;
+
+/**
+ * Lenient on read like `providerInstances`, so a hand edit cannot brick the
+ * settings file; the runtime uses the first group that names an instance.
+ */
+export const ProviderFailoverGroups = Schema.Array(ProviderFailoverGroup);
+
+/** The group whose usage-limit policy applies to `instanceId`, if any. */
+export const providerFailoverGroupFor = (
+  groups: ReadonlyArray<ProviderFailoverGroup>,
+  instanceId: ProviderInstanceId,
+): ProviderFailoverGroup | undefined =>
+  groups.find((group) => group.instanceIds.includes(instanceId));
+
+const WritableProviderFailoverGroups = ProviderFailoverGroups.check(
+  Schema.makeFilter(
+    (groups: ReadonlyArray<ProviderFailoverGroup>) => {
+      const names = new Set<string>();
+      const members = new Set<string>();
+      for (const group of groups) {
+        if (names.has(group.name)) return `failover group '${group.name}' is defined twice`;
+        names.add(group.name);
+        for (const instanceId of group.instanceIds) {
+          if (members.has(instanceId)) {
+            return `provider instance '${instanceId}' is in more than one failover group`;
+          }
+          members.add(instanceId);
+        }
+      }
+      return true;
+    },
+    { identifier: "ProviderFailoverGroupsDisjoint" },
+  ),
+);
+
 export const ProjectProviderInstanceOverride = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
 });
@@ -1254,6 +1308,7 @@ export const ServerSettings = Schema.Struct({
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  failoverGroups: ProviderFailoverGroups.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   sourceControlHosts: Schema.Record(Schema.String, SourceControlHostSettings).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -1530,6 +1585,8 @@ export const ServerSettingsPatch = Schema.Struct({
   // entries is intentionally out of scope: the map is small, and partial
   // patches risk leaving driver-specific config in a half-merged state.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  // Whole-list replacement: order is the failover order.
+  failoverGroups: Schema.optionalKey(WritableProviderFailoverGroups),
   // Per-entry, unlike `providerInstances`: a client only ever adds or removes
   // one source, and sending the whole map races another edit that has not
   // echoed back yet. `null` removes; the server merges into its current map.
@@ -1555,7 +1612,12 @@ export function requiredScopesForServerSettingsPatch(
   let changesSettings = false;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
-    if (key === "providers" || key === "providerInstances" || key === "usageLimitSources") {
+    if (
+      key === "providers" ||
+      key === "providerInstances" ||
+      key === "failoverGroups" ||
+      key === "usageLimitSources"
+    ) {
       changesProviders = true;
     } else {
       changesSettings = true;

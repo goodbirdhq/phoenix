@@ -9,6 +9,7 @@ import {
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
   requiredScopesForProjectMutation,
+  requiredScopesForServerSettingsPatch,
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
   ServerSettings,
@@ -159,6 +160,44 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("decodes a fully empty config (legacy on-disk shape) without complaint", () => {
     const decoded = decodeServerSettings({});
     expect(decoded.providerInstances).toEqual({});
+  });
+});
+
+describe("ServerSettings.failoverGroups", () => {
+  it("defaults to no groups and a group to switching accounts", () => {
+    expect(decodeServerSettings({}).failoverGroups).toEqual([]);
+    expect(
+      decodeServerSettings({
+        failoverGroups: [{ name: "Claude", instanceIds: ["claude", "claude_2"] }],
+      }).failoverGroups[0]?.onUsageLimit,
+    ).toBe("switch");
+  });
+
+  it("refuses to save an account in two groups, which would make its next account ambiguous", () => {
+    expect(() =>
+      decodeServerSettingsPatch({
+        failoverGroups: [
+          { name: "A", instanceIds: ["claude", "claude_2"] },
+          { name: "B", instanceIds: ["claude_2", "claude_3"] },
+        ],
+      }),
+    ).toThrow(/more than one failover group/);
+    expect(() =>
+      decodeServerSettings({
+        failoverGroups: [
+          { name: "A", instanceIds: ["claude"] },
+          { name: "B", instanceIds: ["claude"] },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  it("needs the provider management grant to change", () => {
+    expect(
+      requiredScopesForServerSettingsPatch(
+        decodeServerSettingsPatch({ failoverGroups: [{ name: "A", instanceIds: ["codex"] }] }),
+      ),
+    ).toEqual(["providers:manage"]);
   });
 });
 
