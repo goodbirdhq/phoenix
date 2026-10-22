@@ -106,7 +106,7 @@ describe("DesktopEnvironment", () => {
         { VITE_DEV_SERVER_URL: "http://localhost:5173" },
       );
 
-      assert.equal(production.displayName, "Phoenix (Alpha)");
+      assert.equal(production.displayName, "Phoenix");
       assert.equal(production.appUserModelId, "com.goodbird.phoenix");
       assert.equal(production.linuxDesktopEntryName, "phoenix.desktop");
       assert.equal(production.linuxWmClass, "phoenix");

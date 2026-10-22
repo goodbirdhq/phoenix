@@ -176,7 +176,7 @@ describe("DesktopAppIdentity", () => {
   );
 
   it.effect.each([
-    { stage: "Alpha", environment: {} },
+    { stage: null, environment: {} },
     {
       stage: "Nightly",
       environment: { appVersion: "0.0.43-nightly.20260929.2428" },
@@ -199,9 +199,12 @@ describe("DesktopAppIdentity", () => {
 
         const runtimeName = calls.setName[0];
         assert.isDefined(runtimeName);
-        assert.equal(runtimeName, `Phoenix ${stage}`);
+        assert.equal(runtimeName, stage === null ? "Phoenix" : `Phoenix ${stage}`);
         assert.match(runtimeName.replaceAll(" ", ""), /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/);
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, `Phoenix (${stage})`);
+        assert.equal(
+          calls.setAboutPanelOptions[0]?.applicationName,
+          stage === null ? "Phoenix" : `Phoenix (${stage})`,
+        );
       }),
       { calls, environment },
     );
