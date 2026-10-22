@@ -1,14 +1,26 @@
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
+export type SidebarFooterPage =
+  | "settings"
+  | "agents"
+  | "pull-requests"
+  | "schedules"
+  | "usage"
+  | null;
+
+export function resolveSidebarFooterPage(pathname: string): SidebarFooterPage {
+  // Upstream keeps schedules under settings; the footer treats it as its own tab.
+  if (pathname === "/settings/scheduled-tasks") return "schedules";
+  if (pathname === "/settings" || pathname.startsWith("/settings/")) return "settings";
+  if (pathname === "/usage") return "usage";
+  if (pathname === "/pull-requests") return "pull-requests";
+  if (pathname.startsWith("/projects/")) return null;
+  return "agents";
+}
+
 export function isSidebarUtilityPage(pathname: string) {
-  return (
-    pathname === "/settings" ||
-    pathname.startsWith("/settings/") ||
-    pathname.startsWith("/projects/") ||
-    pathname === "/usage" ||
-    pathname === "/pull-requests"
-  );
+  return resolveSidebarFooterPage(pathname) !== "agents";
 }
 
 let mainAppHref: string | null = null;
