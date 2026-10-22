@@ -22,7 +22,7 @@ becomes a Phoenix name. If it only exists inside the repository, it stays exactl
 | State / base dir        | `~/.t3`                      | `~/.phoenix`                                                              |
 | Base dir env var        | `T3CODE_HOME`                | `PHOENIX_HOME` (no fallback — see below)                                  |
 | Desktop userData dir    | `t3code-v2`, `t3code-dev`    | `phoenix-v2`, `phoenix-dev`                                               |
-| Desktop product name    | `T3 Code (Beta)`             | `Phoenix (Alpha)`                                                         |
+| Desktop product name    | `T3 Code (Beta)`             | `Phoenix`                                                                 |
 | macOS Keychain item     | `t3code Safe Storage`        | `phoenix Safe Storage` (follows the staged package name, not productName) |
 | URL scheme              | `t3code://`, `t3code-dev://` | `phoenix://`, `phoenix-dev://`                                            |
 | AppUserModelID          | `com.t3tools.t3code`         | `com.goodbird.phoenix`                                                    |

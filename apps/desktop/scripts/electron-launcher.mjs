@@ -13,12 +13,12 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
-const APP_DISPLAY_NAME = isDevelopment ? "Phoenix (Dev)" : "Phoenix (Alpha)";
+const APP_DISPLAY_NAME = isDevelopment ? "Phoenix (Dev)" : "Phoenix";
 const APP_BUNDLE_ID = isDevelopment
   ? `com.goodbird.phoenix.dev.${devBundleIdSuffix || "local"}`
   : "com.goodbird.phoenix";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["phoenix-dev"] : ["phoenix"];
-const LAUNCHER_VERSION = 20;
+const LAUNCHER_VERSION = 21;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,
   "assets",
