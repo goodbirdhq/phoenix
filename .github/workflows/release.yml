@@ -830,7 +830,7 @@ jobs:
           vercel_scope_args=(--scope "${VERCEL_TEAM_SLUG:-$VERCEL_ORG_ID}")
 
           echo "Deploying hosted web app for $channel_name channel."
-          deployment_url="$(
+          deployment_output="$(
             vp dlx vercel@53.1.1 deploy \
               --archive=tgz \
               --prod \
@@ -845,6 +845,14 @@ jobs:
               --build-env "VITE_HOSTED_APP_URL=$T3CODE_WEB_ROUTER_URL" \
               --build-env "VITE_HOSTED_APP_CHANNEL=$channel_name"
           )"
+          printf '%s\n' "$deployment_output"
+          # Vercel can print lockfile warnings to stdout before the deployment URL.
+          deployment_url="$(printf '%s\n' "$deployment_output" | grep -E '^https://[[:alnum:].-]+\.vercel\.app$')"
+          if [[ "$deployment_url" == *$'\n'* ]]; then
+            echo "Vercel returned multiple deployment URLs." >&2
+            exit 1
+          fi
+          echo "deployment_url=$deployment_url" >> "$GITHUB_OUTPUT"
 
           echo "Aliasing $deployment_url to $channel_domain."
           vp dlx vercel@53.1.1 alias set "$deployment_url" "$channel_domain" \

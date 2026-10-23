@@ -29,8 +29,9 @@ new interface on the old contract.
 
 ## 1. Pin the integration
 
-Start from a clean, current Phoenix `main`. Configure the upstream remote once, then fetch without
-changing `main`:
+Start from a clean, current Phoenix integration base: `v2/base` while Phoenix Reborn is being
+built, `main` once it ships. Configure the upstream remote once, then fetch without changing the
+base:
 
 ```bash
 git remote add upstream https://github.com/pingdotgg/t3code.git
@@ -40,7 +41,7 @@ phoenix_head=$(git rev-parse HEAD)
 upstream_head=$(git rev-parse upstream/main)
 merge_base=$(git merge-base "$phoenix_head" "$upstream_head")
 
-git switch -c chore/sync-upstream-YYYY-MM-DD
+git switch -c v2/sync-upstream-YYYY-MM-DD
 git merge --no-commit --no-ff "$upstream_head"
 ```
 
@@ -48,7 +49,8 @@ Record all three hashes in the integration report. Never describe a sync only as
 can move during review.
 
 Check `merge_base` against the previous report's upstream head before going further. They should be
-the same commit. A `merge_base` that is older means upstream ancestry was lost from `main` and this
+the same commit. The first sync after Reborn has no earlier report to compare with, since the logs
+before 2026-10-21 describe the old fork; record that instead of comparing. A `merge_base` that is older means upstream ancestry was lost from `main` and this
 sync is about to replay commits an earlier one already integrated; stop and
 [record the ancestry](#7-record-upstream-ancestry-after-a-squash-merge) first.
 
@@ -86,11 +88,13 @@ Run the divergence check before and after resolving, so the register and the tre
 both ends of the sync:
 
 ```bash
-node scripts/upstream-divergence.ts upstream/main
+node scripts/upstream-divergence.ts "$upstream_head"
 ```
 
 It groups every file that differs from upstream by owner and lists upstream-owned files that no
-register row covers.
+register row covers. Pass the pinned hash, not `upstream/main`, which can move. The script compares
+`HEAD`, so before the merge commit exists it still reports the pre-merge tree; the "after" run
+needs the merge committed on the integration branch (amend it while you finish).
 
 ## 3. Review every textual conflict in three stages
 
@@ -132,6 +136,17 @@ Common resolution patterns include:
 Avoid whole-file `ours` or `theirs` resolutions unless inspection proves the other side has no
 relevant delta. They hide non-conflicting improvements in the same file.
 
+When upstream splits or moves code out of a file Phoenix changed, the conflict shows the Phoenix
+change against a deletion. Do not keep the Phoenix file whole beside upstream's new files: replay
+the Phoenix delta onto upstream's layout, so later syncs conflict in the same files. For each
+destination file, `git merge-file -p <phoenix file> <file before the split> <destination at the
+split commit>`; the conflicts that remain are mostly code that moved elsewhere. Then merge each
+result with upstream's head version, using the split commit's version as the ancestor.
+
+A file Phoenix deleted and upstream changed arrives as a modify/delete conflict. Keep it deleted
+when the register says so, delete any test upstream added for it, and port the behaviour to
+Phoenix's replacement if it has the same state.
+
 ## 4. Audit clean auto-merges
 
 Walk the overlapping-file queue after textual conflicts are gone. Pay particular attention to:
@@ -148,7 +163,13 @@ Walk the overlapping-file queue after textual conflicts are gone. Pay particular
   project IDs, npm package names, and updater repository URLs. A clean version change can trigger a
   real build or submission even when no workflow file conflicts.
 - Duplicate implementations of the same feature. Decide precedence and fallback behavior rather
-  than shipping two accidental defaults.
+  than shipping two accidental defaults. This includes duplicate imports when upstream adopts a
+  helper Phoenix already imported.
+- New upstream tests that hard-code upstream runtime identity, such as the `t3` executable name or
+  a workflow step Phoenix renamed. Adapt the fixture to the registered Phoenix value rather than
+  reverting the divergence.
+- New upstream files that write worktree or runtime state (setup markers, test excludes, seed
+  sources under `~/.t3`). They merge cleanly and point at upstream's directories.
 - Provider compatibility policies in `apps/server/src/provider/providerCompatibility.ts` match each
   policy's `t3CodeRange` against the server's `package.json` version, which release builds stamp
   with the Phoenix release version. Check that upstream's ranges still select the intended policies
@@ -175,8 +196,9 @@ Verification should be proportional to the integration, but remain focused as re
 6. Perform a real-client pass only when requested, following the repository's browser/computer-use
    permission rule.
 
-If upstream added dependencies, refresh the workspace from the merged lockfile before treating a
-missing module as a code defect.
+If upstream added dependencies, refresh the workspace from the merged lockfile with `vp i` before
+treating a missing module as a code defect. Typecheck with `vp run --filter <package> typecheck`;
+`apps/web` and `apps/desktop` define that task in their `vite.config.ts`, not in `package.json`.
 
 Do not commit with unresolved warnings introduced by the integration. Existing unrelated warnings
 may be recorded, but the integration must not add new ones.

@@ -532,6 +532,10 @@ function isSidebarHiddenSubagent(thread: SidebarLineageInput): boolean {
   });
 }
 
+export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
+  return thread.lineage.relationshipToParent === "subagent";
+}
+
 export function isSidebarChildSession(thread: SidebarLineageInput): boolean {
   return thread.lineage.relationshipToParent === "subagent" && !isSidebarHiddenSubagent(thread);
 }

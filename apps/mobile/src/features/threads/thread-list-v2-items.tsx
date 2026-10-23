@@ -297,6 +297,7 @@ const THREAD_ROW_RADIUS = 12;
  */
 export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props: {
   readonly pendingTask: PendingNewTask;
+  readonly selected?: boolean;
   readonly project: EnvironmentProject | null;
   readonly projectTitle?: string;
   readonly environmentLabel: string | null;
@@ -305,13 +306,35 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   readonly showPendingDivider: boolean;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
+  readonly fullSwipeWidth?: number;
+  readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
+  readonly onSwipeableClose: (methods: SwipeableMethods) => void;
+  readonly activationKey?: string;
+  readonly simultaneousSwipeGesture?: ComponentProps<typeof ThreadSwipeable>["simultaneousWith"];
 }) {
   const { pendingTask, onSelectPendingTask, onDeletePendingTask } = props;
+  const { width: windowWidth } = useWindowDimensions();
+  const dormant = useSwipeRowDormant(props.activationKey);
   const theme = useUniwindTheme();
   const colors = useNavigationColors();
   const sidebarPane = props.pane === "sidebar";
-  const rowColors = getThreadRowColors(theme, sidebarPane, false);
+  const rowColors = getThreadRowColors(theme, sidebarPane, props.selected ?? false);
   const isDraft = pendingTask.kind === "draft";
+  const deleteLabel = isDraft ? "Discard" : "Delete";
+  const handleDelete = useCallback(
+    () => onDeletePendingTask(pendingTask),
+    [onDeletePendingTask, pendingTask],
+  );
+  const deleteAction = useMemo(
+    () => ({
+      accessibilityLabel: `${deleteLabel} ${pendingTask.title}`,
+      destructive: true,
+      icon: "trash" as const,
+      label: deleteLabel,
+      onPress: handleDelete,
+    }),
+    [deleteLabel, handleDelete, pendingTask.title],
+  );
   const projectTitle = props.projectTitle ?? props.project?.title ?? pendingTask.projectTitle ?? "";
   const detail = [pendingTask.branch ?? projectTitle, props.environmentLabel]
     .filter(Boolean)
@@ -335,115 +358,140 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
       {props.showPendingDivider ? (
         <ThreadListV2SectionDivider label="Unsent" pane={props.pane} />
       ) : null}
-      <Menu
-        actions={isDraft ? DRAFT_TASK_MENU_ACTIONS : PENDING_TASK_MENU_ACTIONS}
-        onPressAction={handleMenuAction}
-        shouldOpenOnLongPress
+      <ThreadSwipeable
+        dormant={dormant}
+        threadKey={pendingTask.key}
+        backgroundColor={rowColors.swipeBackgroundColor}
+        containerStyle={
+          sidebarPane ? { borderRadius: THREAD_ROW_RADIUS, overflow: "hidden" } : undefined
+        }
+        enableTrackpadSwipe
+        fullSwipeAction="primary"
+        fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
+        onDelete={handleDelete}
+        onSwipeableClose={props.onSwipeableClose}
+        onSwipeableWillOpen={props.onSwipeableWillOpen}
+        primaryAction={deleteAction}
+        secondaryAction={null}
+        resetKey={pendingTask.key}
+        simultaneousWith={props.simultaneousSwipeGesture}
+        threadTitle={pendingTask.title}
       >
-        <RowPressable
-          accessibilityActions={[{ name: "delete", label: accessibility.deleteActionLabel }]}
-          accessibilityHint={accessibility.hint}
-          accessibilityLabel={accessibility.label}
-          accessibilityRole="button"
-          onAccessibilityAction={({ nativeEvent }) => {
-            if (nativeEvent.actionName === "delete") onDeletePendingTask(pendingTask);
-          }}
-          key={pendingTask.key}
-          interactionClassName={rowColors.interactionClassName}
-          onPress={() => onSelectPendingTask(pendingTask)}
-          style={{
-            minHeight: 74,
-            marginHorizontal: sidebarPane ? 0 : 14,
-            marginBottom: 4,
-            padding: 10,
-            gap: 10,
-            flexDirection: "row",
-            alignItems: "center",
-            borderRadius: THREAD_ROW_RADIUS,
-            backgroundColor: rowColors.backgroundColor,
-          }}
-        >
-          <View style={{ width: 32, height: 30, alignItems: "center", justifyContent: "center" }}>
-            <View
+        {() => (
+          <Menu
+            actions={isDraft ? DRAFT_TASK_MENU_ACTIONS : PENDING_TASK_MENU_ACTIONS}
+            onPressAction={handleMenuAction}
+            shouldOpenOnLongPress
+          >
+            <RowPressable
+              accessibilityActions={[{ name: "delete", label: accessibility.deleteActionLabel }]}
+              accessibilityHint={accessibility.hint}
+              accessibilityLabel={accessibility.label}
+              accessibilityRole="button"
+              accessibilityState={{ selected: props.selected ?? false }}
+              onAccessibilityAction={({ nativeEvent }) => {
+                if (nativeEvent.actionName === "delete") onDeletePendingTask(pendingTask);
+              }}
+              key={pendingTask.key}
+              interactionClassName={rowColors.interactionClassName}
+              onPress={() => onSelectPendingTask(pendingTask)}
               style={{
-                width: 24,
-                height: 24,
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: colors.border,
-                backgroundColor: colors.surface,
+                minHeight: 74,
+                marginHorizontal: sidebarPane ? 0 : 14,
+                marginBottom: 4,
+                padding: 10,
+                gap: 10,
+                flexDirection: "row",
                 alignItems: "center",
-                justifyContent: "center",
+                borderRadius: THREAD_ROW_RADIUS,
+                backgroundColor: rowColors.backgroundColor,
               }}
             >
-              {props.project ? (
-                <ProjectFavicon
-                  environmentId={pendingTask.environmentId}
-                  faviconPath={props.project.faviconPath}
-                  projectIcon={props.project.projectIcon}
-                  projectTitle={projectTitle}
-                  size={16}
-                  workspaceRoot={props.project.workspaceRoot}
-                />
-              ) : null}
-            </View>
-          </View>
-          <View style={{ flex: 1, gap: 5 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              {/* A queued title is derived from the whole prompt rather than
-                  written as a title, so one line keeps the row's height. */}
-              <Text
-                className={cn("font-t3-medium", rowColors.foregroundClassName)}
-                numberOfLines={1}
-                style={{ flex: 1, fontSize: 15, lineHeight: 22 }}
+              <View
+                style={{ width: 32, height: 30, alignItems: "center", justifyContent: "center" }}
               >
-                {pendingTask.title}
-              </Text>
-              {isDraft ? (
-                <View className="flex-row items-center gap-1">
-                  <SymbolView
-                    name="square.and.pencil"
-                    size={10}
-                    tintColorClassName="accent-adaptive-amber-700-300"
-                    type="monochrome"
-                  />
-                  <Text
-                    className="text-adaptive-amber-700-300"
-                    style={{ fontSize: 12, lineHeight: 17 }}
-                  >
-                    Draft
-                  </Text>
+                <View
+                  style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: 12,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    backgroundColor: colors.surface,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  {props.project ? (
+                    <ProjectFavicon
+                      environmentId={pendingTask.environmentId}
+                      faviconPath={props.project.faviconPath}
+                      projectIcon={props.project.projectIcon}
+                      projectTitle={projectTitle}
+                      size={16}
+                      workspaceRoot={props.project.workspaceRoot}
+                    />
+                  ) : null}
                 </View>
-              ) : (
-                <Text
-                  className={rowColors.mutedForegroundClassName}
-                  style={{ fontSize: 12, lineHeight: 17 }}
-                >
-                  Sends on reconnect
-                </Text>
-              )}
-            </View>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 26 }}>
-              {detail ? (
-                <Text
-                  className={rowColors.mutedForegroundClassName}
-                  numberOfLines={1}
-                  style={{ flexShrink: 1, fontSize: 13, lineHeight: 19 }}
-                >
-                  {detail}
-                </Text>
-              ) : null}
-              {props.environmentLabel && props.environmentMachine ? (
-                <EnvironmentMachineSymbol
-                  kind={props.environmentMachine}
-                  size={11}
-                  tintColorClassName={rowColors.mutedIconTintClassName}
-                />
-              ) : null}
-            </View>
-          </View>
-        </RowPressable>
-      </Menu>
+              </View>
+              <View style={{ flex: 1, gap: 5 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  {/* A queued title is derived from the whole prompt rather than
+                  written as a title, so one line keeps the row's height. */}
+                  <Text
+                    className={cn("font-t3-medium", rowColors.foregroundClassName)}
+                    numberOfLines={1}
+                    style={{ flex: 1, fontSize: 15, lineHeight: 22 }}
+                  >
+                    {pendingTask.title}
+                  </Text>
+                  {isDraft ? (
+                    <View className="flex-row items-center gap-1">
+                      <SymbolView
+                        name="square.and.pencil"
+                        size={10}
+                        tintColorClassName="accent-adaptive-amber-700-300"
+                        type="monochrome"
+                      />
+                      <Text
+                        className="text-adaptive-amber-700-300"
+                        style={{ fontSize: 12, lineHeight: 17 }}
+                      >
+                        Draft
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text
+                      className={rowColors.mutedForegroundClassName}
+                      style={{ fontSize: 12, lineHeight: 17 }}
+                    >
+                      Sends on reconnect
+                    </Text>
+                  )}
+                </View>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 26 }}>
+                  {detail ? (
+                    <Text
+                      className={rowColors.mutedForegroundClassName}
+                      numberOfLines={1}
+                      style={{ flexShrink: 1, fontSize: 13, lineHeight: 19 }}
+                    >
+                      {detail}
+                    </Text>
+                  ) : null}
+                  {props.environmentLabel && props.environmentMachine ? (
+                    <EnvironmentMachineSymbol
+                      kind={props.environmentMachine}
+                      size={11}
+                      tintColorClassName={rowColors.mutedIconTintClassName}
+                    />
+                  ) : null}
+                </View>
+              </View>
+            </RowPressable>
+          </Menu>
+        )}
+      </ThreadSwipeable>
     </>
   );
 });
@@ -1218,7 +1266,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: ThreadListV2
           onSwipeableWillOpen={props.onSwipeableWillOpen}
           primaryAction={primaryAction}
           secondaryAction={secondaryAction}
-          resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}`}
+          resetKey={`${thread.environmentId}:${thread.id}:${variant}:${snoozedRow}:${thread.settledAt}:${thread.unsettledAt}:${thread.snoozedUntil}:${thread.pinnedAt}`}
           simultaneousWith={props.simultaneousSwipeGesture}
           threadTitle={thread.title}
         >
