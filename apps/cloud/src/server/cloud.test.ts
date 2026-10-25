@@ -15,14 +15,18 @@ const auth = createAuth(db, {
 });
 
 beforeAll(async () => {
-  await pg.exec(
-    await NodeFSP.readFile(
-      new URL("../../drizzle/0000_sparkling_puma.sql", import.meta.url),
-      "utf8",
-    ),
-  );
+  for (const file of (await NodeFSP.readdir(new URL("../../drizzle/", import.meta.url)))
+    .filter((file) => file.endsWith(".sql"))
+    .sort()) {
+    await pg.exec(
+      await NodeFSP.readFile(new URL(`../../drizzle/${file}`, import.meta.url), "utf8"),
+    );
+  }
 });
 beforeEach(async () => {
+  await pg.exec(
+    'TRUNCATE TABLE "rate_limit", "device_code", "cloud_installation_request", "oauth_client" CASCADE',
+  );
   await pg.exec('TRUNCATE TABLE "user" CASCADE');
   await db.insert(schema.user).values([
     { id: "alice", name: "Alice", email: "alice@example.com" },
@@ -96,11 +100,21 @@ function authRequest(path: string, body?: object, cookie?: string) {
     new Request(`http://localhost:3100/api/auth/${path}`, {
       method: body ? "POST" : "GET",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type":
+          path === "oauth2/token" ? "application/x-www-form-urlencoded" : "application/json",
         Origin: "http://localhost:3100",
         ...(cookie ? { Cookie: cookie } : {}),
       },
-      ...(body ? { body: JSON.stringify(body) } : {}),
+      ...(body
+        ? {
+            body:
+              path === "oauth2/token"
+                ? new URLSearchParams(
+                    Object.entries(body).map(([key, value]) => [key, String(value)]),
+                  ).toString()
+                : JSON.stringify(body),
+          }
+        : {}),
     }),
   );
 }
@@ -126,6 +140,7 @@ describe("email and password authentication", () => {
   });
   it("rejects missing and incorrect invite codes without creating an account or session", async () => {
     for (const inviteCode of [undefined, "", "000000", 268923]) {
+      await pg.exec('TRUNCATE TABLE "rate_limit"');
       const response = await authRequest("sign-up/email", {
         name: "Invited user",
         email: "invite@example.com",
@@ -202,5 +217,214 @@ describe("email and password authentication", () => {
         })
       ).status,
     ).toBeGreaterThanOrEqual(400);
+  });
+});
+
+async function cloudSignup(email = "owner@example.com") {
+  const response = await authRequest("sign-up/email", {
+    name: "Owner",
+    email,
+    password: "a-long-test-password",
+    inviteCode: "268923",
+  });
+  expect(response.status).toBe(200);
+  return responseCookie(response);
+}
+async function beginInstallation() {
+  const registered = await authRequest("installation/register", {
+    installation_id: "86c897b4-f8fb-4c17-bc87-f291c3c3917a",
+    name: "My laptop",
+    kind: "desktop",
+  });
+  expect(registered.status).toBe(200);
+  const client = await registered.json();
+  const response = await authRequest("device/code", {
+    client_id: client.client_id,
+    scope: "installation offline_access",
+  });
+  expect(response.status).toBe(200);
+  return { ...(await response.json()), ...client };
+}
+function pollInstallation(grant: { client_id: string; device_code: string }) {
+  return authRequest("oauth2/token", {
+    client_id: grant.client_id,
+    device_code: grant.device_code,
+    grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+  });
+}
+async function approveInstallation(grant: { user_code: string }, cookie: string) {
+  expect((await authRequest(`device?user_code=${grant.user_code}`, undefined, cookie)).status).toBe(
+    200,
+  );
+  const response = await authRequest("device/approve", { userCode: grant.user_code }, cookie);
+  expect(response.status).toBe(200);
+}
+function installationRequest(path: string, token?: string, method = "GET") {
+  return auth.handler(
+    new Request(`http://localhost:3100/api/auth/installation/${path}`, {
+      method,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    }),
+  );
+}
+
+describe("installation OAuth device authorization", () => {
+  it("binds approval to a signed-in owner, issues scoped credentials once, and revokes access and refresh tokens", async () => {
+    const owner = await cloudSignup();
+    const other = await cloudSignup("other@example.com");
+    const grant = await beginInstallation();
+    expect(grant.interval).toBe(5);
+    expect(grant.expires_in).toBe(600);
+    expect((await authRequest("device/approve", { userCode: grant.user_code })).status).toBe(401);
+    await authRequest(`device?user_code=${grant.user_code}`, undefined, owner);
+    expect(
+      (await authRequest("device/approve", { userCode: grant.user_code }, other)).status,
+    ).toBeGreaterThanOrEqual(400);
+    await approveInstallation(grant, owner);
+    const response = await pollInstallation(grant);
+    expect(response.status).toBe(200);
+    const tokens = await response.json();
+    expect(tokens.access_token).toBeTruthy();
+    expect(tokens.refresh_token).toBeTruthy();
+    expect(tokens.scope).toContain("installation");
+    expect(responseCookie(response)).not.toContain("session_token");
+    expect((await (await pollInstallation(grant)).json()).error).toBe("invalid_grant");
+    const current = await installationRequest("current", tokens.access_token);
+    expect(current.status).toBe(200);
+    const details = await current.json();
+    expect(details.installation).toMatchObject({
+      name: "My laptop",
+      kind: "desktop",
+      installationId: "86c897b4-f8fb-4c17-bc87-f291c3c3917a",
+      lastSeenAt: null,
+    });
+    expect(details.user.email).toBe("owner@example.com");
+    expect((await installationRequest("current")).status).toBe(401);
+    expect(
+      await (
+        await authRequest(
+          "get-session",
+          undefined,
+          `better-auth.session_token=${tokens.access_token}`,
+        )
+      ).json(),
+    ).toBeNull();
+    const { createInstallationStore } = await import("./installations");
+    const devices = createInstallationStore(db);
+    await expect(devices.revoke("bob", details.installation.id)).rejects.toThrow();
+    await expect(devices.details(details.installation.id, "bob")).rejects.toThrow();
+    const heartbeat = await installationRequest("heartbeat", tokens.access_token, "POST");
+    expect(heartbeat.status).toBe(200);
+    expect((await heartbeat.json()).installation.lastSeenAt).toBeTruthy();
+    expect((await installationRequest("disconnect", tokens.access_token, "POST")).status).toBe(204);
+    expect((await installationRequest("current", tokens.access_token)).status).toBe(401);
+    const refresh = await authRequest("oauth2/token", {
+      client_id: grant.client_id,
+      grant_type: "refresh_token",
+      refresh_token: tokens.refresh_token,
+    });
+    expect(refresh.status).toBeGreaterThanOrEqual(400);
+    expect(
+      (
+        await authRequest("device/code", {
+          client_id: grant.client_id,
+          scope: "installation offline_access",
+        })
+      ).status,
+    ).toBe(400);
+  });
+  it("enforces polling limits and denial", async () => {
+    const cookie = await cloudSignup();
+    const grant = await beginInstallation();
+    expect((await (await pollInstallation(grant)).json()).error).toBe("authorization_pending");
+    expect((await (await pollInstallation(grant)).json()).error).toBe("slow_down");
+    await authRequest(`device?user_code=${grant.user_code}`, undefined, cookie);
+    expect((await authRequest("device/deny", { userCode: grant.user_code }, cookie)).status).toBe(
+      200,
+    );
+    await db.update(schema.deviceCode).set({ lastPolledAt: null });
+    expect((await (await pollInstallation(grant)).json()).error).toBe("access_denied");
+    expect(
+      await store.listInstallations(
+        (await (await authRequest("get-session", undefined, cookie)).json()).user.id,
+      ),
+    ).toEqual([]);
+  });
+  it("rejects expired grants, unauthorized claim access, wrong clients and session-token redemption", async () => {
+    const cookie = await cloudSignup();
+    const grant = await beginInstallation();
+    expect(
+      (await (await authRequest(`device?user_code=${grant.user_code}`)).json()).client_id,
+    ).toBeUndefined();
+    const other = await beginInstallation();
+    expect(
+      (await (await pollInstallation({ ...grant, client_id: other.client_id })).json()).error,
+    ).toBe("invalid_grant");
+    await approveInstallation(grant, cookie);
+    const standalone = await authRequest("device/token", {
+      client_id: grant.client_id,
+      device_code: grant.device_code,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+    });
+    expect(standalone.status).toBeGreaterThanOrEqual(400);
+    await db
+      .update(schema.deviceCode)
+      .set({ expiresAt: new Date("2000-01-01T00:00:00Z"), lastPolledAt: null });
+    expect(
+      (await authRequest("device/approve", { userCode: other.user_code }, cookie)).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect((await (await pollInstallation(grant)).json()).error).toBe("expired_token");
+    expect((await (await pollInstallation(other)).json()).error).toBe("expired_token");
+  });
+  it("consumes simultaneous redemptions once and recovers an unfinished approval projection", async () => {
+    const cookie = await cloudSignup();
+    const grant = await beginInstallation();
+    await approveInstallation(grant, cookie);
+    await db.delete(schema.installation);
+    const responses = await Promise.all([pollInstallation(grant), pollInstallation(grant)]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 400]);
+    const success = responses.find((response) => response.status === 200)!;
+    const tokens = await success.json();
+    expect((await installationRequest("current", tokens.access_token)).status).toBe(200);
+  });
+  it("rate limits unauthenticated installation registration", async () => {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      expect(
+        (
+          await authRequest("installation/register", {
+            installation_id: "86c897b4-f8fb-4c17-bc87-f291c3c3917a",
+            name: "Build host",
+            kind: "remote-server",
+          })
+        ).status,
+      ).toBe(200);
+    }
+    expect(
+      (
+        await authRequest("installation/register", {
+          installation_id: "86c897b4-f8fb-4c17-bc87-f291c3c3917a",
+          name: "Build host",
+          kind: "remote-server",
+        })
+      ).status,
+    ).toBe(429);
+  });
+  it("rotates refresh tokens and website revocation blocks the refreshed credential", async () => {
+    const cookie = await cloudSignup();
+    const grant = await beginInstallation();
+    await approveInstallation(grant, cookie);
+    const tokens = await (await pollInstallation(grant)).json();
+    const refreshed = await authRequest("oauth2/token", {
+      client_id: grant.client_id,
+      grant_type: "refresh_token",
+      refresh_token: tokens.refresh_token,
+    });
+    expect(refreshed.status).toBe(200);
+    const next = await refreshed.json();
+    expect(next.refresh_token).not.toBe(tokens.refresh_token);
+    const details = await (await installationRequest("current", next.access_token)).json();
+    const { createInstallationStore } = await import("./installations");
+    await createInstallationStore(db).revoke(details.user.id, details.installation.id);
+    expect((await installationRequest("current", next.access_token)).status).toBe(401);
   });
 });

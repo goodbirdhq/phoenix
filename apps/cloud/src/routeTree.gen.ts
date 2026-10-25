@@ -11,11 +11,13 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AccountRouteImport } from './routes/_account'
+import { Route as DeviceRouteImport } from './routes/device'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AccountDashboardRouteImport } from './routes/_account.dashboard'
 import { Route as AccountDevicesRouteImport } from './routes/_account.devices'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiInstallationsSplatRouteImport } from './routes/api/installations.$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -24,6 +26,11 @@ const IndexRoute = IndexRouteImport.update({
 } as any)
 const AccountRoute = AccountRouteImport.update({
   id: '/_account',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeviceRoute = DeviceRouteImport.update({
+  id: '/device',
+  path: '/device',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -51,56 +58,86 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiInstallationsSplatRoute = ApiInstallationsSplatRouteImport.update({
+  id: '/api/installations/$',
+  path: '/api/installations/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/device': typeof DeviceRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/dashboard': typeof AccountDashboardRoute
   '/devices': typeof AccountDevicesRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/installations/$': typeof ApiInstallationsSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/device': typeof DeviceRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/dashboard': typeof AccountDashboardRoute
   '/devices': typeof AccountDevicesRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/installations/$': typeof ApiInstallationsSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_account': typeof AccountRouteWithChildren
+  '/device': typeof DeviceRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/_account/dashboard': typeof AccountDashboardRoute
   '/_account/devices': typeof AccountDevicesRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/installations/$': typeof ApiInstallationsSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/login' | '/signup' | '/dashboard' | '/devices' | '/api/auth/$'
+    | '/'
+    | '/device'
+    | '/login'
+    | '/signup'
+    | '/dashboard'
+    | '/devices'
+    | '/api/auth/$'
+    | '/api/installations/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/signup' | '/dashboard' | '/devices' | '/api/auth/$'
+  to:
+    | '/'
+    | '/device'
+    | '/login'
+    | '/signup'
+    | '/dashboard'
+    | '/devices'
+    | '/api/auth/$'
+    | '/api/installations/$'
   id:
     | '__root__'
     | '/'
     | '/_account'
+    | '/device'
     | '/login'
     | '/signup'
     | '/_account/dashboard'
     | '/_account/devices'
     | '/api/auth/$'
+    | '/api/installations/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AccountRoute: typeof AccountRouteWithChildren
+  DeviceRoute: typeof DeviceRoute
   LoginRoute: typeof LoginRoute
   SignupRoute: typeof SignupRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiInstallationsSplatRoute: typeof ApiInstallationsSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -117,6 +154,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AccountRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/device': {
+      id: '/device'
+      path: '/device'
+      fullPath: '/device'
+      preLoaderRoute: typeof DeviceRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -154,6 +198,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/installations/$': {
+      id: '/api/installations/$'
+      path: '/api/installations/$'
+      fullPath: '/api/installations/$'
+      preLoaderRoute: typeof ApiInstallationsSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -173,9 +224,11 @@ const AccountRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AccountRoute: AccountRouteWithChildren,
+  DeviceRoute: DeviceRoute,
   LoginRoute: LoginRoute,
   SignupRoute: SignupRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiInstallationsSplatRoute: ApiInstallationsSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

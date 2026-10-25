@@ -8,7 +8,13 @@ import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
 import { Brand } from "./brand";
 
-export function AuthForm({ signup = false }: { signup?: boolean }) {
+export function AuthForm({
+  signup = false,
+  redirectTo = "/dashboard",
+}: {
+  signup?: boolean;
+  redirectTo?: string;
+}) {
   const [error, setError] = useState("");
   const form = useAppForm({
     defaultValues: { name: "", email: "", password: "", inviteCode: "" },
@@ -23,7 +29,7 @@ export function AuthForm({ signup = false }: { signup?: boolean }) {
           setError(result.error.message ?? "We couldn't sign you in. Please try again.");
           return;
         }
-        window.location.assign("/dashboard");
+        window.location.assign(redirectTo);
       } catch {
         setError("Couldn't reach Phoenix Cloud. Please try again.");
       }
@@ -123,7 +129,7 @@ export function AuthForm({ signup = false }: { signup?: boolean }) {
               </form>
               <div className="auth-switch">
                 {signup ? "Already have an account?" : "New to Phoenix Cloud?"}{" "}
-                <Link to={signup ? "/login" : "/signup"}>
+                <Link to={signup ? "/login" : "/signup"} search={{ redirect: redirectTo }}>
                   {signup ? "Log in" : "Create an account"}
                 </Link>
               </div>

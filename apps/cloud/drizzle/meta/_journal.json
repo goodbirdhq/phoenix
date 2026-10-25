@@ -8,6 +8,13 @@
       "when": 1792947410738,
       "tag": "0000_sparkling_puma",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792948973758,
+      "tag": "0001_watery_rockslide",
+      "breakpoints": true
     }
   ]
 }

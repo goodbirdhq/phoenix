@@ -11,6 +11,8 @@ import {
 
 export function DeleteDialog({
   title,
+  actionLabel = "Delete",
+  busyLabel = "Deleting…",
   description,
   open,
   busy,
@@ -18,6 +20,8 @@ export function DeleteDialog({
   onConfirm,
 }: {
   title: string;
+  actionLabel?: string;
+  busyLabel?: string;
   description: string;
   open: boolean;
   busy: boolean;
@@ -39,7 +43,7 @@ export function DeleteDialog({
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
           <AlertDialogAction variant="destructive" disabled={busy} onClick={onConfirm}>
-            {busy ? "Deleting…" : "Delete"}
+            {busy ? busyLabel : actionLabel}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

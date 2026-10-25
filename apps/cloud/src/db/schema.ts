@@ -1,4 +1,14 @@
-import { boolean, index, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import {
+  bigint,
+  boolean,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  varchar,
+} from "drizzle-orm/pg-core";
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
@@ -74,9 +84,29 @@ export const workspace = pgTable(
   },
   (table) => [index("cloud_workspace_owner_idx").on(table.ownerId)],
 );
+export * from "./oauth-schema";
+
+export const installationRequest = pgTable("cloud_installation_request", {
+  id: uuid("id").primaryKey(),
+  installationId: uuid("installation_id").notNull(),
+  name: varchar("name", { length: 80 }).notNull(),
+  kind: varchar("kind", { length: 20, enum: ["desktop", "remote-server"] }).notNull(),
+  createdAt: createdAt(),
+});
+
+export const rateLimit = pgTable("rate_limit", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  count: integer("count").notNull(),
+  lastRequest: bigint("last_request", { mode: "number" }).notNull(),
+});
+
 export const installation = pgTable(
   "cloud_installation",
   {
+    installationId: uuid("installation_id"),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
     id: uuid("id").primaryKey().defaultRandom(),
     ownerId: text("owner_id")
       .notNull()

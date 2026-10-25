@@ -31,7 +31,7 @@ function Devices() {
       await router.invalidate();
       setDeleting(null);
     } catch {
-      setError("Couldn't remove this registration. Please try again.");
+      setError("Couldn't remove this device access. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -67,11 +67,10 @@ function Devices() {
             </EmptyMedia>
             <EmptyTitle>No devices registered yet</EmptyTitle>
             <EmptyDescription>
-              Your desktop and remote server installations will appear here when device linking is
-              available.
+              Sign in to Phoenix Cloud from your desktop app or run phoenix cloud login on a remote
+              server.
             </EmptyDescription>
           </EmptyHeader>
-          <span className="coming-soon">Device linking is coming later</span>
         </Empty>
       ) : (
         <div className="device-list">
@@ -82,21 +81,36 @@ function Devices() {
                   {device.kind === "desktop" ? <Monitor /> : <Server />}
                   <div>
                     <h2>{device.name}</h2>
-                    <p>{device.kind === "desktop" ? "Desktop" : "Remote server"} · Not connected</p>
+                    <p>
+                      {device.kind === "desktop" ? "Desktop" : "Remote server"} ·{" "}
+                      {device.revokedAt
+                        ? "Disconnected"
+                        : device.lastSeenAt
+                          ? "Authorized"
+                          : "Awaiting first contact"}
+                    </p>
+                    <p>
+                      {device.lastSeenAt
+                        ? `Last seen ${new Date(device.lastSeenAt).toLocaleString()}`
+                        : "No heartbeat received"}
+                    </p>
                   </div>
                   <Button
                     variant="ghost"
                     size="icon"
-                    aria-label={`Remove ${device.name}`}
+                    aria-label={`Disconnect ${device.name}`}
+                    disabled={Boolean(device.revokedAt)}
                     onClick={() => setDeleting(device.id)}
                   >
                     <Trash2 />
                   </Button>
                   <DeleteDialog
+                    actionLabel="Disconnect"
+                    busyLabel="Disconnecting…"
                     open={deleting === device.id}
                     busy={busy}
-                    title={`Remove “${device.name}”?`}
-                    description="This removes the device from your account. Your installation will stay on its machine."
+                    title={`Disconnect “${device.name}”?`}
+                    description="This revokes this installation’s Cloud access immediately. Local projects and agents stay on its machine."
                     onClose={() => setDeleting(null)}
                     onConfirm={() => void remove(device.id)}
                   />
@@ -109,8 +123,8 @@ function Devices() {
       <aside className="info-note">
         <Server size={18} />
         <p>
-          Device linking and remote connections are coming later. Registering a device does not
-          connect it to Phoenix Cloud.
+          Cloud sign-in identifies your installations. Last seen records their latest heartbeat; it
+          does not mean a remote connection is available.
         </p>
       </aside>
     </>
