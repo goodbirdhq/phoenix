@@ -14,6 +14,8 @@ export type Owner = "upstream" | "phoenix";
 // Source of truth for the ownership map in docs/internals/divergence.md. Upstream owns every path
 // that does not start with one of these prefixes.
 export const PHOENIX_OWNED: ReadonlyArray<string> = [
+  "apps/cloud/",
+  "docs/operations/cloud-development.md",
   "apps/web/src/components/Sidebar",
   "apps/web/src/components/sidebar/",
   "apps/web/src/components/AppSidebarLayout.tsx",

@@ -29,19 +29,18 @@ Install dependencies from the repository root, then start only this app's
 database:
 
 ```sh
-vp install
-docker compose -f apps/cloud/compose.yaml up -d
+vp i
+vp run db:cloud:up
 ```
 
 Run the database migration and start the app from the repository root:
 
 ```sh
-vp run --filter @phoenix/cloud db:migrate
-vp run --filter @phoenix/cloud dev
+vp run db:cloud:migrate
+vp run dev:cloud
 ```
 
-The package filter and script names are provisional until the cloud app's
-package manifest is finalized.
+Open `http://localhost:3100` after startup.
 
 To stop this database, run `docker compose -f apps/cloud/compose.yaml down`.
 This keeps the named data volume so the database is available the next time
