@@ -39,6 +39,18 @@ const makeEnvironment = (
 ) => DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(layerEnvironment(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  it.effect.each(["darwin", "linux", "win32"] as const)(
+    "isolates Chromium and legacy imports with PHOENIX_HOME on %s",
+    (platform) =>
+      Effect.gen(function* () {
+        const environment = yield* makeEnvironment(
+          { platform, isPackaged: true },
+          { PHOENIX_HOME: "/isolated/phoenix" },
+        );
+        assert.equal(environment.appDataDirectory, "/isolated/phoenix/app-data");
+      }),
+  );
+
   it.effect("uses the packaged Windows server sidecar as the backend root", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment({

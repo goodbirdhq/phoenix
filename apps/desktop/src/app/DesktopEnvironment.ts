@@ -149,13 +149,16 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
   const appDataDirectory =
-    input.platform === "win32"
-      ? Option.getOrElse(config.appDataDirectory, () =>
-          path.join(homeDirectory, "AppData", "Roaming"),
-        )
-      : input.platform === "darwin"
-        ? path.join(homeDirectory, "Library", "Application Support")
-        : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
+    // Explicit homes must isolate Chromium and legacy imports as well as server state.
+    Option.isSome(config.t3Home)
+      ? path.join(config.t3Home.value, "app-data")
+      : input.platform === "win32"
+        ? Option.getOrElse(config.appDataDirectory, () =>
+            path.join(homeDirectory, "AppData", "Roaming"),
+          )
+        : input.platform === "darwin"
+          ? path.join(homeDirectory, "Library", "Application Support")
+          : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
   const baseDir = resolveDesktopBaseDir({
     homeDirectory,
     joinPath: path.join,
