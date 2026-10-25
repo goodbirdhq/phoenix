@@ -7,7 +7,9 @@ machine. That machine must stay running and reachable while you work.
 
 Desktop and standalone server installations must link to a Phoenix Cloud account
 before use. On first launch, enter your website URL and installation name, then
-approve the displayed code on the website. The account belongs to that installation.
+approve the installation on the website. In a browser, Phoenix returns you to the
+page you started from. The desktop app opens your system browser and brings
+Phoenix back into focus after approval. The account belongs to that installation.
 For another connected server, open **Settings → Connections**, expand its actions,
 and choose **Phoenix Cloud ownership**.
 
