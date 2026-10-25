@@ -1,4 +1,7 @@
 import {
+  type PhoenixCloudBrowserSignInInput,
+  type PhoenixCloudBrowserSignInAttempt,
+  type PhoenixCloudBrowserCallbackInput,
   PhoenixCloudAccountError,
   PhoenixCloudAccountStatus,
   type PhoenixCloudSignInAttempt,
@@ -20,6 +23,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } fr
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
+import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
 import { CloudOriginError, normalizeCloudOrigin } from "./config.ts";
 
 const SECRET = "phoenix-cloud-installation";
@@ -66,9 +70,31 @@ const Current = Schema.Struct({
 });
 const OAuthError = Schema.Struct({ error: Schema.String });
 
+type BrowserContext = {
+  readonly sessionId: string;
+  readonly origin: string | undefined;
+  readonly method?: string;
+};
+type BrowserAttempt = {
+  readonly id: string;
+  readonly credential: Pick<Credential, "cloudUrl" | "clientId">;
+  readonly verifier: string;
+  readonly returnUrl: string;
+  readonly context: BrowserContext;
+  readonly expiresAt: number;
+};
+
 export class PhoenixCloudAccount extends Context.Service<
   PhoenixCloudAccount,
   {
+    readonly beginBrowserSignIn: (
+      input: PhoenixCloudBrowserSignInInput,
+      context: BrowserContext,
+    ) => Effect.Effect<PhoenixCloudBrowserSignInAttempt, PhoenixCloudAccountError>;
+    readonly completeBrowserSignIn: (
+      input: PhoenixCloudBrowserCallbackInput,
+      context: BrowserContext,
+    ) => Effect.Effect<PhoenixCloudAccountStatus, PhoenixCloudAccountError>;
     readonly status: (input?: {
       readonly refresh?: boolean;
     }) => Effect.Effect<PhoenixCloudAccountStatus, PhoenixCloudAccountError>;
@@ -106,6 +132,7 @@ const make = Effect.gen(function* () {
   );
   const gate = yield* Semaphore.make(1);
   const active = yield* Ref.make<Attempt | null>(null);
+  const browserActive = yield* Ref.make<BrowserAttempt | null>(null);
   const cached = yield* Ref.make<PhoenixCloudAccountStatus>({ state: "unavailable" });
   const pendingLogouts = yield* Ref.make(0);
   const verification = yield* Ref.make<Deferred.Deferred<PhoenixCloudAccountStatus> | null>(null);
@@ -270,6 +297,35 @@ const make = Effect.gen(function* () {
   const status = Effect.fnUntraced(function* (input?: { readonly refresh?: boolean }) {
     return yield* input?.refresh ? refreshStatus() : Ref.get(cached);
   });
+  const register = Effect.fn("PhoenixCloudAccount.register")(function* (
+    cloudUrl: string,
+    name: string,
+    returnUrl?: string,
+  ) {
+    const identity = yield* secrets
+      .getOrCreateRandom("phoenix-cloud-installation-id", 16)
+      .pipe(Effect.mapError(() => new PhoenixCloudAccountError({ reason: "storage" })));
+    const bytes = Uint8Array.from(identity);
+    bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+    bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const installationId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    const registered = yield* request(
+      HttpClientRequest.post(`${cloudUrl}/api/installations/register`).pipe(
+        HttpClientRequest.bodyJsonUnsafe({
+          installation_id: installationId,
+          name,
+          ...(returnUrl ? { redirect_uri: returnUrl } : {}),
+          kind: config.mode === "desktop" ? "desktop" : "remote-server",
+        }),
+      ),
+    );
+    if (registered.status !== 200 && registered.status !== 201)
+      return yield* new PhoenixCloudAccountError({
+        reason: registered.status === 429 || registered.status >= 500 ? "network" : "protocol",
+      });
+    return yield* decode(Registration)(registered);
+  });
   const beginAttempt = Effect.fn("PhoenixCloudAccount.beginAttempt")(
     (input: PhoenixCloudSignInInput) =>
       gate.withPermits(1)(
@@ -280,7 +336,11 @@ const make = Effect.gen(function* () {
           const previous = yield* Ref.get(active);
           if (previous && previous.expiresAt <= (yield* Clock.currentTimeMillis))
             yield* cancelActive();
-          if ((yield* read()) || (yield* Ref.get(active)))
+          if (
+            (yield* read()) ||
+            (yield* Ref.get(active)) ||
+            ((yield* Ref.get(browserActive))?.expiresAt ?? 0) > (yield* Clock.currentTimeMillis)
+          )
             return yield* new PhoenixCloudAccountError({ reason: "busy" });
           const cloudUrl = normalizeCloudOrigin(
             input.cloudUrl ?? Option.getOrUndefined(configuredUrl),
@@ -288,29 +348,7 @@ const make = Effect.gen(function* () {
           );
           if (isCloudOriginError(cloudUrl))
             return yield* new PhoenixCloudAccountError({ reason: "configuration" });
-          const identity = yield* secrets
-            .getOrCreateRandom("phoenix-cloud-installation-id", 16)
-            .pipe(Effect.mapError(() => new PhoenixCloudAccountError({ reason: "storage" })));
-          const bytes = Uint8Array.from(identity);
-          bytes[6] = (bytes[6]! & 0x0f) | 0x40;
-          bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-          const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-          const installationId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-          const registered = yield* request(
-            HttpClientRequest.post(`${cloudUrl}/api/installations/register`).pipe(
-              HttpClientRequest.bodyJsonUnsafe({
-                installation_id: installationId,
-                name,
-                kind: config.mode === "desktop" ? "desktop" : "remote-server",
-              }),
-            ),
-          );
-          if (registered.status !== 200 && registered.status !== 201)
-            return yield* new PhoenixCloudAccountError({
-              reason:
-                registered.status === 429 || registered.status >= 500 ? "network" : "protocol",
-            });
-          const registration = yield* decode(Registration)(registered);
+          const registration = yield* register(cloudUrl, name);
           const response = yield* request(
             HttpClientRequest.post(`${cloudUrl}/api/auth/device/code`).pipe(
               HttpClientRequest.bodyJsonUnsafe({
@@ -456,6 +494,7 @@ const make = Effect.gen(function* () {
         gate.withPermits(1)(
           Effect.gen(function* () {
             yield* cancelActive();
+            yield* Ref.set(browserActive, null);
             yield* lock;
             const saved = yield* read();
             yield* Ref.set(cached, { state: "signed-out" });
@@ -486,11 +525,170 @@ const make = Effect.gen(function* () {
     if ((yield* locallySignedOut) && (yield* read())) yield* signOut();
     return yield* beginAttempt(input);
   });
+  const validateReturnUrl = (value: string, context: BrowserContext) => {
+    try {
+      const url = new URL(value);
+      const desktop =
+        context.origin !== undefined &&
+        (DESKTOP_RENDERER_ORIGINS.some((origin) => origin === context.origin) ||
+          (context.method === "desktop-bootstrap" && config.devUrl?.origin === context.origin));
+      if (
+        desktop &&
+        /^http:\/\/127\.0\.0\.1:[1-9][0-9]*\/cloud\/callback$/.test(value) &&
+        url.port &&
+        Number(url.port) <= 65535
+      )
+        return true;
+      return (
+        !!context.origin &&
+        url.origin === context.origin &&
+        value === `${url.origin}/cloud/callback` &&
+        (url.protocol === "https:" || (allowHttp === "1" && url.protocol === "http:"))
+      );
+    } catch {
+      return false;
+    }
+  };
+  const beginBrowserSignIn = Effect.fn("PhoenixCloudAccount.beginBrowserSignIn")(function* (
+    input: PhoenixCloudBrowserSignInInput,
+    context: BrowserContext,
+  ) {
+    if (!validateReturnUrl(input.returnUrl, context))
+      return yield* new PhoenixCloudAccountError({ reason: "configuration" });
+    if ((yield* locallySignedOut) && (yield* read())) yield* signOut();
+    return yield* gate.withPermits(1)(
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const previous = yield* Ref.get(browserActive);
+        if (
+          (yield* read()) ||
+          ((yield* Ref.get(active))?.expiresAt ?? 0) > now ||
+          (previous &&
+            previous.expiresAt > now &&
+            (previous.context.sessionId !== context.sessionId ||
+              previous.context.origin !== context.origin))
+        )
+          return yield* new PhoenixCloudAccountError({ reason: "busy" });
+        const name = yield* decodeInstallationName(input.name).pipe(
+          Effect.mapError(() => new PhoenixCloudAccountError({ reason: "installation-name" })),
+        );
+        const cloudUrl = normalizeCloudOrigin(
+          input.cloudUrl ?? Option.getOrUndefined(configuredUrl),
+          allowHttp === "1",
+        );
+        if (isCloudOriginError(cloudUrl))
+          return yield* new PhoenixCloudAccountError({ reason: "configuration" });
+        const registration = yield* register(cloudUrl, name, input.returnUrl);
+        const verifier = Buffer.from(
+          yield* crypto
+            .randomBytes(32)
+            .pipe(Effect.mapError(() => new PhoenixCloudAccountError({ reason: "storage" }))),
+        ).toString("base64url");
+        const id = Buffer.from(
+          yield* crypto
+            .randomBytes(32)
+            .pipe(Effect.mapError(() => new PhoenixCloudAccountError({ reason: "storage" }))),
+        ).toString("base64url");
+        const challenge = Buffer.from(
+          yield* crypto
+            .digest("SHA-256", new TextEncoder().encode(verifier))
+            .pipe(Effect.mapError(() => new PhoenixCloudAccountError({ reason: "storage" }))),
+        ).toString("base64url");
+        const expiresAt = now + 600_000;
+        const authorization = new URL(`${cloudUrl}/api/auth/oauth2/authorize`);
+        authorization.search = new URLSearchParams({
+          client_id: registration.client_id,
+          redirect_uri: input.returnUrl,
+          response_type: "code",
+          scope: "installation offline_access",
+          prompt: "consent",
+          state: id,
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+        }).toString();
+        yield* Ref.set(browserActive, {
+          id,
+          credential: { cloudUrl, clientId: registration.client_id },
+          verifier,
+          returnUrl: input.returnUrl,
+          context,
+          expiresAt,
+        });
+        return {
+          attemptId: id,
+          authorizationUrl: authorization.href,
+          expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expiresAt)),
+        };
+      }),
+    );
+  });
+  const completeBrowserSignIn = Effect.fn("PhoenixCloudAccount.completeBrowserSignIn")(
+    (input: PhoenixCloudBrowserCallbackInput, context: BrowserContext) =>
+      gate.withPermits(1)(
+        Effect.gen(function* () {
+          const attempt = yield* Ref.get(browserActive);
+          if (
+            !attempt ||
+            input.state !== attempt.id ||
+            context.sessionId !== attempt.context.sessionId ||
+            context.origin !== attempt.context.origin ||
+            input.returnUrl !== attempt.returnUrl ||
+            !validateReturnUrl(input.returnUrl, context) ||
+            input.iss !== `${attempt.credential.cloudUrl}/api/auth` ||
+            !!input.code === !!input.error
+          )
+            return yield* new PhoenixCloudAccountError({ reason: "protocol" });
+          // Consume before exchange: interruption, denial and failures must never replay a grant.
+          yield* Ref.set(browserActive, null);
+          if (attempt.expiresAt <= (yield* Clock.currentTimeMillis))
+            return yield* new PhoenixCloudAccountError({ reason: "expired" });
+          if (input.error) return yield* new PhoenixCloudAccountError({ reason: "denied" });
+          const response = yield* tokenRequest(attempt.credential.cloudUrl, {
+            grant_type: "authorization_code",
+            code: input.code!,
+            code_verifier: attempt.verifier,
+            redirect_uri: attempt.returnUrl,
+            client_id: attempt.credential.clientId,
+          });
+          if (response.status !== 200)
+            return yield* new PhoenixCloudAccountError({
+              reason: response.status >= 500 ? "network" : "denied",
+            });
+          const tokens = yield* decode(Tokens)(response);
+          const credential = {
+            ...attempt.credential,
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            expiresAt: (yield* Clock.currentTimeMillis) + tokens.expires_in * 1000,
+            scopes: tokens.scope === undefined ? [] : grantedScopes(tokens.scope),
+          };
+          const result = yield* current(credential);
+          if (result.state !== "signed-in")
+            return yield* new PhoenixCloudAccountError({ reason: "denied" });
+          if ((yield* Ref.get(pendingLogouts)) > 0)
+            return yield* new PhoenixCloudAccountError({ reason: "cancelled" });
+          yield* persist(credential);
+          if ((yield* Ref.get(pendingLogouts)) > 0)
+            return yield* new PhoenixCloudAccountError({ reason: "cancelled" });
+          yield* unlock;
+          yield* Ref.set(cached, result);
+          return result;
+        }).pipe(Effect.uninterruptible),
+      ),
+  );
   yield* refreshStatus();
   yield* Effect.forever(Effect.sleep("60 seconds").pipe(Effect.andThen(refreshStatus()))).pipe(
     Effect.forkScoped,
   );
-  return PhoenixCloudAccount.of({ status, beginSignIn, completeSignIn, cancelSignIn, signOut });
+  return PhoenixCloudAccount.of({
+    beginBrowserSignIn,
+    completeBrowserSignIn,
+    status,
+    beginSignIn,
+    completeSignIn,
+    cancelSignIn,
+    signOut,
+  });
 });
 
 export const layer = Layer.effect(PhoenixCloudAccount, make);

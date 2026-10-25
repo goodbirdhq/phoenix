@@ -95,6 +95,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.scheduledTasksListWebhookDeliveries]: "scheduledTasks",
   [WS_METHODS.scheduledTasksGetWebhookDelivery]: "scheduledTasks",
   [WS_METHODS.secretsAnswerRequest]: "secrets",
+  [WS_METHODS.phoenixCloudBeginBrowserSignIn]: "phoenixCloud",
+  [WS_METHODS.phoenixCloudCompleteBrowserSignIn]: "phoenixCloud",
   [WS_METHODS.phoenixCloudStatus]: "phoenixCloud",
   [WS_METHODS.phoenixCloudBeginSignIn]: "phoenixCloud",
   [WS_METHODS.phoenixCloudCompleteSignIn]: "phoenixCloud",

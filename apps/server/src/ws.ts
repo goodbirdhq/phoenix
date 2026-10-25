@@ -1223,6 +1223,7 @@ export const layerWsRpc = (
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
+  browserOrigin?: string,
 ) =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -2484,6 +2485,18 @@ export const layerWsRpc = (
         [WS_METHODS.serverReportHostPowerState]: (input) =>
           backgroundPolicy.reportHostPowerState(input),
         [WS_METHODS.serverGetBackgroundPolicy]: (_input) => backgroundPolicy.snapshot,
+        [WS_METHODS.phoenixCloudBeginBrowserSignIn]: (input) =>
+          phoenixCloudAccount.beginBrowserSignIn(input, {
+            sessionId: currentSessionId,
+            origin: browserOrigin,
+            method: currentSession.method,
+          }),
+        [WS_METHODS.phoenixCloudCompleteBrowserSignIn]: (input) =>
+          phoenixCloudAccount.completeBrowserSignIn(input, {
+            sessionId: currentSessionId,
+            origin: browserOrigin,
+            method: currentSession.method,
+          }),
         [WS_METHODS.phoenixCloudStatus]: (input) => phoenixCloudAccount.status(input),
         [WS_METHODS.phoenixCloudBeginSignIn]: (input) => phoenixCloudAccount.beginSignIn(input),
         [WS_METHODS.phoenixCloudCompleteSignIn]: (input) =>
@@ -3288,6 +3301,7 @@ export const layer = Layer.unwrap(
               clientAnalyticsProps,
               previewAutomationBroker,
               serverBrowser,
+              request.headers.origin,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees

@@ -546,3 +546,189 @@ describe("installation OAuth device authorization", () => {
     expect((await installationRequest("current", next.access_token)).status).toBe(401);
   });
 });
+
+describe("installation authorization code flow", () => {
+  const redirectUri = "https://phoenix.example.test/cloud/callback";
+  const verifier = "a".repeat(43);
+  async function authorize(cookie: string, callback = redirectUri) {
+    const { createHash } = await import("node:crypto");
+    const registration = await authRequest("installation/register", {
+      installation_id: "86c897b4-f8fb-4c17-bc87-f291c3c3917a",
+      name: "Browser machine",
+      kind: "remote-server",
+      redirect_uri: callback,
+    });
+    expect(registration.status).toBe(200);
+    const client = await registration.json();
+    const query = new URLSearchParams({
+      client_id: client.client_id,
+      redirect_uri: callback,
+      response_type: "code",
+      scope: "installation offline_access",
+      state: "test-state",
+      prompt: "consent",
+      code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+      code_challenge_method: "S256",
+    });
+    const response = await authRequest("oauth2/authorize?" + query, undefined, cookie);
+    const location = response.headers.get("location") ?? (await response.json()).url;
+    expect(location).toContain("/device?");
+    return {
+      client,
+      query,
+      oauth_query: new URL(location, "http://localhost:3100").search.slice(1),
+      callback,
+    };
+  }
+  async function consent(
+    flow: Awaited<ReturnType<typeof authorize>>,
+    cookie: string,
+    accept = true,
+  ) {
+    const response = await authRequest(
+      "oauth2/consent",
+      { oauth_query: flow.oauth_query, accept },
+      cookie,
+    );
+    expect(response.status).toBe(200);
+    return new URL((await response.json()).url);
+  }
+  function exchange(
+    flow: Awaited<ReturnType<typeof authorize>>,
+    code: string,
+    codeVerifier = verifier,
+    callback = flow.callback,
+  ) {
+    return authRequest("oauth2/token", {
+      client_id: flow.client.client_id,
+      grant_type: "authorization_code",
+      code,
+      code_verifier: codeVerifier,
+      redirect_uri: callback,
+    });
+  }
+  it("requires explicit approval and valid PKCE exchange before assigning ownership, then rejects replay", async () => {
+    const cookie = await cloudSignup();
+    const flow = await authorize(cookie);
+    expect(await db.select().from(schema.installation)).toHaveLength(0);
+    const callback = await consent(flow, cookie);
+    expect(callback.searchParams.get("state")).toBe("test-state");
+    expect(callback.searchParams.get("iss")).toBe("http://localhost:3100/api/auth");
+    expect(await db.select().from(schema.installation)).toHaveLength(0);
+    const response = await exchange(flow, callback.searchParams.get("code")!);
+    expect(response.status).toBe(200);
+    const tokens = await response.json();
+    expect(tokens.refresh_token).toBeTruthy();
+    expect((await installationRequest("current", tokens.access_token)).status).toBe(200);
+    expect(
+      (await exchange(flow, callback.searchParams.get("code")!)).status,
+    ).toBeGreaterThanOrEqual(400);
+  });
+  it("rejects wrong PKCE without assigning ownership", async () => {
+    const cookie = await cloudSignup();
+    const flow = await authorize(cookie);
+    const callback = await consent(flow, cookie);
+    expect(
+      (await exchange(flow, callback.searchParams.get("code")!, "b".repeat(43))).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(await db.select().from(schema.installation)).toHaveLength(0);
+  });
+  it("denies approval without creating a code or installation", async () => {
+    const cookie = await cloudSignup();
+    const flow = await authorize(cookie);
+    const callback = await consent(flow, cookie, false);
+    expect(callback.searchParams.get("error")).toBe("access_denied");
+    expect(callback.searchParams.get("code")).toBeNull();
+    expect(callback.searchParams.get("iss")).toBe("http://localhost:3100/api/auth");
+    expect(await db.select().from(schema.installation)).toHaveLength(0);
+  });
+  it("binds native loopback to the registered port", async () => {
+    const cookie = await cloudSignup();
+    const flow = await authorize(cookie, "http://127.0.0.1:49152/cloud/callback");
+    const callback = await consent(flow, cookie);
+    expect(
+      (
+        await exchange(
+          flow,
+          callback.searchParams.get("code")!,
+          verifier,
+          "http://127.0.0.1:49153/cloud/callback",
+        )
+      ).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(await db.select().from(schema.installation)).toHaveLength(0);
+  });
+  it("carries an unauthenticated request through login to explicit consent", async () => {
+    const flow = await authorize("");
+    expect(
+      (await authRequest("oauth2/consent", { oauth_query: flow.oauth_query, accept: true })).status,
+    ).toBe(401);
+    const cookie = await cloudSignup();
+    const callback = await consent(flow, cookie);
+    expect((await exchange(flow, callback.searchParams.get("code")!)).status).toBe(200);
+  });
+  it("rejects changed signed state and expired codes without ownership", async () => {
+    const cookie = await cloudSignup();
+    const flow = await authorize(cookie);
+    const changed = new URLSearchParams(flow.oauth_query);
+    changed.set("state", "attacker-state");
+    expect(
+      (
+        await authRequest(
+          "oauth2/consent",
+          { oauth_query: changed.toString(), accept: true },
+          cookie,
+        )
+      ).status,
+    ).toBeGreaterThanOrEqual(400);
+    const callback = await consent(flow, cookie);
+    await db.update(schema.verification).set({ expiresAt: new Date("2000-01-01T00:00:00Z") });
+    expect(
+      (await exchange(flow, callback.searchParams.get("code")!)).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(await db.select().from(schema.installation)).toHaveLength(0);
+  });
+  it("rejects callback syntax outside the supported fixed destination", async () => {
+    for (const callback of [
+      "https://phoenix.example.test/other",
+      redirectUri + "?next=https://evil.test",
+      redirectUri + "#",
+      "https://user@phoenix.example.test/cloud/callback",
+      "not a url",
+      "http://remote.example.test/cloud/callback",
+    ]) {
+      const response = await authRequest("installation/register", {
+        installation_id: "86c897b4-f8fb-4c17-bc87-f291c3c3917a",
+        name: "Browser machine",
+        kind: "remote-server",
+        redirect_uri: callback,
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(await db.select().from(schema.oauthClient)).toHaveLength(0);
+  });
+  it("requires S256 and the exact registered callback at authorization", async () => {
+    const cookie = await cloudSignup();
+    const flow = await authorize(cookie);
+    flow.query.set("code_challenge_method", "plain");
+    const plain = await authRequest("oauth2/authorize?" + flow.query, undefined, cookie);
+    expect(plain.headers.get("location")).toContain("error=");
+    flow.query.set("code_challenge_method", "S256");
+    flow.query.set("redirect_uri", "https://evil.test/cloud/callback");
+    expect((await authRequest("oauth2/authorize?" + flow.query, undefined, cookie)).status).toBe(
+      400,
+    );
+    expect(await db.select().from(schema.installation)).toHaveLength(0);
+  });
+  it("supports the explicitly enabled local development callback", async () => {
+    vi.stubEnv("PHOENIX_CLOUD_ALLOW_INSECURE_HTTP", "1");
+    try {
+      const cookie = await cloudSignup();
+      const flow = await authorize(cookie, "http://localhost:6157/cloud/callback");
+      const callback = await consent(flow, cookie);
+      expect((await exchange(flow, callback.searchParams.get("code")!)).status).toBe(200);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});

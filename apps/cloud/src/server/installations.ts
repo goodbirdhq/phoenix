@@ -13,26 +13,51 @@ import * as schema from "../db/schema";
 import { installationInput } from "../lib/validation";
 
 export const installationOAuthOptions = {
-  loginPage: "/login",
+  loginPage: "/device",
   consentPage: "/device",
   // Tokens stay inside this Cloud app; its resource boundary checks active client, owner and scope.
   disableJwtPlugin: true,
   scopes: ["installation", "offline_access"],
-  // The provider requires authorization_code globally for refresh; installation clients permit only device and refresh grants.
+  // Each installation client permits only its selected authorization flow and refresh.
   grantTypes: ["authorization_code", DEVICE_CODE_GRANT_TYPE, "refresh_token"],
   accessTokenExpiresIn: 3600,
   refreshTokenExpiresIn: 2592000,
   allowDynamicClientRegistration: false,
   allowUnauthenticatedClientRegistration: false,
   clientPrivileges: async () => false,
+  validateRedirectUri: (uri, registered) => registered.includes(uri),
 } satisfies OAuthOptions<string[]>;
+
+const registrationInput = installationInput.extend({
+  installation_id: z.uuid(),
+  redirect_uri: z.string().max(2048).optional(),
+});
+
+function validateCallback(value: string) {
+  const parsed = z.url().safeParse(value);
+  if (!parsed.success)
+    throw new APIError("BAD_REQUEST", { message: "Invalid installation callback." });
+  const url = new URL(parsed.data);
+  const native = url.protocol === "http:" && url.hostname === "127.0.0.1" && !!url.port;
+  if (
+    value !== `${url.origin}/cloud/callback` ||
+    !(
+      url.protocol === "https:" ||
+      native ||
+      (process.env.PHOENIX_CLOUD_ALLOW_INSECURE_HTTP === "1" && url.protocol === "http:")
+    )
+  )
+    throw new APIError("BAD_REQUEST", { message: "Invalid installation callback." });
+  return native;
+}
 
 export function createInstallationStore<T extends PgQueryResultHKT>(
   db: PgDatabase<T, typeof schema>,
 ) {
   return {
     async register(input: unknown) {
-      const data = installationInput.extend({ installation_id: z.uuid() }).parse(input);
+      const data = registrationInput.parse(input);
+      const native = data.redirect_uri ? validateCallback(data.redirect_uri) : true;
       const id = NodeCrypto.randomUUID();
       await db.transaction(async (tx) => {
         const now = new Date();
@@ -112,11 +137,16 @@ export function createInstallationStore<T extends PgQueryResultHKT>(
           clientId: id,
           name: data.name,
           disabled: false,
-          redirectUris: [],
+          redirectUris: data.redirect_uri ? [data.redirect_uri] : [],
+          requirePKCE: true,
+          skipConsent: false,
           scopes: ["installation", "offline_access"],
-          grantTypes: [DEVICE_CODE_GRANT_TYPE, "refresh_token"],
+          grantTypes: [
+            data.redirect_uri ? "authorization_code" : DEVICE_CODE_GRANT_TYPE,
+            "refresh_token",
+          ],
           tokenEndpointAuthMethod: "none",
-          applicationType: "native",
+          applicationType: native ? "native" : "web",
           createdAt: new Date(),
         });
         await tx.insert(schema.installationRequest).values({
@@ -127,6 +157,24 @@ export function createInstallationStore<T extends PgQueryResultHKT>(
         });
       });
       return { client_id: id, installation_id: id };
+    },
+    async exchanged(clientId: string, ownerId: string) {
+      const [request] = await db
+        .select()
+        .from(schema.installationRequest)
+        .where(eq(schema.installationRequest.id, clientId));
+      if (!request)
+        throw new APIError("BAD_REQUEST", { message: "Installation request not found." });
+      await db
+        .insert(schema.installation)
+        .values({
+          id: request.id,
+          installationId: request.installationId,
+          ownerId,
+          kind: request.kind,
+          name: request.name,
+        })
+        .onConflictDoNothing();
     },
     async approved(userCode: string) {
       const [grant] = await db
@@ -253,7 +301,7 @@ export function installationPlugin<T extends PgQueryResultHKT>(db: PgDatabase<T,
         "/installation/register",
         {
           method: "POST",
-          body: installationInput.extend({ installation_id: z.uuid() }),
+          body: registrationInput,
         },
         async (ctx) => ctx.json(await store.register(ctx.body)),
       ),

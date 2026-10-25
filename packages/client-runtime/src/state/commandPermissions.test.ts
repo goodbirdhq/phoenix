@@ -65,24 +65,30 @@ describe("command permissions", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* setup;
-        const cloud = createCommandPermissions(runtime, WS_METHODS.phoenixCloudBeginSignIn);
-        registry.set(sessions(env), AsyncResult.success(grant(true)));
-        expect(registry.get(cloud.permissionAtom(env))).toBe(false);
-        expect((yield* cloud.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
-          "EnvironmentAuthorizationError",
-        );
-        registry.set(
-          sessions(env),
-          AsyncResult.success({
-            ...grant(false),
-            scopes: [AuthAccessWriteScope],
-            permissions: [AuthAccessWriteScope],
-          }),
-        );
-        expect(registry.get(cloud.permissionAtom(env))).toBe(true);
-        yield* cloud.authorize(registry, env);
-        registry.set(sessions(other), AsyncResult.success(grant(false)));
-        expect(registry.get(cloud.permissionAtom(other))).toBe(false);
+        for (const method of [
+          WS_METHODS.phoenixCloudBeginSignIn,
+          WS_METHODS.phoenixCloudBeginBrowserSignIn,
+          WS_METHODS.phoenixCloudCompleteBrowserSignIn,
+        ]) {
+          const cloud = createCommandPermissions(runtime, method);
+          registry.set(sessions(env), AsyncResult.success(grant(true)));
+          expect(registry.get(cloud.permissionAtom(env))).toBe(false);
+          expect((yield* cloud.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+            "EnvironmentAuthorizationError",
+          );
+          registry.set(
+            sessions(env),
+            AsyncResult.success({
+              ...grant(false),
+              scopes: [AuthAccessWriteScope],
+              permissions: [AuthAccessWriteScope],
+            }),
+          );
+          expect(registry.get(cloud.permissionAtom(env))).toBe(true);
+          yield* cloud.authorize(registry, env);
+          registry.set(sessions(other), AsyncResult.success(grant(false)));
+          expect(registry.get(cloud.permissionAtom(other))).toBe(false);
+        }
       }),
     ),
   );

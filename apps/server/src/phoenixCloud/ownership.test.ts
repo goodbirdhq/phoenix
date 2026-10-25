@@ -31,6 +31,8 @@ it.effect("allows a verified installation", () =>
 );
 it("keeps bootstrap and stop RPCs usable but denies operational RPCs", () => {
   for (const method of [
+    WS_METHODS.phoenixCloudBeginBrowserSignIn,
+    WS_METHODS.phoenixCloudCompleteBrowserSignIn,
     WS_METHODS.phoenixCloudStatus,
     WS_METHODS.phoenixCloudBeginSignIn,
     WS_METHODS.phoenixCloudCompleteSignIn,

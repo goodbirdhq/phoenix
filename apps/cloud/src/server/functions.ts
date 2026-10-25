@@ -112,3 +112,53 @@ async function deviceAuthRequest(path: string, body?: { userCode: string }) {
   if (!response.ok) throw new Error("Device authorization request failed.");
   return response.json();
 }
+
+export const reviewBrowserInstallation = createServerFn({ method: "POST" })
+  .validator(z.string().uuid())
+  .handler(async ({ data }) => {
+    if (!(await currentUser())) throw new Error("Sign in before reviewing this installation.");
+    const [{ db }, { eq }, schema] = await Promise.all([
+      import("../db"),
+      import("drizzle-orm"),
+      import("../db/schema"),
+    ]);
+    const [request] = await db
+      .select()
+      .from(schema.installationRequest)
+      .where(eq(schema.installationRequest.id, data));
+    const [client] = await db
+      .select()
+      .from(schema.oauthClient)
+      .where(eq(schema.oauthClient.clientId, data));
+    if (
+      !request ||
+      !client ||
+      client.disabled ||
+      !client.grantTypes?.includes("authorization_code") ||
+      request.createdAt.getTime() + 600_000 <= Date.now()
+    )
+      throw new Error("This installation request has expired.");
+    return {
+      name: request.name,
+      kind: request.kind,
+      installationId: request.installationId,
+      callback: client.redirectUris[0],
+    };
+  });
+
+export const decideBrowserInstallation = createServerFn({ method: "POST" })
+  .validator(z.object({ oauthQuery: z.string().max(16000), approve: z.boolean() }))
+  .handler(async ({ data }) => {
+    const [{ auth }, { authConfig }] = await Promise.all([import("./auth"), import("./env")]);
+    const headers = new Headers(getRequestHeaders());
+    headers.set("Content-Type", "application/json");
+    const response = await auth.handler(
+      new Request(`${authConfig().baseURL.replace(/\/$/, "")}/api/auth/oauth2/consent`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ oauth_query: data.oauthQuery, accept: data.approve }),
+      }),
+    );
+    if (!response.ok) throw new Error("This approval request is invalid or expired.");
+    return z.object({ redirect: z.literal(true), url: z.string() }).parse(await response.json());
+  });

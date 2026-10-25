@@ -45,6 +45,8 @@ const fixture = (
     readonly disconnectReady?: Deferred.Deferred<void>;
     readonly disconnectRelease?: Deferred.Deferred<void>;
     readonly mode?: "desktop" | "web";
+    readonly devUrl?: URL;
+    readonly allowHttp?: boolean;
   } = {},
 ) => {
   const stored = new Map<string, Uint8Array>();
@@ -120,7 +122,7 @@ const fixture = (
         ServerConfig.ServerConfig,
         Effect.gen(function* () {
           const config = yield* ServerConfig.ServerConfig;
-          return { ...config, mode: options.mode ?? "web" };
+          return { ...config, mode: options.mode ?? "web", devUrl: options.devUrl };
         }),
       ).pipe(
         Layer.provide(
@@ -128,7 +130,13 @@ const fixture = (
         ),
       ),
     ),
-    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+    Layer.provide(
+      ConfigProvider.layer(
+        ConfigProvider.fromEnv({
+          env: options.allowHttp ? { PHOENIX_CLOUD_ALLOW_INSECURE_HTTP: "1" } : {},
+        }),
+      ),
+    ),
     Layer.provide(NodeServices.layer),
   );
   return { stored, requests, layer };
@@ -544,3 +552,232 @@ it.effect.each([204, 503])(
     }).pipe(Effect.provide(test.layer));
   },
 );
+
+const browser = { sessionId: "admin-session", origin: "https://phoenix.example.test" };
+const returnUrl = browser.origin + "/cloud/callback";
+
+it.effect("links a browser callback once with server-held PKCE and session binding", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+    const attempt = yield* account.beginBrowserSignIn(
+      { cloudUrl: origin, name: "Work machine", returnUrl },
+      browser,
+    );
+    const url = new URL(attempt.authorizationUrl);
+    assert.strictEqual(url.searchParams.get("state"), attempt.attemptId);
+    assert.strictEqual(url.searchParams.get("code_challenge_method"), "S256");
+    assert.strictEqual(url.searchParams.get("redirect_uri"), returnUrl);
+    const callback = {
+      state: attempt.attemptId,
+      code: "code",
+      iss: origin + "/api/auth",
+      returnUrl,
+    };
+    assert.strictEqual(
+      (yield* account
+        .completeBrowserSignIn(callback, { ...browser, sessionId: "other" })
+        .pipe(Effect.result))._tag,
+      "Failure",
+    );
+    assert.strictEqual((yield* account.status()).state, "signed-out");
+    assert.strictEqual(
+      (yield* account.completeBrowserSignIn(callback, browser)).state,
+      "signed-in",
+    );
+    assert.strictEqual(
+      (yield* account.completeBrowserSignIn(callback, browser).pipe(Effect.result))._tag,
+      "Failure",
+    );
+    const body = new URLSearchParams(f.requests.find((r) => r.url.endsWith("/token"))!.body);
+    assert.strictEqual(body.get("grant_type"), "authorization_code");
+    assert.isAtLeast(body.get("code_verifier")!.length, 43);
+  }).pipe(Effect.provide(f.layer));
+});
+
+it.effect("rejects unbound browser destinations before registration", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+    for (const invalid of [
+      "https://evil.test/cloud/callback",
+      returnUrl + "?next=evil",
+      returnUrl + "#x",
+      browser.origin + "/other",
+      "http://phoenix.example.test/cloud/callback",
+    ]) {
+      assert.strictEqual(
+        (yield* account
+          .beginBrowserSignIn({ cloudUrl: origin, name: "Work", returnUrl: invalid }, browser)
+          .pipe(Effect.result))._tag,
+        "Failure",
+      );
+    }
+    assert.lengthOf(f.requests, 0);
+  }).pipe(Effect.provide(f.layer));
+});
+
+it.effect("keeps ownership locked for mismatched, denied and expired callbacks", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+    const begin = () =>
+      account.beginBrowserSignIn({ cloudUrl: origin, name: "Work", returnUrl }, browser);
+    const attempt = yield* begin();
+    const callback = {
+      state: attempt.attemptId,
+      code: "code",
+      iss: origin + "/api/auth",
+      returnUrl,
+    };
+    for (const changed of [
+      { state: "wrong" },
+      { iss: origin },
+      { returnUrl: returnUrl + "?x" },
+      { error: "access_denied" },
+    ]) {
+      assert.strictEqual(
+        (yield* account
+          .completeBrowserSignIn({ ...callback, ...changed }, browser)
+          .pipe(Effect.result))._tag,
+        "Failure",
+      );
+    }
+    assert.strictEqual(
+      (yield* account
+        .completeBrowserSignIn(
+          { state: attempt.attemptId, error: "access_denied", iss: callback.iss, returnUrl },
+          browser,
+        )
+        .pipe(Effect.result))._tag,
+      "Failure",
+    );
+    const next = yield* begin();
+    yield* TestClock.adjust("10 minutes");
+    assert.strictEqual(
+      (yield* account
+        .completeBrowserSignIn({ ...callback, state: next.attemptId }, browser)
+        .pipe(Effect.result))._tag,
+      "Failure",
+    );
+    assert.strictEqual((yield* account.status()).state, "signed-out");
+    assert.isFalse(f.requests.some((r) => r.url.endsWith("/token")));
+  }).pipe(Effect.provide(f.layer));
+});
+
+it.effect("allows native loopback only for authenticated desktop renderer contexts", () => {
+  const f = fixture({ mode: "desktop", devUrl: new URL("http://localhost:6157") });
+  return Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+    const nativeUrl = "http://127.0.0.1:49152/cloud/callback";
+    for (const context of [browser, { ...browser, origin: "http://localhost:6157" }]) {
+      assert.strictEqual(
+        (yield* account
+          .beginBrowserSignIn({ cloudUrl: origin, name: "Desktop", returnUrl: nativeUrl }, context)
+          .pipe(Effect.result))._tag,
+        "Failure",
+      );
+    }
+    for (const context of [
+      { ...browser, origin: "phoenix://app" },
+      { ...browser, origin: "http://localhost:6157", method: "desktop-bootstrap" },
+    ]) {
+      for (const invalid of [
+        "http://localhost:49152/cloud/callback",
+        "http://127.0.0.1/cloud/callback",
+        nativeUrl + "?x",
+        nativeUrl + "#",
+        "http://127.0.0.1:49152/other",
+      ]) {
+        assert.strictEqual(
+          (yield* account
+            .beginBrowserSignIn({ cloudUrl: origin, name: "Desktop", returnUrl: invalid }, context)
+            .pipe(Effect.result))._tag,
+          "Failure",
+        );
+      }
+      const attempt = yield* account.beginBrowserSignIn(
+        { cloudUrl: origin, name: "Desktop", returnUrl: nativeUrl },
+        context,
+      );
+      const callback = {
+        state: attempt.attemptId,
+        error: "access_denied",
+        iss: origin + "/api/auth",
+        returnUrl: nativeUrl,
+      };
+      assert.strictEqual(
+        (yield* account.completeBrowserSignIn(callback, browser).pipe(Effect.result))._tag,
+        "Failure",
+      );
+      assert.strictEqual(
+        (yield* account.completeBrowserSignIn(callback, context).pipe(Effect.flip)).reason,
+        "denied",
+      );
+    }
+  }).pipe(Effect.provide(f.layer));
+});
+
+it.effect(
+  "allows explicit HTTP development and replaces a failed browser attempt from the same session",
+  () => {
+    const f = fixture({ allowHttp: true });
+    return Effect.gen(function* () {
+      const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+      const context = { ...browser, origin: "http://localhost:6157" };
+      const input = {
+        cloudUrl: "http://localhost:3100",
+        name: "Dev",
+        returnUrl: context.origin + "/cloud/callback",
+      };
+      const first = yield* account.beginBrowserSignIn(input, context);
+      const second = yield* account.beginBrowserSignIn(input, context);
+      const callback = {
+        state: first.attemptId,
+        code: "code",
+        iss: input.cloudUrl + "/api/auth",
+        returnUrl: input.returnUrl,
+      };
+      assert.strictEqual(
+        (yield* account.completeBrowserSignIn(callback, context).pipe(Effect.result))._tag,
+        "Failure",
+      );
+      assert.strictEqual(
+        (yield* account.completeBrowserSignIn({ ...callback, state: second.attemptId }, context))
+          .state,
+        "signed-in",
+      );
+    }).pipe(Effect.provide(f.layer));
+  },
+);
+
+it.effect("failed exchange is consumed without saving credentials or unlocking ownership", () => {
+  const f = fixture({ tokenReplies: [{ status: 400, body: { error: "invalid_grant" } }] });
+  return Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+    const attempt = yield* account.beginBrowserSignIn(
+      { cloudUrl: origin, name: "Work", returnUrl },
+      browser,
+    );
+    const callback = {
+      state: attempt.attemptId,
+      code: "code",
+      iss: origin + "/api/auth",
+      returnUrl,
+    };
+    assert.strictEqual(
+      (yield* account.completeBrowserSignIn(callback, browser).pipe(Effect.result))._tag,
+      "Failure",
+    );
+    assert.strictEqual(
+      (yield* account.completeBrowserSignIn(callback, browser).pipe(Effect.result))._tag,
+      "Failure",
+    );
+    assert.strictEqual((yield* account.status()).state, "signed-out");
+    assert.isFalse(f.stored.has("phoenix-cloud-installation"));
+    assert.lengthOf(
+      f.requests.filter((r) => r.url.endsWith("/token")),
+      1,
+    );
+  }).pipe(Effect.provide(f.layer));
+});

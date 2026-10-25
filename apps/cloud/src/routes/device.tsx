@@ -1,6 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { currentUser, reviewInstallation, decideInstallation } from "~/server/functions";
+import {
+  currentUser,
+  reviewInstallation,
+  decideInstallation,
+  reviewBrowserInstallation,
+  decideBrowserInstallation,
+} from "~/server/functions";
 import { useAppForm } from "~/lib/form";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
@@ -10,11 +16,17 @@ export const Route = createFileRoute("/device")({
   validateSearch: (search: Record<string, unknown>) => ({
     user_code: typeof search.user_code === "string" ? search.user_code : "",
   }),
-  loader: () => currentUser(),
-  component: DeviceApproval,
+  loader: async ({ location }) => ({
+    user: await currentUser(),
+    // Preserve signed parameters byte-for-byte; search validation can coerce numeric values.
+    oauthQuery: new URLSearchParams(location.searchStr).has("client_id")
+      ? location.searchStr.slice(1)
+      : "",
+  }),
+  component: () => (Route.useLoaderData().oauthQuery ? <BrowserApproval /> : <DeviceApproval />),
 });
 function DeviceApproval() {
-  const user = Route.useLoaderData();
+  const { user } = Route.useLoaderData();
   const { user_code } = Route.useSearch();
   const [request, setRequest] = useState<Awaited<ReturnType<typeof reviewInstallation>> | null>(
     null,
@@ -138,6 +150,98 @@ function DeviceApproval() {
                   </form.Subscribe>
                 </form>
               )}
+              {error && (
+                <p role="alert" className="form-error">
+                  {error}
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </main>
+    </div>
+  );
+}
+
+function BrowserApproval() {
+  const { user } = Route.useLoaderData();
+  const { oauthQuery } = Route.useLoaderData();
+  const [request, setRequest] = useState<Awaited<
+    ReturnType<typeof reviewBrowserInstallation>
+  > | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    void reviewBrowserInstallation({ data: new URLSearchParams(oauthQuery).get("client_id") ?? "" })
+      .then((value) => {
+        if (active) setRequest(value);
+      })
+      .catch(() => {
+        if (active)
+          setError("This request is invalid or expired. Return to Phoenix and try again.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [user, oauthQuery]);
+  async function decide(approve: boolean) {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await decideBrowserInstallation({ data: { oauthQuery, approve } });
+      window.location.assign(result.url);
+    } catch {
+      setError("This request could not be completed. Return to Phoenix and start again.");
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="auth-page">
+      <header>
+        <Brand />
+      </header>
+      <main className="auth-layout">
+        <Card>
+          <CardContent>
+            <div className="auth-content">
+              <h1>Connect an installation</h1>
+              {!user ? (
+                <>
+                  <p>Sign in to approve your Phoenix installation.</p>
+                  <Link to="/login" search={{ redirect: `/device?${oauthQuery}` }}>
+                    Log in
+                  </Link>
+                  <Link to="/signup" search={{ redirect: `/device?${oauthQuery}` }}>
+                    Create an account
+                  </Link>
+                </>
+              ) : request ? (
+                <>
+                  <p>Signed in as {user.email}</p>
+                  <h2>{request.name}</h2>
+                  <p>{request.kind === "desktop" ? "Desktop" : "Remote server"}</p>
+                  <p>This name and type are reported by the installation.</p>
+                  <p>
+                    Installation identity: <code>{request.installationId}</code>
+                  </p>
+                  <p>Return to: {request.callback}</p>
+                  <p>
+                    Allow this installation to identify itself to Phoenix Cloud and report when it
+                    was last seen. You can revoke access in Devices.
+                  </p>
+                  <p>Only approve a machine you control.</p>
+                  <Button disabled={busy} onClick={() => void decide(true)}>
+                    Approve installation
+                  </Button>
+                  <Button variant="outline" disabled={busy} onClick={() => void decide(false)}>
+                    Deny
+                  </Button>
+                </>
+              ) : !error ? (
+                <p>Loading installation…</p>
+              ) : null}
               {error && (
                 <p role="alert" className="form-error">
                   {error}

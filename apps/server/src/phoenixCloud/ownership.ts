@@ -28,6 +28,8 @@ export const requireOwnership = Effect.fnUntraced(function* () {
 });
 
 const bootstrapMethods = new Set<string>([
+  WS_METHODS.phoenixCloudBeginBrowserSignIn,
+  WS_METHODS.phoenixCloudCompleteBrowserSignIn,
   WS_METHODS.phoenixCloudStatus,
   WS_METHODS.phoenixCloudBeginSignIn,
   WS_METHODS.phoenixCloudCompleteSignIn,

@@ -34,6 +34,8 @@ import * as RpcAuthorization from "./RpcAuthorization.ts";
 describe("RPC authorization scopes", () => {
   it("requires access administration for cloud account mutations", () => {
     for (const method of [
+      WS_METHODS.phoenixCloudBeginBrowserSignIn,
+      WS_METHODS.phoenixCloudCompleteBrowserSignIn,
       WS_METHODS.phoenixCloudBeginSignIn,
       WS_METHODS.phoenixCloudCompleteSignIn,
       WS_METHODS.phoenixCloudCancelSignIn,
