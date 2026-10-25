@@ -11,18 +11,17 @@ export const phoenixCloudStatus = createEnvironmentRpcQueryAtomFamily(connection
   staleTimeMs: 30_000,
   idleTtlMs: 60_000,
 });
-export const phoenixCloudBeginSignIn = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "phoenix-cloud:begin-sign-in",
-  tag: WS_METHODS.phoenixCloudBeginSignIn,
+export const phoenixCloudBeginBrowserSignIn = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "phoenix-cloud:begin-browser-sign-in",
+  tag: WS_METHODS.phoenixCloudBeginBrowserSignIn,
 });
-export const phoenixCloudCompleteSignIn = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "phoenix-cloud:complete-sign-in",
-  tag: WS_METHODS.phoenixCloudCompleteSignIn,
-});
-export const phoenixCloudCancelSignIn = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "phoenix-cloud:cancel-sign-in",
-  tag: WS_METHODS.phoenixCloudCancelSignIn,
-});
+export const phoenixCloudCompleteBrowserSignIn = createEnvironmentRpcCommand(
+  connectionAtomRuntime,
+  {
+    label: "phoenix-cloud:complete-browser-sign-in",
+    tag: WS_METHODS.phoenixCloudCompleteBrowserSignIn,
+  },
+);
 export const phoenixCloudSignOut = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "phoenix-cloud:sign-out",
   tag: WS_METHODS.phoenixCloudSignOut,

@@ -197,6 +197,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       items,
       ...(position === undefined ? {} : { position }),
     }),
+  preparePhoenixCloudCallback: () =>
+    ipcRenderer.invoke(IpcChannels.PREPARE_PHOENIX_CLOUD_CALLBACK_CHANNEL, undefined),
+  receivePhoenixCloudCallback: (url: string) =>
+    ipcRenderer.invoke(IpcChannels.RECEIVE_PHOENIX_CLOUD_CALLBACK_CHANNEL, url),
+  cancelPhoenixCloudCallback: (url: string) =>
+    ipcRenderer.invoke(IpcChannels.CANCEL_PHOENIX_CLOUD_CALLBACK_CHANNEL, url),
   receiveProviderAuthCallback: (url: string) =>
     ipcRenderer.invoke(IpcChannels.RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
   cancelProviderAuthCallback: (url: string) =>

@@ -125,3 +125,7 @@ export const RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:receive-provider-
 export const CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:cancel-provider-auth-callback";
 export const TAKE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:take-legacy-local-storage";
 export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-local-storage";
+
+export const PREPARE_PHOENIX_CLOUD_CALLBACK_CHANNEL = "desktop:prepare-phoenix-cloud-callback";
+export const RECEIVE_PHOENIX_CLOUD_CALLBACK_CHANNEL = "desktop:receive-phoenix-cloud-callback";
+export const CANCEL_PHOENIX_CLOUD_CALLBACK_CHANNEL = "desktop:cancel-phoenix-cloud-callback";

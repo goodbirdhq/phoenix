@@ -3,7 +3,6 @@ import { useId } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 
 import { usePhoenixCloudSignIn } from "../hooks/usePhoenixCloudAccount";
-import { ensureLocalApi } from "../localApi";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Field, FieldLabel, FieldError } from "./ui/field";
@@ -110,27 +109,11 @@ export function PhoenixCloudLinkForm({
       ) : null}
       {flow.attempt ? (
         <div className="flex flex-col gap-3" role="status">
-          <p className="text-sm">
-            Confirm code{" "}
-            <strong className="font-mono tracking-widest">{flow.attempt.userCode}</strong> on the
-            website.
-          </p>
+          <p className="text-sm">Finish approval in your browser to return to Phoenix.</p>
           <p className="text-xs text-muted-foreground">
             Waiting for approval. Expires {new Date(flow.attempt.expiresAt).toLocaleTimeString()}.
           </p>
           <div className="flex gap-2">
-            <Button
-              type="button"
-              onClick={() =>
-                void ensureLocalApi()
-                  .shell.openExternal(
-                    flow.attempt!.verificationUriComplete ?? flow.attempt!.verificationUri,
-                  )
-                  .catch(() => undefined)
-              }
-            >
-              Open website
-            </Button>
             <Button type="button" variant="outline" onClick={() => void flow.cancelSignIn()}>
               Cancel
             </Button>

@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./phoenixCloudCallback": {
+      "types": "./src/phoenixCloudCallback.ts",
+      "import": "./src/phoenixCloudCallback.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"

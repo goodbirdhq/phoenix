@@ -1113,6 +1113,9 @@ export interface DesktopBridge {
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },
   ) => Promise<T | null>;
+  preparePhoenixCloudCallback?: () => Promise<string>;
+  receivePhoenixCloudCallback?: (authorizationUrl: string) => Promise<string>;
+  cancelPhoenixCloudCallback?: (returnUrl: string) => Promise<void>;
   receiveProviderAuthCallback?: (authorizationUrl: string) => Promise<string>;
   cancelProviderAuthCallback?: (authorizationUrl: string) => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
