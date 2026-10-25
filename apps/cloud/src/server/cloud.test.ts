@@ -282,7 +282,14 @@ describe("installation OAuth device authorization", () => {
     expect(
       (await authRequest("device/approve", { userCode: grant.user_code }, other)).status,
     ).toBeGreaterThanOrEqual(400);
-    await approveInstallation(grant, owner);
+    const anotherSession = await authRequest("sign-in/email", {
+      email: "owner@example.com",
+      password: "a-long-test-password",
+    });
+    expect(anotherSession.status).toBe(200);
+    const ownerInAnotherSession = responseCookie(anotherSession);
+    expect(ownerInAnotherSession).not.toBe(owner);
+    await approveInstallation(grant, ownerInAnotherSession);
     const response = await pollInstallation(grant);
     expect(response.status).toBe(200);
     const tokens = await response.json();
