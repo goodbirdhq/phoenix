@@ -47,6 +47,7 @@ const fixture = (
     readonly mode?: "desktop" | "web";
     readonly devUrl?: URL;
     readonly allowHttp?: boolean;
+    readonly issuer?: string;
   } = {},
 ) => {
   const stored = new Map<string, Uint8Array>();
@@ -58,21 +59,26 @@ const fixture = (
         url: request.url,
         body: request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
       });
-      const reply = request.url.endsWith("/register")
-        ? { status: 200, body: { client_id: "client-id", installation_id: "cloud-id" } }
-        : request.url.endsWith("/device/code")
-          ? { status: 200, body: options.device ?? device }
-          : request.url.endsWith("/oauth2/token")
-            ? (replies.shift() ?? { status: 400, body: { error: "authorization_pending" } })
-            : request.url.endsWith("/disconnect")
-              ? {
-                  status:
-                    request.headers["content-type"] === "application/json"
-                      ? (options.disconnectStatus ?? 204)
-                      : 415,
-                  body: null,
-                }
-              : { status: options.currentStatus ?? 200, body: options.currentBody ?? current };
+      const reply = request.url.endsWith("/.well-known/oauth-authorization-server")
+        ? {
+            status: 200,
+            body: { issuer: options.issuer ?? new URL(request.url).origin + "/api/auth" },
+          }
+        : request.url.endsWith("/register")
+          ? { status: 200, body: { client_id: "client-id", installation_id: "cloud-id" } }
+          : request.url.endsWith("/device/code")
+            ? { status: 200, body: options.device ?? device }
+            : request.url.endsWith("/oauth2/token")
+              ? (replies.shift() ?? { status: 400, body: { error: "authorization_pending" } })
+              : request.url.endsWith("/disconnect")
+                ? {
+                    status:
+                      request.headers["content-type"] === "application/json"
+                        ? (options.disconnectStatus ?? 204)
+                        : 415,
+                    body: null,
+                  }
+                : { status: options.currentStatus ?? 200, body: options.currentBody ?? current };
       if (request.url.endsWith("/current")) {
         if (options.currentReady) yield* Deferred.succeed(options.currentReady, undefined);
         if (options.currentRelease) yield* Deferred.await(options.currentRelease);
@@ -779,5 +785,58 @@ it.effect("failed exchange is consumed without saving credentials or unlocking o
       f.requests.filter((r) => r.url.endsWith("/token")),
       1,
     );
+  }).pipe(Effect.provide(f.layer));
+});
+
+it.effect(
+  "binds explicit HTTP development to the pinned provider's advertised HTTPS issuer",
+  () => {
+    const cloudUrl = "http://remote.example.test:3100";
+    const issuer = "https://remote.example.test:3100/api/auth";
+    const f = fixture({ allowHttp: true, issuer });
+    return Effect.gen(function* () {
+      const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+      const attempt = yield* account.beginBrowserSignIn(
+        { cloudUrl, name: "Dev", returnUrl },
+        browser,
+      );
+      const callback = { state: attempt.attemptId, code: "code", iss: issuer, returnUrl };
+      assert.strictEqual(
+        (yield* account
+          .completeBrowserSignIn({ ...callback, iss: cloudUrl + "/api/auth" }, browser)
+          .pipe(Effect.result))._tag,
+        "Failure",
+      );
+      assert.strictEqual(
+        (yield* account.completeBrowserSignIn(callback, browser)).state,
+        "signed-in",
+      );
+      assert.isTrue(
+        f.requests.some(
+          (request) =>
+            request.url === cloudUrl + "/api/auth/.well-known/oauth-authorization-server",
+        ),
+      );
+    }).pipe(Effect.provide(f.layer));
+  },
+);
+
+it.effect.each([
+  "https://evil.test/api/auth",
+  origin + "/other",
+  origin + "/api/auth?x",
+  "http://cloud.example.test/api/auth",
+])("rejects discovery outside the configured HTTPS issuer: %s", (issuer) => {
+  const f = fixture({ issuer });
+  return Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+    assert.strictEqual(
+      (yield* account
+        .beginBrowserSignIn({ cloudUrl: origin, name: "Work", returnUrl }, browser)
+        .pipe(Effect.result))._tag,
+      "Failure",
+    );
+    assert.isFalse(f.requests.some((request) => request.url.endsWith("/register")));
+    assert.strictEqual((yield* account.status()).state, "signed-out");
   }).pipe(Effect.provide(f.layer));
 });

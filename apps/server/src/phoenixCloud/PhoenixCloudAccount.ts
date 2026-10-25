@@ -69,6 +69,7 @@ const Current = Schema.Struct({
   user: Schema.Struct({ id: Schema.String, name: Schema.String, email: Schema.String }),
 });
 const OAuthError = Schema.Struct({ error: Schema.String });
+const AuthorizationServer = Schema.Struct({ issuer: Schema.String });
 
 type BrowserContext = {
   readonly sessionId: string;
@@ -79,6 +80,7 @@ type BrowserAttempt = {
   readonly id: string;
   readonly credential: Pick<Credential, "cloudUrl" | "clientId">;
   readonly verifier: string;
+  readonly issuer: string;
   readonly returnUrl: string;
   readonly context: BrowserContext;
   readonly expiresAt: number;
@@ -578,6 +580,23 @@ const make = Effect.gen(function* () {
         );
         if (isCloudOriginError(cloudUrl))
           return yield* new PhoenixCloudAccountError({ reason: "configuration" });
+        const discovery = yield* request(
+          HttpClientRequest.get(`${cloudUrl}/api/auth/.well-known/oauth-authorization-server`),
+        );
+        if (discovery.status !== 200)
+          return yield* new PhoenixCloudAccountError({
+            reason: discovery.status >= 500 ? "network" : "protocol",
+          });
+        const { issuer } = yield* decode(AuthorizationServer)(discovery);
+        // Pinned Better Auth advertises HTTPS for non-loopback HTTP dev origins.
+        // Trust discovery only from this configured authority, then bind its exact issuer.
+        const expectedIssuer = `${cloudUrl}/api/auth`;
+        const devHttpsIssuer =
+          allowHttp === "1" && cloudUrl.startsWith("http:")
+            ? expectedIssuer.replace(/^http:/, "https:")
+            : expectedIssuer;
+        if (issuer !== expectedIssuer && issuer !== devHttpsIssuer)
+          return yield* new PhoenixCloudAccountError({ reason: "protocol" });
         const registration = yield* register(cloudUrl, name, input.returnUrl);
         const verifier = Buffer.from(
           yield* crypto
@@ -610,6 +629,7 @@ const make = Effect.gen(function* () {
           id,
           credential: { cloudUrl, clientId: registration.client_id },
           verifier,
+          issuer,
           returnUrl: input.returnUrl,
           context,
           expiresAt,
@@ -634,7 +654,7 @@ const make = Effect.gen(function* () {
             context.origin !== attempt.context.origin ||
             input.returnUrl !== attempt.returnUrl ||
             !validateReturnUrl(input.returnUrl, context) ||
-            input.iss !== `${attempt.credential.cloudUrl}/api/auth` ||
+            input.iss !== attempt.issuer ||
             !!input.code === !!input.error
           )
             return yield* new PhoenixCloudAccountError({ reason: "protocol" });
