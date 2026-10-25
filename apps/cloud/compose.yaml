@@ -1,0 +1,26 @@
+name: phoenix-cloud
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-phoenix_cloud}
+      POSTGRES_USER: ${POSTGRES_USER:-phoenix_cloud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-phoenix_local}
+    ports:
+      - "127.0.0.1:55433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-phoenix_cloud} -d ${POSTGRES_DB:-phoenix_cloud}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  postgres-data:
