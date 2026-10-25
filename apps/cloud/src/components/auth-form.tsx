@@ -11,7 +11,7 @@ import { Brand } from "./brand";
 export function AuthForm({ signup = false }: { signup?: boolean }) {
   const [error, setError] = useState("");
   const form = useAppForm({
-    defaultValues: { name: "", email: "", password: "" },
+    defaultValues: { name: "", email: "", password: "", inviteCode: "" },
     validators: { onSubmit: signup ? signupInput : loginInput },
     onSubmit: async ({ value }) => {
       setError("");
@@ -92,6 +92,21 @@ export function AuthForm({ signup = false }: { signup?: boolean }) {
                   )}
                 </form.AppField>
                 {signup && <p className="field-hint">Use at least 12 characters.</p>}
+                {signup && (
+                  <form.AppField name="inviteCode">
+                    {(field) => (
+                      <field.TextField
+                        label="Invite code"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        required
+                        minLength={6}
+                        maxLength={6}
+                        pattern="[0-9]{6}"
+                      />
+                    )}
+                  </form.AppField>
+                )}
                 {error && (
                   <p role="alert" className="form-error">
                     {error}

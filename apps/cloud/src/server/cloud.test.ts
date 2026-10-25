@@ -112,11 +112,43 @@ function responseCookie(response: Response) {
 }
 
 describe("email and password authentication", () => {
+  it("accepts the same invite code for multiple accounts", async () => {
+    for (const email of ["first-invite@example.com", "second-invite@example.com"]) {
+      const response = await authRequest("sign-up/email", {
+        name: "Invited user",
+        email,
+        password: "a-long-test-password",
+        inviteCode: "268923",
+      });
+      expect(response.status).toBe(200);
+      expect(responseCookie(response)).toContain("session_token");
+    }
+  });
+  it("rejects missing and incorrect invite codes without creating an account or session", async () => {
+    for (const inviteCode of [undefined, "", "000000", 268923]) {
+      const response = await authRequest("sign-up/email", {
+        name: "Invited user",
+        email: "invite@example.com",
+        password: "a-long-test-password",
+        inviteCode,
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json()).message).toBe("Enter a valid invite code.");
+      expect(responseCookie(response)).not.toContain("session_token");
+    }
+    expect((await db.select().from(schema.user)).map((row) => row.id).sort()).toEqual([
+      "alice",
+      "bob",
+    ]);
+    expect(await db.select().from(schema.session)).toEqual([]);
+  });
+
   it("signs up, persists an authenticated session, rejects incorrect passwords, logs out, and logs back in", async () => {
     const signedUp = await authRequest("sign-up/email", {
       name: "Charlie",
       email: "charlie@example.com",
       password: "a-long-test-password",
+      inviteCode: "268923",
     });
     expect(signedUp.status).toBe(200);
     const cookie = responseCookie(signedUp);
@@ -147,6 +179,7 @@ describe("email and password authentication", () => {
       name: "Charlie",
       email: "charlie@example.com",
       password: "a-long-test-password",
+      inviteCode: "268923",
     });
     expect(first.status).toBe(200);
     expect(
@@ -155,6 +188,7 @@ describe("email and password authentication", () => {
           name: "Charlie",
           email: "charlie@example.com",
           password: "a-long-test-password",
+          inviteCode: "268923",
         })
       ).status,
     ).toBeGreaterThanOrEqual(400);
@@ -164,6 +198,7 @@ describe("email and password authentication", () => {
           name: "Short",
           email: "short@example.com",
           password: "short",
+          inviteCode: "268923",
         })
       ).status,
     ).toBeGreaterThanOrEqual(400);

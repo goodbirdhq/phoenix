@@ -47,7 +47,8 @@ When opening the app from another machine, set `BETTER_AUTH_URL` in the local
 allowlist uses that origin's hostname, and Better Auth uses it for authentication.
 Use that same origin consistently for signup and login.
 
-This local foundation supports email/password accounts and workspace management.
+This local foundation supports invite-gated email/password signup and workspace management.
+New accounts require the shared invite code; existing accounts log in normally.
 The Devices page lists installation records; desktop/CLI linking and automatic
 tunnels are not connected yet. Email verification and password recovery delivery
 also need configuration before a public deployment.

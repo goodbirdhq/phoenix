@@ -14,10 +14,12 @@ export const installationInput = z.object({
 });
 export const loginInput = z.object({
   name: z.string(),
+  inviteCode: z.string(),
   email: z.email("Enter a valid email address."),
   password: z.string().min(1, "Enter your password."),
 });
 export const signupInput = loginInput.extend({
+  inviteCode: z.string().regex(/^\d{6}$/, "Enter your six-digit invite code."),
   name: displayName,
   password: z
     .string()
