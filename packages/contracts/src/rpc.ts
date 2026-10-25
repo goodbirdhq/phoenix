@@ -924,7 +924,7 @@ const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
 });
 
 const WsPhoenixCloudStatusRpc = Rpc.make(WS_METHODS.phoenixCloudStatus, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({ refresh: Schema.optionalKey(Schema.Boolean) }),
   success: PhoenixCloudAccountStatus,
   error: Schema.Union([PhoenixCloudAccountError, EnvironmentAuthorizationError]),
 });

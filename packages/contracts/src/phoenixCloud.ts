@@ -8,6 +8,7 @@ export const PhoenixCloudInstallation = Schema.Struct({
 
 export const PhoenixCloudAccountStatus = Schema.Union([
   Schema.Struct({ state: Schema.Literal("signed-out") }),
+  Schema.Struct({ state: Schema.Literal("unavailable") }),
   Schema.Struct({
     state: Schema.Literal("signed-in"),
     cloudUrl: Schema.String,
