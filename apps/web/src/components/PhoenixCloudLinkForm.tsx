@@ -1,10 +1,12 @@
 import { createFormHook, createFormHookContexts, useStore } from "@tanstack/react-form";
+import { useId } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 
 import { usePhoenixCloudSignIn } from "../hooks/usePhoenixCloudAccount";
 import { ensureLocalApi } from "../localApi";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Field, FieldLabel, FieldError } from "./ui/field";
 
 const { fieldContext, formContext, useFieldContext } = createFormHookContexts();
 
@@ -19,12 +21,17 @@ function LinkTextField({
   maxLength?: number;
   placeholder?: string;
 }) {
+  const id = useId();
+  const errorId = `${id}-error`;
   const field = useFieldContext<string>();
   const errors = useStore(field.store, (state) => state.meta.errors);
   return (
-    <label className="flex flex-col gap-2 text-sm">
-      {label}
+    <Field data-invalid={errors.length > 0} data-disabled={disabled}>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
       <Input
+        id={id}
+        name={field.name}
+        aria-describedby={errors.length > 0 ? errorId : undefined}
         aria-invalid={errors.length > 0}
         value={field.state.value}
         onChange={(event) => field.handleChange(event.target.value)}
@@ -34,11 +41,9 @@ function LinkTextField({
         placeholder={placeholder}
       />
       {errors.length > 0 ? (
-        <span role="alert" className="text-xs text-destructive-foreground">
-          {errors.map(String).join(". ")}
-        </span>
+        <FieldError id={errorId} errors={errors.map((error) => ({ message: String(error) }))} />
       ) : null}
-    </label>
+    </Field>
   );
 }
 
