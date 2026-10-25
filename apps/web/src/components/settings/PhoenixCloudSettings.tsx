@@ -54,20 +54,23 @@ export function PhoenixCloudSettings({
         </SettingsRow>
       ) : account.loggingOut ? (
         <SettingsRow title="Logging out…" />
-      ) : account.logoutError ? (
-        <SettingsRow title="Could not finish logout" description={account.logoutError}>
-          <Button variant="outline" onClick={() => void account.logout()}>
-            Retry logout
-          </Button>
-        </SettingsRow>
       ) : view === "link" ? (
-        <div className="p-3 sm:p-4">
-          <PhoenixCloudLinkForm
-            key={environmentId}
-            environmentId={environmentId}
-            environmentLabel={environmentLabel}
-          />
-        </div>
+        <>
+          {account.logoutError ? (
+            <SettingsRow title="Could not finish logout" description={account.logoutError}>
+              <Button variant="outline" onClick={() => void account.logout()}>
+                Retry logout
+              </Button>
+            </SettingsRow>
+          ) : null}
+          <div className="p-3 sm:p-4">
+            <PhoenixCloudLinkForm
+              key={environmentId}
+              environmentId={environmentId}
+              environmentLabel={environmentLabel}
+            />
+          </div>
+        </>
       ) : (
         <SettingsRow
           title={

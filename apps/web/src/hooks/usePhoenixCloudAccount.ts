@@ -3,6 +3,7 @@ import type { EnvironmentId, PhoenixCloudSignInAttempt } from "@t3tools/contract
 import { Atom } from "effect/reactivity";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
+import { reconcilePhoenixCloudLogout } from "./phoenixCloudLogout";
 import { ensureLocalApi } from "../localApi";
 import {
   phoenixCloudBeginSignIn,
@@ -15,7 +16,7 @@ import {
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 
-// Logout closes the app before its RPC settles. Only a new approved link clears it.
+// Suppress stale signed-in data until the server acknowledges persisted local logout.
 const localLogout = Atom.family((_environmentId: EnvironmentId) =>
   Atom.make({ signedOut: false, pending: false, error: null as string | null }).pipe(
     Atom.keepAlive,
@@ -27,6 +28,12 @@ export function usePhoenixCloudAccount(environmentId: EnvironmentId) {
   const status = useEnvironmentQuery(phoenixCloudStatus({ environmentId, input: {} }));
   const local = useAtomValue(localLogout(environmentId));
   const setLocal = useAtomSet(localLogout(environmentId));
+  const confirmed = status.isSuccess && !status.isPending;
+  const ownershipState = status.data?.state;
+  useEffect(() => {
+    const reconciled = reconcilePhoenixCloudLogout(local, { state: ownershipState, confirmed });
+    if (reconciled !== local) setLocal(reconciled);
+  }, [local, ownershipState, confirmed, setLocal]);
   const setSignedOut = (signedOut: boolean) => setLocal({ signedOut, pending: false, error: null });
   const signOut = useAtomCommand(phoenixCloudSignOut);
   const refreshStatus = useAtomCommand(phoenixCloudRefreshStatus);

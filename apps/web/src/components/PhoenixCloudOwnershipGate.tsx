@@ -91,21 +91,24 @@ function EnvironmentOwnershipGate({
           <p role="status" className="text-sm text-muted-foreground">
             Logging out…
           </p>
-        ) : account.logoutError ? (
-          <>
-            <p role="alert" className="text-sm text-muted-foreground">
-              {account.logoutError}
-            </p>
-            <Button variant="outline" onClick={() => void account.logout()}>
-              Retry logout
-            </Button>
-          </>
         ) : linking ? (
-          <PhoenixCloudLinkForm
-            key={environmentId}
-            environmentId={environmentId}
-            environmentLabel={environmentLabel}
-          />
+          <>
+            {account.logoutError ? (
+              <>
+                <p role="alert" className="text-sm text-muted-foreground">
+                  {account.logoutError}
+                </p>
+                <Button variant="outline" onClick={() => void account.logout()}>
+                  Retry logout
+                </Button>
+              </>
+            ) : null}
+            <PhoenixCloudLinkForm
+              key={environmentId}
+              environmentId={environmentId}
+              environmentLabel={environmentLabel}
+            />
+          </>
         ) : (
           <>
             <p role={failed ? "alert" : "status"} className="text-sm text-muted-foreground">
