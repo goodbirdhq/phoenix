@@ -5,6 +5,9 @@
   // These executables are supplied by the OS or installed separately from npm.
   "ignoreBinaries": ["eas", "file", "mkfifo", "pkill", "pkg-config", "plutil", "sips"],
   "workspaces": {
+    "apps/cloud": {
+      "entry": ["vite.test.config.ts"],
+    },
     ".": {
       // Keep vendored reference repositories outside the root project.
       "project": ["*.{js,mjs,cjs,ts,mts,cts}", ".github/**/*.cjs"],

@@ -42,6 +42,16 @@ vp run dev:cloud
 
 Open `http://localhost:3100` after startup.
 
+When opening the app from another machine, set `BETTER_AUTH_URL` in the local
+`.env` to the exact origin you will open, then restart the app. The Vite host
+allowlist uses that origin's hostname, and Better Auth uses it for authentication.
+Use that same origin consistently for signup and login.
+
+This local foundation supports email/password accounts and workspace management.
+The Devices page lists installation records; desktop/CLI linking and automatic
+tunnels are not connected yet. Email verification and password recovery delivery
+also need configuration before a public deployment.
+
 To stop this database, run `docker compose -f apps/cloud/compose.yaml down`.
 This keeps the named data volume so the database is available the next time
 you start it. Do not add `-v` unless you intend to delete the local database.

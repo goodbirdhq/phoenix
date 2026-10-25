@@ -1,4 +1,5 @@
-import { assert, it } from "@effect/vitest";
+import * as NodeAssert from "node:assert/strict";
+import { it } from "vite-plus/test";
 
 import { groupDivergence, identityOnlyFiles, registeredPaths } from "./upstream-divergence.ts";
 
@@ -17,7 +18,7 @@ const register = `# Divergence
 `;
 
 it("reads only the Where column of the register table", () => {
-  assert.deepStrictEqual(registeredPaths(register), [
+  NodeAssert.deepStrictEqual(registeredPaths(register), [
     "apps/server/src/telemetry/AnalyticsService.ts",
     ".github/workflows/",
     "packaging/aur/",
@@ -39,7 +40,7 @@ it("groups differing files by owner, register coverage, and identity renames", (
     registered: registeredPaths(register),
   });
 
-  assert.deepStrictEqual(report, {
+  NodeAssert.deepStrictEqual(report, {
     phoenix: ["apps/web/src/components/sidebar/SidebarFooter.tsx"],
     registered: [
       ".github/workflows/release.yml",
@@ -68,5 +69,5 @@ it("counts a file as identity-only when every changed line is a rename", () => {
     "+const retries = 3;",
   ].join("\n");
 
-  assert.deepStrictEqual([...identityOnlyFiles(diff)], ["apps/server/src/config.ts"]);
+  NodeAssert.deepStrictEqual([...identityOnlyFiles(diff)], ["apps/server/src/config.ts"]);
 });

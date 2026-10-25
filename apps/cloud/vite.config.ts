@@ -9,7 +9,11 @@ export default defineConfig(({ mode }) => {
   Object.assign(process.env, loadEnv(mode, process.cwd(), ""));
   return {
     resolve: { alias: { "~": NodeURL.fileURLToPath(new URL("./src", import.meta.url)) } },
-    server: { port: 3100, strictPort: true },
+    server: {
+      port: 3100,
+      strictPort: true,
+      allowedHosts: [new URL(process.env.BETTER_AUTH_URL ?? "http://localhost:3100").hostname],
+    },
     plugins: [tailwindcss(), tanstackStart(), nitro(), react()],
   };
 });
