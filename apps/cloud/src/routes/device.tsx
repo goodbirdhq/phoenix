@@ -89,6 +89,7 @@ function DeviceApproval() {
                   <p>Signed in as {user.email}</p>
                   <h2>{request.name}</h2>
                   <p>{request.kind === "desktop" ? "Desktop" : "Remote server"}</p>
+                  <p>This name and type are reported by the installation.</p>
                   <p>
                     Installation identity: <code>{request.installationId}</code>
                   </p>
