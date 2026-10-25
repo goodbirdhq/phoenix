@@ -27,3 +27,8 @@ export const phoenixCloudSignOut = createEnvironmentRpcCommand(connectionAtomRun
   label: "phoenix-cloud:sign-out",
   tag: WS_METHODS.phoenixCloudSignOut,
 });
+
+export const phoenixCloudRefreshStatus = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "phoenix-cloud:refresh-status",
+  tag: WS_METHODS.phoenixCloudStatus,
+});

@@ -1,3 +1,4 @@
+import { PhoenixCloudSettings } from "./PhoenixCloudSettings";
 import { SessionPermissions } from "./SessionPermissions";
 import {
   ChevronRightIcon,
@@ -114,6 +115,7 @@ export function SavedBackendListRow({
 }: SavedBackendListRowProps) {
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
+  const [ownershipOpen, setOwnershipOpen] = useState(false);
   const [diagnosisOpen, setDiagnosisOpen] = useState(false);
   const environmentId = environment.environmentId;
   const unsupported = environment.connection.phase === "unsupported";
@@ -338,6 +340,15 @@ export function SavedBackendListRow({
               onAddRoute={() => onAddRoute(environment)}
             />
           )}
+          {ownershipOpen && isConnected ? (
+            <div className="mt-3">
+              <PhoenixCloudSettings
+                key={environmentId}
+                environmentId={environmentId}
+                environmentLabel={environment.label}
+              />
+            </div>
+          ) : null}
           {permissionsOpen && (
             <div
               id={`remote-permissions-${environmentId}`}
@@ -415,6 +426,9 @@ export function SavedBackendListRow({
           <MenuItem onClick={() => setRoutesOpen((open) => !open)}>
             <RouteIcon />
             {routesOpen ? "Hide routes" : "Routes"}
+          </MenuItem>
+          <MenuItem disabled={!isConnected} onClick={() => setOwnershipOpen((open) => !open)}>
+            {ownershipOpen ? "Hide Phoenix Cloud ownership" : "Phoenix Cloud ownership"}
           </MenuItem>
           {mcpUrl ? (
             <MenuItem onClick={() => copyMcpUrl(mcpUrl, { url: mcpUrl })}>Copy MCP URL</MenuItem>

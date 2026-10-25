@@ -1,3 +1,4 @@
+import { PhoenixCloudOwnershipGate } from "../components/PhoenixCloudOwnershipGate";
 import { PermissionUpdateNotice } from "../components/PermissionUpdateNotice";
 import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -187,11 +188,13 @@ function RootRouteView() {
           <FontAppearanceSync />
           <ProviderAuthCallbackCoordinator />
           <CustomSnoozeDialogHost />
-          <CommandPalette>
-            <AppSidebarLayout>
-              <Outlet />
-            </AppSidebarLayout>
-          </CommandPalette>
+          <PhoenixCloudOwnershipGate requireEnvironment={primaryEnvironmentAuthenticated}>
+            <CommandPalette>
+              <AppSidebarLayout>
+                <Outlet />
+              </AppSidebarLayout>
+            </CommandPalette>
+          </PhoenixCloudOwnershipGate>
         </AnchoredToastProvider>
       </ToastProvider>
     );
@@ -226,39 +229,41 @@ function RootRouteView() {
         <FontAppearanceSync />
         <ProviderAuthCallbackCoordinator />
         <ChatGptWelcomeCoordinator />
-        <FirstRunGate
-          enabled={primaryEnvironmentAuthenticated}
-          hostedStatic={authGateState.status === "hosted-static"}
-        >
-          {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
-          {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
-          {primaryEnvironmentAuthenticated ? <DesktopWebLinkCoordinator /> : null}
-          {isElectron ? <RunningThreadKeepAlive /> : null}
-          <RelayClientInstallDialog />
-          <ConnectOnboardingDialog />
-          <SshPasswordPromptDialog />
-          <SnapShotCoordinator />
-          <ThreadNotificationCoordinator />
-          <ReopenClosedViewShortcut />
-          <ConfirmDialogHost />
-          <CustomSnoozeDialogHost />
-          <SlowRpcRequestToastCoordinator />
-          <HostFreezeToastCoordinator />
-          <PermissionUpdateNotice />
-          {primaryEnvironmentAuthenticated ? <LegacyThreadMigrationToast /> : null}
-          <ProjectCloneToastCoordinator />
-          <AddProjectToMachineDialogHost />
-          <PullRequestGuideRunCoordinator />
-          <HostedStaticEnvironmentBootstrap />
-          {primaryEnvironmentAuthenticated ? (
-            <EventRouter skipInitialBootstrapNavigation={returningFromWelcome} />
-          ) : null}
-          {isElectron ? <DesktopUpdateLaunchNotice /> : null}
-          {appShell}
-          {/* Above the router: a theme draft is judged by walking the app, so the
+        <PhoenixCloudOwnershipGate requireEnvironment={primaryEnvironmentAuthenticated}>
+          <FirstRunGate
+            enabled={primaryEnvironmentAuthenticated}
+            hostedStatic={authGateState.status === "hosted-static"}
+          >
+            {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
+            {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
+            {primaryEnvironmentAuthenticated ? <DesktopWebLinkCoordinator /> : null}
+            {isElectron ? <RunningThreadKeepAlive /> : null}
+            <RelayClientInstallDialog />
+            <ConnectOnboardingDialog />
+            <SshPasswordPromptDialog />
+            <SnapShotCoordinator />
+            <ThreadNotificationCoordinator />
+            <ReopenClosedViewShortcut />
+            <ConfirmDialogHost />
+            <CustomSnoozeDialogHost />
+            <SlowRpcRequestToastCoordinator />
+            <HostFreezeToastCoordinator />
+            <PermissionUpdateNotice />
+            {primaryEnvironmentAuthenticated ? <LegacyThreadMigrationToast /> : null}
+            <ProjectCloneToastCoordinator />
+            <AddProjectToMachineDialogHost />
+            <PullRequestGuideRunCoordinator />
+            <HostedStaticEnvironmentBootstrap />
+            {primaryEnvironmentAuthenticated ? (
+              <EventRouter skipInitialBootstrapNavigation={returningFromWelcome} />
+            ) : null}
+            {isElectron ? <DesktopUpdateLaunchNotice /> : null}
+            {appShell}
+            {/* Above the router: a theme draft is judged by walking the app, so the
               editor has to survive navigation away from settings. */}
-          <ThemeEditorHost />
-        </FirstRunGate>
+            <ThemeEditorHost />
+          </FirstRunGate>
+        </PhoenixCloudOwnershipGate>
       </AnchoredToastProvider>
     </ToastProvider>
   );

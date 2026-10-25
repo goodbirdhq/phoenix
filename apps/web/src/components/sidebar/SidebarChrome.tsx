@@ -7,7 +7,7 @@ import {
   CalendarClockIcon,
   ChartNoAxesColumnIcon,
   CodeXmlIcon,
-  KeyboardIcon,
+  LogOutIcon,
   PaletteIcon,
   ServerIcon,
   Settings2Icon,
@@ -17,6 +17,11 @@ import type { ReactNode } from "react";
 import { memo, useEffect } from "react";
 import { Link, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 
+import { Avatar, AvatarFallback } from "../ui/avatar";
+import { usePhoenixCloudAccount } from "../../hooks/usePhoenixCloudAccount";
+import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useActiveEnvironmentId } from "../../state/entities";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { APP_BASE_NAME } from "~/branding";
 import { isElectron } from "../../env";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
@@ -184,18 +189,29 @@ function SidebarUtilityItem({
 const SETTINGS_MENU_ITEMS = [
   { to: "/settings/general", label: "General", Icon: Settings2Icon },
   { to: "/settings/appearance", label: "Appearance", Icon: PaletteIcon },
-  { to: "/settings/keybindings", label: "Keybindings", Icon: KeyboardIcon },
+  { to: "/settings/connections", label: "Connections", Icon: ServerIcon },
   { to: "/settings/providers", label: "Providers", Icon: BotIcon },
 ] as const;
 
-function SidebarSettingsMenu({
+function SidebarAccountMenu({
   update,
   onNavigate,
+  environmentId,
 }: {
+  environmentId: EnvironmentId;
   update: SidebarUpdate;
   onNavigate: () => void;
 }) {
   const navigate = useNavigate();
+  const account = usePhoenixCloudAccount(environmentId);
+  const ownership = account.status.data?.state === "signed-in" ? account.status.data : null;
+  const identity = ownership?.account;
+  const initials = (identity?.name.trim() || identity?.email || "Phoenix")
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const providerUpdateCount = collectProviderUpdateCandidates(providers).length;
   const trigger = (
@@ -204,7 +220,7 @@ function SidebarSettingsMenu({
         <button
           type="button"
           aria-label={[
-            "Settings",
+            identity ? `Account: ${identity.email}` : "Phoenix Cloud account",
             update.desktopUpdateAvailable ? "update available" : null,
             providerUpdateCount > 0 ? `${providerUpdateCount} provider updates available` : null,
           ]
@@ -217,7 +233,9 @@ function SidebarSettingsMenu({
         />
       }
     >
-      <SettingsIcon className="size-4" />
+      <Avatar size="sm">
+        <AvatarFallback>{initials}</AvatarFallback>
+      </Avatar>
       {update.desktopUpdateAvailable ? (
         <span className="absolute right-1 top-[3px] size-1.75 rounded-full border border-sidebar bg-info" />
       ) : providerUpdateCount > 0 ? (
@@ -245,19 +263,18 @@ function SidebarSettingsMenu({
           trigger
         )}
         <MenuPopup side="top" align="end" className="w-68">
-          <MenuItem
-            className="h-8"
-            onClick={() => {
-              onNavigate();
-              void navigate({ to: "/settings" });
-            }}
-          >
-            <SettingsIcon className="size-4" />
-            All settings…
-            {isElectron ? (
-              <MenuShortcut>{isMacPlatform(navigator.platform) ? "⌘," : "Ctrl+,"}</MenuShortcut>
-            ) : null}
-          </MenuItem>
+          <div className="flex flex-col gap-0.5 px-2 py-2">
+            <span className="text-xs text-muted-foreground">
+              Installation: {ownership?.installation.name ?? "Phoenix"}
+            </span>
+            <span className="truncate text-sm font-medium">
+              {identity?.name || "Phoenix Cloud"}
+            </span>
+            <span className="truncate text-xs text-muted-foreground">
+              {identity?.email ?? "Installation account"}
+            </span>
+          </div>
+          <MenuSeparator />
           {SETTINGS_MENU_ITEMS.map(({ to, label, Icon }) => (
             <MenuItem
               key={to}
@@ -280,12 +297,36 @@ function SidebarSettingsMenu({
               ) : null}
             </MenuItem>
           ))}
+          <MenuItem
+            className="h-8"
+            onClick={() => {
+              onNavigate();
+              void navigate({ to: "/settings" });
+            }}
+          >
+            <SettingsIcon className="size-4" />
+            All settings…
+            {isElectron ? (
+              <MenuShortcut>{isMacPlatform(navigator.platform) ? "⌘," : "Ctrl+,"}</MenuShortcut>
+            ) : null}
+          </MenuItem>
           {update.visible ? (
             <>
               <MenuSeparator />
               <SidebarUpdateMenuItem update={update} />
             </>
           ) : null}
+          <MenuSeparator />
+          <MenuItem
+            disabled={!account.allowed || account.loggingOut}
+            onClick={() => {
+              onNavigate();
+              void account.logout();
+            }}
+          >
+            <LogOutIcon />
+            Logout
+          </MenuItem>
         </MenuPopup>
       </Menu>
       {update.confirmDialog}
@@ -317,6 +358,9 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) => resolveSidebarFooterPage(location.pathname),
   });
   const pullRequestsSupported = usePullRequestsSupported();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const activeEnvironmentId = useActiveEnvironmentId();
+  const accountEnvironmentId = primaryEnvironmentId ?? activeEnvironmentId;
   const closeMobileSidebar = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -395,9 +439,16 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             />
             {/* The Environments page is a follow-up; until then the tab is inert. */}
             <SidebarUtilityItem icon={<ServerIcon />} label="Environments" onClick={() => {}} />
-            <SidebarSettingsMenu update={update} onNavigate={closeMobileSidebar} />
           </>
         )}
+        {accountEnvironmentId ? (
+          <SidebarAccountMenu
+            key={accountEnvironmentId}
+            environmentId={accountEnvironmentId}
+            update={update}
+            onNavigate={closeMobileSidebar}
+          />
+        ) : null}
       </SidebarMenu>
     </>
   );
