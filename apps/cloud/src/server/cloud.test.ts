@@ -1,3 +1,10 @@
+import {
+  createRouter,
+  createRootRoute,
+  createRoute,
+  createMemoryHistory,
+} from "@tanstack/react-router";
+import { parseCloudSearch, stringifyCloudSearch, deviceSearch } from "../lib/oauth-search";
 import * as NodeFSP from "node:fs/promises";
 import { eq, inArray } from "drizzle-orm";
 import { createInstallationStore } from "./installations";
@@ -730,5 +737,33 @@ describe("installation authorization code flow", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+  it("preserves provider signatures through the actual router search normalization", async () => {
+    const cookie = await cloudSignup();
+    const flow = await authorize(cookie);
+    const root = createRootRoute();
+    const route = createRoute({
+      getParentRoute: () => root,
+      path: "/device",
+      validateSearch: deviceSearch,
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([route]),
+      history: createMemoryHistory({ initialEntries: ["/device?" + flow.oauth_query] }),
+      parseSearch: parseCloudSearch,
+      stringifySearch: stringifyCloudSearch,
+    });
+    const normalized = router.buildLocation({
+      to: "/device",
+      search: (previous) => previous,
+      _includeValidateSearch: true,
+    });
+    const response = await authRequest(
+      "oauth2/consent",
+      { oauth_query: normalized.searchStr.slice(1), accept: true },
+      cookie,
+    );
+    expect(response.status).toBe(200);
+    expect(new URL((await response.json()).url).searchParams.get("code")).toBeTruthy();
   });
 });

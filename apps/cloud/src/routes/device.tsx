@@ -7,15 +7,14 @@ import {
   reviewBrowserInstallation,
   decideBrowserInstallation,
 } from "~/server/functions";
+import { deviceSearch } from "~/lib/oauth-search";
 import { useAppForm } from "~/lib/form";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
 import { Brand } from "~/components/brand";
 
 export const Route = createFileRoute("/device")({
-  validateSearch: (search: Record<string, unknown>) => ({
-    user_code: typeof search.user_code === "string" ? search.user_code : "",
-  }),
+  validateSearch: deviceSearch,
   loader: async ({ location }) => ({
     user: await currentUser(),
     // Preserve signed parameters byte-for-byte; search validation can coerce numeric values.
@@ -27,7 +26,7 @@ export const Route = createFileRoute("/device")({
 });
 function DeviceApproval() {
   const { user } = Route.useLoaderData();
-  const { user_code } = Route.useSearch();
+  const { user_code = "" } = Route.useSearch();
   const [request, setRequest] = useState<Awaited<ReturnType<typeof reviewInstallation>> | null>(
     null,
   );
