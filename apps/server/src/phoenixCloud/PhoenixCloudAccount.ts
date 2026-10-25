@@ -2,7 +2,7 @@ import {
   PhoenixCloudAccountError,
   PhoenixCloudAccountStatus,
   type PhoenixCloudSignInAttempt,
-  type PhoenixCloudSignInInput,
+  PhoenixCloudSignInInput,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
@@ -29,12 +29,15 @@ const Credential = Schema.Struct({
   accessToken: Schema.String,
   refreshToken: Schema.String,
   expiresAt: Schema.Number,
+  scopes: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 type Credential = typeof Credential.Type;
 const CredentialJson = Schema.fromJsonString(Credential);
 const decodeCredential = Schema.decodeEffect(CredentialJson);
 const encodeCredential = Schema.encodeEffect(CredentialJson);
 const isCloudOriginError = Schema.is(CloudOriginError);
+const decodeInstallationName = Schema.decodeEffect(PhoenixCloudSignInInput.fields.name);
+const grantedScopes = (scope: string) => scope.split(/\s+/).filter(Boolean);
 const Registration = Schema.Struct({ client_id: Schema.String, installation_id: Schema.String });
 const DeviceCode = Schema.Struct({
   device_code: Schema.String,
@@ -45,6 +48,7 @@ const DeviceCode = Schema.Struct({
   interval: Schema.optionalKey(Schema.Number.check(Schema.isGreaterThan(0))),
 });
 const Tokens = Schema.Struct({
+  scope: Schema.optionalKey(Schema.String),
   access_token: Schema.String,
   refresh_token: Schema.String,
   expires_in: Schema.Number.check(Schema.isGreaterThan(0)),
@@ -179,6 +183,7 @@ const make = Effect.gen(function* () {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
       expiresAt: (yield* Clock.currentTimeMillis) + tokens.expires_in * 1000,
+      scopes: tokens.scope === undefined ? (credential.scopes ?? []) : grantedScopes(tokens.scope),
     };
     yield* persist(updated);
     return updated;
@@ -205,7 +210,7 @@ const make = Effect.gen(function* () {
       cloudUrl: credential.cloudUrl,
       account: value.user,
       installation: value.installation,
-      scopes: ["installation", "offline_access"],
+      scopes: credential.scopes ?? [],
       expiresAt: DateTime.formatIso(DateTime.makeUnsafe(credential.expiresAt)),
     };
   });
@@ -229,6 +234,9 @@ const make = Effect.gen(function* () {
     (input: PhoenixCloudSignInInput) =>
       gate.withPermits(1)(
         Effect.gen(function* () {
+          const name = yield* decodeInstallationName(input.name).pipe(
+            Effect.mapError(() => new PhoenixCloudAccountError({ reason: "installation-name" })),
+          );
           const previous = yield* Ref.get(active);
           if (previous && previous.expiresAt <= (yield* Clock.currentTimeMillis))
             yield* cancelActive();
@@ -252,7 +260,7 @@ const make = Effect.gen(function* () {
             HttpClientRequest.post(`${cloudUrl}/api/installations/register`).pipe(
               HttpClientRequest.bodyJsonUnsafe({
                 installation_id: installationId,
-                name: input.name,
+                name,
                 kind: config.mode === "desktop" ? "desktop" : "remote-server",
               }),
             ),
@@ -353,6 +361,7 @@ const make = Effect.gen(function* () {
             accessToken: tokens.access_token,
             refreshToken: tokens.refresh_token,
             expiresAt: (yield* Clock.currentTimeMillis) + tokens.expires_in * 1000,
+            scopes: tokens.scope === undefined ? [] : grantedScopes(tokens.scope),
           };
           const result = yield* current(credential);
           if (result.state !== "signed-in")

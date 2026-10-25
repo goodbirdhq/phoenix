@@ -365,3 +365,57 @@ it.effect("preserves credentials when refresh is rate limited", () => {
     assert.isTrue(test.stored.has("phoenix-cloud-installation"));
   }).pipe(Effect.provide(test.layer));
 });
+
+it.effect("rejects an 81-character installation name before making requests", () => {
+  const test = fixture();
+  return Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+    const error = yield* account
+      .beginSignIn({ cloudUrl: origin, name: "x".repeat(81) })
+      .pipe(Effect.flip);
+    assert.equal(error.reason, "installation-name");
+    assert.equal(test.requests.length, 0);
+  }).pipe(Effect.provide(test.layer));
+});
+
+it.effect(
+  "persists reduced OAuth grants from approval and refresh without inventing scopes",
+  () => {
+    const test = fixture({
+      tokenReplies: [
+        { status: 200, body: { ...tokens, scope: "installation", expires_in: 1 } },
+        { status: 200, body: { ...tokens, scope: "" } },
+      ],
+    });
+    return Effect.gen(function* () {
+      const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+      const initial = yield* login(account);
+      assert.equal(initial.state, "signed-in");
+      if (initial.state === "signed-in") assert.deepEqual(initial.scopes, ["installation"]);
+      const refreshed = yield* account.status();
+      assert.equal(refreshed.state, "signed-in");
+      if (refreshed.state === "signed-in") assert.deepEqual(refreshed.scopes, []);
+      const restored = yield* Effect.gen(function* () {
+        return yield* (yield* PhoenixCloudAccount.PhoenixCloudAccount).status();
+      }).pipe(Effect.provide(Layer.fresh(test.layer)));
+      assert.equal(restored.state, "signed-in");
+      if (restored.state === "signed-in") assert.deepEqual(restored.scopes, []);
+    }).pipe(Effect.provide(test.layer));
+  },
+);
+
+it.effect("retains previously granted scopes when refresh omits scope", () => {
+  const test = fixture({
+    tokenReplies: [
+      { status: 200, body: { ...tokens, scope: "installation", expires_in: 1 } },
+      { status: 200, body: tokens },
+    ],
+  });
+  return Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+    yield* login(account);
+    const refreshed = yield* account.status();
+    assert.equal(refreshed.state, "signed-in");
+    if (refreshed.state === "signed-in") assert.deepEqual(refreshed.scopes, ["installation"]);
+  }).pipe(Effect.provide(test.layer));
+});

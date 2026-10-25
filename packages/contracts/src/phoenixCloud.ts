@@ -21,7 +21,7 @@ export type PhoenixCloudAccountStatus = typeof PhoenixCloudAccountStatus.Type;
 
 export const PhoenixCloudSignInInput = Schema.Struct({
   cloudUrl: Schema.optionalKey(Schema.String),
-  name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+  name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(80)),
 });
 export type PhoenixCloudSignInInput = typeof PhoenixCloudSignInInput.Type;
 
@@ -42,6 +42,7 @@ export class PhoenixCloudAccountError extends Schema.TaggedError<PhoenixCloudAcc
   {
     reason: Schema.Literals([
       "configuration",
+      "installation-name",
       "network",
       "protocol",
       "storage",
@@ -54,6 +55,8 @@ export class PhoenixCloudAccountError extends Schema.TaggedError<PhoenixCloudAcc
 ) {
   override get message(): string {
     switch (this.reason) {
+      case "installation-name":
+        return "Installation name must contain between 1 and 80 characters.";
       case "configuration":
         return "Configure a valid HTTPS Phoenix Cloud URL before signing in.";
       case "network":

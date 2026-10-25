@@ -135,7 +135,7 @@ export function PhoenixCloudSettings({
             <Input
               aria-label="Phoenix Cloud installation name"
               value={name}
-              maxLength={100}
+              maxLength={80}
               onChange={(event) => setName(event.target.value)}
               disabled={pending || !allowed}
             />

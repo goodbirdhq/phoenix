@@ -1,4 +1,4 @@
-import { PhoenixCloudAccountStatus } from "@t3tools/contracts";
+import { PhoenixCloudAccountStatus, PhoenixCloudSignInInput } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -41,6 +41,7 @@ const login = Command.make("login", {
     Flag.withDescription("Phoenix Cloud HTTPS origin."),
   ),
   name: Flag.String("name").pipe(
+    Flag.withSchema(PhoenixCloudSignInInput.fields.name),
     Flag.withDefault("Remote server"),
     Flag.withDescription("Name shown in Phoenix Cloud."),
   ),
