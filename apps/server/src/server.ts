@@ -1,3 +1,4 @@
+import * as PhoenixCloudAccount from "./phoenixCloud/PhoenixCloudAccount.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Random from "effect/Random";
@@ -660,6 +661,10 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(
     Layer.mergeAll(
+      PhoenixCloudAccount.layer.pipe(
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provide(FetchHttpClient.layer),
+      ),
       CloudCliTokenManager.layer.pipe(
         Layer.provide(ServerSecretStore.layer),
         Layer.provide(ExternalLauncher.layer),

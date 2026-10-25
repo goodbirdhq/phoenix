@@ -1,4 +1,11 @@
 import {
+  PhoenixCloudAccountStatus,
+  PhoenixCloudAccountError,
+  PhoenixCloudSignInInput,
+  PhoenixCloudSignInAttempt,
+  PhoenixCloudAttemptInput,
+} from "./phoenixCloud.ts";
+import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -521,6 +528,11 @@ export const WS_METHODS = {
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
+  phoenixCloudStatus: "phoenixCloud.status",
+  phoenixCloudBeginSignIn: "phoenixCloud.beginSignIn",
+  phoenixCloudCompleteSignIn: "phoenixCloud.completeSignIn",
+  phoenixCloudCancelSignIn: "phoenixCloud.cancelSignIn",
+  phoenixCloudSignOut: "phoenixCloud.signOut",
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
 
@@ -909,6 +921,30 @@ const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
   error: EnvironmentAuthorizationError,
+});
+
+const WsPhoenixCloudStatusRpc = Rpc.make(WS_METHODS.phoenixCloudStatus, {
+  payload: Schema.Struct({}),
+  success: PhoenixCloudAccountStatus,
+  error: Schema.Union([PhoenixCloudAccountError, EnvironmentAuthorizationError]),
+});
+const WsPhoenixCloudBeginSignInRpc = Rpc.make(WS_METHODS.phoenixCloudBeginSignIn, {
+  payload: PhoenixCloudSignInInput,
+  success: PhoenixCloudSignInAttempt,
+  error: Schema.Union([PhoenixCloudAccountError, EnvironmentAuthorizationError]),
+});
+const WsPhoenixCloudCompleteSignInRpc = Rpc.make(WS_METHODS.phoenixCloudCompleteSignIn, {
+  payload: PhoenixCloudAttemptInput,
+  success: PhoenixCloudAccountStatus,
+  error: Schema.Union([PhoenixCloudAccountError, EnvironmentAuthorizationError]),
+});
+const WsPhoenixCloudCancelSignInRpc = Rpc.make(WS_METHODS.phoenixCloudCancelSignIn, {
+  payload: PhoenixCloudAttemptInput,
+  error: Schema.Union([PhoenixCloudAccountError, EnvironmentAuthorizationError]),
+});
+const WsPhoenixCloudSignOutRpc = Rpc.make(WS_METHODS.phoenixCloudSignOut, {
+  payload: Schema.Struct({}),
+  error: Schema.Union([PhoenixCloudAccountError, EnvironmentAuthorizationError]),
 });
 
 const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
@@ -1944,6 +1980,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
+  WsPhoenixCloudStatusRpc,
+  WsPhoenixCloudBeginSignInRpc,
+  WsPhoenixCloudCompleteSignInRpc,
+  WsPhoenixCloudCancelSignInRpc,
+  WsPhoenixCloudSignOutRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,

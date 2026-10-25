@@ -1,5 +1,6 @@
 import {
   AuthEnvironmentMaintainScope,
+  AuthAccessWriteScope,
   AuthDiagnosticsReadScope,
   AuthFilesystemReadScope,
   AuthProvidersManageScope,
@@ -29,6 +30,18 @@ import {
 import * as RpcAuthorization from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
+  it("requires access administration for cloud account management", () => {
+    for (const method of [
+      WS_METHODS.phoenixCloudStatus,
+      WS_METHODS.phoenixCloudBeginSignIn,
+      WS_METHODS.phoenixCloudCompleteSignIn,
+      WS_METHODS.phoenixCloudCancelSignIn,
+      WS_METHODS.phoenixCloudSignOut,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthAccessWriteScope);
+    }
+  });
+
   it("declares exactly one scope for every RPC in the server group", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });

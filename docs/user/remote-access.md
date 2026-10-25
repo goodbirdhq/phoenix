@@ -3,6 +3,23 @@
 Connect a phone, browser, or another desktop app to T3 Code running on a different
 machine. That machine must stay running and reachable while you work.
 
+## Phoenix Cloud account
+
+Open **Settings → Connections → Phoenix Cloud** for the environment you want to
+sign in. Enter your Phoenix Cloud website's HTTPS URL and a name for this
+installation, then approve the displayed code on the website. The account belongs
+to that environment's server, even when you open Settings from another machine.
+
+On a command-line host, run `phoenix cloud login --cloud-url https://your-cloud-host
+--name "Work server"`. The command prints a URL and code you can approve on another
+machine. Add `--no-browser` to suppress opening a local browser.
+
+Use `phoenix cloud status` to check the account and `phoenix cloud logout` to revoke
+this installation's access. Settings also shows the account and offers **Sign out**.
+A failed network request leaves the saved credential available so you can retry.
+Signing into Phoenix Cloud does not make the server remotely reachable or grant
+access to other environments; existing pairing remains separate.
+
 ## T3 Connect
 
 T3 Connect makes an environment available to your other devices without setting

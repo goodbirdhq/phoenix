@@ -1,3 +1,4 @@
+import * as PhoenixCloudAccount from "./phoenixCloud/PhoenixCloudAccount.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -1352,6 +1353,7 @@ export const layerWsRpc = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
+      const phoenixCloudAccount = yield* PhoenixCloudAccount.PhoenixCloudAccount;
       // A webhook URL starts agent runs, so only sessions that may operate
       // see it; read-only sessions still see the task itself.
       const withVisibleWebhookUrls = (result: ScheduledTaskListResult): ScheduledTaskListResult =>
@@ -2481,6 +2483,12 @@ export const layerWsRpc = (
         [WS_METHODS.serverReportHostPowerState]: (input) =>
           backgroundPolicy.reportHostPowerState(input),
         [WS_METHODS.serverGetBackgroundPolicy]: (_input) => backgroundPolicy.snapshot,
+        [WS_METHODS.phoenixCloudStatus]: (_input) => phoenixCloudAccount.status(),
+        [WS_METHODS.phoenixCloudBeginSignIn]: (input) => phoenixCloudAccount.beginSignIn(input),
+        [WS_METHODS.phoenixCloudCompleteSignIn]: (input) =>
+          phoenixCloudAccount.completeSignIn(input),
+        [WS_METHODS.phoenixCloudCancelSignIn]: (input) => phoenixCloudAccount.cancelSignIn(input),
+        [WS_METHODS.phoenixCloudSignOut]: (_input) => phoenixCloudAccount.signOut(),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) => relayClient.resolve,
         [WS_METHODS.cloudInstallRelayClient]: (_input) =>
           Stream.callback<RelayClientInstallProgressEvent, RelayClientInstallFailedError>((queue) =>

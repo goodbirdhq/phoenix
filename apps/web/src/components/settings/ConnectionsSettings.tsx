@@ -1,3 +1,4 @@
+import { PhoenixCloudSettings } from "./PhoenixCloudSettings";
 import { SessionPermissions } from "./SessionPermissions";
 import { ChevronRightIcon, EllipsisIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
@@ -1033,6 +1034,11 @@ export function ConnectionsSettings() {
     <>
       {primaryEnvironmentId !== null ? (
         <>
+          <PhoenixCloudSettings
+            key={primaryEnvironmentId}
+            environmentId={primaryEnvironmentId}
+            environmentLabel={primaryEnvironment?.label ?? "Primary environment"}
+          />
           <SettingsSection
             {...searchableSetting("connections-environment")}
             title={

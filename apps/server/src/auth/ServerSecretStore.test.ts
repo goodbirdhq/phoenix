@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -118,6 +119,42 @@ const layerConcurrentCreateSecretStore = () =>
   );
 
 it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
+  it.effect(
+    "persists cloud credentials across service reconstruction and removes them on logout",
+    () =>
+      Effect.gen(function* () {
+        const secretStore = yield* ServerSecretStore.ServerSecretStore;
+        const credential = new TextEncoder().encode("installation-credential");
+        yield* secretStore.set("phoenix-cloud-installation", credential);
+
+        const reopened = yield* ServerSecretStore.make;
+        assert.deepEqual(
+          Option.getOrThrow(yield* reopened.get("phoenix-cloud-installation")),
+          credential,
+        );
+        yield* reopened.remove("phoenix-cloud-installation");
+        assert.isTrue(Option.isNone(yield* secretStore.get("phoenix-cloud-installation")));
+        yield* reopened.remove("phoenix-cloud-installation");
+      }).pipe(
+        Effect.provide(ServerSecretStore.layer.pipe(Layer.provideMerge(layerServerConfig()))),
+      ),
+  );
+
+  it.effect("restricts cloud credential files and their directory to the owning user", () =>
+    Effect.gen(function* () {
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* secretStore.set("phoenix-cloud-installation", new TextEncoder().encode("credential"));
+      const directory = secretStore.directory!;
+      const file = yield* fileSystem.stat(`${directory}/phoenix-cloud-installation.bin`);
+      const parent = yield* fileSystem.stat(directory);
+      if ((yield* HostProcess.Platform) !== "win32") {
+        assert.equal(file.mode & 0o777, 0o600);
+        assert.equal(parent.mode & 0o777, 0o700);
+      }
+    }).pipe(Effect.provide(layerServerSecretStore())),
+  );
+
   it.effect("reuses an existing secret instead of regenerating it", () =>
     Effect.gen(function* () {
       const secretStore = yield* ServerSecretStore.ServerSecretStore;

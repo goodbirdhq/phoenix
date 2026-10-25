@@ -8,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
+  AuthAccessWriteScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
   AuthSettingsWriteScope,
@@ -60,6 +61,32 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("requires the destination access administration grant to sign into cloud", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const cloud = createCommandPermissions(runtime, WS_METHODS.phoenixCloudBeginSignIn);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(cloud.permissionAtom(env))).toBe(false);
+        expect((yield* cloud.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthAccessWriteScope],
+            permissions: [AuthAccessWriteScope],
+          }),
+        );
+        expect(registry.get(cloud.permissionAtom(env))).toBe(true);
+        yield* cloud.authorize(registry, env);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(cloud.permissionAtom(other))).toBe(false);
+      }),
+    ),
+  );
+
   it.effect("requires the destination preview grant to close a browser tab", () =>
     Effect.scoped(
       Effect.gen(function* () {

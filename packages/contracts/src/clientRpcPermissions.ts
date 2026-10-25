@@ -5,6 +5,7 @@ import {
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
   AuthSettingsWriteScope,
+  AuthAccessWriteScope,
   AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
 } from "./auth.ts";
@@ -13,6 +14,11 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.phoenixCloudBeginSignIn]: AuthAccessWriteScope,
+  [WS_METHODS.phoenixCloudCompleteSignIn]: AuthAccessWriteScope,
+  [WS_METHODS.phoenixCloudCancelSignIn]: AuthAccessWriteScope,
+  [WS_METHODS.phoenixCloudSignOut]: AuthAccessWriteScope,
+
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
