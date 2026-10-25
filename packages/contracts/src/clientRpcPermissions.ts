@@ -14,6 +14,8 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.phoenixCloudBeginBrowserSignIn]: AuthAccessWriteScope,
+  [WS_METHODS.phoenixCloudCompleteBrowserSignIn]: AuthAccessWriteScope,
   [WS_METHODS.phoenixCloudBeginSignIn]: AuthAccessWriteScope,
   [WS_METHODS.phoenixCloudCompleteSignIn]: AuthAccessWriteScope,
   [WS_METHODS.phoenixCloudCancelSignIn]: AuthAccessWriteScope,

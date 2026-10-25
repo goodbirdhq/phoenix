@@ -4,6 +4,9 @@ import {
   PhoenixCloudSignInInput,
   PhoenixCloudSignInAttempt,
   PhoenixCloudAttemptInput,
+  PhoenixCloudBrowserSignInInput,
+  PhoenixCloudBrowserSignInAttempt,
+  PhoenixCloudBrowserCallbackInput,
 } from "./phoenixCloud.ts";
 import {
   OrchestrationV2SearchThreadError,
@@ -528,6 +531,8 @@ export const WS_METHODS = {
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
+  phoenixCloudBeginBrowserSignIn: "phoenixCloud.beginBrowserSignIn",
+  phoenixCloudCompleteBrowserSignIn: "phoenixCloud.completeBrowserSignIn",
   phoenixCloudStatus: "phoenixCloud.status",
   phoenixCloudBeginSignIn: "phoenixCloud.beginSignIn",
   phoenixCloudCompleteSignIn: "phoenixCloud.completeSignIn",
@@ -923,6 +928,19 @@ const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   error: EnvironmentAuthorizationError,
 });
 
+const WsPhoenixCloudBeginBrowserSignInRpc = Rpc.make(WS_METHODS.phoenixCloudBeginBrowserSignIn, {
+  payload: PhoenixCloudBrowserSignInInput,
+  success: PhoenixCloudBrowserSignInAttempt,
+  error: Schema.Union([PhoenixCloudAccountError, EnvironmentAuthorizationError]),
+});
+const WsPhoenixCloudCompleteBrowserSignInRpc = Rpc.make(
+  WS_METHODS.phoenixCloudCompleteBrowserSignIn,
+  {
+    payload: PhoenixCloudBrowserCallbackInput,
+    success: PhoenixCloudAccountStatus,
+    error: Schema.Union([PhoenixCloudAccountError, EnvironmentAuthorizationError]),
+  },
+);
 const WsPhoenixCloudStatusRpc = Rpc.make(WS_METHODS.phoenixCloudStatus, {
   payload: Schema.Struct({ refresh: Schema.optionalKey(Schema.Boolean) }),
   success: PhoenixCloudAccountStatus,
@@ -1980,6 +1998,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
+  WsPhoenixCloudBeginBrowserSignInRpc,
+  WsPhoenixCloudCompleteBrowserSignInRpc,
   WsPhoenixCloudStatusRpc,
   WsPhoenixCloudBeginSignInRpc,
   WsPhoenixCloudCompleteSignInRpc,

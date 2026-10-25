@@ -36,6 +36,30 @@ export const PhoenixCloudSignInAttempt = Schema.Struct({
 });
 export type PhoenixCloudSignInAttempt = typeof PhoenixCloudSignInAttempt.Type;
 
+export const PhoenixCloudBrowserSignInInput = Schema.Struct({
+  ...PhoenixCloudSignInInput.fields,
+  returnUrl: Schema.String,
+});
+export type PhoenixCloudBrowserSignInInput = typeof PhoenixCloudBrowserSignInInput.Type;
+
+export const PhoenixCloudBrowserSignInAttempt = Schema.Struct({
+  // The opaque attempt ID is also the OAuth state used to recover the UI's destination.
+  attemptId: Schema.String,
+  authorizationUrl: Schema.String,
+  expiresAt: Schema.String,
+});
+export type PhoenixCloudBrowserSignInAttempt = typeof PhoenixCloudBrowserSignInAttempt.Type;
+
+export const PhoenixCloudBrowserCallbackInput = Schema.Struct({
+  state: Schema.String,
+  code: Schema.optionalKey(Schema.String),
+  error: Schema.optionalKey(Schema.String),
+  iss: Schema.String,
+  // Only the initiating browser origin's exact /cloud/callback URL is accepted.
+  returnUrl: Schema.String,
+});
+export type PhoenixCloudBrowserCallbackInput = typeof PhoenixCloudBrowserCallbackInput.Type;
+
 export const PhoenixCloudAttemptInput = Schema.Struct({ attemptId: Schema.String });
 
 export class PhoenixCloudAccountError extends Schema.TaggedError<PhoenixCloudAccountError>()(
