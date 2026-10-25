@@ -61,7 +61,13 @@ const fixture = (
           : request.url.endsWith("/oauth2/token")
             ? (replies.shift() ?? { status: 400, body: { error: "authorization_pending" } })
             : request.url.endsWith("/disconnect")
-              ? { status: options.disconnectStatus ?? 204, body: null }
+              ? {
+                  status:
+                    request.headers["content-type"] === "application/json"
+                      ? (options.disconnectStatus ?? 204)
+                      : 415,
+                  body: null,
+                }
               : { status: options.currentStatus ?? 200, body: options.currentBody ?? current };
       if (request.url.endsWith("/current")) {
         if (options.currentReady) yield* Deferred.succeed(options.currentReady, undefined);

@@ -415,6 +415,7 @@ const make = Effect.gen(function* () {
         const response = yield* request(
           HttpClientRequest.post(`${credential.cloudUrl}/api/installations/disconnect`).pipe(
             HttpClientRequest.bearerToken(credential.accessToken),
+            HttpClientRequest.bodyJsonUnsafe({}),
           ),
         );
         if (![200, 204, 401].includes(response.status))
