@@ -1,7 +1,9 @@
 import * as NodeFSP from "node:fs/promises";
+import { eq, inArray } from "drizzle-orm";
+import { createInstallationStore } from "./installations";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import * as schema from "../db/schema";
 import { createCloudStore } from "./store";
 import { createAuth } from "./create-auth";
@@ -386,6 +388,115 @@ describe("installation OAuth device authorization", () => {
     const success = responses.find((response) => response.status === 200)!;
     const tokens = await success.json();
     expect((await installationRequest("current", tokens.access_token)).status).toBe(200);
+  });
+  it("rejects authorization-code grants and arbitrary public OAuth registration", async () => {
+    const grant = await beginInstallation();
+    const response = await authRequest("oauth2/token", {
+      client_id: grant.client_id,
+      grant_type: "authorization_code",
+      code: "unissued-code",
+      redirect_uri: "https://example.com/callback",
+      code_verifier: "a".repeat(43),
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe("unauthorized_client");
+    const registration = await authRequest("oauth2/register", {
+      client_name: "Untrusted app",
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code"],
+      redirect_uris: ["https://example.com/callback"],
+    });
+    expect(registration.status).toBe(403);
+    expect(await db.select().from(schema.oauthClient)).toHaveLength(1);
+  });
+  it("cleans abandoned registrations while preserving live grants, claims and approved installations", async () => {
+    const devices = createInstallationStore(db);
+    const cookie = await cloudSignup();
+    const expired = await beginInstallation();
+    const live = await beginInstallation();
+    const claimed = await beginInstallation();
+    await authRequest(`device?user_code=${claimed.user_code}`, undefined, cookie);
+    const approved = await beginInstallation();
+    await approveInstallation(approved, cookie);
+    const noGrant = await devices.register({
+      installation_id: "86c897b4-f8fb-4c17-bc87-f291c3c3917a",
+      name: "Abandoned",
+      kind: "desktop",
+    });
+    await db
+      .update(schema.installationRequest)
+      .set({ createdAt: new Date("2000-01-01T00:00:00Z") });
+    await db
+      .update(schema.deviceCode)
+      .set({ expiresAt: new Date("2000-01-01T00:00:00Z") })
+      .where(
+        inArray(schema.deviceCode.clientId, [
+          expired.client_id,
+          claimed.client_id,
+          approved.client_id,
+        ]),
+      );
+    await devices.register({
+      installation_id: "86c897b4-f8fb-4c17-bc87-f291c3c3917a",
+      name: "New",
+      kind: "remote-server",
+    });
+    const clients = (await db.select().from(schema.oauthClient)).map((row) => row.clientId);
+    expect(clients).not.toContain(expired.client_id);
+    expect(clients).not.toContain(noGrant.client_id);
+    expect(clients).toEqual(
+      expect.arrayContaining([live.client_id, claimed.client_id, approved.client_id]),
+    );
+    expect(
+      await db
+        .select()
+        .from(schema.deviceCode)
+        .where(eq(schema.deviceCode.clientId, expired.client_id)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(schema.installationRequest)
+        .where(eq(schema.installationRequest.id, expired.client_id)),
+    ).toEqual([]);
+  });
+  it("bounds opportunistic cleanup to 25 registrations and keeps the issuance plus grant expiry horizon", async () => {
+    const devices = createInstallationStore(db);
+    for (let attempt = 0; attempt < 28; attempt++) {
+      await devices.register({
+        installation_id: "86c897b4-f8fb-4c17-bc87-f291c3c3917a",
+        name: "Abandoned",
+        kind: "desktop",
+      });
+    }
+    await db
+      .update(schema.installationRequest)
+      .set({ createdAt: new Date("2000-01-01T00:00:00Z") });
+    const [withinHorizon] = await db.select().from(schema.installationRequest).limit(1);
+    await db
+      .update(schema.installationRequest)
+      .set({ createdAt: new Date("2029-12-31T23:41:00Z") })
+      .where(eq(schema.installationRequest.id, withinHorizon!.id));
+    using _now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2030-01-01T00:00:00Z"));
+    await devices.register({
+      installation_id: "86c897b4-f8fb-4c17-bc87-f291c3c3917a",
+      name: "New",
+      kind: "desktop",
+    });
+    expect(await db.select().from(schema.installationRequest)).toHaveLength(4);
+    expect(await db.select().from(schema.oauthClient)).toHaveLength(4);
+    await devices.register({
+      installation_id: "86c897b4-f8fb-4c17-bc87-f291c3c3917a",
+      name: "Next",
+      kind: "desktop",
+    });
+    expect(await db.select().from(schema.installationRequest)).toHaveLength(3);
+    expect(
+      await db
+        .select()
+        .from(schema.installationRequest)
+        .where(eq(schema.installationRequest.id, withinHorizon!.id)),
+    ).toHaveLength(1);
   });
   it("rate limits unauthenticated installation registration", async () => {
     for (let attempt = 0; attempt < 10; attempt++) {

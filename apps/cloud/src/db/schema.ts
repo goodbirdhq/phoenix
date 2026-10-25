@@ -86,13 +86,17 @@ export const workspace = pgTable(
 );
 export * from "./oauth-schema";
 
-export const installationRequest = pgTable("cloud_installation_request", {
-  id: uuid("id").primaryKey(),
-  installationId: uuid("installation_id").notNull(),
-  name: varchar("name", { length: 80 }).notNull(),
-  kind: varchar("kind", { length: 20, enum: ["desktop", "remote-server"] }).notNull(),
-  createdAt: createdAt(),
-});
+export const installationRequest = pgTable(
+  "cloud_installation_request",
+  {
+    id: uuid("id").primaryKey(),
+    installationId: uuid("installation_id").notNull(),
+    name: varchar("name", { length: 80 }).notNull(),
+    kind: varchar("kind", { length: 20, enum: ["desktop", "remote-server"] }).notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [index("cloud_installation_request_created_idx").on(table.createdAt, table.id)],
+);
 
 export const rateLimit = pgTable("rate_limit", {
   id: text("id").primaryKey(),

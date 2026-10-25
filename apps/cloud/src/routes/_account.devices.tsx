@@ -83,17 +83,11 @@ function Devices() {
                     <h2>{device.name}</h2>
                     <p>
                       {device.kind === "desktop" ? "Desktop" : "Remote server"} ·{" "}
-                      {device.revokedAt
-                        ? "Disconnected"
-                        : device.lastSeenAt
-                          ? "Authorized"
-                          : "Awaiting first contact"}
+                      {device.revokedAt ? "Disconnected" : "Authorized"}
                     </p>
-                    <p>
-                      {device.lastSeenAt
-                        ? `Last seen ${new Date(device.lastSeenAt).toLocaleString()}`
-                        : "No heartbeat received"}
-                    </p>
+                    {device.lastSeenAt && (
+                      <p>Last seen {new Date(device.lastSeenAt).toLocaleString()}</p>
+                    )}
                   </div>
                   <Button
                     variant="ghost"
@@ -123,8 +117,8 @@ function Devices() {
       <aside className="info-note">
         <Server size={18} />
         <p>
-          Cloud sign-in identifies your installations. Last seen records their latest heartbeat; it
-          does not mean a remote connection is available.
+          Cloud sign-in identifies your installations. Authorization does not mean a remote
+          connection is available.
         </p>
       </aside>
     </>

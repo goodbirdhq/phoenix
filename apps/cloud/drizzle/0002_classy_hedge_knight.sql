@@ -1,0 +1,1 @@
+CREATE INDEX "cloud_installation_request_created_idx" ON "cloud_installation_request" USING btree ("created_at","id");

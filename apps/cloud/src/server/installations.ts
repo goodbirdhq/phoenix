@@ -1,6 +1,6 @@
 import "@tanstack/react-start/server-only";
 import * as NodeCrypto from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { sql, and, eq, isNull, isNotNull, notExists, or, gte, lt, inArray } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { APIError, createAuthEndpoint } from "better-auth/api";
 import {
@@ -15,12 +15,15 @@ import { installationInput } from "../lib/validation";
 export const installationOAuthOptions = {
   loginPage: "/login",
   consentPage: "/device",
+  // Tokens stay inside this Cloud app; its resource boundary checks active client, owner and scope.
   disableJwtPlugin: true,
   scopes: ["installation", "offline_access"],
   // The provider requires authorization_code globally for refresh; installation clients permit only device and refresh grants.
   grantTypes: ["authorization_code", DEVICE_CODE_GRANT_TYPE, "refresh_token"],
   accessTokenExpiresIn: 3600,
   refreshTokenExpiresIn: 2592000,
+  allowDynamicClientRegistration: false,
+  allowUnauthenticatedClientRegistration: false,
   clientPrivileges: async () => false,
 } satisfies OAuthOptions<string[]>;
 
@@ -32,6 +35,77 @@ export function createInstallationStore<T extends PgQueryResultHKT>(
       const data = installationInput.extend({ installation_id: z.uuid() }).parse(input);
       const id = NodeCrypto.randomUUID();
       await db.transaction(async (tx) => {
+        const now = new Date();
+        // Registration can issue a grant for ten minutes; that grant lives another ten.
+        // Never purge claimed requests or anything that could still authorize a machine.
+        const abandoned = await tx
+          .select({ id: schema.installationRequest.id })
+          .from(schema.installationRequest)
+          .where(
+            and(
+              lt(schema.installationRequest.createdAt, new Date(Date.now() - 20 * 60_000)),
+              notExists(
+                tx
+                  .select()
+                  .from(schema.installation)
+                  .where(eq(schema.installation.id, schema.installationRequest.id)),
+              ),
+              notExists(
+                tx
+                  .select()
+                  .from(schema.deviceCode)
+                  .where(
+                    and(
+                      eq(schema.deviceCode.clientId, sql`${schema.installationRequest.id}::text`),
+                      or(
+                        isNotNull(schema.deviceCode.userId),
+                        gte(schema.deviceCode.expiresAt, now),
+                      ),
+                    ),
+                  ),
+              ),
+              notExists(
+                tx
+                  .select()
+                  .from(schema.oauthAccessToken)
+                  .where(
+                    eq(
+                      schema.oauthAccessToken.clientId,
+                      sql`${schema.installationRequest.id}::text`,
+                    ),
+                  ),
+              ),
+              notExists(
+                tx
+                  .select()
+                  .from(schema.oauthRefreshToken)
+                  .where(
+                    eq(
+                      schema.oauthRefreshToken.clientId,
+                      sql`${schema.installationRequest.id}::text`,
+                    ),
+                  ),
+              ),
+              notExists(
+                tx
+                  .select()
+                  .from(schema.oauthConsent)
+                  .where(
+                    eq(schema.oauthConsent.clientId, sql`${schema.installationRequest.id}::text`),
+                  ),
+              ),
+            ),
+          )
+          .orderBy(schema.installationRequest.createdAt, schema.installationRequest.id)
+          .limit(25);
+        if (abandoned.length) {
+          const ids = abandoned.map((row) => row.id);
+          await tx.delete(schema.deviceCode).where(inArray(schema.deviceCode.clientId, ids));
+          await tx
+            .delete(schema.installationRequest)
+            .where(inArray(schema.installationRequest.id, ids));
+          await tx.delete(schema.oauthClient).where(inArray(schema.oauthClient.clientId, ids));
+        }
         // One OAuth client per attempt makes authorization and revocation installation-specific.
         await tx.insert(schema.oauthClient).values({
           id,
