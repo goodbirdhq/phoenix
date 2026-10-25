@@ -23,6 +23,7 @@ import * as ServerConfig from "../config.ts";
 import { CloudOriginError, normalizeCloudOrigin } from "./config.ts";
 
 const SECRET = "phoenix-cloud-installation";
+const SIGNED_OUT = "phoenix-cloud-signed-out";
 const Credential = Schema.Struct({
   cloudUrl: Schema.String,
   clientId: Schema.String,
@@ -68,7 +69,9 @@ const OAuthError = Schema.Struct({ error: Schema.String });
 export class PhoenixCloudAccount extends Context.Service<
   PhoenixCloudAccount,
   {
-    readonly status: () => Effect.Effect<PhoenixCloudAccountStatus, PhoenixCloudAccountError>;
+    readonly status: (input?: {
+      readonly refresh?: boolean;
+    }) => Effect.Effect<PhoenixCloudAccountStatus, PhoenixCloudAccountError>;
     readonly beginSignIn: (
       input: PhoenixCloudSignInInput,
     ) => Effect.Effect<PhoenixCloudSignInAttempt, PhoenixCloudAccountError>;
@@ -103,6 +106,9 @@ const make = Effect.gen(function* () {
   );
   const gate = yield* Semaphore.make(1);
   const active = yield* Ref.make<Attempt | null>(null);
+  const cached = yield* Ref.make<PhoenixCloudAccountStatus>({ state: "unavailable" });
+  const logoutRequested = yield* Ref.make(false);
+  const verification = yield* Ref.make<Deferred.Deferred<PhoenixCloudAccountStatus> | null>(null);
 
   const request = Effect.fn("PhoenixCloudAccount.request")(function* (
     request: HttpClientRequest.HttpClientRequest,
@@ -148,6 +154,17 @@ const make = Effect.gen(function* () {
   });
   const remove = secrets
     .remove(SECRET)
+    .pipe(Effect.mapError(() => new PhoenixCloudAccountError({ reason: "storage" })));
+  // Separate from rotating credentials so another process cannot overwrite a logout lock.
+  const locallySignedOut = secrets.get(SIGNED_OUT).pipe(
+    Effect.map(Option.isSome),
+    Effect.mapError(() => new PhoenixCloudAccountError({ reason: "storage" })),
+  );
+  const lock = secrets
+    .set(SIGNED_OUT, Uint8Array.of(1))
+    .pipe(Effect.mapError(() => new PhoenixCloudAccountError({ reason: "storage" })));
+  const unlock = secrets
+    .remove(SIGNED_OUT)
     .pipe(Effect.mapError(() => new PhoenixCloudAccountError({ reason: "storage" })));
   const tokenRequest = (cloudUrl: string, params: Record<string, string>) =>
     request(
@@ -219,18 +236,41 @@ const make = Effect.gen(function* () {
     if (attempt) yield* Deferred.succeed(attempt.cancelled, undefined);
   });
 
-  const status = Effect.fn("PhoenixCloudAccount.status")(() =>
+  const verify = Effect.fn("PhoenixCloudAccount.verify")(() =>
     gate.withPermits(1)(
       Effect.gen(function* () {
+        if (yield* locallySignedOut) return { state: "signed-out" } as const;
         const saved = yield* read();
         if (!saved) return { state: "signed-out" } as const;
         // Rotation and persistence must finish together; the HTTP exchange has its own timeout.
         const credential = yield* refresh(saved).pipe(Effect.uninterruptible);
-        return credential ? yield* current(credential) : ({ state: "signed-out" } as const);
-      }),
+        const value = credential ? yield* current(credential) : ({ state: "signed-out" } as const);
+        return (yield* locallySignedOut) ? ({ state: "signed-out" } as const) : value;
+      }).pipe(
+        Effect.catch(() => Effect.succeed({ state: "unavailable" } as const)),
+        Effect.flatMap((value) =>
+          Ref.get(logoutRequested).pipe(
+            Effect.map((locked) => (locked ? ({ state: "signed-out" } as const) : value)),
+          ),
+        ),
+        Effect.tap((value) => Ref.set(cached, value)),
+      ),
     ),
   );
-  const beginSignIn = Effect.fn("PhoenixCloudAccount.beginSignIn")(
+  const refreshStatus = Effect.fn("PhoenixCloudAccount.refreshStatus")(function* () {
+    const pending = yield* Deferred.make<PhoenixCloudAccountStatus>();
+    const existing = yield* Ref.getAndUpdate(verification, (value) => value ?? pending);
+    if (existing) return yield* Deferred.await(existing);
+    return yield* verify().pipe(
+      Effect.tap((value) => Deferred.succeed(pending, value)),
+      Effect.ensuring(Ref.set(verification, null)),
+    );
+  }, Effect.uninterruptible);
+  // Cached status is read for each control frame; remote verification owns its own span.
+  const status = Effect.fnUntraced(function* (input?: { readonly refresh?: boolean }) {
+    return yield* input?.refresh ? refreshStatus() : Ref.get(cached);
+  });
+  const beginAttempt = Effect.fn("PhoenixCloudAccount.beginAttempt")(
     (input: PhoenixCloudSignInInput) =>
       gate.withPermits(1)(
         Effect.gen(function* () {
@@ -306,6 +346,7 @@ const make = Effect.gen(function* () {
             cancelled: yield* Deferred.make<void>(),
             completing: false,
           };
+          yield* Ref.set(logoutRequested, false);
           yield* Ref.set(active, attempt);
           return {
             attemptId: attempt.id,
@@ -368,10 +409,14 @@ const make = Effect.gen(function* () {
             return yield* new PhoenixCloudAccountError({ reason: "denied" });
           return yield* gate.withPermits(1)(
             Effect.gen(function* () {
-              if ((yield* Ref.get(active)) !== attempt)
+              if ((yield* Ref.get(active)) !== attempt || (yield* Ref.get(logoutRequested)))
                 return yield* new PhoenixCloudAccountError({ reason: "cancelled" });
               yield* persist(credential);
+              if (yield* Ref.get(logoutRequested))
+                return yield* new PhoenixCloudAccountError({ reason: "cancelled" });
+              yield* unlock;
               yield* Ref.set(active, null);
+              yield* Ref.set(cached, result);
               return result;
             }),
           );
@@ -405,24 +450,44 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.ensuring(cancelSignIn(input)));
   });
   const signOut = Effect.fn("PhoenixCloudAccount.signOut")(() =>
-    gate.withPermits(1)(
-      Effect.gen(function* () {
-        yield* cancelActive();
-        const saved = yield* read();
-        if (!saved) return;
-        const credential = yield* refresh(saved).pipe(Effect.uninterruptible);
-        if (!credential) return;
-        const response = yield* request(
-          HttpClientRequest.post(`${credential.cloudUrl}/api/installations/disconnect`).pipe(
-            HttpClientRequest.bearerToken(credential.accessToken),
-            HttpClientRequest.bodyJsonUnsafe({}),
-          ),
-        );
-        if (![200, 204, 401].includes(response.status))
-          return yield* new PhoenixCloudAccountError({ reason: "network" });
-        yield* remove;
-      }),
+    Ref.set(logoutRequested, true).pipe(
+      Effect.andThen(Ref.set(cached, { state: "signed-out" })),
+      Effect.andThen(lock),
+      Effect.andThen(
+        gate.withPermits(1)(
+          Effect.gen(function* () {
+            yield* cancelActive();
+            yield* lock;
+            const saved = yield* read();
+            yield* Ref.set(cached, { state: "signed-out" });
+            if (!saved) return;
+            const credential = yield* refresh(saved).pipe(Effect.uninterruptible);
+            if (!credential) return;
+            const response = yield* request(
+              HttpClientRequest.post(`${credential.cloudUrl}/api/installations/disconnect`).pipe(
+                HttpClientRequest.bearerToken(credential.accessToken),
+                HttpClientRequest.bodyJsonUnsafe({}),
+              ),
+            );
+            if (![200, 204, 401].includes(response.status))
+              return yield* new PhoenixCloudAccountError({ reason: "network" });
+            yield* remove;
+          }),
+        ),
+      ),
+      Effect.uninterruptible,
     ),
+  );
+  const beginSignIn = Effect.fn("PhoenixCloudAccount.beginSignIn")(function* (
+    input: PhoenixCloudSignInInput,
+  ) {
+    // A failed disconnect remains locally locked; Link explicitly retries it before registration.
+    if ((yield* locallySignedOut) && (yield* read())) yield* signOut();
+    return yield* beginAttempt(input);
+  });
+  yield* refreshStatus();
+  yield* Effect.forever(Effect.sleep("60 seconds").pipe(Effect.andThen(refreshStatus()))).pipe(
+    Effect.forkScoped,
   );
   return PhoenixCloudAccount.of({ status, beginSignIn, completeSignIn, cancelSignIn, signOut });
 });

@@ -1,3 +1,4 @@
+import * as CloudOwnershipTestkit from "../phoenixCloud/ownership.testkit.ts";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   AuthOrchestrationReadScope,
@@ -44,6 +45,7 @@ const fixture = (
   );
   const { handler, dispose } = HttpRouter.toWebHandler(
     DeviceHubProxy.layer.pipe(
+      Layer.provideMerge(CloudOwnershipTestkit.layer),
       Layer.provideMerge(
         Layer.succeed(EnvironmentAuth.EnvironmentAuth, {
           authenticateWebSocketUpgrade: () =>

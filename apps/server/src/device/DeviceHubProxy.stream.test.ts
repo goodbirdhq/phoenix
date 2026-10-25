@@ -1,3 +1,5 @@
+import * as CloudOwnershipTestkit from "../phoenixCloud/ownership.testkit.ts";
+import * as PhoenixCloudAccount from "../phoenixCloud/PhoenixCloudAccount.ts";
 import { expect, it } from "@effect/vitest";
 import { NodeWS } from "@effect/platform-node/NodeSocket";
 import * as Context from "effect/Context";
@@ -14,8 +16,10 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as DeviceService from "./DeviceService.ts";
 import * as DeviceHubProxy from "./DeviceHubProxy.ts";
 
-it.effect("preserves binary input and admission frames through the real socket proxy", () =>
+it.effect("preserves binary frames and stops forwarding input when ownership is lost", () =>
   Effect.gen(function* () {
+    let owned = true;
+    const upstreamInputs: number[][] = [];
     const hub = yield* Effect.acquireRelease(
       Effect.sync(() => new NodeWS.WebSocketServer({ port: 0 })),
       (server) =>
@@ -33,11 +37,22 @@ it.effect("preserves binary input and admission frames through the real socket p
     if (typeof address !== "object" || !address) throw new Error("Missing hub port");
     hub.on("connection", (socket) => {
       socket.send(Uint8Array.of(0x83));
-      socket.on("message", (data, binary) => socket.send(data, { binary }));
+      socket.on("message", (data, binary) => {
+        upstreamInputs.push(Array.from(data as Buffer));
+        socket.send(data, { binary });
+      });
     });
     const services = yield* Layer.build(
       HttpRouter.serve(DeviceHubProxy.layer, { disableListenLog: true }).pipe(
         Layer.provideMerge(NodeHttpServer.layerTest),
+        Layer.provide(
+          Layer.mock(PhoenixCloudAccount.PhoenixCloudAccount)({
+            status: () =>
+              Effect.succeed(
+                owned ? CloudOwnershipTestkit.signedInStatus : { state: "signed-out" as const },
+              ),
+          }),
+        ),
         Layer.provide(
           Layer.succeed(EnvironmentAuth.EnvironmentAuth, {
             authenticateWebSocketUpgrade: () =>
@@ -85,5 +100,14 @@ it.effect("preserves binary input and admission frames through the real socket p
     });
     yield* Effect.promise(() => received.promise);
     expect(frames).toEqual([[0x83], [0x03, 1], [0x03, 2]]);
+    owned = false;
+    const closed = Promise.withResolvers<void>();
+    client.addEventListener("close", () => closed.resolve());
+    client.send(Uint8Array.of(0x03, 3));
+    yield* Effect.promise(() => closed.promise);
+    expect(upstreamInputs).toEqual([
+      [0x03, 1],
+      [0x03, 2],
+    ]);
   }),
 );

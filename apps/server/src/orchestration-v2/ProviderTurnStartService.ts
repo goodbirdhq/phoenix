@@ -1,3 +1,5 @@
+import * as PhoenixCloudAccount from "../phoenixCloud/PhoenixCloudAccount.ts";
+import { requireOwnership } from "../phoenixCloud/ownership.ts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
@@ -99,6 +101,7 @@ export class ProviderTurnStartServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   ProviderTurnStartServiceV2,
   never,
+  | PhoenixCloudAccount.PhoenixCloudAccount
   | EventSink.EventSinkV2
   | ContextHandoffService.ContextHandoffServiceV2
   | IdAllocator.IdAllocatorV2
@@ -116,6 +119,7 @@ export const layer: Layer.Layer<
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
     const eventSink = yield* EventSink.EventSinkV2;
     const contextHandoffService = yield* ContextHandoffService.ContextHandoffServiceV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -235,6 +239,10 @@ export const layer: Layer.Layer<
       readonly willRetry?: boolean;
     }) {
       const { runId } = input;
+      yield* requireOwnership().pipe(
+        Effect.provideService(PhoenixCloudAccount.PhoenixCloudAccount, account),
+        Effect.mapError((cause) => new ProviderTurnStartError({ runId, cause })),
+      );
       const projection = yield* projectionStore.getTurnStartContext(input.threadId, runId);
       const run = projection.runs.find((candidate) => candidate.id === runId);
       if (run === undefined) {

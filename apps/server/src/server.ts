@@ -1,3 +1,4 @@
+import * as CloudOwnership from "./phoenixCloud/ownership.ts";
 import * as PhoenixCloudAccount from "./phoenixCloud/PhoenixCloudAccount.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
@@ -732,6 +733,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
   Layer.provide(layerCommandReadiness),
+  Layer.provide(CloudOwnership.layerHttp),
   Layer.provide(ServerHttp.layerBrowserApiCors),
   Layer.provide(ServerHttp.layerHttpCompression),
 );

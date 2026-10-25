@@ -1,3 +1,5 @@
+import { ownershipRequiredForRpc, requireOwnership } from "../phoenixCloud/ownership.ts";
+import * as PhoenixCloudAccount from "../phoenixCloud/PhoenixCloudAccount.ts";
 import {
   AuthEnvironmentMaintainScope,
   AuthAccessWriteScope,
@@ -30,9 +32,8 @@ import {
 import * as RpcAuthorization from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
-  it("requires access administration for cloud account management", () => {
+  it("requires access administration for cloud account mutations", () => {
     for (const method of [
-      WS_METHODS.phoenixCloudStatus,
       WS_METHODS.phoenixCloudBeginSignIn,
       WS_METHODS.phoenixCloudCompleteSignIn,
       WS_METHODS.phoenixCloudCancelSignIn,
@@ -383,4 +384,66 @@ it.effect("denies manual cleanup before the handler without settings permission"
     });
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
+);
+
+it.effect("exposes cloud status to an authenticated client without administration scope", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.phoenixCloudStatus> =>
+          tag !== WS_METHODS.phoenixCloudStatus,
+      ),
+    );
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.phoenixCloudStatus, () =>
+            Effect.succeed({ state: "signed-out" as const }),
+          ),
+          RpcAuthorization.layer([]),
+        ),
+      ),
+    );
+    expect(yield* client[WS_METHODS.phoenixCloudStatus]({})).toEqual({ state: "signed-out" });
+  }),
+);
+
+it.effect("denies normal RPCs through ownership middleware even with every required scope", () =>
+  Effect.gen(function* () {
+    const methods = [WS_METHODS.serverProbe, WS_METHODS.serverRetryResourceTelemetry] as const;
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof methods)[number]> =>
+          !(methods as readonly string[]).includes(tag),
+      ),
+    );
+    const guarded = requireOwnership().pipe(
+      Effect.provide(
+        Layer.mock(PhoenixCloudAccount.PhoenixCloudAccount)({
+          status: () => Effect.succeed({ state: "signed-out" }),
+        }),
+      ),
+    );
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.serverProbe, () => Effect.succeed({})),
+          group.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () =>
+            Effect.die("handler must not run"),
+          ),
+          RpcAuthorization.layer(
+            [AuthOrchestrationReadScope, AuthEnvironmentMaintainScope, AuthDiagnosticsReadScope],
+            undefined,
+            (method, payload) => (ownershipRequiredForRpc(method, payload) ? guarded : Effect.void),
+          ),
+        ),
+      ),
+    );
+    expect(yield* client[WS_METHODS.serverProbe]({})).toEqual({});
+    expect(
+      yield* client[WS_METHODS.serverRetryResourceTelemetry]({}).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: "phoenix-cloud-ownership" });
+  }),
 );

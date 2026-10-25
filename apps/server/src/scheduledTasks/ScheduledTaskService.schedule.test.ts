@@ -1,3 +1,4 @@
+import * as CloudOwnershipTestkit from "../phoenixCloud/ownership.testkit.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
@@ -54,7 +55,14 @@ it.effect("rejects a stale form save after deletion while preserving explicit-id
       expect((yield* service.list()).tasks).toEqual([]);
 
       expect((yield* service.upsert(input)).task.id).toBe(created.task.id);
-    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+    }).pipe(
+      Effect.provide(
+        ScheduledTaskService.layer.pipe(
+          Layer.provide(CloudOwnershipTestkit.layer),
+          Layer.provide(layerDependencies),
+        ),
+      ),
+    );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
@@ -113,7 +121,14 @@ it.effect("preserves a due run when a save only pads the scheduled hour", () =>
       expect(rescheduled.task.nextRunAt).toBe(
         DateTime.formatIso(DateTime.toUtc(DateTime.add(dueAt, { minutes: 30 }))),
       );
-    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+    }).pipe(
+      Effect.provide(
+        ScheduledTaskService.layer.pipe(
+          Layer.provide(CloudOwnershipTestkit.layer),
+          Layer.provide(layerDependencies),
+        ),
+      ),
+    );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
@@ -164,6 +179,13 @@ it.effect("keeps the task list order when a toggle or edit rewrites updated_at",
       const edit = { ...input(older.task.id), requireExisting: true, title: "Edited" };
       yield* service.upsert(yield* decodeUpsertInput({ ...edit, enabled: false }));
       expect(yield* listedIds).toEqual(order);
-    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+    }).pipe(
+      Effect.provide(
+        ScheduledTaskService.layer.pipe(
+          Layer.provide(CloudOwnershipTestkit.layer),
+          Layer.provide(layerDependencies),
+        ),
+      ),
+    );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

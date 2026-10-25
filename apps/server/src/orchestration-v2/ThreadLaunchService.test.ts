@@ -1,3 +1,4 @@
+import * as CloudOwnershipTestkit from "../phoenixCloud/ownership.testkit.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
@@ -314,6 +315,7 @@ it.effect.each(
   ({ target, createdBy }) => {
     const harness = makeHarness();
     const layerScheduledTasks = ScheduledTasks.layer.pipe(
+      Layer.provide(CloudOwnershipTestkit.layer),
       Layer.provide(
         Layer.mergeAll(
           harness.layer,
@@ -379,6 +381,7 @@ it.effect(
   () => {
     const harness = makeHarness();
     const layerScheduledTasks = ScheduledTasks.layer.pipe(
+      Layer.provide(CloudOwnershipTestkit.layer),
       Layer.provide(
         Layer.mergeAll(
           harness.layer,
@@ -416,6 +419,7 @@ it.effect(
 it.effect("runs a thread-bound automation on the provider the thread uses now", () => {
   const harness = makeHarness({ adapters: [adapter, claudeAdapter] });
   const layerScheduledTasks = ScheduledTasks.layer.pipe(
+    Layer.provide(CloudOwnershipTestkit.layer),
     Layer.provide(
       Layer.mergeAll(
         harness.layer,
@@ -880,6 +884,7 @@ function scratchHarness() {
           } as never),
   });
   const layerScheduledTasks = ScheduledTasks.layer.pipe(
+    Layer.provide(CloudOwnershipTestkit.layer),
     Layer.provide(
       Layer.mergeAll(
         harness.layer,

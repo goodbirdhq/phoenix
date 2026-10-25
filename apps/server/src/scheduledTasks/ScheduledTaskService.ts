@@ -1,3 +1,5 @@
+import * as PhoenixCloudAccount from "../phoenixCloud/PhoenixCloudAccount.ts";
+import { requireOwnership } from "../phoenixCloud/ownership.ts";
 import {
   CommandId,
   MessageId,
@@ -400,6 +402,7 @@ export const listDueTasks = Effect.fn("ScheduledTaskService.listDueTasks")(funct
 export const layer = Layer.effect(
   ScheduledTaskService,
   Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
     const sql = yield* SqlClient.SqlClient;
     const crypto = yield* Crypto.Crypto;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
@@ -737,6 +740,14 @@ export const layer = Layer.effect(
         readonly dispatched: Ref.Ref<boolean>;
       },
     ) {
+      yield* requireOwnership().pipe(
+        Effect.provideService(PhoenixCloudAccount.PhoenixCloudAccount, account),
+        Effect.mapError(() =>
+          taskError("Link this installation to Phoenix Cloud before running scheduled tasks.", {
+            taskId: task.id,
+          }),
+        ),
+      );
       const reserved = yield* Ref.modify(activeRuns, (active) => {
         if (active.has(task.id)) return [false, active] as const;
         const next = new Set(active);

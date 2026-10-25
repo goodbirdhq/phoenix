@@ -42,6 +42,8 @@ const fixture = (
     readonly disconnectStatus?: number;
     readonly currentReady?: Deferred.Deferred<void>;
     readonly currentRelease?: Deferred.Deferred<void>;
+    readonly disconnectReady?: Deferred.Deferred<void>;
+    readonly disconnectRelease?: Deferred.Deferred<void>;
     readonly mode?: "desktop" | "web";
   } = {},
 ) => {
@@ -72,6 +74,10 @@ const fixture = (
       if (request.url.endsWith("/current")) {
         if (options.currentReady) yield* Deferred.succeed(options.currentReady, undefined);
         if (options.currentRelease) yield* Deferred.await(options.currentRelease);
+      }
+      if (request.url.endsWith("/disconnect")) {
+        if (options.disconnectReady) yield* Deferred.succeed(options.disconnectReady, undefined);
+        if (options.disconnectRelease) yield* Deferred.await(options.disconnectRelease);
       }
       return HttpClientResponse.fromWeb(
         request,
@@ -143,7 +149,7 @@ it.effect(
     const test = fixture();
     return Effect.gen(function* () {
       const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
-      assert.deepEqual(yield* account.status(), { state: "signed-out" });
+      assert.deepEqual(yield* account.status({ refresh: true }), { state: "signed-out" });
       const status = yield* login(account);
       assert.equal(status.state, "signed-in");
       assert.include(test.requests[0]!.body, '"kind":"remote-server"');
@@ -156,7 +162,7 @@ it.effect(
       yield* account.signOut();
       assert.isFalse(test.stored.has("phoenix-cloud-installation"));
       assert.isTrue(test.requests.some(({ url }) => url.endsWith("/disconnect")));
-      assert.deepEqual(yield* account.status(), { state: "signed-out" });
+      assert.deepEqual(yield* account.status({ refresh: true }), { state: "signed-out" });
     }).pipe(Effect.provide(test.layer));
   },
 );
@@ -229,9 +235,12 @@ it.effect("refreshes once for concurrent status calls and saves the rotated toke
   return Effect.gen(function* () {
     const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
     yield* login(account);
-    const results = yield* Effect.all([account.status(), account.status()], {
-      concurrency: "unbounded",
-    });
+    const results = yield* Effect.all(
+      [account.status({ refresh: true }), account.status({ refresh: true })],
+      {
+        concurrency: "unbounded",
+      },
+    );
     assert.isTrue(results.every((result) => result.state === "signed-in"));
     assert.equal(
       test.requests.filter(({ body }) => body.includes("grant_type=refresh_token")).length,
@@ -254,7 +263,7 @@ it.effect("treats a revoked refresh grant as signed out", () => {
   return Effect.gen(function* () {
     const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
     yield* login(account);
-    assert.deepEqual(yield* account.status(), { state: "signed-out" });
+    assert.deepEqual(yield* account.status({ refresh: true }), { state: "signed-out" });
     assert.isFalse(test.stored.has("phoenix-cloud-installation"));
   }).pipe(Effect.provide(test.layer));
 });
@@ -266,7 +275,7 @@ it.effect("reports a status network failure without removing the stored account"
     const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
     yield* login(account);
     options.currentStatus = 503;
-    assert.equal((yield* account.status().pipe(Effect.flip)).reason, "network");
+    assert.deepEqual(yield* account.status({ refresh: true }), { state: "unavailable" });
     assert.isTrue(test.stored.has("phoenix-cloud-installation"));
   }).pipe(Effect.provide(test.layer));
 });
@@ -352,7 +361,7 @@ it.effect("clears a revoked installation on the custom Better Auth 401 response"
     yield* login(account);
     options.currentStatus = 401;
     options.currentBody = { code: "UNAUTHORIZED", message: "Installation revoked" };
-    assert.deepEqual(yield* account.status(), { state: "signed-out" });
+    assert.deepEqual(yield* account.status({ refresh: true }), { state: "signed-out" });
     assert.isFalse(test.stored.has("phoenix-cloud-installation"));
   }).pipe(Effect.provide(test.layer));
 });
@@ -367,7 +376,7 @@ it.effect("preserves credentials when refresh is rate limited", () => {
   return Effect.gen(function* () {
     const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
     yield* login(account);
-    assert.equal((yield* account.status().pipe(Effect.flip)).reason, "network");
+    assert.deepEqual(yield* account.status({ refresh: true }), { state: "unavailable" });
     assert.isTrue(test.stored.has("phoenix-cloud-installation"));
   }).pipe(Effect.provide(test.layer));
 });
@@ -398,7 +407,7 @@ it.effect(
       const initial = yield* login(account);
       assert.equal(initial.state, "signed-in");
       if (initial.state === "signed-in") assert.deepEqual(initial.scopes, ["installation"]);
-      const refreshed = yield* account.status();
+      const refreshed = yield* account.status({ refresh: true });
       assert.equal(refreshed.state, "signed-in");
       if (refreshed.state === "signed-in") assert.deepEqual(refreshed.scopes, []);
       const restored = yield* Effect.gen(function* () {
@@ -420,8 +429,91 @@ it.effect("retains previously granted scopes when refresh omits scope", () => {
   return Effect.gen(function* () {
     const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
     yield* login(account);
-    const refreshed = yield* account.status();
+    const refreshed = yield* account.status({ refresh: true });
     assert.equal(refreshed.state, "signed-in");
     if (refreshed.state === "signed-in") assert.deepEqual(refreshed.scopes, ["installation"]);
   }).pipe(Effect.provide(test.layer));
 });
+
+it.effect("serves cached status without requests and rechecks ownership every minute", () => {
+  const options = { currentStatus: 200 };
+  const test = fixture(options);
+  return Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+    yield* login(account);
+    const before = test.requests.length;
+    yield* Effect.all(Array.from({ length: 10 }, () => account.status()));
+    assert.equal(test.requests.length, before);
+    options.currentStatus = 503;
+    yield* TestClock.adjust("60 seconds");
+    assert.deepEqual(yield* account.status(), { state: "unavailable" });
+    assert.isTrue(test.stored.has("phoenix-cloud-installation"));
+    options.currentStatus = 200;
+    assert.equal((yield* account.status({ refresh: true })).state, "signed-in");
+  }).pipe(Effect.provide(test.layer));
+});
+
+it.effect(
+  "keeps failed logout locked across reconstruction and retries disconnect before linking",
+  () => {
+    const options = { disconnectStatus: 503 };
+    const test = fixture(options);
+    return Effect.gen(function* () {
+      const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+      yield* login(account);
+      yield* account.signOut().pipe(Effect.flip);
+      assert.deepEqual(yield* account.status(), { state: "signed-out" });
+      assert.deepEqual(yield* account.status({ refresh: true }), { state: "signed-out" });
+      yield* Effect.gen(function* () {
+        const restored = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+        assert.deepEqual(yield* restored.status(), { state: "signed-out" });
+        assert.equal(
+          (yield* restored.beginSignIn({ cloudUrl: origin, name: "Server" }).pipe(Effect.flip))
+            .reason,
+          "network",
+        );
+        assert.isTrue(test.stored.has("phoenix-cloud-installation"));
+        options.disconnectStatus = 401;
+        const attempt = yield* restored.beginSignIn({ cloudUrl: origin, name: "Server" });
+        assert.deepEqual(yield* restored.status(), { state: "signed-out" });
+        assert.isFalse(test.stored.has("phoenix-cloud-installation"));
+        yield* restored.cancelSignIn(attempt);
+      }).pipe(Effect.provide(Layer.fresh(test.layer)));
+    }).pipe(Effect.provide(test.layer));
+  },
+);
+
+it.effect("coalesces concurrent explicit verification requests", () => {
+  const test = fixture();
+  return Effect.gen(function* () {
+    const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+    yield* login(account);
+    const before = test.requests.length;
+    yield* Effect.all(
+      Array.from({ length: 10 }, () => account.status({ refresh: true })),
+      { concurrency: "unbounded" },
+    );
+    assert.equal(test.requests.length, before + 1);
+  }).pipe(Effect.provide(test.layer));
+});
+
+it.effect(
+  "locks immediately while remote logout is pending and preserves the lock on failure",
+  () =>
+    Effect.gen(function* () {
+      const disconnectReady = yield* Deferred.make<void>();
+      const disconnectRelease = yield* Deferred.make<void>();
+      const test = fixture({ disconnectStatus: 503, disconnectReady, disconnectRelease });
+      yield* Effect.gen(function* () {
+        const account = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+        yield* login(account);
+        const logout = yield* account.signOut().pipe(Effect.forkChild);
+        yield* Deferred.await(disconnectReady);
+        assert.deepEqual(yield* account.status(), { state: "signed-out" });
+        assert.isTrue(test.stored.has("phoenix-cloud-signed-out"));
+        yield* Deferred.succeed(disconnectRelease, undefined);
+        assert.equal((yield* Fiber.join(logout).pipe(Effect.flip)).reason, "network");
+        assert.deepEqual(yield* account.status({ refresh: true }), { state: "signed-out" });
+      }).pipe(Effect.provide(test.layer));
+    }),
+);

@@ -1,3 +1,4 @@
+import { requireOwnership } from "../phoenixCloud/ownership.ts";
 /**
  * The hub binds loopback and is never reachable directly: serve-sim exposes a shell-exec route
  * and serve-emu's action routes are unauthenticated, so the only way to a device stream is
@@ -98,7 +99,7 @@ const proxyWebSocket = Effect.fn("DeviceHubProxy.proxyWebSocket")(function* (
       // fails the pull with a SocketError, which loses the race.
       return yield* Effect.raceFirst(
         pumpFrames(upstream, writeToClient),
-        pumpFrames(client, writeToUpstream),
+        pumpFrames(client, writeToUpstream, true),
       );
     }),
   ).pipe(Effect.ignoreCause);
@@ -107,10 +108,12 @@ const proxyWebSocket = Effect.fn("DeviceHubProxy.proxyWebSocket")(function* (
 
 const pumpFrames =
   /* Frame pumping runs continuously; a span per frame stream adds no diagnostic value. */
-  Effect.fnUntraced(function* (source: Socket.Socket, sink: Socket.Writer) {
+  Effect.fnUntraced(function* (source: Socket.Socket, sink: Socket.Writer, checkOwnership = false) {
     const { pull } = yield* source.reader;
     while (true) {
-      yield* sink.writeAll(yield* pull);
+      const frames = yield* pull;
+      if (checkOwnership) yield* requireOwnership();
+      yield* sink.writeAll(frames);
     }
   });
 

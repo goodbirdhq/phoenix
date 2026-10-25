@@ -1,4 +1,4 @@
-import * as PhoenixCloudAccount from "./phoenixCloud/PhoenixCloudAccount.ts";
+import * as CloudOwnershipTestkit from "./phoenixCloud/ownership.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -335,7 +335,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(PullRequestService.PullRequestService)({}),
   Layer.mock(PullRequestSyncReactor.PullRequestSyncReactor)({}),
   Layer.mock(RelayClient.RelayClient)({}),
-  Layer.mock(PhoenixCloudAccount.PhoenixCloudAccount)({}),
+  CloudOwnershipTestkit.layer,
   Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
   Layer.mock(ResourceTelemetry.ResourceTelemetry)({}),
   Layer.mock(ReviewService.ReviewService)({}),

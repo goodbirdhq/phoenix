@@ -1,3 +1,4 @@
+import { requireOwnership } from "../phoenixCloud/ownership.ts";
 import * as NodeHttpServerRequest from "@effect/platform-node/NodeHttpServerRequest";
 import {
   AuthOrchestrationReadScope,
@@ -182,7 +183,12 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
         // replies and takeover can unblock an action already waiting on the page.
         if (!isAck(message))
           return canOperate
-            ? viewer.input(message).pipe(Effect.forkScoped, Effect.asVoid)
+            ? requireOwnership().pipe(
+                Effect.andThen(viewer.input(message)),
+                Effect.ignore,
+                Effect.forkScoped,
+                Effect.asVoid,
+              )
             : Effect.void;
         const ack = inFlight;
         const next = pending;

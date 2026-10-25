@@ -1,3 +1,5 @@
+import * as PhoenixCloudAccount from "../phoenixCloud/PhoenixCloudAccount.ts";
+import * as CloudOwnershipTestkit from "../phoenixCloud/ownership.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
@@ -123,6 +125,7 @@ function startWithMissingWorktree(
   const pruneWorktrees = vi.fn(() => Effect.void);
   const createWorktree = vi.fn(() => Effect.succeed({} as never));
   const layer = ProviderTurnStart.layer.pipe(
+    Layer.provide(CloudOwnershipTestkit.layer),
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
@@ -258,6 +261,7 @@ it.each([
 });
 
 function makeLocalCommandHarness(input: {
+  readonly ownershipState?: "signed-out" | "unavailable";
   readonly text: string;
   readonly worktreePath?: string;
   readonly worktreesDir?: string;
@@ -683,6 +687,13 @@ function makeLocalCommandHarness(input: {
     }),
   );
   const layer = ProviderTurnStart.layer.pipe(
+    Layer.provide(
+      input.ownershipState === undefined
+        ? CloudOwnershipTestkit.layer
+        : Layer.mock(PhoenixCloudAccount.PhoenixCloudAccount)({
+            status: () => Effect.succeed({ state: input.ownershipState! }),
+          }),
+    ),
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({
@@ -1243,3 +1254,17 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
       }),
   );
 }
+
+effectIt.effect.each(["signed-out", "unavailable"] as const)(
+  "refuses provider starts before any workspace or provider side effect when ownership is %s",
+  (ownershipState) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({ text: "Do work", ownershipState });
+      const error = yield* harness.start.pipe(Effect.flip);
+      expect(error.cause).toMatchObject({ requiredPermission: "phoenix-cloud-ownership" });
+      expect(harness.getTurnStartContext).not.toHaveBeenCalled();
+      expect(harness.createWorktree).not.toHaveBeenCalled();
+      expect(harness.open).not.toHaveBeenCalled();
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+    }),
+);

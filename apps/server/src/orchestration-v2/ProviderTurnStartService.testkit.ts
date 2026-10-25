@@ -1,3 +1,4 @@
+import * as CloudOwnershipTestkit from "../phoenixCloud/ownership.testkit.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -5,7 +6,8 @@ import * as Option from "effect/Option";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 
-export const layer = Layer.merge(
+export const layer = Layer.mergeAll(
+  CloudOwnershipTestkit.layer,
   Layer.mock(GitWorkflow.GitWorkflowService)({
     pruneWorktrees: () => Effect.void,
     createWorktree: () => Effect.succeed({} as never),

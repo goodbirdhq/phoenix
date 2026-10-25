@@ -1,3 +1,5 @@
+import * as CloudOwnershipTestkit from "../phoenixCloud/ownership.testkit.ts";
+import * as PhoenixCloudAccount from "../phoenixCloud/PhoenixCloudAccount.ts";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -30,6 +32,7 @@ const platformLayer = NodeHttpPlatform.layer.pipe(Layer.provideMerge(NodeService
 const makeAuth = (
   scopes: ReadonlyArray<AuthEnvironmentScope>,
   error?: EnvironmentAuth.ServerAuthCredentialError,
+  isOwned = () => true,
 ) => {
   const requests: string[] = [];
   const layer = Layer.mock(EnvironmentAuth.EnvironmentAuth, {
@@ -45,7 +48,18 @@ const makeAuth = (
           });
     },
   });
-  return { layer, requests };
+  return {
+    layer: Layer.merge(
+      layer,
+      Layer.mock(PhoenixCloudAccount.PhoenixCloudAccount)({
+        status: () =>
+          Effect.succeed(
+            isOwned() ? CloudOwnershipTestkit.signedInStatus : { state: "signed-out" as const },
+          ),
+      }),
+    ),
+    requests,
+  };
 };
 
 const mutations = [
@@ -65,16 +79,18 @@ const mutations = [
 ];
 
 it.effect.each([
-  { hasOperateScope: false, interactive: true },
-  { hasOperateScope: true, interactive: true },
-  { hasOperateScope: true, interactive: false },
-])("streams frames and acks while gating page mutations (%s)", ({ hasOperateScope, interactive }) =>
+  { hasOperateScope: false, interactive: true, lost: false },
+  { hasOperateScope: true, interactive: true, lost: false },
+  { hasOperateScope: true, interactive: true, lost: true },
+  { hasOperateScope: true, interactive: false, lost: false },
+])("streams frames while gating mutations (%s)", ({ hasOperateScope, interactive, lost }) =>
   Effect.gen(function* () {
     const canOperate = hasOperateScope && interactive;
     const scopes = hasOperateScope
       ? [AuthOrchestrationReadScope, AuthPreviewOperateScope]
       : [AuthOrchestrationReadScope];
-    const auth = makeAuth(scopes);
+    let owned = true;
+    const auth = makeAuth(scopes, undefined, () => owned);
     const inputs: unknown[] = [];
     const attachments: Parameters<ServerBrowser.ServerBrowser["Service"]["attachViewer"]>[0][] = [];
     const acked = Promise.withResolvers<void>();
@@ -127,6 +143,7 @@ it.effect.each([
         return;
       }
       frames.push(new Uint8Array(event.data as ArrayBuffer));
+      if (lost) owned = false;
       for (const message of mutations) socket.send(JSON.stringify(message));
       socket.send("malformed input");
       socket.send(JSON.stringify({ type: "ack" }));
@@ -138,7 +155,7 @@ it.effect.each([
     yield* Effect.promise(() => acked.promise);
     expect(frames).toEqual([frame]);
     expect(viewports).toEqual([{ type: "viewport", width: 1280, height: 800 }]);
-    expect(inputs).toEqual(canOperate ? [...mutations, null] : []);
+    expect(inputs).toEqual(canOperate && !lost ? [...mutations, null] : []);
     expect(attachments).toEqual([
       {
         threadId: "thread",

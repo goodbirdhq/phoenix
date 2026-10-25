@@ -1,3 +1,5 @@
+import * as PhoenixCloudAccount from "../phoenixCloud/PhoenixCloudAccount.ts";
+import * as CloudOwnershipTestkit from "../phoenixCloud/ownership.testkit.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as NodeUtil from "node:util";
 
@@ -189,7 +191,7 @@ it.effect(
         Effect.gen(function* () {
           yield* Layer.build(
             Layer.provideMerge(
-              ScheduledTaskService.layer,
+              ScheduledTaskService.layer.pipe(Layer.provide(CloudOwnershipTestkit.layer)),
               Layer.mergeAll(
                 Layer.mock(ThreadLaunchService.ThreadLaunchService)({
                   launch: () =>
@@ -283,7 +285,7 @@ it.effect(
         Effect.gen(function* () {
           yield* Layer.build(
             Layer.provideMerge(
-              ScheduledTaskService.layer,
+              ScheduledTaskService.layer.pipe(Layer.provide(CloudOwnershipTestkit.layer)),
               Layer.mergeAll(
                 Layer.mock(ThreadLaunchService.ThreadLaunchService)({
                   launch: () =>
@@ -339,14 +341,27 @@ it.effect(
     }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
-it.effect("thread cleanup notifies subscribers and a finishing run cannot recreate the task", () =>
+it.effect("finishes admitted run cleanup after ownership is lost", () =>
   Effect.gen(function* () {
+    const owned = yield* Ref.make(true);
+    const cloud = yield* PhoenixCloudAccount.PhoenixCloudAccount.pipe(
+      Effect.provide(CloudOwnershipTestkit.layer),
+    );
+    const ownership = Layer.mock(PhoenixCloudAccount.PhoenixCloudAccount)({
+      status: () =>
+        Ref.get(owned).pipe(
+          Effect.flatMap((value) =>
+            value ? cloud.status() : Effect.succeed({ state: "signed-out" as const }),
+          ),
+        ),
+    });
     const started = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const subscribed = yield* Deferred.make<void>();
     const running = yield* Deferred.make<void>();
     const removed = yield* Deferred.make<void>();
     const layer = ScheduledTaskService.layer.pipe(
+      Layer.provide(ownership),
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
@@ -397,6 +412,7 @@ it.effect("thread cleanup notifies subscribers and a finishing run cannot recrea
       const run = yield* service.runNow({ id: task.id }).pipe(Effect.forkChild);
       yield* Deferred.await(started);
       yield* Deferred.await(running);
+      yield* Ref.set(owned, false);
       yield* service.deleteForThread(threadId);
       yield* Deferred.await(removed);
       yield* Deferred.succeed(release, undefined);
@@ -404,4 +420,57 @@ it.effect("thread cleanup notifies subscribers and a finishing run cannot recrea
       assert.lengthOf((yield* service.list()).tasks, 0);
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect.each(["signed-out", "unavailable"] as const)(
+  "refuses a scheduled launch before changing run state when ownership is %s",
+  (state) =>
+    Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const { task } = yield* service.upsert({
+        id: ScheduledTaskId.make("task:ownership"),
+        title: "Work",
+        prompt: "Do work",
+        enabled: false,
+        schedule: { type: "interval", everyMs: 60_000 },
+        projectId: ProjectId.make("project:test"),
+        threadId: ThreadId.make("thread:test"),
+        workspaceStrategy: { type: "root" },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+      const error = yield* service.runNow({ id: task.id }).pipe(Effect.flip);
+      assert.isTrue(isScheduledTaskError(error.cause));
+      if (isScheduledTaskError(error.cause)) assert.include(error.cause.message, "Phoenix Cloud");
+      const saved = (yield* service.list()).tasks[0]!;
+      assert.equal(saved.runCount, 0);
+      assert.equal(saved.lastRunStatus, "never");
+    }).pipe(
+      Effect.provide(
+        ScheduledTaskService.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.mock(PhoenixCloudAccount.PhoenixCloudAccount)({
+                status: () => Effect.succeed({ state }),
+              }),
+              Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+                launch: () => Effect.die("must not launch"),
+              }),
+              Layer.mock(ThreadManagementService.ThreadManagementService)({
+                sendToThread: () => Effect.die("must not dispatch"),
+              }),
+              Layer.mock(SecretRequests.SecretRequests)({}),
+              Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                namedProjectsRoot: "/projects",
+                isScratchProject: () => Effect.succeed(false),
+              }),
+              NodeCrypto.layer,
+              Scheduler.layer,
+              SqlitePersistence.layerMemory,
+            ),
+          ),
+        ),
+      ),
+    ),
 );

@@ -1,3 +1,4 @@
+import { ownershipRequiredForRpc, requireOwnership } from "./phoenixCloud/ownership.ts";
 import * as PhoenixCloudAccount from "./phoenixCloud/PhoenixCloudAccount.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -2483,7 +2484,7 @@ export const layerWsRpc = (
         [WS_METHODS.serverReportHostPowerState]: (input) =>
           backgroundPolicy.reportHostPowerState(input),
         [WS_METHODS.serverGetBackgroundPolicy]: (_input) => backgroundPolicy.snapshot,
-        [WS_METHODS.phoenixCloudStatus]: (_input) => phoenixCloudAccount.status(),
+        [WS_METHODS.phoenixCloudStatus]: (input) => phoenixCloudAccount.status(input),
         [WS_METHODS.phoenixCloudBeginSignIn]: (input) => phoenixCloudAccount.beginSignIn(input),
         [WS_METHODS.phoenixCloudCompleteSignIn]: (input) =>
           phoenixCloudAccount.completeSignIn(input),
@@ -3207,6 +3208,10 @@ export const layer = Layer.unwrap(
     const pullRequests = yield* PullRequestService.PullRequestService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const sql = yield* SqlClient.SqlClient;
+    const cloudAccount = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+    const checkOwnership = requireOwnership().pipe(
+      Effect.provideService(PhoenixCloudAccount.PhoenixCloudAccount, cloudAccount),
+    );
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -3248,21 +3253,26 @@ export const layer = Layer.unwrap(
             Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
             Effect.provide(
               Layer.merge(
-                RpcAuthorization.layer(session.scopes, (method, payload) => {
-                  // Anonymous product signal: the feature and its enum variant,
-                  // credited to the connecting client's surface only.
-                  const usage = featureUsage(method, payload);
-                  return usage === undefined
-                    ? Effect.void
-                    : analytics
-                        .record("feature.used", {
-                          ...usage,
-                          ...(clientAnalyticsProps.surface === undefined
-                            ? {}
-                            : { surface: clientAnalyticsProps.surface }),
-                        })
-                        .pipe(Effect.ignore);
-                }),
+                RpcAuthorization.layer(
+                  session.scopes,
+                  (method, payload) => {
+                    // Anonymous product signal: the feature and its enum variant,
+                    // credited to the connecting client's surface only.
+                    const usage = featureUsage(method, payload);
+                    return usage === undefined
+                      ? Effect.void
+                      : analytics
+                          .record("feature.used", {
+                            ...usage,
+                            ...(clientAnalyticsProps.surface === undefined
+                              ? {}
+                              : { surface: clientAnalyticsProps.surface }),
+                          })
+                          .pipe(Effect.ignore);
+                  },
+                  (method, payload) =>
+                    ownershipRequiredForRpc(method, payload) ? checkOwnership : Effect.void,
+                ),
                 rpcInstrumentationLayer,
               ),
             ),
