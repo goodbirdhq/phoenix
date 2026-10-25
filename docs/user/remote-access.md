@@ -5,20 +5,31 @@ machine. That machine must stay running and reachable while you work.
 
 ## Phoenix Cloud account
 
-Open **Settings → Connections → Phoenix Cloud** for the environment you want to
-sign in. Enter your Phoenix Cloud website's HTTPS URL and a name for this
-installation, then approve the displayed code on the website. The account belongs
-to that environment's server, even when you open Settings from another machine.
+Desktop and standalone server installations must link to a Phoenix Cloud account
+before use. On first launch, enter your website URL and installation name, then
+approve the displayed code on the website. The account belongs to that installation.
+For another connected server, open **Settings → Connections**, expand its actions,
+and choose **Phoenix Cloud ownership**.
 
-On a command-line host, run `phoenix cloud login --cloud-url https://your-cloud-host
---name "Work server"`. The command prints a URL and code you can approve on another
-machine. Add `--no-browser` to suppress opening a local browser.
+On a command-line host, run:
 
-Use `phoenix cloud status` to check the account and `phoenix cloud logout` to revoke
-this installation's access. Settings also shows the account and offers **Sign out**.
-A failed network request leaves the saved credential available so you can retry.
-Signing into Phoenix Cloud does not make the server remotely reachable or grant
-access to other environments; existing pairing remains separate.
+```bash
+phoenix cloud login --cloud-url https://your-cloud-host --name "Work server"
+```
+
+The command prints a URL and code you can approve on another machine. Add
+`--no-browser` to suppress opening a local browser. Use `phoenix cloud status`
+to check the account.
+
+Choose **Logout** from the account avatar menu, or run `phoenix cloud logout`,
+to lock the installation and revoke its access. If the website is unavailable,
+the installation stays locked and retains the credential to retry revocation.
+Linking again retries that step before requesting fresh approval.
+
+Phoenix periodically verifies ownership. If verification fails, new work pauses
+until it succeeds; running turns may finish and save their results. Signing into
+Phoenix Cloud does not make the server remotely reachable or grant access to
+other environments; existing pairing remains separate.
 
 ## T3 Connect
 

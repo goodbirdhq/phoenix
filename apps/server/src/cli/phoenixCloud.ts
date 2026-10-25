@@ -96,7 +96,9 @@ const status = Command.make("status", {
             ? yield* encodeStatus(status)
             : status.state === "signed-in"
               ? `Signed in as ${status.account.email}\n${status.installation.name} (${status.installation.kind})\n${status.cloudUrl}`
-              : "Not signed in to Phoenix Cloud.",
+              : status.state === "unavailable"
+                ? "Phoenix Cloud is unavailable. Saved credentials are retained; retry when the website is reachable."
+                : "Not signed in to Phoenix Cloud.",
         );
       }),
     ),
