@@ -517,3 +517,30 @@ it.effect(
       }).pipe(Effect.provide(test.layer));
     }),
 );
+
+it.effect.each([204, 503])(
+  "observes fresh approval from another service after local logout (%s)",
+  (disconnectStatus) => {
+    const options = {
+      disconnectStatus,
+      tokenReplies: [
+        { status: 200, body: tokens },
+        { status: 200, body: tokens },
+      ],
+    };
+    const test = fixture(options);
+    return Effect.gen(function* () {
+      const runningServer = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+      yield* login(runningServer);
+      yield* runningServer.signOut().pipe(Effect.ignore);
+      assert.deepEqual(yield* runningServer.status(), { state: "signed-out" });
+      options.disconnectStatus = 204;
+      yield* Effect.gen(function* () {
+        const cli = yield* PhoenixCloudAccount.PhoenixCloudAccount;
+        assert.equal((yield* login(cli)).state, "signed-in");
+      }).pipe(Effect.provide(Layer.fresh(test.layer)));
+      assert.isFalse(test.stored.has("phoenix-cloud-signed-out"));
+      assert.equal((yield* runningServer.status({ refresh: true })).state, "signed-in");
+    }).pipe(Effect.provide(test.layer));
+  },
+);

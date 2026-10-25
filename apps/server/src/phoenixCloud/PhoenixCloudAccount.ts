@@ -107,7 +107,7 @@ const make = Effect.gen(function* () {
   const gate = yield* Semaphore.make(1);
   const active = yield* Ref.make<Attempt | null>(null);
   const cached = yield* Ref.make<PhoenixCloudAccountStatus>({ state: "unavailable" });
-  const logoutRequested = yield* Ref.make(false);
+  const pendingLogouts = yield* Ref.make(0);
   const verification = yield* Ref.make<Deferred.Deferred<PhoenixCloudAccountStatus> | null>(null);
 
   const request = Effect.fn("PhoenixCloudAccount.request")(function* (
@@ -249,8 +249,8 @@ const make = Effect.gen(function* () {
       }).pipe(
         Effect.catch(() => Effect.succeed({ state: "unavailable" } as const)),
         Effect.flatMap((value) =>
-          Ref.get(logoutRequested).pipe(
-            Effect.map((locked) => (locked ? ({ state: "signed-out" } as const) : value)),
+          Ref.get(pendingLogouts).pipe(
+            Effect.map((pending) => (pending > 0 ? ({ state: "signed-out" } as const) : value)),
           ),
         ),
         Effect.tap((value) => Ref.set(cached, value)),
@@ -346,7 +346,6 @@ const make = Effect.gen(function* () {
             cancelled: yield* Deferred.make<void>(),
             completing: false,
           };
-          yield* Ref.set(logoutRequested, false);
           yield* Ref.set(active, attempt);
           return {
             attemptId: attempt.id,
@@ -409,10 +408,10 @@ const make = Effect.gen(function* () {
             return yield* new PhoenixCloudAccountError({ reason: "denied" });
           return yield* gate.withPermits(1)(
             Effect.gen(function* () {
-              if ((yield* Ref.get(active)) !== attempt || (yield* Ref.get(logoutRequested)))
+              if ((yield* Ref.get(active)) !== attempt || (yield* Ref.get(pendingLogouts)) > 0)
                 return yield* new PhoenixCloudAccountError({ reason: "cancelled" });
               yield* persist(credential);
-              if (yield* Ref.get(logoutRequested))
+              if ((yield* Ref.get(pendingLogouts)) > 0)
                 return yield* new PhoenixCloudAccountError({ reason: "cancelled" });
               yield* unlock;
               yield* Ref.set(active, null);
@@ -450,7 +449,7 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.ensuring(cancelSignIn(input)));
   });
   const signOut = Effect.fn("PhoenixCloudAccount.signOut")(() =>
-    Ref.set(logoutRequested, true).pipe(
+    Ref.update(pendingLogouts, (count) => count + 1).pipe(
       Effect.andThen(Ref.set(cached, { state: "signed-out" })),
       Effect.andThen(lock),
       Effect.andThen(
@@ -475,6 +474,8 @@ const make = Effect.gen(function* () {
           }),
         ),
       ),
+      // The persisted marker owns the durable lock; this counter only covers in-flight logout.
+      Effect.ensuring(Ref.update(pendingLogouts, (count) => count - 1)),
       Effect.uninterruptible,
     ),
   );
