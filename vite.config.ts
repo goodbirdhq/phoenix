@@ -86,6 +86,8 @@ export default defineConfig({
       // Macroscope's glob-per-line ignore grammar, not Markdown: formatting
       // it rewrites `*` as `_` and joins lines.
       ".macroscope/ignore.md",
+      // Written by bd, which rewrites them in its own layout.
+      ".beads/**",
       ".alchemy",
       "dist",
       "dist-electron",
