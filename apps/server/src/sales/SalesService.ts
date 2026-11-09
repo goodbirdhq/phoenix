@@ -1,11 +1,13 @@
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -57,7 +59,17 @@ const make = Effect.gen(function* () {
   const state = yield* SubscriptionRef.make<SalesSnapshot>(EMPTY_SNAPSHOT);
   /** The engine the snapshot's summary came from, so a new URL or token drops the old one. */
   const lastConfigKey = yield* Ref.make<string | null>(null);
-  const inFlight = yield* SynchronizedRef.make(Option.none<Fiber.Fiber<SalesSnapshot>>());
+  /** The read in flight and the engine it is reading, so a settings change can replace it. */
+  const inFlight = yield* Ref.make(
+    Option.none<{
+      readonly fiber: Fiber.Fiber<SalesSnapshot>;
+      readonly key: string;
+      readonly token: object;
+    }>(),
+  );
+  // Guards choosing or replacing the read. A read's own cleanup uses `inFlight` without it, so
+  // waiting on an interrupted read here cannot deadlock.
+  const readLock = yield* Semaphore.make(1);
   const poller = yield* SynchronizedRef.make({
     subscribers: 0,
     fiber: Option.none<Fiber.Fiber<void>>(),
@@ -75,73 +87,95 @@ const make = Effect.gen(function* () {
 
   const publish = (snapshot: SalesSnapshot) => SubscriptionRef.setAndGet(state, snapshot);
 
-  const readEngine = Effect.gen(function* () {
-    const config = yield* readConfig;
-    const key = configKey(config);
-    const sameEngine = (yield* Ref.getAndSet(lastConfigKey, key)) === key;
-    const previous = sameEngine ? yield* SubscriptionRef.get(state) : EMPTY_SNAPSHOT;
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const readEngine = (config: SalesEngineSettings) =>
+    Effect.gen(function* () {
+      const key = configKey(config);
+      const sameEngine = (yield* Ref.getAndSet(lastConfigKey, key)) === key;
+      const previous = sameEngine ? yield* SubscriptionRef.get(state) : EMPTY_SNAPSHOT;
+      const checkedAt = DateTime.formatIso(yield* DateTime.now);
 
-    if (!isConfigured(config)) {
-      return yield* publish(EMPTY_SNAPSHOT);
-    }
-    if (SalesEngineApi.salesApiBaseUrl(config.baseUrl) === null) {
+      if (!isConfigured(config)) {
+        return yield* publish(EMPTY_SNAPSHOT);
+      }
+      if (SalesEngineApi.salesApiBaseUrl(config.baseUrl) === null) {
+        return yield* publish({
+          ...EMPTY_SNAPSHOT,
+          status: "failed",
+          message: "The sales engine URL must be an http or https URL.",
+          checkedAt,
+        });
+      }
+      if (!sameEngine) {
+        yield* publish({ ...EMPTY_SNAPSHOT, status: "loading" });
+      }
+
+      const result = yield* SalesEngineApi.readSummary(config).pipe(
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+        Effect.result,
+      );
+      if (Result.isSuccess(result)) {
+        return yield* publish({
+          status: "ready",
+          message: null,
+          summary: result.success,
+          summaryReadAt: checkedAt,
+          checkedAt,
+        });
+      }
+      const error = result.failure;
+      yield* Effect.logWarning("failed to read the sales engine", {
+        status: error.status,
+        httpStatus: error.httpStatus,
+      });
+      // Keep the last summary through an error so the screen can show it as stale.
       return yield* publish({
-        ...EMPTY_SNAPSHOT,
-        status: "failed",
-        message: "The sales engine URL must be an http or https URL.",
+        status: error.status,
+        message: error.message,
+        summary: previous.summary,
+        summaryReadAt: previous.summaryReadAt,
         checkedAt,
       });
-    }
-    if (!sameEngine) {
-      yield* publish({ ...EMPTY_SNAPSHOT, status: "loading" });
-    }
-
-    const result = yield* SalesEngineApi.readSummary(config).pipe(
-      Effect.provideService(HttpClient.HttpClient, httpClient),
-      Effect.result,
-    );
-    if (Result.isSuccess(result)) {
-      return yield* publish({
-        status: "ready",
-        message: null,
-        summary: result.success,
-        summaryReadAt: checkedAt,
-        checkedAt,
-      });
-    }
-    const error = result.failure;
-    yield* Effect.logWarning("failed to read the sales engine", {
-      status: error.status,
-      httpStatus: error.httpStatus,
     });
-    // Keep the last summary through an error so the screen can show it as stale.
-    return yield* publish({
-      status: error.status,
-      message: error.message,
-      summary: previous.summary,
-      summaryReadAt: previous.summaryReadAt,
-      checkedAt,
-    });
-  });
 
   // The read runs in the service scope, so a caller that goes away does not cancel it for the
-  // others waiting on it.
+  // others waiting on it. A read of a different engine (the settings changed while it ran) is
+  // interrupted and replaced rather than joined, so the old engine's answer never lands as the
+  // new one's.
   const refresh = Effect.gen(function* () {
-    const fiber = yield* SynchronizedRef.modifyEffect(inFlight, (current) =>
-      Option.match(current, {
-        onSome: (fiber) => Effect.succeed([fiber, current] as const),
-        onNone: () =>
-          readEngine.pipe(
-            Effect.ensuring(SynchronizedRef.set(inFlight, Option.none())),
-            Effect.forkIn(serviceScope),
-            Effect.map((fiber) => [fiber, Option.some(fiber)] as const),
+    const config = yield* readConfig;
+    const key = configKey(config);
+    const fiber = yield* readLock.withPermits(1)(
+      Effect.gen(function* () {
+        const current = yield* Ref.get(inFlight);
+        if (Option.isSome(current) && current.value.key === key) {
+          return current.value.fiber;
+        }
+        if (Option.isSome(current)) {
+          yield* Fiber.interrupt(current.value.fiber);
+        }
+        const token = {};
+        // The read waits until its entry is recorded, so it can never finish (and clear the
+        // entry) before the entry exists.
+        const recorded = yield* Deferred.make<void>();
+        const next = yield* Deferred.await(recorded).pipe(
+          Effect.andThen(readEngine(config)),
+          // Clear only our own entry: a replaced read must not clear its replacement.
+          Effect.ensuring(
+            Ref.update(inFlight, (entry) =>
+              Option.isSome(entry) && entry.value.token === token ? Option.none() : entry,
+            ),
           ),
+          Effect.forkIn(serviceScope),
+        );
+        yield* Ref.set(inFlight, Option.some({ fiber: next, key, token }));
+        yield* Deferred.succeed(recorded, undefined);
+        return next;
       }),
     );
     return yield* Fiber.join(fiber);
   });
 
+  // While anyone is watching, a settings change reads the new engine at once.
   const refreshOnSettingsChange = serverSettings.streamChanges.pipe(
     Stream.runForEach((settings) =>
       Ref.get(lastConfigKey).pipe(
@@ -151,6 +185,19 @@ const make = Effect.gen(function* () {
       ),
     ),
   );
+
+  /**
+   * The snapshot, unless the settings now name a different engine than the one it came from;
+   * then it belongs to the old engine and is dropped, so nobody sees it under the new settings.
+   */
+  const currentSnapshot = Effect.gen(function* () {
+    const key = configKey(yield* readConfig);
+    const last = yield* Ref.get(lastConfigKey);
+    if (last === null || last === key) return yield* SubscriptionRef.get(state);
+    yield* Ref.set(lastConfigKey, null);
+    return yield* publish(EMPTY_SNAPSHOT);
+  });
+
   const pollLoop = Effect.all(
     [
       refresh.pipe(Effect.andThen(Effect.sleep(SALES_POLL_INTERVAL)), Effect.forever),
@@ -162,8 +209,8 @@ const make = Effect.gen(function* () {
   const attach = SynchronizedRef.updateEffect(poller, (current) =>
     current.subscribers > 0
       ? Effect.succeed({ ...current, subscribers: current.subscribers + 1 })
-      : pollLoop.pipe(
-          Effect.forkIn(serviceScope),
+      : currentSnapshot.pipe(
+          Effect.andThen(pollLoop.pipe(Effect.forkIn(serviceScope))),
           Effect.map((fiber) => ({ subscribers: 1, fiber: Option.some(fiber) })),
         ),
   );
@@ -185,7 +232,7 @@ const make = Effect.gen(function* () {
   );
 
   return SalesService.of({
-    getSnapshot: SubscriptionRef.get(state),
+    getSnapshot: currentSnapshot,
     refresh,
     subscribe,
   });

@@ -315,3 +315,37 @@ it.effect("shares one engine request between overlapping reads", () => {
     assert.strictEqual(requests.length, 2);
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("replaces a read of the old engine when the settings change during it", () => {
+  const { layer, requests } = makeLayer({ delay: "1 second" });
+  return Effect.gen(function* () {
+    const sales = yield* SalesService.SalesService;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    // A read of the old engine is in flight when the token changes.
+    yield* sales.refresh.pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    yield* settings.updateSettings({ salesEngine: { readToken: "the-new-token" } });
+    const replacement = yield* sales.refresh.pipe(Effect.forkChild);
+    yield* TestClock.adjust("1 second");
+    const after = yield* Fiber.join(replacement);
+    assert.strictEqual(after.status, "ready");
+    const last = requests.at(-1);
+    assert.strictEqual(last?.headers.authorization, "Bearer the-new-token");
+    // The old engine's answer never became the snapshot.
+    assert.deepStrictEqual(yield* sales.getSnapshot, after);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("drops the old engine's snapshot when the settings change with nobody watching", () => {
+  const { layer, requests } = makeLayer({});
+  return Effect.gen(function* () {
+    const sales = yield* SalesService.SalesService;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    assert.strictEqual((yield* sales.refresh).status, "ready");
+    yield* settings.updateSettings({ salesEngine: { readToken: "the-new-token" } });
+    const snapshot = yield* sales.getSnapshot;
+    assert.strictEqual(snapshot.summary, null);
+    // Nothing was asked of either engine: nobody is watching.
+    assert.strictEqual(requests.length, 1);
+  }).pipe(Effect.provide(layer));
+});
