@@ -46,6 +46,7 @@ import {
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
+  SALES_WS_METHODS,
   SCHEDULE_WS_METHODS,
   ProjectId,
   type ProjectCreateNewInput,
@@ -162,6 +163,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as ScheduleService from "./schedule/ScheduleService.ts";
+import * as SalesService from "./sales/SalesService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
@@ -680,6 +682,7 @@ const makeWsRpcLayer = (
       const hostMetrics = yield* HostMetrics.HostMetrics;
       const usage = yield* UsageService.UsageService;
       const schedules = yield* ScheduleService.ScheduleService;
+      const sales = yield* SalesService.SalesService;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1353,6 +1356,18 @@ const makeWsRpcLayer = (
         [SCHEDULE_WS_METHODS.subscribe]: () =>
           observeRpcStreamEffect(SCHEDULE_WS_METHODS.subscribe, schedules.subscribe, {
             "rpc.aggregate": "schedule",
+          }),
+        [SALES_WS_METHODS.getSnapshot]: () =>
+          observeRpcEffect(SALES_WS_METHODS.getSnapshot, sales.getSnapshot, {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.refresh]: () =>
+          observeRpcEffect(SALES_WS_METHODS.refresh, sales.refresh, {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.subscribe]: () =>
+          observeRpcStreamEffect(SALES_WS_METHODS.subscribe, sales.subscribe, {
+            "rpc.aggregate": "sales",
           }),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(

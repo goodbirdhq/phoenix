@@ -45,6 +45,7 @@ export * from "./resourceTelemetry.ts";
 export * from "./hostMetrics.ts";
 export * from "./usage.ts";
 export * from "./schedule.ts";
+export * from "./sales.ts";
 export * from "./scheduleOrchestration.ts";
 export * from "./rpc.ts";
 export * from "./worktreeSetup.ts";

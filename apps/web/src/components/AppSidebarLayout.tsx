@@ -72,6 +72,9 @@ const EnvironmentsSidebar = lazy(() =>
 const SchedulesSidebar = lazy(() =>
   import("./schedules/SchedulesSidebar").then((module) => ({ default: module.SchedulesSidebar })),
 );
+const SalesSidebar = lazy(() =>
+  import("./sales/SalesSidebar").then((module) => ({ default: module.SalesSidebar })),
+);
 const UsageSidebarNav = lazy(() =>
   import("./usage/UsageSidebarNav").then((module) => ({ default: module.UsageSidebarNav })),
 );
@@ -260,6 +263,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   // sidebar is active.
   const pathname = useLocation({ select: (location) => location.pathname });
   const isOnSchedules = pathname === "/schedules";
+  const isOnSales = pathname === "/sales";
   const isOnPullRequests = pathname === "/pull-requests";
   const [pullRequestSidebar, setPullRequestSidebar] = useState<HTMLDivElement | null>(null);
   const isOnUsage = pathname === "/usage";
@@ -382,6 +386,13 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
                   <SchedulesSidebar />
                 </Suspense>
               </>
+            ) : isOnSales ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} plain compact />
+                <Suspense fallback={null}>
+                  <SalesSidebar />
+                </Suspense>
+              </>
             ) : isOnUsage ? (
               <>
                 <SidebarChromeHeader isElectron={isElectron} plain />
@@ -400,8 +411,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           </Sidebar>
           {children}
           <SidebarControl
-            plain={isOnUsage || isOnEnvironments || isOnSchedules}
-            compact={isOnEnvironments || isOnSchedules}
+            plain={isOnUsage || isOnEnvironments || isOnSchedules || isOnSales}
+            compact={isOnEnvironments || isOnSchedules || isOnSales}
           />
           <NavigationHistoryShortcuts />
           <MainAppLocationTracker />

@@ -305,6 +305,7 @@ import {
   ScheduleListStreamEvent,
   ScheduleOperationError,
 } from "./schedule.ts";
+import { SALES_WS_METHODS, SalesSnapshot, SalesStreamEvent } from "./sales.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -1520,6 +1521,25 @@ const WsScheduleSubscribeRpc = Rpc.make(SCHEDULE_WS_METHODS.subscribe, {
   stream: true,
 });
 
+const WsSalesGetSnapshotRpc = Rpc.make(SALES_WS_METHODS.getSnapshot, {
+  payload: Schema.Struct({}),
+  success: SalesSnapshot,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsSalesRefreshRpc = Rpc.make(SALES_WS_METHODS.refresh, {
+  payload: Schema.Struct({}),
+  success: SalesSnapshot,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsSalesSubscribeRpc = Rpc.make(SALES_WS_METHODS.subscribe, {
+  payload: Schema.Struct({}),
+  success: SalesStreamEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1671,6 +1691,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduleGetDetailRpc,
   WsScheduleGetHistoryRpc,
   WsScheduleSubscribeRpc,
+  WsSalesGetSnapshotRpc,
+  WsSalesRefreshRpc,
+  WsSalesSubscribeRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,

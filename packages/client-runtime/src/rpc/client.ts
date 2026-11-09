@@ -1,5 +1,6 @@
 import {
   ORCHESTRATION_WS_METHODS,
+  SALES_WS_METHODS,
   SCHEDULE_WS_METHODS,
   type ServerConfig,
   WS_METHODS,
@@ -52,6 +53,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof ORCHESTRATION_WS_METHODS.subscribeShell
   | typeof ORCHESTRATION_WS_METHODS.subscribeThread
   | typeof SCHEDULE_WS_METHODS.subscribe
+  | typeof SALES_WS_METHODS.subscribe
   | typeof WS_METHODS.subscribeAuthAccess
   | typeof WS_METHODS.subscribeServerConfig
   | typeof WS_METHODS.subscribeServerLifecycle

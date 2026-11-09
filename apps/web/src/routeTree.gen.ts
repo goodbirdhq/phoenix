@@ -13,6 +13,7 @@ import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SchedulesRouteImport } from './routes/schedules'
+import { Route as SalesRouteImport } from './routes/sales'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as EnvironmentsRouteImport } from './routes/environments'
 import { Route as ChatRouteImport } from './routes/_chat'
@@ -53,6 +54,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const SchedulesRoute = SchedulesRouteImport.update({
   id: '/schedules',
   path: '/schedules',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SalesRoute = SalesRouteImport.update({
+  id: '/sales',
+  path: '/sales',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PairRoute = PairRouteImport.update({
@@ -166,6 +172,7 @@ export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/environments': typeof EnvironmentsRoute
   '/pair': typeof PairRoute
+  '/sales': typeof SalesRoute
   '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -191,6 +198,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/environments': typeof EnvironmentsRoute
   '/pair': typeof PairRoute
+  '/sales': typeof SalesRoute
   '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -219,6 +227,7 @@ export interface FileRoutesById {
   '/_chat': typeof ChatRouteWithChildren
   '/environments': typeof EnvironmentsRoute
   '/pair': typeof PairRoute
+  '/sales': typeof SalesRoute
   '/schedules': typeof SchedulesRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -248,6 +257,7 @@ export interface FileRouteTypes {
     | '/'
     | '/environments'
     | '/pair'
+    | '/sales'
     | '/schedules'
     | '/settings'
     | '/usage'
@@ -273,6 +283,7 @@ export interface FileRouteTypes {
   to:
     | '/environments'
     | '/pair'
+    | '/sales'
     | '/schedules'
     | '/settings'
     | '/usage'
@@ -300,6 +311,7 @@ export interface FileRouteTypes {
     | '/_chat'
     | '/environments'
     | '/pair'
+    | '/sales'
     | '/schedules'
     | '/settings'
     | '/usage'
@@ -328,6 +340,7 @@ export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
   EnvironmentsRoute: typeof EnvironmentsRoute
   PairRoute: typeof PairRoute
+  SalesRoute: typeof SalesRoute
   SchedulesRoute: typeof SchedulesRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
@@ -363,6 +376,13 @@ declare module '@tanstack/react-router' {
       path: '/schedules'
       fullPath: '/schedules'
       preLoaderRoute: typeof SchedulesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sales': {
+      id: '/sales'
+      path: '/sales'
+      fullPath: '/sales'
+      preLoaderRoute: typeof SalesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/pair': {
@@ -571,6 +591,7 @@ const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
   EnvironmentsRoute: EnvironmentsRoute,
   PairRoute: PairRoute,
+  SalesRoute: SalesRoute,
   SchedulesRoute: SchedulesRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,

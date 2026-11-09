@@ -1,0 +1,3 @@
+# Sales reads one external engine through an adapter
+
+Phoenix has a generic `sales` module that reads one external sales engine, configured per Environment by URL and read token, through an adapter on the server; Notion and the engine stay the record, and Phoenix stores no sales records of its own. The server polls the engine only while a client is subscribed, keeps the latest answer in memory, and streams it to clients, so every client and connection mode sees the same data without reaching the engine itself. The business specifics (which engine, which CRM) stay behind the adapter and the engine's own contract, which keeps the module honest about the coupling instead of hiding it.

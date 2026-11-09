@@ -986,6 +986,18 @@ export const BitbucketSettings = Schema.Struct({
 });
 export type BitbucketSettings = typeof BitbucketSettings.Type;
 
+/**
+ * The external sales engine this environment reads for the Sales area. The
+ * read token lives in the server's secret store; settings and clients only see
+ * a redaction marker when one is set. The Sales area stays hidden until both
+ * are set.
+ */
+export const SalesEngineSettings = Schema.Struct({
+  baseUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  readToken: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type SalesEngineSettings = typeof SalesEngineSettings.Type;
+
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -1378,6 +1390,7 @@ export const ServerSettings = Schema.Struct({
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   bitbucket: BitbucketSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  salesEngine: SalesEngineSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
@@ -1647,6 +1660,13 @@ export const ServerSettingsPatch = Schema.Struct({
       email: Schema.optionalKey(TrimmedString),
       accessToken: Schema.optionalKey(TrimmedString),
       apiToken: Schema.optionalKey(TrimmedString),
+    }),
+  ),
+  /** An empty token clears it; an omitted one keeps what the server has. */
+  salesEngine: Schema.optionalKey(
+    Schema.Struct({
+      baseUrl: Schema.optionalKey(TrimmedString),
+      readToken: Schema.optionalKey(TrimmedString),
     }),
   ),
   providers: Schema.optionalKey(
