@@ -195,6 +195,7 @@ import {
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ScheduleService from "./schedule/ScheduleService.ts";
+import * as SalesService from "./sales/SalesService.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -828,6 +829,7 @@ const buildAppUnderTest = (options?: {
       // ceiling.
       .pipe(Layer.provideMerge(ThreadTurnBootstrap.layer))
       .pipe(Layer.provide(Layer.mock(ScheduleService.ScheduleService)({})))
+      .pipe(Layer.provide(Layer.mock(SalesService.SalesService)({})))
       // settle_session reads merged pull requests through this registry to
       // prove a branch is safe to delete; no route test here takes that path,
       // so the mock only has to satisfy the graph.

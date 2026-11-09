@@ -8,6 +8,7 @@ import { Link, useLocation, useNavigate, useRouter } from "@tanstack/react-route
 import {
   ArrowLeftIcon,
   ArrowUpIcon,
+  BriefcaseBusinessIcon,
   CalendarClockIcon,
   ChartNoAxesColumnIcon,
   CodeXmlIcon,
@@ -30,6 +31,7 @@ import { APP_BASE_NAME } from "~/branding";
 import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
 import { useWebEnvironmentSchedules } from "../../state/schedules";
+import { useSalesEnvironments } from "../../state/sales";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -298,7 +300,9 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                 ? "environments"
                 : location.pathname === "/schedules"
                   ? "schedules"
-                  : null,
+                  : location.pathname === "/sales"
+                    ? "sales"
+                    : null,
   });
   useEffect(() => {
     const target = { href: location.href, index: location.state.__TSR_index };
@@ -325,6 +329,8 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const pullRequestsSupported = environments.some(
     (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
   );
+  // Shown only where an environment's settings name a sales engine.
+  const salesConfigured = useSalesEnvironments().environments.length > 0;
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -354,6 +360,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/schedules" });
   }, [closeMobileSidebar, navigate]);
 
+  const handleSalesClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/sales" });
+  }, [closeMobileSidebar, navigate]);
+
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
     // TanStack history supplies this index; if unavailable, the comparison
@@ -368,7 +379,8 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       data-wide-label={
         currentFooterPage === "environments" ||
         currentFooterPage === "pull-requests" ||
-        currentFooterPage === "schedules"
+        currentFooterPage === "schedules" ||
+        currentFooterPage === "sales"
       }
       className="@container/sidebar-footer group/footer flex-row items-center justify-between"
     >
@@ -405,6 +417,14 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             onClick={handleSchedulesClick}
             badge={scheduleFailureCount}
           />
+          {salesConfigured ? (
+            <SidebarUtilityItem
+              icon={<BriefcaseBusinessIcon />}
+              label="Sales"
+              active={currentFooterPage === "sales"}
+              onClick={handleSalesClick}
+            />
+          ) : null}
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"

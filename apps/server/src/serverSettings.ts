@@ -140,7 +140,7 @@ function providerEnvironmentSecretName(input: {
 }
 
 /**
- * On disk a hub key or Bitbucket token is replaced by this marker and the
+ * On disk a hub key, Bitbucket token or sales engine token is replaced by this marker and the
  * real value lives in the secret store, mirroring provider environment
  * secrets. A client that sends the marker back means "keep what you have".
  */
@@ -150,11 +150,35 @@ function usageLimitSourceSecretName(sourceId: string): string {
   return `usage-limit-source-${Buffer.from(sourceId, "utf8").toString("base64url")}`;
 }
 
-const BITBUCKET_SECRET_NAMES = {
-  accessToken: "bitbucket-access-token",
-  apiToken: "bitbucket-api-token",
+/**
+ * Credential fields of the plain-string settings sections, by secret store name. Each value
+ * lives in the secret store; settings.json and clients carry SECRET_REDACTED in its place.
+ */
+const SECTION_SECRET_NAMES = {
+  bitbucket: { accessToken: "bitbucket-access-token", apiToken: "bitbucket-api-token" },
+  salesEngine: { readToken: "sales-engine-read-token" },
 } as const;
-const BITBUCKET_SECRET_FIELDS = ["accessToken", "apiToken"] as const;
+type SecretSection = keyof typeof SECTION_SECRET_NAMES;
+const SECTION_SECRET_FIELDS = (
+  Object.entries(SECTION_SECRET_NAMES) as Array<[SecretSection, Record<string, string>]>
+).flatMap(([section, fields]) =>
+  Object.entries(fields).map(([field, secretName]) => ({ section, field, secretName })),
+);
+type SecretSectionValues = Record<SecretSection, Record<string, string>>;
+
+/** Mutable copies of the secret-bearing sections, for the loops over SECTION_SECRET_FIELDS. */
+const secretSectionValues = (settings: ServerSettings): SecretSectionValues => ({
+  bitbucket: { ...settings.bitbucket },
+  salesEngine: { ...settings.salesEngine },
+});
+const withSecretSectionValues = (
+  settings: ServerSettings,
+  sections: SecretSectionValues,
+): ServerSettings => ({
+  ...settings,
+  bitbucket: sections.bitbucket as ServerSettings["bitbucket"],
+  salesEngine: sections.salesEngine as ServerSettings["salesEngine"],
+});
 
 const redactSecret = (value: string) => (value.length > 0 ? SECRET_REDACTED : "");
 
@@ -194,12 +218,11 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
       },
     ]),
   );
-  const bitbucket = {
-    ...settings.bitbucket,
-    accessToken: redactSecret(settings.bitbucket.accessToken),
-    apiToken: redactSecret(settings.bitbucket.apiToken),
-  };
-  return { ...settings, providerInstances, usageLimitSources, bitbucket };
+  const sections = secretSectionValues(settings);
+  for (const { section, field } of SECTION_SECRET_FIELDS) {
+    sections[section][field] = redactSecret(sections[section][field] ?? "");
+  }
+  return withSecretSectionValues({ ...settings, providerInstances, usageLimitSources }, sections);
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -569,32 +592,31 @@ const make = Effect.gen(function* () {
   );
 
   /**
-   * Moves Bitbucket tokens hand-edited into settings.json into the secret store as they load,
+   * Moves section tokens hand-edited into settings.json into the secret store as they load,
    * so plaintext does not stay on disk. If the store is unavailable, the token keeps working
    * from the file and the move is retried on the next load.
    */
-  const moveInlineBitbucketTokens = (settings: ServerSettings) =>
+  const moveInlineSectionTokens = (settings: ServerSettings) =>
     Effect.gen(function* () {
-      const bitbucket = { ...settings.bitbucket };
+      const sections = secretSectionValues(settings);
       let moved = false;
-      for (const field of BITBUCKET_SECRET_FIELDS) {
-        const value = bitbucket[field];
+      for (const { section, field, secretName } of SECTION_SECRET_FIELDS) {
+        const value = sections[section][field] ?? "";
         if (value.length === 0 || value === SECRET_REDACTED) continue;
-        const stored = yield* secretStore
-          .set(BITBUCKET_SECRET_NAMES[field], textEncoder.encode(value))
-          .pipe(
-            Effect.as(true),
-            Effect.catch(() =>
-              Effect.logWarning("failed to move a Bitbucket token into the secret store", {
-                field,
-              }).pipe(Effect.as(false)),
-            ),
-          );
+        const stored = yield* secretStore.set(secretName, textEncoder.encode(value)).pipe(
+          Effect.as(true),
+          Effect.catch(() =>
+            Effect.logWarning("failed to move a settings token into the secret store", {
+              section,
+              field,
+            }).pipe(Effect.as(false)),
+          ),
+        );
         if (!stored) continue;
-        bitbucket[field] = SECRET_REDACTED;
+        sections[section][field] = SECRET_REDACTED;
         moved = true;
       }
-      return moved ? { ...settings, bitbucket } : settings;
+      return moved ? withSecretSectionValues(settings, sections) : settings;
     });
 
   const loadSettingsFromDisk = Effect.gen(function* () {
@@ -682,7 +704,7 @@ const make = Effect.gen(function* () {
       ? foldLegacyProjectSettings(loaded, legacyProjectRows)
       : loaded;
     // Only rewrite a file that decoded cleanly; an untrusted one stays for the user to repair.
-    const migrated = settingsFileTrusted ? yield* moveInlineBitbucketTokens(folded) : folded;
+    const migrated = settingsFileTrusted ? yield* moveInlineSectionTokens(folded) : folded;
     if (migrated !== loaded) {
       yield* writeSettingsAtomically(migrated);
     }
@@ -753,24 +775,26 @@ const make = Effect.gen(function* () {
           managementKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
         };
       }
-      const bitbucket = { ...settings.bitbucket };
-      for (const field of BITBUCKET_SECRET_FIELDS) {
-        if (bitbucket[field] !== SECRET_REDACTED) continue;
+      const sections = secretSectionValues(settings);
+      for (const { section, field, secretName } of SECTION_SECRET_FIELDS) {
+        if (sections[section][field] !== SECRET_REDACTED) continue;
         const secret = yield* secretStore
-          .get(BITBUCKET_SECRET_NAMES[field])
+          .get(secretName)
           .pipe(
             Effect.mapError(
               (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
             ),
           );
-        bitbucket[field] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
+        sections[section][field] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
       }
-      return {
-        ...settings,
-        providerInstances: providerInstances as ServerSettings["providerInstances"],
-        usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
-        bitbucket,
-      };
+      return withSecretSectionValues(
+        {
+          ...settings,
+          providerInstances: providerInstances as ServerSettings["providerInstances"],
+          usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+        },
+        sections,
+      );
     });
 
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
@@ -911,32 +935,34 @@ const make = Effect.gen(function* () {
         });
       }
 
-      const bitbucket = { ...next.bitbucket };
-      for (const field of BITBUCKET_SECRET_FIELDS) {
-        let value = bitbucket[field];
+      const sections = secretSectionValues(next);
+      const currentSections = secretSectionValues(current);
+      for (const { section, field, secretName } of SECTION_SECRET_FIELDS) {
+        let value = sections[section][field] ?? "";
         if (value === SECRET_REDACTED) {
           // The marker keeps what is saved. A plaintext value hand-edited into settings.json
           // is not in the secret store yet, so move it there instead of dropping it.
-          const inline = current.bitbucket[field];
+          const inline = currentSections[section][field] ?? "";
           if (inline === SECRET_REDACTED || inline.length === 0) continue;
           value = inline;
         }
-        const secretName = BITBUCKET_SECRET_NAMES[field];
         if (value.length === 0) {
           changes.push({ kind: "remove", secretName, operation: "remove-secret" });
           continue;
         }
         changes.push({ kind: "write", secretName, value: textEncoder.encode(value) });
-        bitbucket[field] = SECRET_REDACTED;
+        sections[section][field] = SECRET_REDACTED;
       }
 
       return {
-        settings: {
-          ...next,
-          providerInstances: providerInstances as ServerSettings["providerInstances"],
-          usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
-          bitbucket,
-        },
+        settings: withSecretSectionValues(
+          {
+            ...next,
+            providerInstances: providerInstances as ServerSettings["providerInstances"],
+            usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+          },
+          sections,
+        ),
         changes,
       };
     });

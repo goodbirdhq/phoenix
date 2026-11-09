@@ -2,11 +2,13 @@
 
 Birdhouse is the company's business workflows — prospect research, mailbox
 reconciliation, follow-up drafting. It lives in its own repository
-(`goodbirdhq/birdhouse`), not in this one, and Phoenix's involvement in it is
-timing and nothing else: a [Schedule](./schedules.md) triggers an agent thread
-whose workspace is a birdhouse checkout, and the thread reads
-`workflows/<key>/SKILL.md` from disk and follows it. See
-[ADR 0003](../adr/0003-birdhouse-delegates-timing-to-phoenix-schedules.md).
+(`goodbirdhq/birdhouse`), not in this one. Phoenix touches it in two ways.
+Timing: a [Schedule](./schedules.md) triggers an agent thread whose workspace
+is a birdhouse checkout, and the thread reads `workflows/<key>/SKILL.md` from
+disk and follows it (see
+[ADR 0003](../adr/0003-birdhouse-delegates-timing-to-phoenix-schedules.md)).
+And reading: the Sales area shows what the birdhouse engine reports, as
+described below.
 
 There used to be a service in this repo. `infra/birdhouse` was a headless Node
 process with its own Postgres that served workflow definitions over a claim
@@ -31,5 +33,11 @@ workflow actually did its job, and did it once, is answered in the workflow's
 own domain: a CRM stage it sets before starting, a Gmail message id it matches
 on. That is deliberate. Resist adding run records here to answer it.
 
-**Nothing in `apps/` or `packages/` should know the word "birdhouse".** If that
-changes, something has been coupled that should not be.
+**Phoenix knows a sales engine, not birdhouse.** The Sales area reads the
+birdhouse engine's read API, but the code calls it a sales engine: a generic
+`sales` module whose adapter (`apps/server/src/sales/SalesEngineApi.ts`) is the
+only place the engine's paths and answers are known. It stores no sales
+records; the engine and Notion stay the truth. See
+[ADR 0005](../adr/0005-sales-engine-adapter.md). Workflow names, run records
+and anything else birdhouse-specific still do not belong in `apps/` or
+`packages/`.

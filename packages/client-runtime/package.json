@@ -111,6 +111,10 @@
       "types": "./src/schedules/index.ts",
       "default": "./src/schedules/index.ts"
     },
+    "./sales/home": {
+      "types": "./src/sales/home.ts",
+      "default": "./src/sales/home.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
@@ -118,6 +122,10 @@
     "./state/assets": {
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"
+    },
+    "./state/sales": {
+      "types": "./src/state/sales.ts",
+      "default": "./src/state/sales.ts"
     },
     "./state/attachments": {
       "types": "./src/state/attachments.ts",

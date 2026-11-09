@@ -1342,6 +1342,37 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
   );
 
+  it.effect("keeps the sales engine read token in the secret store", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+
+      const saved = yield* serverSettings.updateSettings({
+        salesEngine: { baseUrl: "https://engine.example.com", readToken: "sales-read" },
+      });
+      assert.deepEqual(saved.salesEngine, {
+        baseUrl: "https://engine.example.com",
+        readToken: "sales-read",
+      });
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(raw, "sales-read");
+      assert.include(raw, "https://engine.example.com");
+
+      const forClient = ServerSettingsModule.redactServerSettingsForClient(saved).salesEngine;
+      assert.equal(forClient.baseUrl, "https://engine.example.com");
+      assert.notInclude(forClient.readToken, "sales-read");
+      assert.isAbove(forClient.readToken.length, 0);
+
+      // Echoing the marker keeps the token; an empty one clears it from the store.
+      yield* serverSettings.updateSettings({ salesEngine: forClient });
+      assert.equal((yield* serverSettings.getSettings).salesEngine.readToken, "sales-read");
+      yield* serverSettings.updateSettings({ salesEngine: { readToken: "" } });
+      assert.isTrue(Option.isNone(yield* secrets.get("sales-engine-read-token")));
+    }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
   it.effect("removes a Bitbucket secret once its token is cleared by hand in settings.json", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;

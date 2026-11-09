@@ -607,6 +607,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["allow disable enable open drive preview tools sessions project override"],
   },
   {
+    id: "sales-engine",
+    title: "Sales engine",
+    to: "/settings/integrations",
+    searchTerms: ["sales outreach crm engine url read token notion approvals"],
+    environmentOnly: true,
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",
