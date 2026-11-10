@@ -61,6 +61,11 @@ export function isSalesConfigured(config: ServerConfig | null | undefined): bool
   return engine.baseUrl.length > 0 && engine.readToken.length > 0;
 }
 
+/** Whether the environment's server holds an action token, so drafts can be acted on. */
+export function canActOnSales(config: ServerConfig | null | undefined): boolean {
+  return isSalesConfigured(config) && (config?.settings.salesEngine.actionToken.length ?? 0) > 0;
+}
+
 const makeEnvironmentSalesState = Effect.fn("EnvironmentSalesState.make")(function* () {
   const supervisor = yield* EnvironmentSupervisor;
   const environmentId = supervisor.target.environmentId;
@@ -162,14 +167,95 @@ export function createSalesEnvironmentAtoms<R, E>(
       Option.getOrElse(AsyncResult.value(get(stateAtom(environmentId))), () => EMPTY_SALES_STATE),
     ).pipe(Atom.withLabel(`environment-sales-value:${environmentId}`)),
   );
+  const scheduler = createAtomCommandScheduler();
+  const parallel = { mode: "parallel" } as const;
+  /** Actions on one card run one at a time, so an edit and an approve never cross. */
+  const perCard = {
+    mode: "serial",
+    key: ({
+      environmentId,
+      input,
+    }: {
+      environmentId: EnvironmentId;
+      input: { activityId: string };
+    }) => `${environmentId}:${input.activityId}`,
+  } as const;
   return {
     stateValueAtom,
     /** Asks the engine now. The new snapshot also arrives on the subscription. */
     refresh: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:sales:refresh",
       tag: SALES_WS_METHODS.refresh,
-      scheduler: createAtomCommandScheduler(),
+      scheduler,
       concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
+    // Reads on demand. Never cached: a card is signed only as just read.
+    getQueueItem: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:queue-item",
+      tag: SALES_WS_METHODS.getQueueItem,
+      scheduler,
+      concurrency: parallel,
+    }),
+    listConversations: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:conversations",
+      tag: SALES_WS_METHODS.listConversations,
+      scheduler,
+      concurrency: parallel,
+    }),
+    getConversation: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:conversation",
+      tag: SALES_WS_METHODS.getConversation,
+      scheduler,
+      concurrency: parallel,
+    }),
+    listDevices: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:devices",
+      tag: SALES_WS_METHODS.listDevices,
+      scheduler,
+      concurrency: parallel,
+    }),
+    /** Carries presses this client signed. The server cannot sign. */
+    approve: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:approve",
+      tag: SALES_WS_METHODS.approve,
+      scheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
+    unapprove: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:unapprove",
+      tag: SALES_WS_METHODS.unapprove,
+      scheduler,
+      concurrency: perCard,
+    }),
+    edit: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:edit",
+      tag: SALES_WS_METHODS.edit,
+      scheduler,
+      concurrency: perCard,
+    }),
+    discard: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:discard",
+      tag: SALES_WS_METHODS.discard,
+      scheduler,
+      concurrency: perCard,
+    }),
+    enrolDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:enrol-device",
+      tag: SALES_WS_METHODS.enrolDevice,
+      scheduler,
+      concurrency: parallel,
+    }),
+    revokeDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:revoke-device",
+      tag: SALES_WS_METHODS.revokeDevice,
+      scheduler,
+      concurrency: parallel,
+    }),
+    dispatch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:dispatch",
+      tag: SALES_WS_METHODS.dispatch,
+      scheduler,
+      concurrency: parallel,
     }),
   };
 }

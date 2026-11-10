@@ -1342,7 +1342,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
   );
 
-  it.effect("keeps the sales engine read token in the secret store", () =>
+  it.effect("keeps the sales engine tokens in the secret store", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const secrets = yield* ServerSecretStore.ServerSecretStore;
@@ -1350,26 +1350,42 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const fileSystem = yield* FileSystem.FileSystem;
 
       const saved = yield* serverSettings.updateSettings({
-        salesEngine: { baseUrl: "https://engine.example.com", readToken: "sales-read" },
+        salesEngine: {
+          baseUrl: "https://engine.example.com",
+          readToken: "sales-read",
+          actionToken: "sales-action",
+          agentsProjectId: "project-birdhouse",
+        },
       });
       assert.deepEqual(saved.salesEngine, {
         baseUrl: "https://engine.example.com",
         readToken: "sales-read",
+        actionToken: "sales-action",
+        agentsProjectId: "project-birdhouse",
       });
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       assert.notInclude(raw, "sales-read");
+      assert.notInclude(raw, "sales-action");
       assert.include(raw, "https://engine.example.com");
+      assert.include(raw, "project-birdhouse");
 
       const forClient = ServerSettingsModule.redactServerSettingsForClient(saved).salesEngine;
       assert.equal(forClient.baseUrl, "https://engine.example.com");
-      assert.notInclude(forClient.readToken, "sales-read");
-      assert.isAbove(forClient.readToken.length, 0);
+      assert.equal(forClient.agentsProjectId, "project-birdhouse");
+      for (const token of [forClient.readToken, forClient.actionToken]) {
+        assert.notInclude(token, "sales-read");
+        assert.notInclude(token, "sales-action");
+        assert.isAbove(token.length, 0);
+      }
 
       // Echoing the marker keeps the token; an empty one clears it from the store.
       yield* serverSettings.updateSettings({ salesEngine: forClient });
-      assert.equal((yield* serverSettings.getSettings).salesEngine.readToken, "sales-read");
-      yield* serverSettings.updateSettings({ salesEngine: { readToken: "" } });
+      const kept = (yield* serverSettings.getSettings).salesEngine;
+      assert.equal(kept.readToken, "sales-read");
+      assert.equal(kept.actionToken, "sales-action");
+      yield* serverSettings.updateSettings({ salesEngine: { readToken: "", actionToken: "" } });
       assert.isTrue(Option.isNone(yield* secrets.get("sales-engine-read-token")));
+      assert.isTrue(Option.isNone(yield* secrets.get("sales-engine-action-token")));
     }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
   );
 

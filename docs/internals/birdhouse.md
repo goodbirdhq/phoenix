@@ -34,10 +34,17 @@ own domain: a CRM stage it sets before starting, a Gmail message id it matches
 on. That is deliberate. Resist adding run records here to answer it.
 
 **Phoenix knows a sales engine, not birdhouse.** The Sales area reads the
-birdhouse engine's read API, but the code calls it a sales engine: a generic
-`sales` module whose adapter (`apps/server/src/sales/SalesEngineApi.ts`) is the
-only place the engine's paths and answers are known. It stores no sales
-records; the engine and Notion stay the truth. See
-[ADR 0005](../adr/0005-sales-engine-adapter.md). Workflow names, run records
-and anything else birdhouse-specific still do not belong in `apps/` or
+birdhouse engine's API and relays its actions, but the code calls it a sales
+engine: a generic `sales` module whose adapter
+(`apps/server/src/sales/SalesEngineApi.ts`) is the only place the engine's paths
+and answers are known. It stores no sales records; the engine and Notion stay
+the truth. See [ADR 0005](../adr/0005-sales-engine-adapter.md). Approvals are
+signed on a device, never by the server: see [Sales approvals](./sales-approvals.md).
+
+**Dispatch follows the agents repo's contract, in one file.** Research this and
+Redraft with notes start a thread in the configured sales agents project with
+the prompt birdhouse's README gives under "Dispatching a skill". That prompt and
+the skill keys it names live only in `apps/server/src/sales/SalesDispatch.ts`;
+when birdhouse changes its dispatch table, that file changes with it. Run
+records and other birdhouse specifics still do not belong in `apps/` or
 `packages/`.

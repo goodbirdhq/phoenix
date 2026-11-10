@@ -37,7 +37,7 @@ const AREA_ICONS = {
 } as const;
 
 export function SalesSidebar() {
-  const { environment: requested } = useSearch({ from: "/sales" });
+  const { environment: requested, area } = useSearch({ from: "/sales" });
   const { environments, target } = useSalesTarget(requested);
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -79,7 +79,12 @@ export function SalesSidebar() {
       </div>
       <SidebarContent>
         {target ? (
-          <SalesSidebarNav environmentId={target.environmentId} onNavigate={closeMobile} />
+          <SalesSidebarNav
+            environmentId={target.environmentId}
+            requested={requested}
+            area={area}
+            onNavigate={closeMobile}
+          />
         ) : null}
       </SidebarContent>
       <SidebarChromeFooter />
@@ -89,9 +94,13 @@ export function SalesSidebar() {
 
 function SalesSidebarNav({
   environmentId,
+  requested,
+  area: currentArea,
   onNavigate,
 }: {
   readonly environmentId: EnvironmentId;
+  readonly requested: string | undefined;
+  readonly area: "outreach" | "conversations" | undefined;
   readonly onNavigate: () => void;
 }) {
   const navigate = useNavigate();
@@ -105,7 +114,13 @@ function SalesSidebarNav({
     <nav aria-label="Sales" className="flex min-h-full flex-col px-2.5 pb-2">
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton isActive onClick={onNavigate}>
+          <SidebarMenuButton
+            isActive={currentArea === undefined}
+            onClick={() => {
+              onNavigate();
+              void navigate({ to: "/sales", search: requested ? { environment: requested } : {} });
+            }}
+          >
             <HouseIcon />
             <span>Home</span>
           </SidebarMenuButton>
@@ -116,13 +131,31 @@ function SalesSidebarNav({
         {SALES_WORK_AREAS.map((area) => {
           const Icon = AREA_ICONS[area.key];
           const count = counts.get(area.key) ?? null;
+          const shown = count !== null && count > 0 ? count : null;
+          if (area.key === "outreach" || area.key === "conversations") {
+            const key = area.key;
+            return (
+              <SidebarMenuItem key={key}>
+                <SidebarMenuButton
+                  isActive={currentArea === key}
+                  aria-label={shown === null ? area.label : `${area.label}, ${shown}`}
+                  onClick={() => {
+                    onNavigate();
+                    void navigate({
+                      to: "/sales",
+                      search: { ...(requested ? { environment: requested } : {}), area: key },
+                    });
+                  }}
+                >
+                  <Icon />
+                  <span className="flex-1">{area.label}</span>
+                  {shown !== null ? <span className="text-xs tabular-nums">{shown}</span> : null}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            );
+          }
           return (
-            <SalesPlaceholderItem
-              key={area.key}
-              icon={<Icon />}
-              label={area.label}
-              count={count !== null && count > 0 ? count : null}
-            />
+            <SalesPlaceholderItem key={area.key} icon={<Icon />} label={area.label} count={shown} />
           );
         })}
       </SalesSidebarGroup>

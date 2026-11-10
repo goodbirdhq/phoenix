@@ -143,6 +143,7 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as ScheduleService from "./schedule/ScheduleService.ts";
+import * as SalesDispatch from "./sales/SalesDispatch.ts";
 import * as SalesService from "./sales/SalesService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
@@ -492,6 +493,7 @@ const ProviderInstallationRefreshLive = Layer.effectDiscard(
 const RuntimeCoreProviderDependenciesLive = Layer.mergeAll(
   ReactorLayerLive,
   ScheduleRuntimeLayerLive,
+  SalesDispatch.layer.pipe(Layer.provide(T3ProjectFileLoader.layer)),
 )
   .pipe(
     Layer.provideMerge(ThreadTurnBootstrap.layer.pipe(Layer.provide(ReactorLayerLive))),

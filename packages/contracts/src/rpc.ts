@@ -305,7 +305,25 @@ import {
   ScheduleListStreamEvent,
   ScheduleOperationError,
 } from "./schedule.ts";
-import { SALES_WS_METHODS, SalesSnapshot, SalesStreamEvent } from "./sales.ts";
+import {
+  SALES_WS_METHODS,
+  SalesActionError,
+  SalesApproveInput,
+  SalesApproveResult,
+  SalesCardState,
+  SalesConversationDetail,
+  SalesConversationList,
+  SalesDevice,
+  SalesDeviceList,
+  SalesDispatch,
+  SalesDispatchInput,
+  SalesEditInput,
+  SalesEditResult,
+  SalesEnrolDeviceInput,
+  SalesQueueItemDetail,
+  SalesSnapshot,
+  SalesStreamEvent,
+} from "./sales.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -1540,6 +1558,74 @@ const WsSalesSubscribeRpc = Rpc.make(SALES_WS_METHODS.subscribe, {
   stream: true,
 });
 
+const SalesRpcError = Schema.Union([SalesActionError, EnvironmentAuthorizationError]);
+
+const WsSalesGetQueueItemRpc = Rpc.make(SALES_WS_METHODS.getQueueItem, {
+  payload: Schema.Struct({ activityId: Schema.String }),
+  success: SalesQueueItemDetail,
+  error: SalesRpcError,
+});
+
+const WsSalesListConversationsRpc = Rpc.make(SALES_WS_METHODS.listConversations, {
+  payload: Schema.Struct({}),
+  success: SalesConversationList,
+  error: SalesRpcError,
+});
+
+const WsSalesGetConversationRpc = Rpc.make(SALES_WS_METHODS.getConversation, {
+  payload: Schema.Struct({ contactKey: Schema.String }),
+  success: SalesConversationDetail,
+  error: SalesRpcError,
+});
+
+const WsSalesApproveRpc = Rpc.make(SALES_WS_METHODS.approve, {
+  payload: SalesApproveInput,
+  success: SalesApproveResult,
+  error: SalesRpcError,
+});
+
+const WsSalesUnapproveRpc = Rpc.make(SALES_WS_METHODS.unapprove, {
+  payload: Schema.Struct({ activityId: Schema.String }),
+  success: SalesCardState,
+  error: SalesRpcError,
+});
+
+const WsSalesEditRpc = Rpc.make(SALES_WS_METHODS.edit, {
+  payload: SalesEditInput,
+  success: SalesEditResult,
+  error: SalesRpcError,
+});
+
+const WsSalesDiscardRpc = Rpc.make(SALES_WS_METHODS.discard, {
+  payload: Schema.Struct({ activityId: Schema.String, expectedHash: Schema.String }),
+  success: SalesCardState,
+  error: SalesRpcError,
+});
+
+const WsSalesListDevicesRpc = Rpc.make(SALES_WS_METHODS.listDevices, {
+  payload: Schema.Struct({}),
+  success: SalesDeviceList,
+  error: SalesRpcError,
+});
+
+const WsSalesEnrolDeviceRpc = Rpc.make(SALES_WS_METHODS.enrolDevice, {
+  payload: SalesEnrolDeviceInput,
+  success: SalesDevice,
+  error: SalesRpcError,
+});
+
+const WsSalesRevokeDeviceRpc = Rpc.make(SALES_WS_METHODS.revokeDevice, {
+  payload: Schema.Struct({ deviceId: Schema.String }),
+  success: SalesDevice,
+  error: SalesRpcError,
+});
+
+const WsSalesDispatchRpc = Rpc.make(SALES_WS_METHODS.dispatch, {
+  payload: SalesDispatchInput,
+  success: SalesDispatch,
+  error: SalesRpcError,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1694,6 +1780,17 @@ export const WsRpcGroup = RpcGroup.make(
   WsSalesGetSnapshotRpc,
   WsSalesRefreshRpc,
   WsSalesSubscribeRpc,
+  WsSalesGetQueueItemRpc,
+  WsSalesListConversationsRpc,
+  WsSalesGetConversationRpc,
+  WsSalesApproveRpc,
+  WsSalesUnapproveRpc,
+  WsSalesEditRpc,
+  WsSalesDiscardRpc,
+  WsSalesListDevicesRpc,
+  WsSalesEnrolDeviceRpc,
+  WsSalesRevokeDeviceRpc,
+  WsSalesDispatchRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,

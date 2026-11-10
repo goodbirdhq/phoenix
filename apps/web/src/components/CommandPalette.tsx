@@ -46,6 +46,8 @@ import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
   CalendarClockIcon,
+  MessagesSquareIcon,
+  SendIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -199,6 +201,8 @@ import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindin
 import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/command";
 import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
+import { useSalesPaletteCommands } from "./sales/salesPaletteCommands";
+import { useSalesEnvironments } from "../state/sales";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
@@ -750,6 +754,8 @@ function OpenCommandPaletteDialog(props: {
     reportFailure: false,
   });
   const { environments } = useEnvironments();
+  const salesConfigured = useSalesEnvironments().environments.length > 0;
+  const salesCommands = useSalesPaletteCommands();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
@@ -2270,6 +2276,45 @@ function OpenCommandPaletteDialog(props: {
       await navigate({ to: "/schedules" });
     },
   });
+
+  if (salesConfigured) {
+    actionItems.push(
+      {
+        kind: "action",
+        value: "action:sales:outreach",
+        searchTerms: ["sales", "outreach", "drafts", "approve", "queue", "emails"],
+        title: "Open Sales outreach",
+        icon: <SendIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({ to: "/sales", search: { area: "outreach" } });
+        },
+      },
+      {
+        kind: "action",
+        value: "action:sales:conversations",
+        searchTerms: ["sales", "conversations", "replies", "answers", "inbox"],
+        title: "Open Sales conversations",
+        icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({ to: "/sales", search: { area: "conversations" } });
+        },
+      },
+    );
+  }
+  // Offered by the open Sales page: act on its selected draft.
+  for (const command of salesCommands) {
+    actionItems.push({
+      kind: "action",
+      value: `action:${command.id}`,
+      searchTerms: [...command.keywords],
+      title: command.title,
+      icon: <SendIcon className={ITEM_ICON_CLASS} />,
+      ...(command.shortcut ? { titleTrailingContent: <Kbd>{command.shortcut}</Kbd> } : {}),
+      run: async () => {
+        command.run();
+      },
+    });
+  }
 
   actionItems.push({
     kind: "action",

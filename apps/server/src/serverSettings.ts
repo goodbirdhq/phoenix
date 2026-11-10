@@ -156,7 +156,10 @@ function usageLimitSourceSecretName(sourceId: string): string {
  */
 const SECTION_SECRET_NAMES = {
   bitbucket: { accessToken: "bitbucket-access-token", apiToken: "bitbucket-api-token" },
-  salesEngine: { readToken: "sales-engine-read-token" },
+  salesEngine: {
+    readToken: "sales-engine-read-token",
+    actionToken: "sales-engine-action-token",
+  },
 } as const;
 type SecretSection = keyof typeof SECTION_SECRET_NAMES;
 const SECTION_SECRET_FIELDS = (
