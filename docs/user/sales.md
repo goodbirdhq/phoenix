@@ -14,8 +14,8 @@ Open **Settings › Integrations**, choose the environment that should read the 
   footer on web and desktop.
 - **Action token** (the engine's `SALES_ACTION_TOKEN`) lets Phoenix unapprove, edit and discard
   drafts, and carry approvals signed on an enrolled device. On its own it approves nothing.
-- **Sales agents project** is the project whose checkout holds the sales workflows. Research this
-  and Redraft with notes start a thread there, the way a new thread in that project would start.
+- **Sales agents project** is the project whose checkout holds the sales workflows. Redraft and
+  research runs start a thread there, the way a new thread in that project would start.
 
 Tokens are stored by that environment's server and are never shown again. Changing the engine URL
 clears both tokens, so enter them again for the new engine.
@@ -53,12 +53,13 @@ Other actions:
 
 - **Unapprove** withdraws an approval before the draft goes.
 - **Discard** drops a draft for good. It's never sent.
-- **Redraft with notes** starts a run that rewrites the draft with your note. A reply is
-  discarded first and drafted again, since the reply drafter can't edit a draft. If that run
-  fails to start, the answer is already gone: choose **Draft an answer** in Conversations.
-- **Research this** starts a research run for the draft's account.
+- **Redraft** starts a run that rewrites the draft with your note. Some drafts, such as a
+  reply, are discarded first and drafted again; the form says so. If that run fails to start,
+  the draft is already gone: start a new answer from the conversation.
+- **Research** starts a research run for the draft's account.
 
-The page links each run it started. Keys: <kbd>J</kbd> and <kbd>K</kbd> move, <kbd>A</kbd>
+The engine decides which runs a draft offers and names each button. The page links each run it
+started. Keys: <kbd>J</kbd> and <kbd>K</kbd> move, <kbd>A</kbd>
 approves, <kbd>E</kbd> edits. The command palette offers the same actions.
 
 ## Answer replies

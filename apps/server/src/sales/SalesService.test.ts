@@ -10,7 +10,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
-import { ProjectId, SalesActionError, type SalesStreamEvent, ThreadId } from "@t3tools/contracts";
+import { SalesActionError, type SalesStreamEvent, ThreadId } from "@t3tools/contracts";
 import {
   HttpClient,
   HttpClientError,
@@ -728,12 +728,8 @@ it.effect("keeps dispatches through engine reads and settings changes", () => {
     const settings = yield* ServerSettings.ServerSettingsService;
     yield* sales.recordDispatch({
       target: "act-1",
-      action: "redraft",
-      skill: "follow-up-drafting",
       threadId: ThreadId.make("thread-1"),
-      projectId: ProjectId.make("project-1"),
       title: "Redraft for Ana",
-      startedAt: "2026-11-10T09:00:00.000Z",
     });
     assert.strictEqual((yield* sales.refresh).dispatches.length, 1);
     yield* settings.updateSettings({ salesEngine: { readToken: "the-new-token" } });

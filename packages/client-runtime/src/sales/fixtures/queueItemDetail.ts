@@ -10,7 +10,7 @@ const chaseVector = vectors.contentHash.find(
 export const hashInput = chaseVector.input;
 export const ENGINE_HASH = chaseVector.expected;
 
-/** A waiting chase whose hash inputs verify against `contentHash`. */
+/** A waiting chase whose hash inputs verify against `contentHash`, with the plans it offers. */
 export const detail = (overrides: Partial<SalesQueueItemDetail> = {}): SalesQueueItemDetail => ({
   activityId: "act-1",
   kind: "chase",
@@ -47,5 +47,24 @@ export const detail = (overrides: Partial<SalesQueueItemDetail> = {}): SalesQueu
   rowName: hashInput.rowName,
   hashInput,
   hashAlgorithm: SALES_HASH_ALGORITHM,
+  dispatch: {
+    redraft: {
+      title: "Redraft for Ana",
+      skill: "a-workflow",
+      prompt: "Target: c1{{note}}\n\nReport.",
+      noteRequired: true,
+      discardFirst: false,
+      card: { activityId: "act-1", expectedHash: ENGINE_HASH },
+    },
+    research: {
+      title: "Research Brand",
+      skill: "another-workflow",
+      prompt: "Account: Brand{{note}}\n\nReport.",
+      noteRequired: false,
+      discardFirst: false,
+      card: null,
+    },
+    answer: null,
+  },
   ...overrides,
 });

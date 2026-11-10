@@ -98,7 +98,7 @@ function salesFailureText(
     case "agents-project-missing":
       return text("The sales agents project is gone", message);
     case "no-target":
-      return text("Nothing to dispatch against");
+      return text("Nothing to start here", message, true);
     case "dispatch-failed":
       return text("Could not start the run");
     case "other":

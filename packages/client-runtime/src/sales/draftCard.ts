@@ -6,6 +6,7 @@ import type {
   SalesEditResult,
   SalesQueueItemDetail,
 } from "@t3tools/contracts";
+import { safeSalesNote } from "@t3tools/contracts";
 
 import type { AtomCommandResult } from "../state/runtime.ts";
 import type { ApproveOutcome } from "./approve.ts";
@@ -303,24 +304,30 @@ export function createDraftCard(
         await load();
       }),
 
-    research: () =>
-      state.detail === null
-        ? Promise.resolve()
-        : dispatch({ action: "research", activityId: state.detail.activityId }),
+    research: () => {
+      const plan = state.detail?.dispatch.research ?? null;
+      if (state.detail === null || plan === null) return Promise.resolve();
+      return dispatch({
+        activityId: state.detail.activityId,
+        action: "research",
+        expectedHash: plan.card?.expectedHash ?? null,
+        note: "",
+      });
+    },
 
     toggleRedraft: () => set({ redraftNote: state.redraftNote === null ? "" : null }),
     setRedraftNote: (note) => set({ redraftNote: note }),
     startRedraft: () => {
       const { detail, redraftNote } = state;
-      if (detail === null || redraftNote === null || redraftNote.trim().length === 0) {
-        return Promise.resolve();
-      }
-      // A reply redraft discards this card first, so read it again after.
+      const plan = detail?.dispatch.redraft ?? null;
+      if (detail === null || plan === null || redraftNote === null) return Promise.resolve();
+      if (plan.noteRequired && safeSalesNote(redraftNote).length === 0) return Promise.resolve();
+      // A plan may discard this card first, so read it again after.
       return dispatch(
         {
-          action: "redraft",
           activityId: detail.activityId,
-          expectedHash: detail.contentHash,
+          action: "redraft",
+          expectedHash: plan.card?.expectedHash ?? null,
           note: redraftNote,
         },
         load,

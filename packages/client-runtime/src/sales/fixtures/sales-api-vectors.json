@@ -1,5 +1,5 @@
 {
-  "about": "Conformance vectors for the sales API (docs/sales-api.md, 'Conformance vectors'). Every client that recomputes the content hash, the approve message or the key fingerprint must reproduce each 'expected' exactly. Computed once by the engine and pinned; the engine's tests assert these literals. If one ever has to change, the algorithm changed: change hashAlgorithm (HASH_ALGORITHM) or approvePrefix (APPROVE_PREFIX) with it.",
+  "about": "Conformance vectors for the sales API (docs/sales-api.md, 'Conformance vectors'). Every client that recomputes the content hash, the approve message or the key fingerprint, or fills a dispatch prompt's note, must reproduce each 'expected' exactly. Computed once by the engine and pinned; the engine's tests assert these literals. If one ever has to change, the algorithm changed: change hashAlgorithm (HASH_ALGORITHM), approvePrefix (APPROVE_PREFIX), noteToken (NOTE_TOKEN) or the note line ('Note from Gabriel:', NOTE_LINE) with it.",
   "hashAlgorithm": "sha256 hex of JSON.stringify([lowercased trimmed toAddress, subject.trim(), body, rowName.trim(), step, gmailThreadId ?? \"\", answers ?? \"\"])",
   "approvePrefix": "birdhouse-approve:v1",
   "contentHash": [
@@ -115,6 +115,57 @@
         "fingerprint": "927e2d2ed405ff4e62daa5ee612b0e26fd952a217b458d34e44175b91d183b35",
         "fingerprintShort": "927e 2d2e d405 ff4e"
       }
+    }
+  ],
+  "noteToken": "{{note}}",
+  "dispatchNote": [
+    {
+      "name": "a one-line note",
+      "input": {
+        "template": "Contact: https://www.notion.so/0123abcd{{note}}\n\nEnd with a short report.",
+        "note": "Mention the Q3 launch."
+      },
+      "expected": "Contact: https://www.notion.so/0123abcd\nNote from Gabriel:\nMention the Q3 launch.\n\nEnd with a short report."
+    },
+    {
+      "name": "no note leaves no block",
+      "input": {
+        "template": "Contact: https://www.notion.so/0123abcd{{note}}\n\nEnd with a short report.",
+        "note": ""
+      },
+      "expected": "Contact: https://www.notion.so/0123abcd\n\nEnd with a short report."
+    },
+    {
+      "name": "only white space is no note",
+      "input": {
+        "template": "Contact: https://www.notion.so/0123abcd{{note}}\n\nEnd with a short report.",
+        "note": "  \r\n\t\n "
+      },
+      "expected": "Contact: https://www.notion.so/0123abcd\n\nEnd with a short report."
+    },
+    {
+      "name": "CRLF, blank lines and trailing spaces",
+      "input": {
+        "template": "Contact: https://www.notion.so/0123abcd{{note}}\n\nEnd with a short report.",
+        "note": "Shorter.\r\n\r\n  Mention Q3.  \r\nNo pricing.\r\n"
+      },
+      "expected": "Contact: https://www.notion.so/0123abcd\nNote from Gabriel:\nShorter.\n  Mention Q3.\nNo pricing.\n\nEnd with a short report."
+    },
+    {
+      "name": "control characters and line separators become spaces",
+      "input": {
+        "template": "Contact: https://www.notion.so/0123abcd{{note}}\n\nEnd with a short report.",
+        "note": "a\u0000b\tc\u2028d\u0085e\u000bf"
+      },
+      "expected": "Contact: https://www.notion.so/0123abcd\nNote from Gabriel:\na b c d e f\n\nEnd with a short report."
+    },
+    {
+      "name": "replacement patterns stay literal",
+      "input": {
+        "template": "Contact: https://www.notion.so/0123abcd{{note}}\n\nEnd with a short report.",
+        "note": "Say $& and $' and {{note}}."
+      },
+      "expected": "Contact: https://www.notion.so/0123abcd\nNote from Gabriel:\nSay $& and $' and {{note}}.\n\nEnd with a short report."
     }
   ]
 }

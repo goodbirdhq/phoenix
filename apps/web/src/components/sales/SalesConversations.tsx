@@ -1,11 +1,12 @@
 import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
 import { intentLabel, sortConversations } from "@t3tools/client-runtime/sales/outreach";
-import type {
-  EnvironmentId,
-  SalesConversation,
-  SalesConversationDetail,
-  SalesConversationList,
-  SalesConversationMessage,
+import {
+  type EnvironmentId,
+  type SalesConversation,
+  type SalesConversationDetail,
+  type SalesConversationList,
+  type SalesConversationMessage,
+  safeSalesNote,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import * as Option from "effect/Option";
@@ -219,6 +220,7 @@ function ConversationDetailView({
   const dispatch = useAtomCommand(salesEnvironment.dispatch, { reportFailure: false });
   const state = useSalesState(environmentId);
   const dispatches = Option.getOrNull(state.snapshot)?.dispatches ?? [];
+  const contactThreads = dispatches.filter((entry) => entry.target === conversation.contactKey);
   const [detail, setDetail] = useState<SalesConversationDetail | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [note, setNote] = useState("");
@@ -241,21 +243,29 @@ function ConversationDetailView({
   const replyDraft =
     detail?.drafts.find((draft) => draft.kind === "reply") ??
     (conversation.replyDraft ? { ...conversation.replyDraft } : null);
-  const contactThreads = dispatches.filter((entry) => entry.target === conversation.contactKey);
+  const answer = detail?.dispatch.answer ?? null;
 
   const draftAnswer = async () => {
+    if (answer === null) return;
     setBusy(true);
     try {
       const result = await dispatch({
         environmentId,
-        input: { action: "draft-reply", contactKey: conversation.contactKey, note },
+        input: {
+          contactKey: conversation.contactKey,
+          action: "answer",
+          expectedHash: answer.card?.expectedHash ?? null,
+          note,
+        },
       });
       // The started thread arrives in the snapshot's dispatches and is linked below.
       if (result._tag === "Success") {
         setDispatchError(null);
         setNote("");
       } else {
-        setDispatchError(readSalesFailure(result).description);
+        const failure = readSalesFailure(result);
+        setDispatchError(failure.description);
+        if (failure.reread) await load();
       }
     } finally {
       setBusy(false);
@@ -327,7 +337,7 @@ function ConversationDetailView({
                 ? "No answer is drafted yet."
                 : "Nothing waits on an answer here."}
             </p>
-            {props.canAct && conversation.awaitingAnswer ? (
+            {props.canAct && answer ? (
               <form
                 className="grid gap-2"
                 onSubmit={(event) => {
@@ -336,7 +346,7 @@ function ConversationDetailView({
                 }}
               >
                 <Label htmlFor={`sales-reply-note-${conversation.contactKey}`}>
-                  Note for the drafter (optional)
+                  {answer.noteRequired ? "Note for the drafter" : "Note for the drafter (optional)"}
                 </Label>
                 <Textarea
                   id={`sales-reply-note-${conversation.contactKey}`}
@@ -345,8 +355,12 @@ function ConversationDetailView({
                   onChange={(event) => setNote(event.target.value)}
                 />
                 <div className="flex justify-end">
-                  <Button type="submit" size="xs" disabled={busy}>
-                    {busy ? "Starting…" : "Draft an answer"}
+                  <Button
+                    type="submit"
+                    size="xs"
+                    disabled={busy || (answer.noteRequired && safeSalesNote(note).length === 0)}
+                  >
+                    {busy ? "Starting…" : answer.title}
                   </Button>
                 </div>
                 {dispatchError ? (

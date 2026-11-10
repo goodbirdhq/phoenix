@@ -105,7 +105,6 @@ export function cardActions(item: Pick<SalesQueueItem, "state" | "approval">) {
     unapprove: open && approved && item.approval?.by !== "route",
     edit: open,
     discard: open,
-    redraft: open && !approved,
   };
 }
 

@@ -42,9 +42,11 @@ sales records; the engine and Notion stay the truth. See
 [ADR 0005](../adr/0005-sales-is-a-birdhouse-engine-client.md). Approvals are
 signed on a device, never by the server: see [Sales approvals](./sales-approvals.md).
 
-**Dispatch follows the agents repo's contract, in one file.** Research this and
-Redraft with notes start a thread in the configured sales agents project with
-the prompt birdhouse's README gives under "Dispatching a skill". That prompt and
-the skill keys it names live only in `apps/server/src/sales/SalesDispatch.ts`;
-when birdhouse changes its dispatch table, that file changes with it, until the
-engine supplies dispatch plans itself. Run records do not belong in Phoenix.
+**Dispatch knowledge lives in the engine.** The engine sends a dispatch plan
+for each run a card or conversation offers: its title, the whole prompt, and
+whether it needs a note or discards the card first (`engine/docs/sales-api.md`,
+"Dispatch plans"). `apps/server/src/sales/SalesDispatch.ts` knows no skill,
+draft kind or prompt wording: it reads the plan again, checks the card is the
+version the person saw, fills in the note and starts the thread in the
+configured agents project. A new birdhouse workflow is an engine change only.
+Run records do not belong in Phoenix.
