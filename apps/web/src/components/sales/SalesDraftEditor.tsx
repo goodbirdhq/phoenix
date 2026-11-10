@@ -6,7 +6,7 @@ import {
   isEditing,
 } from "@t3tools/client-runtime/sales/draft-card";
 import type { SalesQueueItemDetail } from "@t3tools/contracts";
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode, Ref } from "react";
 
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -21,8 +21,10 @@ export function SalesDraftEditor(props: {
   readonly card: DraftCard;
   readonly state: DraftCardState;
   readonly detail: SalesQueueItemDetail;
+  /** The body input while editing, so the page can return focus to it (E, palette). */
+  readonly bodyRef?: Ref<HTMLTextAreaElement>;
 }) {
-  const { card, state, detail } = props;
+  const { card, state, detail, bodyRef } = props;
   const shown = displayedDraft(detail);
   const editing = isEditing(state);
   const subject = state.subjectDraft ?? shown.subject;
@@ -32,6 +34,12 @@ export function SalesDraftEditor(props: {
   // since a one-line field would hide part of what is hashed.
   const subjectAsText =
     !editing || detail.threaded || (state.subjectDraft === null && /[\r\n]/u.test(subject));
+  // Escape leaves an untouched edit; it never throws away typed text.
+  const onEscape = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    if (event.key !== "Escape") return;
+    if (isDirty(state)) event.currentTarget.blur();
+    else card.cancelEdit();
+  };
 
   return (
     <article aria-label="Email" className="grid gap-3 rounded-lg border p-4">
@@ -63,6 +71,7 @@ export function SalesDraftEditor(props: {
             value={subject}
             disabled={state.busy !== null}
             onChange={(event) => card.editSubject(event.target.value)}
+            onKeyDown={onEscape}
           />
         </div>
       )}
@@ -71,17 +80,13 @@ export function SalesDraftEditor(props: {
           <Label htmlFor={`sales-body-${id}`}>Body</Label>
           <Textarea
             id={`sales-body-${id}`}
+            ref={bodyRef}
             // Opening an edit (E or the Edit button) lands in the body.
             autoFocus
             value={body}
             disabled={state.busy !== null}
             onChange={(event) => card.editBody(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Escape") return;
-              // Escape leaves an untouched edit; it never throws away typed text.
-              if (isDirty(state)) event.currentTarget.blur();
-              else card.cancelEdit();
-            }}
+            onKeyDown={onEscape}
           />
           <div className="flex justify-end gap-2">
             <Button size="xs" variant="outline" onClick={card.cancelEdit}>

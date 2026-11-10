@@ -2,7 +2,7 @@ import { type DraftNotice, isDirty } from "@t3tools/client-runtime/sales/draft-c
 import { kindLabel, stateLabel } from "@t3tools/client-runtime/sales/outreach";
 import type { EnvironmentId, SalesDispatchSource, SalesQueueItemDetail } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { type Ref, useCallback, useImperativeHandle } from "react";
+import { type Ref, useCallback, useImperativeHandle, useRef } from "react";
 
 import type { useSalesDevice } from "../../state/sales";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
@@ -59,10 +59,14 @@ export function SalesDraftPanel({
 }) {
   const { environmentId, activityId } = props;
   const [card, state] = useDraftCard(props);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   useImperativeHandle(ref, () => ({
     approve: () => void card.approve(props.device),
     edit: () => {
-      if (props.canAct) card.startEdit();
+      if (!props.canAct) return;
+      card.startEdit();
+      // An edit already open (say, left with Escape) gets its body back; a new one autofocuses.
+      bodyRef.current?.focus();
     },
   }));
   // A run started here may have written a new version: read it once, unless mid-edit, and let
@@ -104,7 +108,7 @@ export function SalesDraftPanel({
               </pre>
             </details>
           ) : null}
-          <SalesDraftEditor card={card} state={state} detail={detail} />
+          <SalesDraftEditor card={card} state={state} detail={detail} bodyRef={bodyRef} />
           <dl className="grid gap-1 text-xs empty:hidden">
             {detail.goes ? <StatusLine label="Goes">{detail.goes}</StatusLine> : null}
             {detail.refusal ? <StatusLine label="Refused">{detail.refusal}</StatusLine> : null}
