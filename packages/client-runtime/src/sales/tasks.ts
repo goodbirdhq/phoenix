@@ -82,15 +82,31 @@ const OUTCOME_LABELS: Record<SalesTaskOutcome, string> = {
 export const taskOutcomeLabel = (outcome: SalesTaskOutcome) => OUTCOME_LABELS[outcome];
 
 /**
+ * "Mark as sent" with the contact's first name (`Mark sent to Ana`): one click spends an invite
+ * for good, so the button says whose it is.
+ */
+export function markSentLabel(task: Pick<SalesTask, "contact">): string {
+  const [first] = task.contact.name?.trim().split(/\s+/) ?? [];
+  return first ? `Mark sent to ${first}` : OUTCOME_LABELS.request_sent;
+}
+
+/** The engine's list for an action, by a name this build may not know. */
+function listedOutcomes(action: string): ReadonlyArray<SalesTaskOutcome> {
+  const byAction: Readonly<Record<string, ReadonlyArray<SalesTaskOutcome>>> = SALES_TASK_OUTCOMES;
+  return Object.hasOwn(byAction, action) ? (byAction[action] ?? []) : [];
+}
+
+/**
  * What a task offers to report, from the engine's one list (`SALES_TASK_OUTCOMES`), less what the
  * engine would refuse: a connection request with no place in the budget can't be reported sent
- * (`not_admitted`). `primary` is "Mark as sent" where it is offered; the rest go in `others`.
+ * (`not_admitted`). `primary` is `request_sent` where it is offered (its button is
+ * `markSentLabel`'s); the rest go in `others`.
  */
 export function taskOutcomeChoices(task: Pick<SalesTask, "action" | "admittedOn">): {
   readonly primary: SalesTaskOutcome | null;
   readonly others: ReadonlyArray<SalesTaskOutcome>;
 } {
-  const offered = (SALES_TASK_OUTCOMES[task.action] ?? []).filter(
+  const offered = listedOutcomes(task.action).filter(
     (outcome) => !(task.action === "connect" && task.admittedOn === null && SENDS.has(outcome)),
   );
   const primary = offered.includes("request_sent") ? "request_sent" : null;

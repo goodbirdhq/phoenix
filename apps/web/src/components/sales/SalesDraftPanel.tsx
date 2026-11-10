@@ -1,5 +1,5 @@
 import { type DraftNotice, isDirty } from "@t3tools/client-runtime/sales/draft-card";
-import { kindLabel, stateLabel } from "@t3tools/client-runtime/sales/outreach";
+import { cardActions, kindLabel, stateLabel } from "@t3tools/client-runtime/sales/outreach";
 import type { EnvironmentId, SalesDispatchSource, SalesQueueItem } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { type Ref, useCallback, useImperativeHandle, useMemo, useRef } from "react";
@@ -21,6 +21,8 @@ export type SalesDeviceView = ReturnType<typeof useSalesDevice>;
 export interface SalesDraftPanelHandle {
   readonly approve: () => void;
   readonly edit: () => void;
+  readonly hold: () => void;
+  readonly resume: () => void;
 }
 
 const STATE_VARIANT: Record<string, "warning" | "success" | "secondary" | "error" | "outline"> = {
@@ -71,6 +73,12 @@ export function SalesDraftPanel({
       card.startEdit();
       // An edit already open (say, left with Escape) gets its body back; a new one autofocuses.
       bodyRef.current?.focus();
+    },
+    hold: () => {
+      if (props.canAct && state.detail && cardActions(state.detail).hold) void card.hold();
+    },
+    resume: () => {
+      if (props.canAct && state.detail && cardActions(state.detail).resume) void card.resume();
     },
   }));
   // A run started here may have written a new version: read it once, unless mid-edit, and let

@@ -3,11 +3,14 @@ import {
   autopilotActions,
   autopilotDetail,
   autopilotTimeline,
-  batchSummary,
-  eachSend,
+  batchConfirmText,
   outOfOfficeLabel,
   pauseSend,
   resumeSend,
+  runBatch,
+  type SalesBatchState,
+  type SalesBatchVerb,
+  showsOnRowAfterBatch,
 } from "@t3tools/client-runtime/sales/autopilot";
 import type { SalesHoldOutcome } from "@t3tools/client-runtime/sales/hold";
 import { salesDay, salesTime } from "@t3tools/client-runtime/sales/time";
@@ -19,22 +22,13 @@ import { requestConfirmDialog } from "../../confirmDialog";
 import { useNowMs } from "../../hooks/useNowMinute";
 import { salesEnvironment, useSalesView } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
+import { SalesOutcomeAlert } from "./SalesOutcomeAlert";
 import { SalesContactLine, SalesViewFrame } from "./SalesViewFrame";
-
-type Verb = "Paused" | "Resumed";
-
-/** A run of Pause all or Resume all: how far it got, then what it did. */
-interface Batch {
-  readonly verb: Verb;
-  readonly done: number;
-  readonly total: number;
-  readonly summary: string | null;
-}
+import { useRowActions } from "./useRowActions";
 
 /** Today's sends the engine makes by itself, done and to come, with Pause and Resume on each. */
 export function SalesAutopilot(props: {
@@ -46,42 +40,24 @@ export function SalesAutopilot(props: {
   const [includePressed, setIncludePressed] = useState(false);
   const now = useNowMs();
   const commands = useAutopilotCommands(environmentId);
-  /** The engine's last word on each send acted on here, until the page goes. */
-  const [outcomes, setOutcomes] = useState<ReadonlyMap<string, SalesHoldOutcome>>(new Map());
-  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
-  const [batch, setBatch] = useState<Batch | null>(null);
+  const rows = useRowActions<SalesHoldOutcome>();
+  const [batch, setBatch] = useState<SalesBatchState | null>(null);
 
-  const act = async (activityId: string, verb: Verb) => {
-    setBusy((previous) => new Set(previous).add(activityId));
-    const outcome = await (verb === "Paused" ? pauseSend : resumeSend)(commands, activityId);
-    setOutcomes((previous) => new Map(previous).set(activityId, outcome));
-    setBusy((previous) => {
-      const next = new Set(previous);
-      next.delete(activityId);
-      return next;
-    });
-    return outcome;
-  };
+  const act = (
+    item: SalesAutopilotItem,
+    verb: SalesBatchVerb,
+    keep?: (outcome: SalesHoldOutcome) => boolean,
+  ) =>
+    rows.run(
+      item.activityId,
+      item.state,
+      () => (verb === "Paused" ? pauseSend : resumeSend)(commands, item.activityId),
+      keep,
+    );
 
-  const runAll = async (activityIds: ReadonlyArray<string>, verb: Verb) => {
-    const confirmed = await requestConfirmDialog(
-      verb === "Paused"
-        ? `Pause ${activityIds.length} of today's automated sends?\nEach stays paused until you resume it. A send already going can't be stopped.`
-        : `Resume ${activityIds.length} paused sends?\nThe autopilot sends each at its slot, within today's chase limit.`,
-    );
-    if (confirmed !== true) return;
-    setBatch({ verb, done: 0, total: activityIds.length, summary: null });
-    const all = await eachSend(
-      activityIds,
-      (activityId) => act(activityId, verb),
-      (done) => setBatch({ verb, done, total: activityIds.length, summary: null }),
-    );
-    setBatch({
-      verb,
-      done: all.size,
-      total: activityIds.length,
-      summary: batchSummary(verb, [...all.values()]),
-    });
+  const runAll = async (items: ReadonlyArray<SalesAutopilotItem>, verb: SalesBatchVerb) => {
+    if ((await requestConfirmDialog(batchConfirmText(verb, items.length))) !== true) return;
+    await runBatch(verb, items, (item) => act(item, verb, showsOnRowAfterBatch), setBatch);
   };
 
   return (
@@ -101,7 +77,7 @@ export function SalesAutopilot(props: {
         const timeline = autopilotTimeline(today.items, includePressed);
         const pausable = today.items.filter((item) => autopilotActions(item).pause);
         const paused = today.items.filter((item) => autopilotActions(item).resume);
-        const running = batch !== null && batch.summary === null;
+        const running = batch?.running ?? false;
         return (
           <div className="space-y-6">
             {canAct && (pausable.length > 0 || paused.length > 0 || batch !== null) ? (
@@ -111,12 +87,7 @@ export function SalesAutopilot(props: {
                     size="sm"
                     variant="outline"
                     disabled={running}
-                    onClick={() =>
-                      void runAll(
-                        pausable.map((item) => item.activityId),
-                        "Paused",
-                      )
-                    }
+                    onClick={() => void runAll(pausable, "Paused")}
                   >
                     Pause all {pausable.length} scheduled
                   </Button>
@@ -126,20 +97,14 @@ export function SalesAutopilot(props: {
                     size="sm"
                     variant="outline"
                     disabled={running}
-                    onClick={() =>
-                      void runAll(
-                        paused.map((item) => item.activityId),
-                        "Resumed",
-                      )
-                    }
+                    onClick={() => void runAll(paused, "Resumed")}
                   >
                     Resume all {paused.length} paused
                   </Button>
                 ) : null}
                 {batch ? (
                   <p className="text-xs text-muted-foreground" aria-live="polite">
-                    {batch.summary ??
-                      `${batch.verb === "Paused" ? "Pausing" : "Resuming"} ${Math.min(batch.done + 1, batch.total)} of ${batch.total}…`}
+                    {batch.text}
                   </p>
                 ) : null}
               </div>
@@ -165,9 +130,9 @@ export function SalesAutopilot(props: {
                       item={item}
                       now={now}
                       canAct={canAct && !running}
-                      busy={busy.has(item.activityId)}
-                      outcome={outcomes.get(item.activityId) ?? null}
-                      onAct={(verb) => void act(item.activityId, verb)}
+                      busy={rows.busy(item.activityId)}
+                      outcome={rows.outcome(item.activityId, item.state)}
+                      onAct={(verb) => void act(item, verb)}
                     />
                   ))}
                 </ul>
@@ -199,7 +164,7 @@ function AutopilotRow(props: {
   readonly canAct: boolean;
   readonly busy: boolean;
   readonly outcome: SalesHoldOutcome | null;
-  readonly onAct: (verb: Verb) => void;
+  readonly onAct: (verb: SalesBatchVerb) => void;
 }) {
   const { item, outcome } = props;
   const at = salesTime(item.at, props.now, { theirZone: item.contact.effectiveTimeZone });
@@ -249,11 +214,10 @@ function AutopilotRow(props: {
         ) : null}
       </div>
       {outcome ? (
-        <Alert variant={outcome.tone}>
-          <AlertTitle>{outcome.title}</AlertTitle>
-          <AlertDescription>
-            {outcome.description}
-            {outcome.needsPress ? (
+        <SalesOutcomeAlert outcome={outcome}>
+          {outcome.needsPress ? (
+            <>
+              {" "}
               <Link
                 to="/sales"
                 search={{
@@ -265,9 +229,9 @@ function AutopilotRow(props: {
               >
                 Open the draft in Outreach
               </Link>
-            ) : null}
-          </AlertDescription>
-        </Alert>
+            </>
+          ) : null}
+        </SalesOutcomeAlert>
       ) : null}
     </li>
   );

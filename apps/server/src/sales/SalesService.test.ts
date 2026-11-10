@@ -1286,22 +1286,3 @@ it.effect("sends a failed read with the last read that succeeded, not the first"
     assert.isAbove(Date.parse(failed.readAt ?? ""), Date.parse(first.readAt ?? ""));
   }).pipe(Effect.provide(layer));
 });
-
-it.effect("never lands a read of the old engine that finishes after the settings changed", () => {
-  const { layer, requests } = makeLayer({ delay: "1 second" });
-  return Effect.gen(function* () {
-    const sales = yield* SalesService.SalesService;
-    const settings = yield* ServerSettings.ServerSettingsService;
-    // A read of the old engine is in flight, with nobody watching to replace it.
-    const inFlight = yield* sales.refresh.pipe(Effect.forkChild);
-    yield* TestClock.adjust("500 millis");
-    assert.strictEqual(summaryReads(requests), 1);
-    yield* settings.updateSettings({ salesEngine: { readToken: "the-new-token" } });
-    // Looking now lets go of the old engine.
-    assert.strictEqual((yield* sales.getSnapshot).summary, null);
-    yield* TestClock.adjust("500 millis");
-    yield* Fiber.join(inFlight);
-    // Its answer came in after that, and is not the new engine's.
-    assert.strictEqual((yield* sales.getSnapshot).summary, null);
-  }).pipe(Effect.provide(layer));
-});

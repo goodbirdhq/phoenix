@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   cardActions,
   dispatchedThreads,
+  holdLabel,
   listedVersionMoved,
   queueRowStatus,
   queueSummary,
@@ -153,6 +154,13 @@ describe("cardActions", () => {
       resume: false,
       approve: true,
     });
+  });
+
+  it("names Hold for what it does: a route chase pauses, a person's approval is withdrawn", () => {
+    expect(holdLabel({ approval: route })).toBe("Pause");
+    expect(holdLabel({ approval: route }, true)).toBe("Pausing…");
+    expect(holdLabel({ approval: press })).toBe("Withdraw approval");
+    expect(holdLabel({ approval: press }, true)).toBe("Withdrawing…");
   });
 
   it("offers nothing on a closed card", () => {

@@ -482,13 +482,20 @@ export type SalesTaskOutcome = typeof SalesTaskOutcome.Type;
  * What each task's card offers, in the order it shows them: the engine's
  * `LINKEDIN_CARD_OUTCOMES`, which also draws its Slack buttons. An action not listed offers none.
  */
-export const SALES_TASK_OUTCOMES: Readonly<Record<string, ReadonlyArray<SalesTaskOutcome>>> = {
+export const SALES_TASK_OUTCOMES = {
   connect: ["request_sent", "pending", "connected", "skip", "connected_message", "pending_message"],
   dm: ["request_sent", "skip"],
-};
+} as const satisfies Record<string, ReadonlyArray<SalesTaskOutcome>>;
 
 export const SalesTaskReportInput = Schema.Struct({
-  taskId: Schema.String,
+  /**
+   * `GET /tasks` `id`, sent as one path segment. Escaping keeps any other id inside that segment,
+   * but `.` and `..` are segments a URL resolves away, so they are refused.
+   */
+  taskId: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.makeFilter((id) => id !== "." && id !== ".."),
+  ),
   outcome: SalesTaskOutcome,
 });
 export type SalesTaskReportInput = typeof SalesTaskReportInput.Type;

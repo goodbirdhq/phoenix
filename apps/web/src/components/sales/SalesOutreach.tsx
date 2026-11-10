@@ -1,6 +1,8 @@
 import { checkSigning } from "@t3tools/client-runtime/sales/devices";
 import {
+  cardActions,
   groupQueue,
+  holdLabel,
   kindLabel,
   queueOrder,
   queueRowStatus,
@@ -71,7 +73,13 @@ export function SalesOutreach(props: {
     edit: () => panel.current?.edit(),
   });
 
-  // Registered once; each command reaches the current list and draft through refs.
+  // Hold and Resume are offered only where the selected draft's state allows them.
+  const selectedActions = current !== null && canAct ? cardActions(current) : null;
+  const holdTitle = current !== null && selectedActions?.hold ? holdLabel(current) : null;
+  const canResume = selectedActions?.resume ?? false;
+
+  // Registered again only when what is offered changes; each command reaches the current list
+  // and draft through refs.
   useEffect(() => {
     setSalesPaletteCommands([
       {
@@ -88,6 +96,26 @@ export function SalesOutreach(props: {
         shortcut: "E",
         run: () => panel.current?.edit(),
       },
+      ...(holdTitle === null
+        ? []
+        : [
+            {
+              id: "sales:hold",
+              title: `Selected draft: ${holdTitle}`,
+              keywords: ["sales", "hold", "pause", "withdraw", "approval", "draft", "outreach"],
+              run: () => panel.current?.hold(),
+            },
+          ]),
+      ...(canResume
+        ? [
+            {
+              id: "sales:resume",
+              title: "Selected draft: Resume",
+              keywords: ["sales", "resume", "unpause", "autopilot", "draft", "outreach"],
+              run: () => panel.current?.resume(),
+            },
+          ]
+        : []),
       {
         id: "sales:next",
         title: "Next draft",
@@ -104,7 +132,7 @@ export function SalesOutreach(props: {
       },
     ]);
     return () => setSalesPaletteCommands([]);
-  }, []);
+  }, [holdTitle, canResume]);
 
   const approvable = tickedForReview(order, checked);
 

@@ -121,39 +121,71 @@ export async function resumeSend(
   return resumeOutcome(await commands.resume({ activityId, expectedHash: read.value.contentHash }));
 }
 
-/**
- * Runs one action on each send in turn, reporting progress after each, and returns every
- * outcome by activity id. One at a time: each answer is the engine's word on that send.
- */
-export async function eachSend(
-  activityIds: ReadonlyArray<string>,
-  act: (activityId: string) => Promise<SalesHoldOutcome>,
-  onProgress: (done: number, outcomes: ReadonlyMap<string, SalesHoldOutcome>) => void,
-): Promise<ReadonlyMap<string, SalesHoldOutcome>> {
-  const outcomes = new Map<string, SalesHoldOutcome>();
-  for (const activityId of activityIds) {
-    outcomes.set(activityId, await act(activityId));
-    onProgress(outcomes.size, outcomes);
-  }
-  return outcomes;
+export type SalesBatchVerb = "Paused" | "Resumed";
+
+/** A run of Pause all or Resume all, as a view shows it. */
+export interface SalesBatchState {
+  /** Until the last send has its answer. */
+  readonly running: boolean;
+  /** `Pausing 3 of 8…` while running, then what it did. */
+  readonly text: string;
 }
 
-/** `Paused 7 of 8. 1 was already going and was not stopped. 1 failed.` */
-export function batchSummary(
-  verb: "Paused" | "Resumed",
-  outcomes: ReadonlyArray<SalesHoldOutcome>,
-): string {
+/** What Pause all or Resume all asks before it runs: the question, then what it means. */
+export const batchConfirmText = (verb: SalesBatchVerb, count: number) =>
+  verb === "Paused"
+    ? `Pause ${count} of today's automated sends?\nEach stays paused until you resume it. A send already going can't be stopped.`
+    : `Resume ${count} paused sends?\nThe autopilot sends each at its slot, within today's chase limit.`;
+
+/**
+ * Whether a send's answer in a batch shows on its row: only what the summary can't settle, a send
+ * already going, a refusal, or an approval withdrawn instead of paused. The rest are in the sum.
+ */
+export const showsOnRowAfterBatch = (outcome: SalesHoldOutcome) =>
+  outcome.kind === "going" || outcome.kind === "failed" || outcome.kind === "withdrawn";
+
+/**
+ * Runs Pause or Resume on each send in turn, telling `onChange` how far it got and then what it
+ * did. One at a time: each answer is the engine's word on that send.
+ */
+export async function runBatch<Send>(
+  verb: SalesBatchVerb,
+  sends: ReadonlyArray<Send>,
+  act: (send: Send) => Promise<SalesHoldOutcome>,
+  onChange: (state: SalesBatchState) => void,
+): Promise<SalesBatchState> {
+  const doing = verb === "Paused" ? "Pausing" : "Resuming";
+  const outcomes: SalesHoldOutcome[] = [];
+  for (const send of sends) {
+    onChange({ running: true, text: `${doing} ${outcomes.length + 1} of ${sends.length}…` });
+    outcomes.push(await act(send));
+  }
+  const finished = { running: false, text: batchSummary(verb, outcomes) };
+  onChange(finished);
+  return finished;
+}
+
+/**
+ * `Paused 6 of 8. 1 was approved by a person: its approval was withdrawn instead. 1 was already
+ * going and could not be stopped.` A withdrawal is never counted as paused: no Resume undoes it.
+ */
+function batchSummary(verb: SalesBatchVerb, outcomes: ReadonlyArray<SalesHoldOutcome>): string {
   const count = (kind: SalesHoldOutcome["kind"]) =>
     outcomes.filter((outcome) => outcome.kind === kind).length;
   const done = count("done") + count("already");
+  const withdrawn = count("withdrawn");
   const going = count("going");
   const failed = count("failed");
+  const were = (n: number) => (n === 1 ? "was" : "were");
   return [
     `${verb} ${done} of ${outcomes.length}.`,
-    going > 0
-      ? `${going} ${going === 1 ? "was" : "were"} already going and could not be stopped.`
-      : null,
-    failed > 0 ? `${failed} ${failed === 1 ? "was" : "were"} not ${verb.toLowerCase()}.` : null,
+    withdrawn === 1
+      ? "1 was approved by a person: its approval was withdrawn instead."
+      : withdrawn > 1
+        ? `${withdrawn} were approved by a person: their approvals were withdrawn instead.`
+        : null,
+    going > 0 ? `${going} ${were(going)} already going and could not be stopped.` : null,
+    failed > 0 ? `${failed} ${were(failed)} not ${verb.toLowerCase()}.` : null,
   ]
     .filter(Boolean)
     .join(" ");

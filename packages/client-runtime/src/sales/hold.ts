@@ -9,10 +9,11 @@ export interface SalesHoldOutcome {
   /**
    * - `done`: it did what was asked.
    * - `already`: it stood that way already.
+   * - `withdrawn`: a Hold on a person's approval took it back for good; no Resume brings it back.
    * - `going`: the send was already under way when held, so it was not stopped.
    * - `failed`: the engine or Phoenix refused, or the outcome is unknown.
    */
-  readonly kind: "done" | "already" | "going" | "failed";
+  readonly kind: "done" | "already" | "withdrawn" | "going" | "failed";
   readonly tone: "success" | "warning" | "error";
   readonly title: string;
   readonly description: string;
@@ -57,7 +58,7 @@ export function holdOutcome(result: AtomCommandResult<SalesHoldResult, unknown>)
   }
   if (result.value.result === "unapproved") {
     return outcome(
-      "done",
+      "withdrawn",
       "success",
       "Approval withdrawn",
       "It goes only once you approve it again.",
@@ -76,6 +77,6 @@ export function resumeOutcome(
   const { card, already } = result.value;
   const goes = card.goes ? `It goes ${card.goes}.` : "The autopilot sends it at its slot.";
   return already
-    ? outcome("already", "success", "Already going", goes)
+    ? outcome("already", "success", "Already resumed", goes)
     : outcome("done", "success", "Resumed", goes);
 }

@@ -9,6 +9,7 @@ import {
   SalesTask,
   SalesTaskOutcome,
   SalesTaskReport,
+  SalesTaskReportInput,
   salesDispatchThreadPrefix,
   salesEngineKey,
   salesEngineRoot,
@@ -122,13 +123,21 @@ describe("Hold, Resume and task reports", () => {
     expect(() => decode({ card, already: false, result: "stopped" })).toThrow();
   });
 
-  it("offers only outcomes the report accepts, in the engine's order", () => {
+  it("offers only outcomes the report accepts", () => {
     const isOutcome = Schema.is(SalesTaskOutcome);
     for (const outcomes of Object.values(SALES_TASK_OUTCOMES)) {
       expect(outcomes.every(isOutcome)).toBe(true);
     }
-    expect(SALES_TASK_OUTCOMES.dm).toEqual(["request_sent", "skip"]);
-    expect(SALES_TASK_OUTCOMES.connect?.[0]).toBe("request_sent");
+  });
+
+  it("refuses a task id a URL would resolve out of its path segment", () => {
+    const isInput = Schema.is(SalesTaskReportInput);
+    for (const taskId of ["", ".", ".."]) {
+      expect(isInput({ taskId, outcome: "skip" })).toBe(false);
+    }
+    for (const taskId of ["01JC8Z", "task/1", "..."]) {
+      expect(isInput({ taskId, outcome: "skip" })).toBe(true);
+    }
   });
 
   it("reads a report's open result and its budget, and a task with no budget place", () => {

@@ -1,8 +1,10 @@
 import { safeHttpsUrl } from "@t3tools/client-runtime/sales/links";
+import type { RowActions } from "@t3tools/client-runtime/sales/row-actions";
 import {
   connectionLabel,
   groupTasks,
   inviteBudgetLine,
+  markSentLabel,
   type SalesTaskReportOutcome,
   shownBudget,
   taskActionLabel,
@@ -23,7 +25,6 @@ import { useRef, useState } from "react";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { salesEnvironment, useSalesView } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import {
   ANCHORED_COPY_TOAST_TIMEOUT_MS,
   showAnchoredCopyErrorToast,
@@ -33,12 +34,13 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { SalesExternalLink } from "./SalesExternalLink";
+import { SalesOutcomeAlert } from "./SalesOutcomeAlert";
 import { SalesContactLine, SalesViewFrame } from "./SalesViewFrame";
+import { useRowActions } from "./useRowActions";
 
 interface TaskReporting {
   readonly canAct: boolean;
-  readonly busy: ReadonlySet<string>;
-  readonly outcomes: ReadonlyMap<string, SalesTaskReportOutcome>;
+  readonly rows: RowActions<SalesTaskReportOutcome>;
   readonly report: (task: SalesTask, outcome: SalesTaskOutcome) => void;
 }
 
@@ -54,8 +56,7 @@ export function SalesTodo(props: {
   const { environmentId } = props;
   const { read, failed } = useSalesView(environmentId, "tasks");
   const reportTask = useAtomCommand(salesEnvironment.reportTask, { reportFailure: false });
-  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
-  const [outcomes, setOutcomes] = useState<ReadonlyMap<string, SalesTaskReportOutcome>>(new Map());
+  const rows = useRowActions<SalesTaskReportOutcome>();
   /** The budget the last report returned, for the list it was reported against. */
   const [reported, setReported] = useState<{
     readonly budget: SalesTaskBudget;
@@ -64,23 +65,17 @@ export function SalesTodo(props: {
 
   const report = async (task: SalesTask, outcome: SalesTaskOutcome) => {
     const listGeneratedAt = read?.data?.generatedAt ?? "";
-    setBusy((previous) => new Set(previous).add(task.id));
-    const result = taskReportOutcome(
-      outcome,
-      await reportTask({ environmentId, input: { taskId: task.id, outcome } }),
+    const result = await rows.run(task.id, task.status, async () =>
+      taskReportOutcome(
+        outcome,
+        await reportTask({ environmentId, input: { taskId: task.id, outcome } }),
+      ),
     );
-    setOutcomes((previous) => new Map(previous).set(task.id, result));
     if (result.budget !== null) setReported({ budget: result.budget, listGeneratedAt });
-    setBusy((previous) => {
-      const next = new Set(previous);
-      next.delete(task.id);
-      return next;
-    });
   };
   const reporting: TaskReporting = {
     canAct: props.canAct,
-    busy,
-    outcomes,
+    rows,
     report: (task, outcome) => void report(task, outcome),
   };
 
@@ -157,7 +152,7 @@ function TaskRow(props: {
   const linkedin = safeHttpsUrl(task.contact.linkedinUrl);
   const connection = connectionLabel(task.connectionState);
   const due = props.today === null ? null : taskDueLabel(task.dueOn, props.today);
-  const outcome = reporting.outcomes.get(task.id) ?? null;
+  const outcome = reporting.rows.outcome(task.id, task.status);
   return (
     <li className="space-y-2 px-4 py-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -174,23 +169,19 @@ function TaskRow(props: {
       {reporting.canAct ? (
         <TaskOutcomes
           task={task}
-          busy={reporting.busy.has(task.id)}
+          busy={reporting.rows.busy(task.id)}
           onReport={(chosen) => reporting.report(task, chosen)}
         />
       ) : null}
-      {outcome ? (
-        <Alert variant={outcome.tone}>
-          <AlertTitle>{outcome.title}</AlertTitle>
-          {outcome.description ? <AlertDescription>{outcome.description}</AlertDescription> : null}
-        </Alert>
-      ) : null}
+      {outcome ? <SalesOutcomeAlert outcome={outcome} /> : null}
     </li>
   );
 }
 
 /**
- * The outcomes the engine takes for this task: "Mark as sent" first where offered, a second
- * single choice as its own button, more in a menu.
+ * The outcomes the engine takes for this task: "Mark sent to Ana" first where offered, a second
+ * single choice as its own button, more in a menu. Marking sent spends an invite for good, so its
+ * button names whose; it asks nothing more.
  */
 function TaskOutcomes(props: {
   readonly task: SalesTask;
@@ -204,7 +195,7 @@ function TaskOutcomes(props: {
     <div className="flex flex-wrap items-center gap-2">
       {primary ? (
         <Button size="xs" disabled={props.busy} onClick={() => props.onReport(primary)}>
-          {props.busy ? "Reporting…" : taskOutcomeLabel(primary)}
+          {props.busy ? "Reporting…" : markSentLabel(props.task)}
         </Button>
       ) : null}
       {only ? (

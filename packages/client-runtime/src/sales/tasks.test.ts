@@ -7,6 +7,7 @@ import type { AtomCommandResult } from "../state/runtime.ts";
 import {
   groupTasks,
   inviteBudgetLine,
+  markSentLabel,
   shownBudget,
   taskActionLabel,
   taskDueLabel,
@@ -52,10 +53,19 @@ describe("task outcomes", () => {
       primary: "request_sent",
       others: ["skip"],
     });
-    expect(taskOutcomeChoices({ action: "endorse_skill", admittedOn: null })).toEqual({
-      primary: null,
-      others: [],
-    });
+    for (const action of ["endorse_skill", "toString"]) {
+      expect(taskOutcomeChoices({ action, admittedOn: null })).toEqual({
+        primary: null,
+        others: [],
+      });
+    }
+  });
+
+  it("names whose invite Mark as sent spends", () => {
+    const task = (name: string | null) => ({ contact: { name } }) as Pick<SalesTask, "contact">;
+    expect(markSentLabel(task("Ana de la Cruz"))).toBe("Mark sent to Ana");
+    expect(markSentLabel(task(null))).toBe("Mark as sent");
+    expect(markSentLabel(task("  "))).toBe("Mark as sent");
   });
 
   it("offers no send on a connection request without a place in the budget", () => {

@@ -163,6 +163,10 @@
       "types": "./src/sales/outreach.ts",
       "default": "./src/sales/outreach.ts"
     },
+    "./sales/row-actions": {
+      "types": "./src/sales/rowActions.ts",
+      "default": "./src/sales/rowActions.ts"
+    },
     "./sales/runs": {
       "types": "./src/sales/runs.ts",
       "default": "./src/sales/runs.ts"

@@ -163,13 +163,23 @@ export function cardActions(item: Pick<SalesQueueItem, "state" | "approval">) {
 }
 
 /**
- * What Hold on this card will do, said before the press: a route chase pauses and Resume gives
- * it back; a person's approval comes off for good.
+ * Hold's button, named for what it does to this card: a route chase pauses, and a person's
+ * approval is withdrawn for good. `busy` names it while the engine answers.
  */
+export const holdLabel = (item: Pick<SalesQueueItem, "approval">, busy = false) =>
+  item.approval?.by === "route"
+    ? busy
+      ? "Pausing…"
+      : "Pause"
+    : busy
+      ? "Withdrawing…"
+      : "Withdraw approval";
+
+/** What Hold on this card will do, said before the press. */
 export const holdHint = (item: Pick<SalesQueueItem, "approval">) =>
   item.approval?.by === "route"
-    ? "Hold pauses it; Resume gives it back to the autopilot."
-    : "Hold takes your approval back; it goes only once you approve it again.";
+    ? "Pausing keeps it for Resume, which gives it back to the autopilot."
+    : "Withdrawing takes your approval back; it goes only once you approve it again.";
 
 export function intentLabel(intent: string | null | undefined): string {
   switch (intent) {

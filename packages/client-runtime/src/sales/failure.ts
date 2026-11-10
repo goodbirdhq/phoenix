@@ -96,7 +96,7 @@ function salesFailureText(
     case "needs_press":
       return text(
         "Needs your approval",
-        "It changed, was refused or was approved by a person since it was paused, so only your approval sends it now. Open it in Outreach.",
+        "It changed, was refused or was approved by a person since it was paused, so only your approval sends it now.",
         true,
       );
     case "chase_cap":

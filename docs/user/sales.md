@@ -41,7 +41,7 @@ running there.
 
 Each browser and each desktop app is its own device. Clearing its site data removes the key; enrol
 again to make a new one. **Revoke** stops a device from signing. Drafts it already approved stay
-approved until you hold them.
+approved until you withdraw their approval.
 
 ## Approve drafts
 
@@ -57,10 +57,10 @@ ticked it is unticked and left for you to open; it's never approved from the old
 
 Other actions:
 
-- **Hold** takes an approval back before the draft goes. On a draft you approved, it withdraws
-  your approval: it goes only once you approve it again. On a chase the autopilot approved, it
-  pauses it, and **Resume** gives it back.
-- If the send had already started, Phoenix says so: holding can't stop a send under way.
+- **Withdraw approval** takes your approval back before the draft goes, for good: it goes only
+  once you approve it again. On a chase the autopilot approved, the same button is **Pause**, and
+  **Resume** gives it back.
+- If the send had already started, Phoenix says so: neither can stop a send under way.
 - **Discard** drops a draft for good. It's never sent.
 - The engine may offer runs, such as a redraft with your note or research on the account, and
   names each button. Some runs discard the draft first; the form says so. If such a run fails to
@@ -69,7 +69,8 @@ Other actions:
 **Runs** lists each run started from the draft with its status, including after a restart, but
 not runs you archived. When one finishes, Phoenix reads the draft again so a new version shows.
 Keys: <kbd>J</kbd> and <kbd>K</kbd> move, <kbd>A</kbd> approves, <kbd>E</kbd> edits. The
-command palette offers the same actions.
+command palette offers the same actions, and Pause, Withdraw approval or Resume where the selected
+draft allows it.
 
 ## Answer replies
 
@@ -83,7 +84,8 @@ nobody has drafted an answer, the engine may offer a run that drafts one.
 **Autopilot** lists what the engine sends today without a press, done and to come, grouped by
 state: failed, retrying, needs your approval, held by the engine, paused, sending, scheduled and
 sent. **Pause** holds a scheduled send and **Resume** gives a paused one back; **Pause all** and
-**Resume all** do the same for every one of today's, one at a time, and say how each went.
+**Resume all** do the same for every one of today's, one at a time, then sum up what happened. A
+send that needs a look, such as one already going or refused, keeps its own note.
 Resume can be refused: the autopilot sends only so many chases a day, so a paused chase may have
 to wait until tomorrow, and a chase that changed since it was paused needs your approval in
 Outreach. A paused chase also shows in Outreach, where approving it sends it as yours. Each send shows who it's to, which email it is, the mailbox, and why it's held, refused or
@@ -96,8 +98,9 @@ Outreach.
 ## Work the LinkedIn checklist
 
 **To do** lists the LinkedIn connection requests and messages to send by hand, with the contact's
-LinkedIn link, the suggested text and a button to copy it. Once you've done one, choose **Mark as
-sent**, or say what happened instead (already connected, skip, and so on); Phoenix shows what the
+LinkedIn link, the suggested text and a button to copy it. Once you've done one, choose **Mark
+sent** (the button names the contact, since it spends one of today's invites for good), or say
+what happened instead (already connected, skip, and so on); Phoenix shows what the
 engine recorded, and the heading shows how many invites today's budget has left. Tasks not posted
 yet wait for invite budget and are folded away; a connection request there can't be marked sent
 until it gets a place.

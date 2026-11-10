@@ -4,7 +4,7 @@ import {
   isEditing,
 } from "@t3tools/client-runtime/sales/draft-card";
 import { checkSigning, thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
-import { cardActions, holdHint } from "@t3tools/client-runtime/sales/outreach";
+import { cardActions, holdHint, holdLabel } from "@t3tools/client-runtime/sales/outreach";
 import {
   type SalesDispatchAction,
   type SalesQueueItemDetail,
@@ -59,7 +59,7 @@ export function SalesDraftActions(props: {
           ) : null}
           {actions.hold ? (
             <Button size="sm" variant="outline" disabled={busy} onClick={() => void card.hold()}>
-              {state.busy === "hold" ? "Holding…" : "Hold"}
+              {holdLabel(detail, state.busy === "hold")}
             </Button>
           ) : null}
           {actions.edit && !isEditing(state) ? (

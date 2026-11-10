@@ -16,12 +16,15 @@ import {
   autopilotActions,
   autopilotDetail,
   autopilotTimeline,
-  batchSummary,
-  eachSend,
+  batchConfirmText,
   outOfOfficeLabel,
   pauseSend,
   resumeSend,
+  runBatch,
+  type SalesBatchState,
+  showsOnRowAfterBatch,
 } from "./autopilot.ts";
+import type { SalesHoldOutcome } from "./hold.ts";
 import { detail } from "./fixtures/queueItemDetail.ts";
 
 const decodeAutopilot = Schema.decodeUnknownSync(SalesAutopilotToday);
@@ -158,6 +161,17 @@ describe("autopilot actions", () => {
     expect(outcome).toMatchObject({ kind: "going", tone: "warning", title: "Already going" });
   });
 
+  it("tells a withdrawn approval apart from a pause", async () => {
+    const outcome = await pauseSend(
+      commands({
+        hold: async () =>
+          AsyncResult.success({ card: card(), already: false, result: "unapproved" }),
+      }),
+      "act-1",
+    );
+    expect(outcome).toMatchObject({ kind: "withdrawn", title: "Approval withdrawn" });
+  });
+
   it("resumes the version the engine shows now", async () => {
     const asked: SalesResumeInput[] = [];
     const outcome = await resumeSend(
@@ -210,23 +224,71 @@ describe("autopilot actions", () => {
     expect(press).toMatchObject({ tone: "warning", needsPress: true });
   });
 
-  it("acts on each send in turn and sums up truthfully", async () => {
-    const progress: number[] = [];
-    const answers = { a: "done", b: "going", c: "failed" } as const;
-    const all = await eachSend(
-      ["a", "b", "c"],
-      async (id) => ({
-        kind: answers[id as keyof typeof answers],
-        tone: "success",
-        title: "",
-        description: "",
-        needsPress: false,
+  it("never words Resume's already as Hold's already going", async () => {
+    const resumed = await resumeSend(
+      commands({
+        resume: async () =>
+          AsyncResult.success({ card: card({ goes: "Tue 10 Nov, 09:14" }), already: true }),
       }),
-      (done) => progress.push(done),
+      "act-1",
     );
-    expect(progress).toEqual([1, 2, 3]);
-    expect(batchSummary("Paused", [...all.values()])).toBe(
-      "Paused 1 of 3. 1 was already going and could not be stopped. 1 was not paused.",
+    expect(resumed).toMatchObject({
+      kind: "already",
+      title: "Already resumed",
+      description: "It goes Tue 10 Nov, 09:14.",
+    });
+  });
+
+  const answer = (kind: SalesHoldOutcome["kind"]): SalesHoldOutcome => ({
+    kind,
+    tone: "success",
+    title: "",
+    description: "",
+    needsPress: false,
+  });
+
+  it("pauses each send in turn, says how far it got, and sums up truthfully", async () => {
+    const answers = { a: "done", b: "going", c: "failed", d: "already" } as const;
+    const seen: SalesBatchState[] = [];
+    const finished = await runBatch(
+      "Paused",
+      ["a", "b", "c", "d"],
+      async (id) => answer(answers[id as keyof typeof answers]),
+      (state) => seen.push(state),
     );
+    expect(seen.map((state) => state.text)).toEqual([
+      "Pausing 1 of 4…",
+      "Pausing 2 of 4…",
+      "Pausing 3 of 4…",
+      "Pausing 4 of 4…",
+      "Paused 2 of 4. 1 was already going and could not be stopped. 1 was not paused.",
+    ]);
+    expect(seen.map((state) => state.running)).toEqual([true, true, true, true, false]);
+    expect(finished).toEqual(seen.at(-1));
+  });
+
+  it("never counts a withdrawn approval as paused", async () => {
+    const finished = await runBatch(
+      "Paused",
+      ["a", "b", "c"],
+      async (id) => answer(id === "a" ? "done" : "withdrawn"),
+      () => {},
+    );
+    expect(finished.text).toBe(
+      "Paused 1 of 3. 2 were approved by a person: their approvals were withdrawn instead.",
+    );
+  });
+
+  it("keeps on the row only what the batch summary can't settle", () => {
+    expect(
+      (["done", "already", "withdrawn", "going", "failed"] as const).filter((kind) =>
+        showsOnRowAfterBatch(answer(kind)),
+      ),
+    ).toEqual(["withdrawn", "going", "failed"]);
+  });
+
+  it("asks before a batch, with how many it touches", () => {
+    expect(batchConfirmText("Paused", 8)).toMatch(/^Pause 8 of today's automated sends\?\n/);
+    expect(batchConfirmText("Resumed", 2)).toMatch(/^Resume 2 paused sends\?\n/);
   });
 });
