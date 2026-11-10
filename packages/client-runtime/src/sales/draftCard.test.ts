@@ -3,6 +3,7 @@ import {
   type SalesActionFailureReason,
   type SalesCardState,
   type SalesDispatchInput,
+  type SalesEditInput,
   type SalesHoldResult,
   type SalesQueueItemDetail,
   ThreadId,
@@ -12,7 +13,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { AtomCommandResult } from "../state/runtime.ts";
-import type { VerifiedVersion } from "./signing.ts";
+import { computeContentHash, type VerifiedVersion } from "./signing.ts";
 import type { ApproveOutcome } from "./approve.ts";
 import type { SalesDeviceKey, SigningDevice } from "./devices.ts";
 import { createDraftCard, type DraftCardCommands, isEditing } from "./draftCard.ts";
@@ -223,6 +224,47 @@ describe("draft card edits", () => {
     card.cancelEdit();
     await Promise.resolve();
     expect(calls.reads).toBe(2);
+  });
+});
+
+describe("draft card hidden text", () => {
+  it("signs nothing with hidden text, and an edit takes it out for a new version", async () => {
+    const input = {
+      ...hashInput,
+      subject: "creator\nx fintech",
+      body: "Hey Ana,\u200B\n\nWire it.\u202E",
+    };
+    const hidden = detail({
+      threaded: false,
+      hashInput: input,
+      contentHash: await computeContentHash(input),
+    });
+    const sent: SalesEditInput[] = [];
+    const { card, calls } = setup({
+      served: hidden,
+      commands: {
+        edit: async (edit) => {
+          sent.push(edit);
+          return refused("empty_body");
+        },
+      },
+    });
+    await card.load();
+    await card.approve(activeDevice);
+    expect(calls.signed).toEqual([]);
+    expect(card.getState().notice?.description).toMatch(/would not show as it is sent/u);
+
+    card.removeHiddenCharacters();
+    expect(isEditing(card.getState())).toBe(true);
+    await card.save();
+    expect(sent).toEqual([
+      {
+        activityId: "act-1",
+        expectedHash: hidden.contentHash,
+        subject: "creator x fintech",
+        body: "Hey Ana,\n\nWire it.",
+      },
+    ]);
   });
 });
 

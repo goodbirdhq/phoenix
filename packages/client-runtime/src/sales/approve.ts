@@ -14,7 +14,7 @@ import {
   readSalesFailure,
   versionRefusalText,
 } from "./failure.ts";
-import { type VerifiedVersion, verifyReviewedVersion } from "./signing.ts";
+import { type VerifiedVersion, type VersionRefusal, verifyReviewedVersion } from "./signing.ts";
 
 /** What happened to one approval, for the person who pressed. */
 export interface ApproveOutcome {
@@ -107,12 +107,19 @@ export type ReviewedDraft =
       readonly detail: SalesQueueItemDetail;
       readonly version: VerifiedVersion;
     }
-  | { readonly status: "refused"; readonly text: string };
+  | {
+      readonly status: "refused";
+      readonly reason: VersionRefusal;
+      readonly text: string;
+      /** The draft, to show with its findings marked, when it was refused for what it holds. */
+      readonly marked: SalesQueueItemDetail | null;
+    };
 
 /**
  * Reads a ticked draft again for the review step. It is `ready` to sign only when the hash this
  * client recomputes from the text the step shows equals the engine's and the one captured at
- * the tick (`verifyReviewedVersion`); otherwise it is `refused` and must be unticked.
+ * the tick (`verifyReviewedVersion`); otherwise it is `refused` and must be unticked. A draft
+ * refused for hidden text comes back `marked`, so the step can show where it is.
  */
 export async function reviewTickedDraft(
   read: () => Promise<AtomCommandResult<SalesQueueItemDetail, unknown>>,
@@ -126,7 +133,12 @@ export async function reviewTickedDraft(
     };
   }
   const check = await verifyReviewedVersion(result.value, tickedHash);
-  return check.ok
-    ? { status: "ready", detail: result.value, version: check.version }
-    : { status: "refused", text: versionRefusalText(check.reason, "review") };
+  if (check.ok) return { status: "ready", detail: result.value, version: check.version };
+  const { reason } = check;
+  return {
+    status: "refused",
+    reason,
+    text: versionRefusalText(reason, "review"),
+    marked: reason === "address" || reason === "hidden-text" ? result.value : null,
+  };
 }

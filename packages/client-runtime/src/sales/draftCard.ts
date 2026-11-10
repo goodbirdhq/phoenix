@@ -14,6 +14,7 @@ import type { AtomCommandResult } from "../state/runtime.ts";
 import type { ApproveOutcome } from "./approve.ts";
 import { checkSigning, type SigningDevice } from "./devices.ts";
 import { readSalesFailure, versionRefusalText } from "./failure.ts";
+import { withoutHiddenCharacters } from "./hiddenText.ts";
 import { holdOutcome, resumeOutcome, type SalesHoldOutcome } from "./hold.ts";
 import { cardActions, listedVersionMoved } from "./outreach.ts";
 import { displayedDraft, type VerifiedVersion, verifyDisplayedVersion } from "./signing.ts";
@@ -83,6 +84,12 @@ export interface DraftCard {
   readonly startEdit: () => void;
   readonly editSubject: (subject: string) => void;
   readonly editBody: (body: string) => void;
+  /**
+   * Opens an edit with the hidden characters taken out of the subject (a new thread's only) and
+   * the body (`withoutHiddenCharacters`), since nobody can find one to delete by hand. Saving it
+   * makes a new version, read and verified again like any other.
+   */
+  readonly removeHiddenCharacters: () => void;
   /** Drops the edit and returns to the email, showing the engine's newer version if it has one. */
   readonly cancelEdit: () => void;
   readonly save: () => Promise<void>;
@@ -234,6 +241,18 @@ export function createDraftCard(
     },
     editSubject: (subject) => set({ subjectDraft: subject }),
     editBody: (body) => set({ bodyDraft: body }),
+    removeHiddenCharacters: () => {
+      const { detail, busy } = state;
+      if (detail === null || busy !== null || !cardActions(detail).edit) return;
+      const shown = displayedDraft(detail);
+      const body = withoutHiddenCharacters("body", state.bodyDraft ?? shown.body);
+      const subject = withoutHiddenCharacters("subject", state.subjectDraft ?? shown.subject);
+      set({
+        editing: true,
+        bodyDraft: body === shown.body ? null : body,
+        ...(detail.threaded ? {} : { subjectDraft: subject === shown.subject ? null : subject }),
+      });
+    },
     cancelEdit: () => {
       set({ editing: false, subjectDraft: null, bodyDraft: null, notice: null });
       // The engine moved on during the edit: show its version now.

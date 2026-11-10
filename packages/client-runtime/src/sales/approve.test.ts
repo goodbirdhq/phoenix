@@ -8,10 +8,10 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { AtomCommandResult } from "../state/runtime.ts";
-import type { VerifiedVersion } from "./signing.ts";
+import { computeContentHash, type VerifiedVersion } from "./signing.ts";
 import { approveVersions, reviewTickedDraft } from "./approve.ts";
 import type { SalesDeviceKey, SigningDevice } from "./devices.ts";
-import { ENGINE_HASH, detail } from "./fixtures/queueItemDetail.ts";
+import { ENGINE_HASH, detail, hashInput } from "./fixtures/queueItemDetail.ts";
 
 // Only the verify functions make these; the tests here start after verification.
 const verified = (activityId: string) =>
@@ -217,7 +217,19 @@ describe("reviewTickedDraft", () => {
     );
     expect(reviewed).toEqual({
       status: "refused",
+      reason: "changed",
       text: "It changed after you ticked it. Open it and read the new version.",
+      marked: null,
     });
+  });
+
+  it("refuses a draft with hidden text and hands it back to show where", async () => {
+    const input = { ...hashInput, body: "Hey Ana,\u200B\n\nGabriel" };
+    const hidden = detail({ hashInput: input, contentHash: await computeContentHash(input) });
+    const reviewed = await reviewTickedDraft(
+      async () => AsyncResult.success(hidden),
+      hidden.contentHash,
+    );
+    expect(reviewed).toMatchObject({ status: "refused", reason: "hidden-text", marked: hidden });
   });
 });

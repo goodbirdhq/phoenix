@@ -147,6 +147,10 @@
       "types": "./src/sales/health.ts",
       "default": "./src/sales/health.ts"
     },
+    "./sales/hidden-text": {
+      "types": "./src/sales/hiddenText.ts",
+      "default": "./src/sales/hiddenText.ts"
+    },
     "./sales/hold": {
       "types": "./src/sales/hold.ts",
       "default": "./src/sales/hold.ts"

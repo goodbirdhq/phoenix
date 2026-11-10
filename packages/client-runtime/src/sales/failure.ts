@@ -226,10 +226,14 @@ export function versionRefusalText(reason: VersionRefusal, context: "card" | "re
   switch (reason) {
     case "algorithm":
       return "The engine hashes drafts in a way this version of Phoenix does not know. Update Phoenix.";
-    case "subject-lines":
+    case "address":
       return context === "card"
-        ? "The subject has a line break. Edit it onto one line, then approve."
-        : "Its subject has a line break. Open it and put the subject on one line.";
+        ? "The To address has characters that are not plain ASCII, marked above, so it may not be the address it looks like. Correct the contact's address and draft it again."
+        : "Its To address has characters that are not plain ASCII, marked below, so it may not be the address it looks like.";
+    case "hidden-text":
+      return context === "card"
+        ? "Part of this draft would not show as it is sent: hidden characters or long runs of blank space, marked in the email. Edit them out, then approve."
+        : "Part of it would not show as it is sent, marked below. Open it and edit that out.";
     case "mismatch":
       return context === "card"
         ? "The text shown is not the version the engine reports. It has been read again; look before approving."

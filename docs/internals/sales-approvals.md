@@ -56,7 +56,20 @@ rather than in each view. Traps that follow from this:
   (`verifyReviewedVersion`). Any other is shown as changed, unticked, and never
   signed. One confirm press signs the rest. The list's preview fields are never
   evidence of what the person saw.
-- **A subject is one line.** A subject with a line break is refused, since a
-  one-line field would show it without the break.
+- **Shown is not the same as seen.** Agents write the text, so a draft could
+  carry what a person cannot see: format characters (zero-width, soft hyphen,
+  BOM, tag characters), bidi controls that reorder what is shown, other
+  controls (a subject's line break among them; a body keeps `\n`, `\t` and
+  CRLF), or more than three blank lines or fifteen spaces in a row that push a
+  paragraph out of view. Signing refuses any of these (`hiddenTextFindings`,
+  `packages/client-runtime/src/sales/hiddenText.ts`) on the card and in the
+  review, and the preview shows each as a token such as `⟨U+200B⟩` in its
+  place; a clean draft is still shown exactly as hashed. The To address must be
+  printable ASCII: one look-alike letter makes another address, and telling
+  look-alikes from real internationalised addresses needs confusable tables
+  that still miss whole-script fakes, so such an address cannot be approved
+  here. The fix is an edit, which makes a new version that is read and verified
+  again; "Remove hidden characters" takes out what nobody can find to delete by
+  hand.
 - **Never sign again for the person.** A `stale_hash` answer re-reads the card
   and shows it. The next signature needs a new press.
