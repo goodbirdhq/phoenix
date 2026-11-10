@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -122,6 +123,23 @@ export class SalesService extends Context.Service<
     readonly recordDispatch: (dispatch: SalesDispatch) => Effect.Effect<void>;
   }
 >()("t3/sales/SalesService") {}
+
+/** The snapshot with every read time blanked: ours, and the engine's `generatedAt`. */
+const withoutReadTimes = (snapshot: SalesSnapshot) => ({
+  ...snapshot,
+  summaryReadAt: null,
+  checkedAt: null,
+  summary: snapshot.summary === null ? null : { ...snapshot.summary, generatedAt: "" },
+  queue: snapshot.queue === null ? null : { ...snapshot.queue, generatedAt: "" },
+});
+
+/**
+ * Whether two snapshots say the same thing apart from when they were read. Subscribers are sent
+ * a snapshot only when this changes, so a poll that finds nothing new sends nothing; a client
+ * already watching keeps the read time of the last change, while `getSnapshot` has the latest.
+ */
+const sameSalesContent = (left: SalesSnapshot, right: SalesSnapshot) =>
+  Equal.equals(withoutReadTimes(left), withoutReadTimes(right));
 
 const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -303,6 +321,7 @@ const make = Effect.gen(function* () {
   const subscribe = Effect.acquireRelease(attach, () => detach).pipe(
     Effect.as(
       SubscriptionRef.changes(state).pipe(
+        Stream.changesWith(sameSalesContent),
         Stream.map((snapshot): SalesStreamEvent => ({ type: "sales-snapshot", snapshot })),
       ),
     ),

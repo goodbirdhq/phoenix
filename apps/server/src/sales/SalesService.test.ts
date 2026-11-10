@@ -229,7 +229,17 @@ const subscribeInScope = Effect.gen(function* () {
 const isReady = (event: SalesStreamEvent) => event.snapshot.status === "ready";
 
 it.effect("polls the engine only while a client is subscribed", () => {
-  const { layer, requests } = makeLayer({});
+  // Each summary read reports one more sent today, so every tick changes what subscribers see.
+  let reads = 0;
+  const { layer, requests } = makeLayer({
+    respond: (request) =>
+      pathOf(request).endsWith("/summary")
+        ? Response.json({
+            ...summaryFixture,
+            autopilotToday: { ...summaryFixture.autopilotToday, sent: ++reads },
+          })
+        : views(request),
+  });
   return Effect.gen(function* () {
     // Nothing is fetched before anyone subscribes, however long the server runs.
     yield* TestClock.adjust("10 minutes");
@@ -654,11 +664,18 @@ it.effect("never reads a missing approval result as approved", () => {
 });
 
 it.effect("reads the queue again after an action while someone watches", () => {
+  let unapproved = false;
   const { layer, requests } = makeLayer({
-    respond: (request) =>
-      pathOf(request) === "/api/sales/v1/actions/unapprove"
-        ? Response.json({ ok: true, ...cardState, approved: false })
-        : views(request),
+    respond: (request) => {
+      if (pathOf(request) === "/api/sales/v1/actions/unapprove") {
+        unapproved = true;
+        return Response.json({ ok: true, ...cardState, approved: false });
+      }
+      // After the action the engine reports the card in another state.
+      return unapproved && pathOf(request).endsWith("/queue")
+        ? Response.json({ ...queueFixture, items: [{ ...queueItemFixture, state: "held" }] })
+        : views(request);
+    },
   });
   return Effect.gen(function* () {
     const sales = yield* SalesService.SalesService;
@@ -691,5 +708,38 @@ it.effect("keeps dispatches through engine reads and settings changes", () => {
     assert.strictEqual((yield* sales.refresh).dispatches.length, 1);
     yield* settings.updateSettings({ salesEngine: { readToken: "the-new-token" } });
     assert.strictEqual((yield* sales.getSnapshot).dispatches[0]?.threadId, "thread-1");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("sends subscribers nothing when a poll finds nothing new", () => {
+  let changed = false;
+  const { layer, requests } = makeLayer({
+    respond: (request) =>
+      pathOf(request).endsWith("/queue")
+        ? Response.json({
+            ...queueFixture,
+            // The engine stamps every answer; a new stamp alone is not news.
+            generatedAt: `2026-11-09T18:3${summaryReads(requests)}:00.000Z`,
+            items: changed ? [] : [queueItemFixture],
+          })
+        : Response.json({
+            ...summaryFixture,
+            generatedAt: `2026-11-09T18:3${summaryReads(requests)}:00.000Z`,
+          }),
+  });
+  return Effect.gen(function* () {
+    const sales = yield* SalesService.SalesService;
+    const watcher = yield* subscribeInScope;
+    yield* watcher.nextWith(isReady);
+    // A read that finds the same drafts updates the snapshot but sends nothing.
+    const same = yield* sales.refresh;
+    assert.strictEqual(summaryReads(requests), 2);
+    assert.strictEqual(same.queue?.items.length, 1);
+    // So the next event a subscriber gets is the read that changed something.
+    changed = true;
+    yield* sales.refresh;
+    const next = yield* watcher.nextWith(() => true);
+    assert.strictEqual(next.snapshot.queue?.items.length, 0);
+    yield* Scope.close(watcher.scope, Exit.void);
   }).pipe(Effect.provide(layer));
 });
