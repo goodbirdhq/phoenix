@@ -19,7 +19,8 @@ export type SalesDeviceView = ReturnType<typeof useSalesDevice>;
 
 /** What the page's keyboard shortcuts and command palette entries call. */
 export interface SalesDraftPanelHandle {
-  readonly approve: () => void;
+  /** `intentAt`: when the press began, on `performance.now()`'s clock (`DraftCard.approve`). */
+  readonly approve: (intentAt: number) => void;
   readonly edit: () => void;
   readonly hold: () => void;
   readonly resume: () => void;
@@ -67,7 +68,7 @@ export function SalesDraftPanel({
   const [card, state] = useDraftCard(props);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   useImperativeHandle(ref, () => ({
-    approve: () => void card.approve(props.device),
+    approve: (intentAt) => void card.approve(props.device, intentAt),
     edit: () => {
       if (!props.canAct) return;
       card.startEdit();

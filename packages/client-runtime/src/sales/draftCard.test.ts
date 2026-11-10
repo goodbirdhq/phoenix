@@ -188,71 +188,21 @@ describe("draft card approval", () => {
 });
 
 describe("draft card approval after a version swap", () => {
-  /** A card showing an older version, then the verifiable one swapped in at `swapAt`. */
-  async function swapped(swapAt: number, commands?: Partial<DraftCardCommands>) {
+  /** A card showing an older version, then `next` (by default a verifiable one) at `swapAt`. */
+  async function swapped(swapAt: number, next = detail()) {
     let clock = 0;
-    const fixture = setup({
-      served: detail({ contentHash: "older-version" }),
-      now: () => clock,
-      ...(commands ? { commands } : {}),
-    });
+    const fixture = setup({ served: detail({ contentHash: "older-version" }), now: () => clock });
     await fixture.card.load();
     clock = swapAt;
-    fixture.serve(detail());
+    fixture.serve(next);
     await fixture.card.load();
     return { ...fixture, setClock: (ms: number) => (clock = ms) };
   }
 
-  it("does not sign a version that swapped in just before the press; a second press does", async () => {
-    const { card, calls, setClock } = await swapped(10_000);
-    setClock(10_000 + VERSION_SETTLE_MS - 1);
-    await card.approve(activeDevice);
-    expect(calls.signed).toEqual([]);
-    expect(card.getState().notice).toMatchObject({
-      tone: "warning",
-      title: "This draft just changed",
-    });
-
-    await card.approve(activeDevice);
-    expect(calls.signed).toEqual([{ activityId: "act-1", contentHash: ENGINE_HASH }]);
-  });
-
-  it("signs on one press once the swapped version has been on screen long enough", async () => {
-    const { card, calls, setClock } = await swapped(10_000);
-    setClock(10_000 + VERSION_SETTLE_MS);
-    await card.approve(activeDevice);
-    expect(calls.signed).toHaveLength(1);
-  });
-
-  it("does not sign a version that swapped in after the pointer went down", async () => {
-    const { card, calls, setClock } = await swapped(10_000);
-    setClock(20_000);
-    await card.approve(activeDevice, 9_000);
-    expect(calls.signed).toEqual([]);
-    await card.approve(activeDevice, 20_000);
-    expect(calls.signed).toHaveLength(1);
-  });
-
-  it("flags each new version, not only the first", async () => {
-    const { card, calls, serve, setClock } = await swapped(10_000);
-    await card.approve(activeDevice);
-    // Another version lands between the presses: the second press flags it instead of signing.
-    serve(detail({ contentHash: "newest-version" }));
-    setClock(10_500);
-    await card.load();
-    await card.approve(activeDevice);
-    expect(calls.signed).toEqual([]);
-    expect(card.getState().notice?.title).toBe("This draft just changed");
-  });
-
-  it("signs the first read, and the person's own saved edit, on one press", async () => {
+  /** A card that saves the person's edit of the body; the engine then serves `readBack`. */
+  async function savedEdit(readBack: SalesQueueItemDetail) {
     let clock = 0;
-    const fresh = setup({ now: () => clock });
-    await fresh.card.load();
-    await fresh.card.approve(activeDevice);
-    expect(fresh.calls.signed).toHaveLength(1);
-
-    const saved = setup({
+    const fixture = setup({
       served: detail({ contentHash: "before-edit" }),
       now: () => clock,
       commands: {
@@ -263,13 +213,92 @@ describe("draft card approval after a version swap", () => {
           }),
       },
     });
-    await saved.card.load();
-    saved.card.editBody(hashInput.body);
-    saved.serve(detail());
+    await fixture.card.load();
+    fixture.card.editBody(hashInput.body);
+    fixture.serve(readBack);
     clock = 5_000;
-    await saved.card.save();
-    await saved.card.approve(activeDevice);
-    expect(saved.calls.signed).toEqual([{ activityId: "act-1", contentHash: ENGINE_HASH }]);
+    await fixture.card.save();
+    return fixture;
+  }
+
+  it("does not sign a version that swapped in just before the press", async () => {
+    const { card, calls, setClock } = await swapped(10_000);
+    setClock(10_000 + VERSION_SETTLE_MS - 1);
+    await card.approve(activeDevice);
+    expect(calls.signed).toEqual([]);
+    expect(card.getState().notice).toMatchObject({
+      tone: "warning",
+      title: "This draft just changed",
+    });
+  });
+
+  it("does not sign on a second press inside the window, such as a double-click", async () => {
+    const { card, calls, setClock } = await swapped(10_000);
+    setClock(10_200);
+    await card.approve(activeDevice);
+    setClock(10_300);
+    await card.approve(activeDevice);
+    expect(calls.signed).toEqual([]);
+
+    setClock(10_000 + VERSION_SETTLE_MS);
+    await card.approve(activeDevice);
+    expect(calls.signed).toEqual([{ activityId: "act-1", contentHash: ENGINE_HASH }]);
+  });
+
+  it("does not sign a version that swapped in after the press began", async () => {
+    const { card, calls, setClock } = await swapped(10_000);
+    setClock(20_000);
+    await card.approve(activeDevice, 9_000);
+    expect(calls.signed).toEqual([]);
+    await card.approve(activeDevice, 20_000);
+    expect(calls.signed).toHaveLength(1);
+  });
+
+  it("flags each new version, not only the first", async () => {
+    const { card, calls, serve, setClock } = await swapped(10_000);
+    const input = { ...hashInput, body: `${hashInput.body}\nOne more line.` };
+    setClock(12_000);
+    serve(detail({ hashInput: input, contentHash: await computeContentHash(input) }));
+    await card.load();
+    setClock(12_500);
+    await card.approve(activeDevice);
+    expect(calls.signed).toEqual([]);
+    expect(card.getState().notice?.title).toBe("This draft just changed");
+  });
+
+  it("says first that a version can never be signed, rather than to press again", async () => {
+    // The engine reports a hash the shown text does not make.
+    const { card, calls, setClock } = await swapped(
+      10_000,
+      detail({ hashInput: { ...hashInput, body: "Wire the money." } }),
+    );
+    setClock(10_100);
+    await card.approve(activeDevice);
+    expect(calls.signed).toEqual([]);
+    expect(card.getState().notice?.title).toBe("Phoenix will not sign this");
+  });
+
+  it("signs the first read on one press", async () => {
+    const { card, calls } = setup({ now: () => 0 });
+    await card.load();
+    await card.approve(activeDevice);
+    expect(calls.signed).toHaveLength(1);
+  });
+
+  it("signs the person's own saved edit on one press", async () => {
+    const { card, calls } = await savedEdit(detail());
+    await card.approve(activeDevice);
+    expect(calls.signed).toEqual([{ activityId: "act-1", contentHash: ENGINE_HASH }]);
+  });
+
+  it("flags a save whose text read back is not what the person saved, whatever hash it reports", async () => {
+    const input = { ...hashInput, body: `${hashInput.body}\nP.S. Wire the money.` };
+    const { card, calls } = await savedEdit(
+      detail({ hashInput: input, contentHash: await computeContentHash(input) }),
+    );
+    await card.approve(activeDevice);
+    expect(calls.signed).toEqual([]);
+    expect(card.getState().notice?.title).toBe("This draft just changed");
   });
 });
 

@@ -90,7 +90,7 @@ export function SalesConversations(props: {
   useSalesListKeys({
     "sales.next": () => move(1),
     "sales.previous": () => move(-1),
-    "sales.approve": () => panel.current?.approve(),
+    "sales.approve": (pressedAt) => panel.current?.approve(pressedAt),
     "sales.edit": () => panel.current?.edit(),
   });
 

@@ -756,6 +756,8 @@ function OpenCommandPaletteDialog(props: {
   const { environments } = useEnvironments();
   const salesConfigured = useSalesEnvironments().environments.length > 0;
   const salesCommands = useSalesPaletteCommands();
+  // This mounts as the palette opens; a Sales command started when the person opened it.
+  const [openedAt] = useState(() => performance.now());
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
@@ -2301,7 +2303,7 @@ function OpenCommandPaletteDialog(props: {
       icon: <SendIcon className={ITEM_ICON_CLASS} />,
       ...(command.shortcut ? { titleTrailingContent: <Kbd>{command.shortcut}</Kbd> } : {}),
       run: async () => {
-        command.run();
+        command.run(openedAt);
       },
     });
   }

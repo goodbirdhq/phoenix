@@ -10,7 +10,8 @@ import {
   type SalesShortcutCommand,
 } from "./salesShortcuts";
 
-export type SalesListKeys = Partial<Record<SalesShortcutCommand, () => void>>;
+/** Each receives the keydown's timestamp, when the press began; approve needs it. */
+export type SalesListKeys = Partial<Record<SalesShortcutCommand, (pressedAt: number) => void>>;
 
 /**
  * Runs a Sales list's commands from their bindings (J and K move, A approves the open draft,
@@ -29,7 +30,7 @@ export function useSalesListKeys(keys: SalesListKeys): void {
       const action = command === null ? undefined : current.current[command];
       if (action === undefined) return;
       event.preventDefault();
-      action();
+      action(event.timeStamp);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

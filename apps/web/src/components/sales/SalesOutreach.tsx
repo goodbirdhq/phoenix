@@ -84,12 +84,13 @@ export function SalesOutreach(props: {
     moveRef.current = move;
   });
 
-  // Stable, and each reaches the current list and draft through refs.
-  const actions = useMemo<Record<SalesShortcutCommand, () => void>>(
+  // Stable, and each reaches the current list and draft through refs. Each receives when the
+  // press began (keydown timestamp, or palette open); approve passes it to the swap guard.
+  const actions = useMemo<Record<SalesShortcutCommand, (startedAt: number) => void>>(
     () => ({
       "sales.next": () => moveRef.current(1),
       "sales.previous": () => moveRef.current(-1),
-      "sales.approve": () => panel.current?.approve(),
+      "sales.approve": (startedAt) => panel.current?.approve(startedAt),
       "sales.edit": () => panel.current?.edit(),
     }),
     [],
