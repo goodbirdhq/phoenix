@@ -265,6 +265,9 @@ const make = Effect.gen(function* () {
           const result = yield* options
             .read(engineConfig(config))
             .pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.result);
+          // The settings named another engine while this read ran (`current` let go of this
+          // one): its answer is not that engine's, so it must not land.
+          if ((yield* Ref.get(lastConfigKey)) !== key) return yield* SubscriptionRef.get(state);
           if (Result.isSuccess(result)) {
             return yield* publish({
               status: "ready",
