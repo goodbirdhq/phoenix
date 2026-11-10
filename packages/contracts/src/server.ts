@@ -294,6 +294,19 @@ export const canStartProviderSession = (snapshot: ServerProvider): boolean =>
   snapshot.auth.status !== "unauthenticated";
 
 /**
+ * Why a saved model selection cannot start work now, or null when it can: its provider instance
+ * is gone or cannot start a session, or that provider no longer offers its model.
+ */
+export const modelSelectionUnavailable = (
+  providers: ReadonlyArray<ServerProvider>,
+  selection: { readonly instanceId: ProviderInstanceId; readonly model: string },
+): "provider_unavailable" | "model_unavailable" | null => {
+  const provider = providers.find(({ instanceId }) => instanceId === selection.instanceId);
+  if (provider === undefined || !canStartProviderSession(provider)) return "provider_unavailable";
+  return provider.models.some(({ slug }) => slug === selection.model) ? null : "model_unavailable";
+};
+
+/**
  * Whether asking this instance for a fresh native quota reading is safe.
  * A refresh runs the provider's own CLI, so it is only offered for an
  * instance that is present, switched on, and already signed in — an

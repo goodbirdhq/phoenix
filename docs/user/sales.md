@@ -15,10 +15,11 @@ Open **Settings › Integrations**, choose the environment that should read the 
 - **Action token** (the engine's `SALES_ACTION_TOKEN`) lets Phoenix unapprove, edit and discard
   drafts, and carry approvals signed on an enrolled device. On its own it approves nothing.
 - **Sales agents project** is the project whose checkout holds the sales workflows. Redraft and
-  research runs start a thread there, the way a new thread in that project would start.
-- **Agent for Sales runs** is the provider and model those threads use. By default Phoenix uses
-  Claude Code, and refuses to start a run when Claude Code isn't set up rather than hand it to
-  another agent. Choose another agent here if your workflows don't need Claude Code.
+  research runs start a thread there with the project's thread mode and permissions.
+- **Agent for Sales runs** is the provider and model those threads use, whatever the project's
+  own default model. By default it's Claude Code, and Phoenix refuses to start a run when Claude
+  Code isn't set up rather than hand it to another agent. Choose another agent here if your
+  workflows don't need Claude Code.
 
 Tokens are stored by that environment's server and are never shown again. Changing the engine URL
 clears both tokens, so enter them again for the new engine.

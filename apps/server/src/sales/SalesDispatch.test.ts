@@ -390,6 +390,21 @@ it.effect("refuses, discarding nothing, when Claude Code is not available", () =
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("refuses, discarding nothing, a chosen model its provider no longer offers", () => {
+  const { layer, calls } = makeDispatchLayer({
+    agentsProjectId: "project-birdhouse",
+    runModelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-retired" },
+  });
+  return Effect.gen(function* () {
+    const dispatch = yield* SalesDispatch.SalesDispatchService;
+    const exit = yield* dispatch.dispatch(redraftReply).pipe(Effect.exit);
+    const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : null;
+    assert.isTrue(isSalesActionError(error));
+    assert.match(isSalesActionError(error) ? error.message : "", /no longer offered/u);
+    assert.deepStrictEqual(calls, []);
+  }).pipe(Effect.provide(layer));
+});
+
 it("refuses an agent chosen for Sales runs that cannot start", () => {
   const chosen: ModelSelection = { instanceId: ProviderInstanceId.make("gone"), model: "x" };
   const resolved = SalesDispatch.resolveRunModel(chosen, [codex, claude]);

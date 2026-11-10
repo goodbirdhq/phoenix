@@ -1,9 +1,7 @@
 import {
   CommandId,
-  DEFAULT_MODEL_BY_PROVIDER,
   MessageId,
   ProjectId,
-  ProviderDriverKind,
   type ModelSelection,
   type SalesActionError,
   type SalesDispatch,
@@ -12,8 +10,9 @@ import {
   type SalesDispatchPlans,
   type ServerProvider,
   ThreadId,
-  canStartProviderSession,
+  defaultSalesRunModel,
   fillSalesNote,
+  modelSelectionUnavailable,
   safeSalesNote,
   salesDispatchThreadPrefix,
 } from "@t3tools/contracts";
@@ -76,41 +75,39 @@ export function checkPlan(
   return { plan, prompt };
 }
 
-const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
-
 /**
- * The agent a Sales run starts with: the one chosen in Settings, or else Claude Code, Phoenix's
- * default for Sales runs. No other provider silently stands in for it: a workflow started on an
- * agent it was not written for fails in ways that look like the workflow's own.
+ * The agent a Sales run starts with: the one chosen in Settings, or else Claude Code on its
+ * default model. The agents project's own default model plays no part, and no other provider
+ * silently stands in: a workflow started on an agent it was not written for fails in ways that
+ * look like the workflow's own.
  */
 export function resolveRunModel(
   chosen: ModelSelection | null,
   providers: ReadonlyArray<ServerProvider>,
 ): ModelSelection | SalesActionError {
-  if (chosen !== null) {
-    const provider = providers.find((entry) => entry.instanceId === chosen.instanceId);
-    return provider !== undefined && canStartProviderSession(provider)
-      ? chosen
-      : salesActionError("dispatch-failed", {
-          message:
-            "The agent chosen for Sales runs is not available. Check it in Settings › Providers, or choose another in Settings › Integrations.",
-        });
+  if (chosen === null) {
+    return (
+      defaultSalesRunModel(providers) ??
+      salesActionError("dispatch-failed", {
+        message:
+          "Sales runs need Claude Code. Set it up in Settings › Providers, or choose another agent for Sales runs in Settings › Integrations.",
+      })
+    );
   }
-  const claude = providers.find(
-    (provider) => provider.driver === CLAUDE_DRIVER && canStartProviderSession(provider),
-  );
-  if (claude === undefined) {
-    return salesActionError("dispatch-failed", {
-      message:
-        "Sales runs need Claude Code. Set it up in Settings › Providers, or choose another agent for Sales runs in Settings › Integrations.",
-    });
+  switch (modelSelectionUnavailable(providers, chosen)) {
+    case null:
+      return chosen;
+    case "provider_unavailable":
+      return salesActionError("dispatch-failed", {
+        message:
+          "The agent chosen for Sales runs is not available. Check it in Settings › Providers, or choose another in Settings › Integrations.",
+      });
+    case "model_unavailable":
+      return salesActionError("dispatch-failed", {
+        message:
+          "The model chosen for Sales runs is no longer offered. Choose another in Settings › Integrations.",
+      });
   }
-  const model =
-    claude.models.find((entry) => entry.isDefault === true)?.slug ??
-    DEFAULT_MODEL_BY_PROVIDER[CLAUDE_DRIVER];
-  return model === undefined
-    ? salesActionError("dispatch-failed", { message: "Claude Code offers no model to run with." })
-    : { instanceId: claude.instanceId, model };
 }
 
 export class SalesDispatchService extends Context.Service<
@@ -136,8 +133,8 @@ const make = Effect.gen(function* () {
   const randomUUID = crypto.randomUUIDv4.pipe(Effect.mapError(failed("Could not start a thread.")));
 
   /**
-   * The agents project and how a new thread there starts: by that project's own defaults, on
-   * the agent Sales runs use.
+   * The agents project and how a new thread there starts: its thread mode and permissions are
+   * the project's, and the agent comes from Agent for Sales runs (`resolveRunModel`).
    */
   const resolveProject = Effect.gen(function* () {
     const settings = yield* serverSettings.getSettings.pipe(

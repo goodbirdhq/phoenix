@@ -2,17 +2,27 @@ import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
 import { shortFingerprint } from "@t3tools/client-runtime/sales/signing";
 import { createDeviceKey, thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
 import {
-  isProviderAvailable,
+  ProviderDriverKind,
+  canStartProviderSession,
+  defaultSalesRunModel,
+  modelSelectionUnavailable,
   type EnvironmentId,
   type ModelSelection,
   type SalesDevice,
   type SalesEngineSettings as SalesEngineSettingsValue,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { createModelSelection } from "@t3tools/shared/model";
 import { useMemo, useState } from "react";
 
 import { isElectron } from "../../env";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { getCustomModelOptionsByInstance } from "../../modelSelection";
+import {
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  sortProviderInstanceEntries,
+} from "../../providerInstances";
 import { useProjects } from "../../state/entities";
 import type { EnvironmentPresentation } from "../../state/environments";
 import {
@@ -23,15 +33,20 @@ import {
 } from "../../state/sales";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { TraitsPicker } from "../chat/TraitsPicker";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { modelSelectionValue } from "../schedules/SchedulesPage.logic";
 import { getDriverOption } from "./providerDriverMeta";
-import { SettingsSection } from "./settingsLayout";
+import {
+  SETTINGS_PICKER_TRIGGER_CLASSNAME,
+  SettingResetButton,
+  SettingsSection,
+} from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 
@@ -90,73 +105,85 @@ function TokenField(props: {
   );
 }
 
-const DEFAULT_RUN_AGENT = "__default__";
+const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
 
-/** Who runs Sales work: Phoenix's default (Claude Code) or any model the environment offers. */
+/**
+ * Who runs Sales work. Left unset, the server starts Claude Code on its default model
+ * (`defaultSalesRunModel`), so the picker shows that until another agent is chosen. Only providers
+ * that can start a session are offered, by the rule the server checks at dispatch.
+ */
 function SalesRunAgentField(props: {
+  readonly environmentId: EnvironmentId;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly value: ModelSelection | null;
   readonly onChange: (value: ModelSelection | null) => void;
 }) {
-  const choices = useMemo(
-    () =>
-      props.providers.flatMap((provider) =>
-        provider.enabled && isProviderAvailable(provider)
-          ? provider.models.map((model) => ({
-              selection: { instanceId: provider.instanceId, model: model.slug } as ModelSelection,
-              label: `${provider.displayName ?? provider.instanceId} · ${model.name}`,
-              icon: getDriverOption(provider.driver)?.icon,
-            }))
-          : [],
-      ),
-    [props.providers],
+  const settings = useEnvironmentSettings(props.environmentId);
+  const startable = props.providers.filter(canStartProviderSession);
+  const selection = props.value ?? defaultSalesRunModel(startable);
+  const entries = sortProviderInstanceEntries(
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(startable), settings),
   );
-  const value = props.value === null ? DEFAULT_RUN_AGENT : modelSelectionValue(props.value);
-  const chosen = choices.find((choice) => modelSelectionValue(choice.selection) === value);
-  const ChosenIcon = chosen?.icon;
+  const modelOptions = getCustomModelOptionsByInstance(
+    settings,
+    startable,
+    selection?.instanceId,
+    selection?.model,
+  );
+  const activeEntry = entries.find((entry) => entry.instanceId === selection?.instanceId);
+  const hint =
+    props.value === null
+      ? selection === null
+        ? `${getDriverOption(CLAUDE_DRIVER)?.label ?? "Claude Code"} isn't set up on this environment.`
+        : null
+      : modelSelectionUnavailable(props.providers, props.value) !== null
+        ? "The chosen agent isn't available on this environment."
+        : null;
+  // With nothing chosen and no Claude Code, the picker opens on the first agent that can start.
+  const pickerInstanceId = selection?.instanceId ?? entries[0]?.instanceId;
+
   return (
     <div className="grid gap-1.5">
-      <Label>Agent for Sales runs</Label>
-      <Select
-        value={value}
-        onValueChange={(next) =>
-          props.onChange(
-            choices.find((choice) => modelSelectionValue(choice.selection) === next)?.selection ??
-              null,
-          )
-        }
-      >
-        <SelectTrigger size="sm" aria-label="Agent for Sales runs">
-          <span className="flex min-w-0 items-center gap-2">
-            {ChosenIcon ? <ChosenIcon className="size-4" /> : null}
-            <span className="truncate">
-              {props.value === null
-                ? "Claude Code (default)"
-                : (chosen?.label ??
-                  `Unavailable · ${props.value.instanceId} · ${props.value.model}`)}
-            </span>
-          </span>
-        </SelectTrigger>
-        <SelectPopup alignItemWithTrigger={false}>
-          <SelectItem value={DEFAULT_RUN_AGENT}>Claude Code (default)</SelectItem>
-          {choices.map((choice) => {
-            const Icon = choice.icon;
-            const key = modelSelectionValue(choice.selection);
-            return (
-              <SelectItem key={key} value={key}>
-                <span className="flex items-center gap-2">
-                  {Icon ? <Icon className="size-4" /> : null}
-                  {choice.label}
-                </span>
-              </SelectItem>
-            );
-          })}
-        </SelectPopup>
-      </Select>
-      <p className="text-xs text-muted-foreground">
-        The agents project&apos;s workflows decide what they need. Phoenix starts Sales runs on
-        Claude Code unless you choose another agent here.
-      </p>
+      <div className="flex items-center gap-1">
+        <Label>Agent for Sales runs</Label>
+        {props.value !== null ? (
+          <SettingResetButton label="agent for Sales runs" onClick={() => props.onChange(null)} />
+        ) : null}
+      </div>
+      {pickerInstanceId !== undefined ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <ProviderModelPicker
+            activeInstanceId={pickerInstanceId}
+            model={selection?.model ?? ""}
+            lockedProvider={null}
+            instanceEntries={entries}
+            modelOptionsByInstance={modelOptions}
+            triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+            triggerAriaLabel="Agent for Sales runs"
+            {...(selection === null ? { triggerLabel: "Choose an agent" } : {})}
+            onInstanceModelChange={(instanceId, model) =>
+              props.onChange(createModelSelection(instanceId, model))
+            }
+          />
+          {selection !== null && activeEntry !== undefined ? (
+            <TraitsPicker
+              provider={activeEntry.driverKind}
+              models={activeEntry.models}
+              model={selection.model}
+              prompt=""
+              onPromptChange={() => {}}
+              modelOptions={selection.options ?? []}
+              allowPromptInjectedEffort={false}
+              planModeEnabled={settings.planModeEnabled}
+              triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+              onModelOptionsChange={(options) =>
+                props.onChange(createModelSelection(selection.instanceId, selection.model, options))
+              }
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {hint !== null ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
     </div>
   );
 }
@@ -200,7 +227,12 @@ function SalesEngineForm({
         environmentId,
         input: { patch: { salesEngine: patch } },
       });
-      if (result._tag === "Success") {
+      // Only a save of the engine fields consumes their drafts; picking a project or an agent
+      // keeps whatever is still being typed.
+      if (
+        result._tag === "Success" &&
+        ("baseUrl" in patch || "readToken" in patch || "actionToken" in patch)
+      ) {
         setReadToken("");
         setActionToken("");
         setBaseUrlDraft(null);
@@ -227,7 +259,7 @@ function SalesEngineForm({
         }
       }}
     >
-      {/* Locked while saving: a successful save clears the drafts. */}
+      {/* Locked while saving: a successful engine save clears the drafts. */}
       <fieldset disabled={saving} className="contents">
         <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
           The server reads outreach status from this engine and shows it under Sales. Phoenix stores
@@ -293,10 +325,12 @@ function SalesEngineForm({
           </Select>
           <p className="text-xs text-muted-foreground">
             Runs started from Sales open a thread in this project, the checkout that holds the sales
-            workflows, the way a new thread there would start.
+            workflows. They use the project&apos;s thread mode and permissions; the agent comes from
+            Agent for Sales runs.
           </p>
         </div>
         <SalesRunAgentField
+          environmentId={environmentId}
           providers={providers}
           value={saved.runModelSelection}
           onChange={(runModelSelection) => void save({ runModelSelection })}
