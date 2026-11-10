@@ -4,7 +4,7 @@ import {
   type ReviewedDraft,
   reviewTickedDraft,
 } from "@t3tools/client-runtime/sales/approve";
-import { thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
+import { checkSigning } from "@t3tools/client-runtime/sales/devices";
 import { kindLabel } from "@t3tools/client-runtime/sales/outreach";
 import type { EnvironmentId, SalesQueueItem, SalesQueueItemDetail } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
@@ -79,14 +79,13 @@ export function SalesBatchReview(props: {
   const loading = drafts.some(
     ({ row }) => (reviewed.get(row.activityId) ?? { status: "loading" }).status === "loading",
   );
-  const blocked = device.blocked;
-  const canSign = device.key !== null && device.state === "active" && blocked === null;
+  const { refusal } = checkSigning(device);
 
   const confirm = async () => {
-    if (device.key === null || !canSign || ready.length === 0) return;
+    if (refusal !== null || ready.length === 0) return;
     setSigning(true);
     try {
-      props.onDone(await approveVersions(device.key, ready));
+      props.onDone(await approveVersions(device, ready));
     } finally {
       setSigning(false);
     }
@@ -112,16 +111,16 @@ export function SalesBatchReview(props: {
           ))}
         </DialogPanel>
         <DialogFooter>
-          {canSign ? null : (
+          {refusal === null ? null : (
             <p className="flex-1 self-center text-xs text-muted-foreground">
-              {blocked ?? thisDeviceDescription(device.state, device.key)}
+              {refusal.description}
             </p>
           )}
           <Button variant="outline" disabled={signing} onClick={props.onClose}>
             Cancel
           </Button>
           <Button
-            disabled={!canSign || loading || signing || ready.length === 0}
+            disabled={refusal !== null || loading || signing || ready.length === 0}
             onClick={() => void confirm()}
           >
             {signing ? "Signing…" : `Approve ${ready.length}`}

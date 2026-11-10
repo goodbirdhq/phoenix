@@ -7,8 +7,14 @@ import {
 } from "@t3tools/contracts";
 
 import type { AtomCommandResult } from "../state/runtime.ts";
+import { checkSigning, type SalesDeviceKey, type SigningDevice } from "./devices.ts";
+import {
+  approveFailureText,
+  approveRequestFailure,
+  readSalesFailure,
+  versionRefusalText,
+} from "./failure.ts";
 import { type VerifiedVersion, verifyReviewedVersion } from "./signing.ts";
-import { approveFailureText, approveRequestFailure, readSalesFailure } from "./failure.ts";
 
 /** What happened to one approval, for the person who pressed. */
 export interface ApproveOutcome {
@@ -25,9 +31,9 @@ export interface ApproveOutcome {
  * Signs each version on this device, one signature per draft, and sends them in batches of the
  * engine's limit. Only verified versions can be passed, so nothing is signed that this client
  * did not hash from the text it showed. Nothing is retried: a stale version comes back as
- * `stale` for the page to re-show. `blockedReason` is asked again before each batch is signed,
- * and when a request fails in a way that may still have landed, `refresh` reads the queue again
- * and the outcome is reported as unknown.
+ * `stale` for the page to re-show. `device` is read and checked (`checkSigning`) again before
+ * each batch is signed, and when a request fails in a way that may still have landed,
+ * `refresh` reads the queue again and the outcome is reported as unknown.
  */
 export async function approveVersions(input: {
   readonly versions: ReadonlyArray<VerifiedVersion>;
@@ -36,10 +42,10 @@ export async function approveVersions(input: {
     items: ReadonlyArray<SalesSignedApproval>,
   ) => Promise<AtomCommandResult<SalesApproveResult, unknown>>;
   readonly refresh: () => Promise<unknown>;
-  /** Why this client may not sign now, or null when it may. */
-  readonly blockedReason: () => string | null;
+  /** This device as it stands now. */
+  readonly device: () => SigningDevice;
   /** Signs one version with this device's key. */
-  readonly sign: (version: VerifiedVersion) => Promise<SalesSignedApproval>;
+  readonly sign: (key: SalesDeviceKey, version: VerifiedVersion) => Promise<SalesSignedApproval>;
 }): Promise<ReadonlyArray<ApproveOutcome>> {
   const outcomes: ApproveOutcome[] = [];
   const failAll = (chunk: ReadonlyArray<VerifiedVersion>, text: string, unknown: boolean) => {
@@ -50,17 +56,17 @@ export async function approveVersions(input: {
   let unknown = false;
   for (let start = 0; start < input.versions.length; start += SALES_APPROVE_BATCH_LIMIT) {
     const chunk = input.versions.slice(start, start + SALES_APPROVE_BATCH_LIMIT);
-    const blocked = input.blockedReason();
-    if (blocked !== null) {
-      failAll(chunk, blocked, false);
+    const signing = checkSigning(input.device());
+    if (signing.refusal !== null) {
+      failAll(chunk, signing.refusal.description, false);
       continue;
     }
+    const { key } = signing;
     // Signed just before sending: the engine refuses a signature five minutes old.
-    const items = await Promise.all(chunk.map(input.sign));
+    const items = await Promise.all(chunk.map((version) => input.sign(key, version)));
     const result = await input.approve(items);
     if (result._tag !== "Success") {
-      // A failed result always reads as a failure.
-      const outcome = approveRequestFailure(readSalesFailure(result)!);
+      const outcome = approveRequestFailure(readSalesFailure(result));
       unknown ||= outcome.unknown;
       failAll(chunk, outcome.text, outcome.unknown);
       continue;
@@ -103,13 +109,6 @@ export type ReviewedDraft =
     }
   | { readonly status: "refused"; readonly text: string };
 
-const REFUSED_TEXT = {
-  changed: "It changed after you ticked it. Open it and read the new version.",
-  mismatch: "The text Phoenix received is not the version the engine reports. Open it again.",
-  algorithm: "The engine hashes drafts in a way this version of Phoenix does not know.",
-  "subject-lines": "Its subject has a line break. Open it and put the subject on one line.",
-} as const;
-
 /**
  * Reads a ticked draft again for the review step. It is `ready` to sign only when the hash this
  * client recomputes from the text the step shows equals the engine's and the one captured at
@@ -123,11 +122,11 @@ export async function reviewTickedDraft(
   if (result._tag !== "Success") {
     return {
       status: "unreadable",
-      text: readSalesFailure(result)?.description ?? "Could not read it.",
+      text: readSalesFailure(result).description,
     };
   }
   const check = await verifyReviewedVersion(result.value, tickedHash);
   return check.ok
     ? { status: "ready", detail: result.value, version: check.version }
-    : { status: "refused", text: REFUSED_TEXT[check.reason] };
+    : { status: "refused", text: versionRefusalText(check.reason, "review") };
 }

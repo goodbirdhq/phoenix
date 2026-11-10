@@ -84,18 +84,18 @@ export interface VerifiedVersion {
   readonly [verified]: true;
 }
 
+/**
+ * Why a version may not be signed:
+ * - `algorithm`: the engine hashes some other way.
+ * - `mismatch`: the shown text is not the hashed version.
+ * - `subject-lines`: the subject has a line break, which a subject line cannot show.
+ * - `changed`: not the version the person ticked.
+ */
+export type VersionRefusal = "algorithm" | "mismatch" | "subject-lines" | "changed";
+
 export type VersionCheck =
   | { readonly ok: true; readonly version: VerifiedVersion }
-  | {
-      readonly ok: false;
-      /**
-       * - `algorithm`: the engine hashes some other way.
-       * - `mismatch`: the shown text is not the hashed version.
-       * - `subject-lines`: the subject has a line break, which a subject line cannot show.
-       * - `changed`: not the version the person ticked.
-       */
-      readonly reason: "algorithm" | "mismatch" | "subject-lines" | "changed";
-    };
+  | { readonly ok: false; readonly reason: VersionRefusal };
 
 /**
  * Whether this client may sign for the draft as shown: the engine names the hash this client

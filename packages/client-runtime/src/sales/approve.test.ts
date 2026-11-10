@@ -10,13 +10,20 @@ import { describe, expect, it } from "vite-plus/test";
 import type { AtomCommandResult } from "../state/runtime.ts";
 import type { VerifiedVersion } from "./signing.ts";
 import { approveVersions, reviewTickedDraft } from "./approve.ts";
+import type { SalesDeviceKey, SigningDevice } from "./devices.ts";
 import { ENGINE_HASH, detail } from "./fixtures/queueItemDetail.ts";
 
 // Only the verify functions make these; the tests here start after verification.
 const verified = (activityId: string) =>
   ({ activityId, contentHash: `${activityId}-hash` }) as VerifiedVersion;
 
-const sign = async (version: VerifiedVersion): Promise<SalesSignedApproval> => ({
+const key = { deviceId: "laptop-3f2a", fingerprint: "3f2a".repeat(16) } as SalesDeviceKey;
+const activeDevice = (): SigningDevice => ({ key, state: "active", blocked: null });
+
+const sign = async (
+  _key: SalesDeviceKey,
+  version: VerifiedVersion,
+): Promise<SalesSignedApproval> => ({
   activityId: version.activityId,
   contentHash: version.contentHash,
   deviceId: "laptop-3f2a",
@@ -69,7 +76,7 @@ describe("approveVersions", () => {
         return approvesAll(items);
       },
       refresh: async () => {},
-      blockedReason: () => null,
+      device: activeDevice,
       sign,
     });
     expect(batches).toEqual([25, 5]);
@@ -87,10 +94,13 @@ describe("approveVersions", () => {
       approve: approvesAll,
       refresh: async () => {},
       // The client gained a local backend with an engine between the two batches.
-      blockedReason: () => (checks++ === 0 ? null : "Approve from another computer."),
-      sign: (version) => {
+      device: () => ({
+        ...activeDevice(),
+        blocked: checks++ === 0 ? null : "Approve from another computer.",
+      }),
+      sign: (signingKey, version) => {
         signed.push(version.activityId);
-        return sign(version);
+        return sign(signingKey, version);
       },
     });
     expect(signed).toHaveLength(25);
@@ -103,6 +113,27 @@ describe("approveVersions", () => {
     });
   });
 
+  it("signs nothing on a device without a key or not active with the engine", async () => {
+    for (const device of [
+      { key: null, state: "none", blocked: null },
+      { key, state: "pending", blocked: null },
+    ] satisfies ReadonlyArray<SigningDevice>) {
+      let signed = 0;
+      const [outcome] = await approveVersions({
+        versions: [verified("act-1")],
+        approve: approvesAll,
+        refresh: async () => {},
+        device: () => device,
+        sign: (signingKey, version) => {
+          signed += 1;
+          return sign(signingKey, version);
+        },
+      });
+      expect(signed).toBe(0);
+      expect(outcome).toMatchObject({ ok: false, unknown: false });
+    }
+  });
+
   it("calls a request that may have landed unknown and reads the queue again", async () => {
     let refreshes = 0;
     const outcomes = await approveVersions({
@@ -111,7 +142,7 @@ describe("approveVersions", () => {
       refresh: async () => {
         refreshes += 1;
       },
-      blockedReason: () => null,
+      device: activeDevice,
       sign,
     });
     expect(outcomes.map((outcome) => outcome.unknown)).toEqual([true, true]);
@@ -126,7 +157,7 @@ describe("approveVersions", () => {
       refresh: async () => {
         refreshes += 1;
       },
-      blockedReason: () => null,
+      device: activeDevice,
       sign,
     });
     expect(outcome).toMatchObject({ ok: false, unknown: false, stale: false });
@@ -151,7 +182,7 @@ describe("approveVersions", () => {
           ],
         }),
       refresh: async () => {},
-      blockedReason: () => null,
+      device: activeDevice,
       sign,
     });
     expect(outcomes.map(({ text, stale }) => ({ text, stale }))).toEqual([

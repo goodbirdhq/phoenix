@@ -8,11 +8,11 @@ import type {
 } from "@t3tools/contracts";
 
 import type { AtomCommandResult } from "../state/runtime.ts";
-import { displayedDraft, type VerifiedVersion, verifyDisplayedVersion } from "./signing.ts";
 import type { ApproveOutcome } from "./approve.ts";
-import { type SalesDeviceKey, type ThisDeviceState, thisDeviceDescription } from "./devices.ts";
-import { readSalesFailure } from "./failure.ts";
+import { checkSigning, type SigningDevice } from "./devices.ts";
+import { readSalesFailure, versionRefusalText } from "./failure.ts";
 import { listedVersionMoved } from "./outreach.ts";
+import { displayedDraft, type VerifiedVersion, verifyDisplayedVersion } from "./signing.ts";
 
 export interface DraftNotice {
   readonly tone: "success" | "warning" | "error";
@@ -32,18 +32,10 @@ export interface DraftCardState {
   readonly notice: DraftNotice | null;
   /** Text from an edit the engine refused because the card moved on, kept so it is not lost. */
   readonly lostText: string | null;
-  /** The action running now. One runs at a time; the others wait for it. */
+  /** The action running now. One runs at a time: a press while one runs does nothing. */
   readonly busy: "approve" | "edit" | "dispatch" | "discard" | "unapprove" | null;
   /** The note for Redraft with notes, or null while that form is closed. */
   readonly redraftNote: string | null;
-}
-
-/** This device as approval needs it, read at the press. */
-export interface DraftCardDevice {
-  readonly key: SalesDeviceKey | null;
-  readonly state: ThisDeviceState;
-  /** Why this client may not sign at all, or null. */
-  readonly blocked: string | null;
 }
 
 /** What the card asks of its environment and its page. */
@@ -55,9 +47,9 @@ export interface DraftCardCommands {
   readonly dispatch: (
     input: SalesDispatchInput,
   ) => Promise<AtomCommandResult<SalesDispatch, unknown>>;
-  /** Signs and sends verified versions (`approveVersions`). */
+  /** Signs and sends verified versions on this device (`approveVersions`). */
   readonly approveVersions: (
-    key: SalesDeviceKey,
+    device: SigningDevice,
     versions: ReadonlyArray<VerifiedVersion>,
   ) => Promise<ReadonlyArray<ApproveOutcome>>;
   /** Asks the person to confirm; undefined when there is no way to ask. */
@@ -83,7 +75,7 @@ export interface DraftCard {
   readonly cancelEdit: () => void;
   readonly save: () => Promise<void>;
   /** Approves the version shown, after hashing that text again here. */
-  readonly approve: (device: DraftCardDevice) => Promise<void>;
+  readonly approve: (device: SigningDevice) => Promise<void>;
   readonly unapprove: () => Promise<void>;
   /** Asks `${label}?` and discards the card if the person confirms. */
   readonly discard: (label: string) => Promise<void>;
@@ -95,13 +87,6 @@ export interface DraftCard {
 
 export const isDirty = (state: DraftCardState) =>
   state.subjectDraft !== null || state.bodyDraft !== null;
-
-const verifyRefusal = (reason: string) =>
-  reason === "algorithm"
-    ? "The engine hashes drafts in a way this version of Phoenix does not know. Update Phoenix."
-    : reason === "subject-lines"
-      ? "The subject has a line break. Edit it onto one line, then approve."
-      : "The text shown is not the version the engine reports. It has been read again; look before approving.";
 
 /**
  * One draft card: read, edited in place, and acted on. What it shows comes from the card's hash
@@ -140,11 +125,14 @@ export function createDraftCard(
     if (result._tag === "Success") {
       set({ detail: result.value, loadFailure: null, subjectDraft: null, bodyDraft: null });
     } else {
-      set({ loadFailure: readSalesFailure(result)?.description ?? "Could not read this draft." });
+      set({ loadFailure: readSalesFailure(result).description });
     }
   };
 
-  /** Runs one action on a read card, unless another is running. */
+  /**
+   * Runs one action on the card as read at the press, unless another is running; a read that
+   * lands meanwhile changes what the next press acts on, never this one.
+   */
   const run = async (
     busy: NonNullable<DraftCardState["busy"]>,
     action: (detail: SalesQueueItemDetail) => Promise<void>,
@@ -174,7 +162,7 @@ export function createDraftCard(
         await after?.();
         return;
       }
-      const failure = readSalesFailure(result)!;
+      const failure = readSalesFailure(result);
       failureNotice(failure);
       if (failure.state === "discarded") commands().onAnswerDiscarded(failure.description);
       if (failure.reread) await load();
@@ -242,7 +230,7 @@ export function createDraftCard(
           await load();
           return;
         }
-        const failure = readSalesFailure(result)!;
+        const failure = readSalesFailure(result);
         failureNotice(failure);
         if (failure.reread) {
           set({ lostText: body });
@@ -256,21 +244,9 @@ export function createDraftCard(
         notify({ tone: "warning", title: "Save or cancel your edit before approving." });
         return;
       }
-      if (device.blocked !== null) {
-        notify({
-          tone: "warning",
-          title: "This client cannot approve",
-          description: device.blocked,
-        });
-        return;
-      }
-      const key = device.key;
-      if (key === null || device.state !== "active") {
-        notify({
-          tone: "warning",
-          title: "This device cannot approve",
-          description: thisDeviceDescription(device.state, key),
-        });
+      const { refusal } = checkSigning(device);
+      if (refusal !== null) {
+        notify({ tone: "warning", ...refusal });
         return;
       }
       await run("approve", async (detail) => {
@@ -279,12 +255,12 @@ export function createDraftCard(
           notify({
             tone: "error",
             title: "Phoenix will not sign this",
-            description: verifyRefusal(check.reason),
+            description: versionRefusalText(check.reason, "card"),
           });
           await load();
           return;
         }
-        const [outcome] = await commands().approveVersions(key, [check.version]);
+        const [outcome] = await commands().approveVersions(device, [check.version]);
         if (outcome === undefined) return;
         notify({
           tone: outcome.ok ? "success" : outcome.stale || outcome.unknown ? "warning" : "error",

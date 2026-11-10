@@ -100,6 +100,45 @@ export function thisDeviceState(
   }
 }
 
+/** This device as signing needs it. */
+export interface SigningDevice {
+  readonly key: SalesDeviceKey | null;
+  readonly state: ThisDeviceState;
+  /** Why this client may not hold a key at all (`salesDeviceBlockedReason`), or null. */
+  readonly blocked: string | null;
+}
+
+export type SigningCheck =
+  | { readonly key: SalesDeviceKey; readonly refusal: null }
+  | {
+      readonly key: null;
+      readonly refusal: { readonly title: string; readonly description: string };
+    };
+
+/**
+ * Whether this device may sign now, and the key to sign with: a client allowed to hold keys,
+ * a key here, and the engine has it active. Every approve control and `approveVersions` ask
+ * this, so a button never offers what signing would refuse.
+ */
+export function checkSigning(device: SigningDevice): SigningCheck {
+  if (device.blocked !== null) {
+    return {
+      key: null,
+      refusal: { title: "This client cannot approve", description: device.blocked },
+    };
+  }
+  if (device.key === null || device.state !== "active") {
+    return {
+      key: null,
+      refusal: {
+        title: "This device cannot approve",
+        description: thisDeviceDescription(device.state, device.key),
+      },
+    };
+  }
+  return { key: device.key, refusal: null };
+}
+
 /** What to tell the person about this device, wherever approval is offered. */
 export function thisDeviceDescription(state: ThisDeviceState, key: SalesDeviceKey | null): string {
   const fingerprint = key === null ? "" : ` (${shortFingerprint(key.fingerprint)})`;

@@ -1,4 +1,4 @@
-import { thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
+import { checkSigning } from "@t3tools/client-runtime/sales/devices";
 import {
   groupQueue,
   kindLabel,
@@ -43,6 +43,7 @@ export function SalesOutreach(props: {
   const order = useMemo(() => queueOrder(groups), [groups]);
   const current = order.find((item) => item.activityId === props.selected) ?? order[0] ?? null;
   const device = useSalesDevice(environmentId, props.baseUrl, canAct);
+  const signingRefusal = checkSigning(device).refusal;
   const panel = useRef<SalesDraftPanelHandle>(null);
   /** Ticked rows, each with the hash it had when ticked: a tick covers that version only. */
   const [checked, setChecked] = useState<ReadonlyMap<string, string>>(new Map());
@@ -161,16 +162,16 @@ export function SalesOutreach(props: {
           {canAct && approvable.length > 0 ? (
             <Button
               size="xs"
-              disabled={reviewing !== null || device.state !== "active" || device.blocked !== null}
+              disabled={reviewing !== null || signingRefusal !== null}
               onClick={reviewChecked}
             >
               {`Approve ${approvable.length}`}
             </Button>
           ) : null}
         </div>
-        {canAct && approvable.length > 0 && (device.state !== "active" || device.blocked) ? (
+        {canAct && approvable.length > 0 && signingRefusal !== null ? (
           <p className="border-b px-3 py-2 text-xs text-muted-foreground">
-            {device.blocked ?? thisDeviceDescription(device.state, device.key)}
+            {signingRefusal.description}
           </p>
         ) : null}
         {reviewing !== null ? (

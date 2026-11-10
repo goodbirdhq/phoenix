@@ -72,7 +72,7 @@ export function SalesConversations(props: {
         setList(result.value);
         setFailure(null);
       } else {
-        setFailure(readSalesFailure(result)?.description ?? "Could not read conversations.");
+        setFailure(readSalesFailure(result).description);
       }
     } finally {
       setLoading(false);
@@ -231,7 +231,7 @@ function ConversationDetailView({
       input: { contactKey: conversation.contactKey },
     });
     if (result._tag === "Success") setDetail(result.value);
-    else setFailure(readSalesFailure(result)?.description ?? "Could not read this conversation.");
+    else setFailure(readSalesFailure(result).description);
   }, [conversation.contactKey, environmentId, getConversation]);
 
   useEffect(() => {
@@ -255,7 +255,7 @@ function ConversationDetailView({
         setDispatchError(null);
         setNote("");
       } else {
-        setDispatchError(readSalesFailure(result)?.description ?? "Could not start the run.");
+        setDispatchError(readSalesFailure(result).description);
       }
     } finally {
       setBusy(false);

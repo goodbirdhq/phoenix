@@ -3,6 +3,7 @@ import {
   thisDeviceState,
   type SalesDeviceKey,
   type SalesDeviceKeyStore,
+  type SigningDevice,
 } from "@t3tools/client-runtime/sales/devices";
 import { signApproval, type VerifiedVersion } from "@t3tools/client-runtime/sales/signing";
 import { approveVersions } from "@t3tools/client-runtime/sales/approve";
@@ -143,20 +144,20 @@ export function useSalesDeviceGuard(): () => string | null {
 }
 
 /**
- * Signs verified versions with this device's key and sends them (`approveVersions`), checking
- * the device guard again before each batch.
+ * Signs verified versions with this device's key and sends them (`approveVersions`). The device
+ * is the one at the press; the device guard is read again before each batch.
  */
 export function useApproveVersions(environmentId: EnvironmentId) {
   const approve = useAtomCommand(salesEnvironment.approve, { reportFailure: false });
   const refresh = useAtomCommand(salesEnvironment.refresh, { reportFailure: false });
   const blockedReason = useSalesDeviceGuard();
-  return (key: SalesDeviceKey, versions: ReadonlyArray<VerifiedVersion>) =>
+  return (device: SigningDevice, versions: ReadonlyArray<VerifiedVersion>) =>
     approveVersions({
       versions,
       approve: (items) => approve({ environmentId, input: { items } }),
       refresh: () => refresh({ environmentId, input: {} }),
-      blockedReason,
-      sign: (version) =>
+      device: () => ({ ...device, blocked: blockedReason() }),
+      sign: (key, version) =>
         signApproval({ privateKey: key.privateKey, deviceId: key.deviceId, version }),
     });
 }
@@ -182,7 +183,7 @@ export function useSalesDevice(environmentId: EnvironmentId, baseUrl: string, ca
       setDevices(result.value.items);
       setError(null);
     } else {
-      setError(readSalesFailure(result)?.description ?? null);
+      setError(readSalesFailure(result).description);
     }
   }, [canAct, engine, environmentId, listDevices]);
 

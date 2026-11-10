@@ -5,8 +5,10 @@ import {
   type SalesFailureOrigin,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import type { AsyncResult } from "effect/unstable/reactivity";
 
 import { type AtomCommandResult, squashAtomCommandFailure } from "../state/runtime.ts";
+import type { VersionRefusal } from "./signing.ts";
 
 /** What to tell the person when a sales request fails, on every client. */
 
@@ -110,6 +112,8 @@ export interface SalesFailure extends SalesFailureText {
 }
 
 /** A failed sales command as the person should read it; null for a success. */
+export function readSalesFailure(result: AsyncResult.Failure<unknown, unknown>): SalesFailure;
+export function readSalesFailure(result: AtomCommandResult<unknown, unknown>): SalesFailure | null;
 export function readSalesFailure(result: AtomCommandResult<unknown, unknown>): SalesFailure | null {
   if (result._tag === "Success") return null;
   const error = squashAtomCommandFailure(result);
@@ -185,5 +189,23 @@ export function approveFailureText(reason: SalesApproveFailureReason, message: s
     case "bad_request":
     case "other":
       return message;
+  }
+}
+
+/** Why Phoenix will not sign a version (`VersionCheck`), on the open card or in a batch's review. */
+export function versionRefusalText(reason: VersionRefusal, context: "card" | "review"): string {
+  switch (reason) {
+    case "algorithm":
+      return "The engine hashes drafts in a way this version of Phoenix does not know. Update Phoenix.";
+    case "subject-lines":
+      return context === "card"
+        ? "The subject has a line break. Edit it onto one line, then approve."
+        : "Its subject has a line break. Open it and put the subject on one line.";
+    case "mismatch":
+      return context === "card"
+        ? "The text shown is not the version the engine reports. It has been read again; look before approving."
+        : "The text Phoenix received is not the version the engine reports. Open it again.";
+    case "changed":
+      return "It changed after you ticked it. Open it and read the new version.";
   }
 }

@@ -12,8 +12,8 @@ import { describe, expect, it } from "vite-plus/test";
 import type { AtomCommandResult } from "../state/runtime.ts";
 import type { VerifiedVersion } from "./signing.ts";
 import type { ApproveOutcome } from "./approve.ts";
-import type { SalesDeviceKey } from "./devices.ts";
-import { createDraftCard, type DraftCardCommands, type DraftCardDevice } from "./draftCard.ts";
+import type { SalesDeviceKey, SigningDevice } from "./devices.ts";
+import { createDraftCard, type DraftCardCommands } from "./draftCard.ts";
 import { ENGINE_HASH, detail, hashInput } from "./fixtures/queueItemDetail.ts";
 
 // Approval never reads the private key here: signing is `approveVersions`' job.
@@ -22,7 +22,7 @@ const key = {
   deviceId: "laptop-3f2a",
   fingerprint: "3f2a".repeat(16),
 } as SalesDeviceKey;
-const activeDevice: DraftCardDevice = { key, state: "active", blocked: null };
+const activeDevice: SigningDevice = { key, state: "active", blocked: null };
 
 const refused = <A>(
   reason: SalesActionFailureReason,
@@ -60,7 +60,7 @@ function setup(options: {
     },
     unapprove: async () => refused("not_approved"),
     dispatch: async () => refused("dispatch-failed"),
-    approveVersions: async (_key, versions) => {
+    approveVersions: async (_device, versions) => {
       calls.signed.push(...versions);
       return versions.map(
         (version) =>
@@ -123,6 +123,34 @@ describe("draft card approval", () => {
     expect(card.getState().notice?.title).toBe("This client cannot approve");
     await card.approve({ ...activeDevice, state: "pending" });
     expect(card.getState().notice?.title).toBe("This device cannot approve");
+    expect(calls.signed).toEqual([]);
+  });
+
+  it("signs the version shown at the press, even if a read lands while it hashes", async () => {
+    const { card, calls, serve } = setup({});
+    await card.load();
+    serve(detail({ hashInput: { ...hashInput, body: "A newer body." } }));
+    await Promise.all([card.approve(activeDevice), card.load()]);
+    expect(calls.signed).toEqual([{ activityId: "act-1", contentHash: ENGINE_HASH }]);
+  });
+
+  it("drops an approve pressed while a save runs, and signs nothing", async () => {
+    let finishSave = () => {};
+    const { card, calls } = setup({
+      commands: {
+        edit: () =>
+          new Promise((resolve) => {
+            finishSave = () => resolve(refused("empty_body"));
+          }),
+      },
+    });
+    await card.load();
+    card.editBody("Rewritten.");
+    const saving = card.save();
+    await card.approve(activeDevice);
+    expect(card.getState()).toMatchObject({ busy: "edit", notice: null });
+    finishSave();
+    await saving;
     expect(calls.signed).toEqual([]);
   });
 

@@ -3,7 +3,7 @@ import {
   type DraftCardState,
   isDirty,
 } from "@t3tools/client-runtime/sales/draft-card";
-import { thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
+import { checkSigning, thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
 import { cardActions } from "@t3tools/client-runtime/sales/outreach";
 import type { SalesQueueItemDetail } from "@t3tools/contracts";
 
@@ -34,6 +34,7 @@ export function SalesDraftActions(props: {
   }
   const actions = cardActions(detail);
   const busy = state.busy !== null;
+  const { refusal } = checkSigning(device);
   return (
     <>
       <div className="grid gap-2">
@@ -41,9 +42,7 @@ export function SalesDraftActions(props: {
           {actions.approve ? (
             <Button
               size="sm"
-              disabled={
-                busy || isDirty(state) || device.state !== "active" || device.blocked !== null
-              }
+              disabled={busy || isDirty(state) || refusal !== null}
               onClick={() => void card.approve(device)}
             >
               {state.busy === "approve" ? "Signing…" : (props.approveLabel ?? "Approve")}
@@ -92,7 +91,7 @@ export function SalesDraftActions(props: {
         </div>
         {actions.approve ? (
           <p className="text-xs text-muted-foreground">
-            {device.blocked ?? thisDeviceDescription(device.state, device.key)}
+            {refusal?.description ?? thisDeviceDescription(device.state, device.key)}
           </p>
         ) : null}
       </div>
