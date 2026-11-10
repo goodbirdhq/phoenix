@@ -96,7 +96,7 @@ const contactLine = (contact: SalesContactRef) => {
  * The workflow for redrafting a card of this kind. A reply is drafted again after a discard,
  * since the reply drafter cannot edit a row; the others rewrite the waiting draft in place.
  */
-export function redraftSkill(
+function redraftSkill(
   kind: string | null,
 ): "outreach-drafting" | "follow-up-drafting" | "reply-drafting" | null {
   switch (kind) {

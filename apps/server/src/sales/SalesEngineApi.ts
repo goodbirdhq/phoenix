@@ -93,7 +93,7 @@ const ErrorBody = Schema.Struct({
 const decodeErrorBody = Schema.decodeUnknownOption(ErrorBody);
 
 /** An engine refusal as a typed reason. Exported for the tests of the mapping. */
-export function engineFailure(half: Half, httpStatus: number, body: unknown): SalesActionError {
+function engineFailure(half: Half, httpStatus: number, body: unknown): SalesActionError {
   const parsed = decodeErrorBody(body);
   const error = parsed._tag === "Some" ? parsed.value : {};
   const code = error.error;

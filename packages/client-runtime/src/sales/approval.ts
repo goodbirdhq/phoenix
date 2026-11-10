@@ -21,7 +21,7 @@ export const SALES_HASH_ALGORITHM =
   'sha256 hex of JSON.stringify([lowercased trimmed toAddress, subject.trim(), body, rowName.trim(), step, gmailThreadId ?? "", answers ?? ""])';
 
 /** What a device signs to approve one version of one draft, at one moment. */
-export const SALES_APPROVE_PREFIX = "birdhouse-approve:v1";
+const SALES_APPROVE_PREFIX = "birdhouse-approve:v1";
 
 const encoder = new TextEncoder();
 
