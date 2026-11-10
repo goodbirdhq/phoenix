@@ -9,7 +9,7 @@ import {
   shortFingerprint,
 } from "./signing.ts";
 // The engine's conformance vectors, copied verbatim from goodbirdhq/birdhouse
-// `engine/docs/sales-api-vectors.json` at 1ac320d07551f5b8b32d4d8f847d051c7dd54d79. Copy the file
+// `engine/docs/sales-api-vectors.json` at 8b3f28ba7cbdb3bd2b4aa4bef8422ead3f69343d. Copy the file
 // again when the engine changes it; never edit the copy.
 import vectors from "./fixtures/sales-api-vectors.json" with { type: "json" };
 
