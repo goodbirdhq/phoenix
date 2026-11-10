@@ -70,15 +70,19 @@ export function useSalesState(environmentId: EnvironmentId) {
   return useAtomValue(salesEnvironment.stateValueAtom(environmentId));
 }
 
-/** The threads dispatched from cards or conversations, from the environment's read model. */
+/**
+ * The threads dispatched from cards or conversations, from the environment's read model.
+ * `sources` keys the memo, so callers pass a stable (memoized) array.
+ */
 export function useDispatchedThreads(
   environmentId: EnvironmentId,
   sources: ReadonlyArray<SalesDispatchSource>,
 ) {
   const titles = useEnvironmentThreadTitles(environmentId);
-  // Prefixes are URI-encoded, so a space never occurs in one: joined, they key the memo.
-  const prefixes = sources.map(salesDispatchThreadPrefix).join(" ");
-  return useMemo(() => dispatchedThreads(titles, prefixes.split(" ")), [titles, prefixes]);
+  return useMemo(
+    () => dispatchedThreads(titles, sources.map(salesDispatchThreadPrefix)),
+    [titles, sources],
+  );
 }
 
 // --- Device keys ------------------------------------------------------------------------------

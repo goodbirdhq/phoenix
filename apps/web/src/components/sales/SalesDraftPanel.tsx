@@ -2,7 +2,7 @@ import { type DraftNotice, isDirty } from "@t3tools/client-runtime/sales/draft-c
 import { kindLabel, stateLabel } from "@t3tools/client-runtime/sales/outreach";
 import type { EnvironmentId, SalesDispatchSource, SalesQueueItemDetail } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { type Ref, useCallback, useImperativeHandle, useRef } from "react";
+import { type Ref, useCallback, useImperativeHandle, useMemo, useRef } from "react";
 
 import type { useSalesDevice } from "../../state/sales";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
@@ -47,7 +47,7 @@ export function SalesDraftPanel({
   readonly approveLabel?: string;
   readonly discardLabel?: string;
   readonly allowResearch?: boolean;
-  /** Where runs listed with the draft came from; the draft's own card when not given. */
+  /** Where runs listed with the draft came from (memoized); the draft's own card when not given. */
   readonly runSources?: ReadonlyArray<SalesDispatchSource>;
   /** Shows who the draft is to and how it came about: beside the email when there is room. */
   readonly showAbout?: boolean;
@@ -76,6 +76,10 @@ export function SalesDraftPanel({
     if (!isDirty(card.getState())) void card.load();
     onChanged?.();
   }, [card, onChanged]);
+  const runSources = useMemo(
+    () => props.runSources ?? [{ activityId }],
+    [props.runSources, activityId],
+  );
 
   const detail = state.detail;
   if (detail === null) {
@@ -126,11 +130,7 @@ export function SalesDraftPanel({
             discardLabel={props.discardLabel}
             allowResearch={props.allowResearch ?? false}
           />
-          <SalesRuns
-            environmentId={environmentId}
-            sources={props.runSources ?? [{ activityId }]}
-            onSettled={onRunSettled}
-          />
+          <SalesRuns environmentId={environmentId} sources={runSources} onSettled={onRunSettled} />
         </div>
         {props.showAbout ? <SalesDraftAbout detail={detail} /> : null}
       </div>

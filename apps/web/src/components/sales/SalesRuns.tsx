@@ -32,6 +32,7 @@ const STATUS_VARIANT: Record<
  */
 export function SalesRuns(props: {
   readonly environmentId: EnvironmentId;
+  /** Memoized by the caller: a new array reads the runs again. */
   readonly sources: ReadonlyArray<SalesDispatchSource>;
   readonly onSettled?: () => void;
 }) {

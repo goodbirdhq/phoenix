@@ -249,12 +249,20 @@ function ConversationDetailView({
     void onChanged();
     void load();
   }, [load, onChanged]);
-  const contactRuns = { contactKey: conversation.contactKey };
 
   const replyDraft =
     detail?.drafts.find((draft) => draft.kind === "reply") ??
     (conversation.replyDraft ? { ...conversation.replyDraft } : null);
   const answer = detail?.dispatch.answer ?? null;
+  const contactRuns = useMemo(
+    () => [{ contactKey: conversation.contactKey }],
+    [conversation.contactKey],
+  );
+  const replyDraftId = replyDraft?.activityId ?? null;
+  const draftRuns = useMemo(
+    () => (replyDraftId === null ? contactRuns : [{ activityId: replyDraftId }, ...contactRuns]),
+    [contactRuns, replyDraftId],
+  );
 
   const draftAnswer = async () => {
     if (answer === null) return;
@@ -334,7 +342,7 @@ function ConversationDetailView({
               device={props.device}
               approveLabel="Approve answer"
               discardLabel="No reply needed"
-              runSources={[{ activityId: replyDraft.activityId }, contactRuns]}
+              runSources={draftRuns}
               // The draft is gone and its run did not start: the conversation's own plans take
               // over once it is read again, and this shows why.
               onDiscardedWithoutRun={setDispatchError}
@@ -380,7 +388,7 @@ function ConversationDetailView({
                   ) : null}
                 </form>
               ) : null}
-              <SalesRuns environmentId={environmentId} sources={[contactRuns]} onSettled={reread} />
+              <SalesRuns environmentId={environmentId} sources={contactRuns} onSettled={reread} />
             </div>
           )}
         </section>
