@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEnvironmentConnected } from "../../state/environments";
 import { salesEnvironment, useSalesDevice } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
@@ -228,6 +229,7 @@ function ConversationDetailView({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
+  const [showEarlier, setShowEarlier] = useState(false);
   const connected = useEnvironmentConnected(environmentId);
 
   const load = useCallback(async () => {
@@ -263,6 +265,10 @@ function ConversationDetailView({
     () => (replyDraftId === null ? contactRuns : [{ activityId: replyDraftId }, ...contactRuns]),
     [contactRuns, replyDraftId],
   );
+  // Stacked, the answer follows their latest message: what came before it folds away.
+  const messages = detail?.messages ?? [];
+  const latestInbound = messages.findLastIndex((message) => message.direction === "in");
+  const earlier = showEarlier ? 0 : Math.max(0, latestInbound);
 
   const draftAnswer = async () => {
     if (answer === null) return;
@@ -320,14 +326,27 @@ function ConversationDetailView({
               <Spinner />
             )
           ) : (
-            <ol className="grid max-w-[70ch] gap-3">
-              {detail.messages.map((message) => (
-                <MessageItem
-                  key={`${message.direction}:${message.id}:${message.at ?? ""}`}
-                  message={message}
-                />
-              ))}
-            </ol>
+            <>
+              {earlier > 0 ? (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  className="self-start @5xl:hidden"
+                  onClick={() => setShowEarlier(true)}
+                >
+                  {earlier === 1 ? "Show 1 earlier message" : `Show ${earlier} earlier messages`}
+                </Button>
+              ) : null}
+              <ol className="grid max-w-[70ch] gap-3">
+                {messages.map((message, index) => (
+                  <MessageItem
+                    key={`${message.direction}:${message.id}:${message.at ?? ""}`}
+                    message={message}
+                    folded={index < earlier}
+                  />
+                ))}
+              </ol>
+            </>
           )}
         </section>
         <section aria-label="Our answer" className="flex flex-col @5xl:min-h-0">
@@ -397,11 +416,26 @@ function ConversationDetailView({
   );
 }
 
-/** A message from either side. Their words are text from a stranger: never markup. */
-function MessageItem({ message }: { readonly message: SalesConversationMessage }) {
+/**
+ * A message from either side. Their words are text from a stranger: never markup. A folded
+ * message shows only beside the answer, not stacked above it.
+ */
+function MessageItem({
+  message,
+  folded,
+}: {
+  readonly message: SalesConversationMessage;
+  readonly folded: boolean;
+}) {
   const ours = message.direction === "out";
   return (
-    <li className={ours ? "rounded-lg border p-3" : "rounded-lg border bg-accent/40 p-3"}>
+    <li
+      className={cn(
+        "rounded-lg border p-3",
+        !ours && "bg-accent/40",
+        folded && "hidden @5xl:block",
+      )}
+    >
       <p className="mb-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
         <span>{ours ? "Us" : message.kind === "reply" ? "Them" : message.kind}</span>
         {message.mailbox ? <span>{message.mailbox}</span> : null}
