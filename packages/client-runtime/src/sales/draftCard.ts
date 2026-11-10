@@ -19,6 +19,15 @@ import { holdOutcome, resumeOutcome, type SalesHoldOutcome } from "./hold.ts";
 import { cardActions, listedVersionMoved } from "./outreach.ts";
 import { displayedDraft, type VerifiedVersion, verifyDisplayedVersion } from "./signing.ts";
 
+/**
+ * How long a newly swapped-in version must stay on screen before one press signs it. A read
+ * that lands as the person reaches for Approve (a run finishing, the list moving, a reconnect)
+ * would otherwise be signed after a glance; 1.5 s is about the shortest time to see that the
+ * text moved, well under the time it takes to read it, and short enough not to slow a person
+ * who is reading.
+ */
+export const VERSION_SETTLE_MS = 1500;
+
 export interface DraftNotice {
   readonly tone: "success" | "warning" | "error";
   readonly title: string;
@@ -94,8 +103,12 @@ export interface DraftCard {
   /** Drops the edit and returns to the email, showing the engine's newer version if it has one. */
   readonly cancelEdit: () => void;
   readonly save: () => Promise<void>;
-  /** Approves the version shown, after hashing that text again here. */
-  readonly approve: (device: SigningDevice) => Promise<void>;
+  /**
+   * Approves the version shown, after hashing that text again here. When that version swapped
+   * in within `VERSION_SETTLE_MS`, or after `intentAt` (when the pointer went down, on the
+   * card's clock), the press only says so; a second press for the same version signs.
+   */
+  readonly approve: (device: SigningDevice, intentAt?: number) => Promise<void>;
   /** Pauses a route chase, or withdraws a person's approval; the notice says which. */
   readonly hold: () => Promise<void>;
   /** Gives a paused route chase back to the autopilot, for the version shown. */
@@ -149,11 +162,13 @@ export const canRemoveHiddenCharacters = (state: DraftCardState) =>
  * (`verifyDisplayedVersion`); a draft that moved on is read again and shown, never signed for
  * the person. Framework-free: a view subscribes and renders `getState()`.
  *
- * A view hands in its latest callbacks with `setCommands`.
+ * A view hands in its latest callbacks with `setCommands`. `now` is the clock for
+ * `VERSION_SETTLE_MS`.
  */
 export function createDraftCard(
   initialCommands: DraftCardCommands,
   initialListedHash: string | null,
+  now: () => number = Date.now,
 ): DraftCard {
   let current = initialCommands;
   const commands = () => current;
@@ -169,6 +184,10 @@ export function createDraftCard(
     redraftNote: null,
   };
   let listedHash = initialListedHash;
+  /** When the version shown last swapped for another; the first read is not a swap. */
+  let swappedAt = Number.NEGATIVE_INFINITY;
+  /** A version a press has already flagged as new, or the person's own save: no flag again. */
+  let acknowledgedHash: string | null = null;
   const listeners = new Set<() => void>();
   const set = (patch: Partial<DraftCardState>) => {
     state = { ...state, ...patch };
@@ -179,6 +198,8 @@ export function createDraftCard(
   const load = async () => {
     const result = await commands().getQueueItem();
     if (result._tag === "Success") {
+      const shownHash = state.detail?.contentHash;
+      if (shownHash !== undefined && shownHash !== result.value.contentHash) swappedAt = now();
       set({
         detail: result.value,
         loadFailure: null,
@@ -290,6 +311,8 @@ export function createDraftCard(
           ...(detail.threaded || subject === null ? {} : { subject }),
         });
         if (result._tag === "Success") {
+          // The version this save made is the person's own text: no need to flag it as new.
+          acknowledgedHash = result.value.card.contentHash;
           set({
             lostText: null,
             notice: {
@@ -311,7 +334,7 @@ export function createDraftCard(
         }
       }),
 
-    approve: async (device) => {
+    approve: async (device, intentAt = now()) => {
       if (state.detail === null || state.busy !== null) return;
       // Approval signs the email as shown, so not while the inputs are open, typed in or not.
       if (isEditing(state)) {
@@ -321,6 +344,17 @@ export function createDraftCard(
       const { refusal } = checkSigning(device);
       if (refusal !== null) {
         notify({ tone: "warning", ...refusal });
+        return;
+      }
+      const shownHash = state.detail.contentHash;
+      const justSwapped = now() - swappedAt < VERSION_SETTLE_MS || swappedAt > intentAt;
+      if (justSwapped && acknowledgedHash !== shownHash) {
+        acknowledgedHash = shownHash;
+        notify({
+          tone: "warning",
+          title: "This draft just changed",
+          description: "Read it, then press Approve again.",
+        });
         return;
       }
       await run("approve", async (detail) => {

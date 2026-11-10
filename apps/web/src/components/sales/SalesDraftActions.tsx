@@ -10,6 +10,7 @@ import {
   type SalesQueueItemDetail,
   safeSalesNote,
 } from "@t3tools/contracts";
+import { useRef } from "react";
 
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
@@ -28,6 +29,8 @@ export function SalesDraftActions(props: {
   readonly allowResearch: boolean;
 }) {
   const { card, state, detail, device } = props;
+  // When the press began, so a version swapped in while the pointer was down is not signed.
+  const approvePointerDownAt = useRef<number | null>(null);
   if (!props.canAct) {
     return (
       <p className="text-xs text-muted-foreground">
@@ -47,7 +50,14 @@ export function SalesDraftActions(props: {
             <Button
               size="sm"
               disabled={busy || isEditing(state) || refusal !== null}
-              onClick={() => void card.approve(device)}
+              onPointerDown={() => {
+                approvePointerDownAt.current = Date.now();
+              }}
+              onClick={() => {
+                const intentAt = approvePointerDownAt.current ?? undefined;
+                approvePointerDownAt.current = null;
+                void card.approve(device, intentAt);
+              }}
             >
               {state.busy === "approve" ? "Signing…" : (props.approveLabel ?? "Approve")}
             </Button>
