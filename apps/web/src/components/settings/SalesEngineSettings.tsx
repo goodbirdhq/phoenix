@@ -14,9 +14,9 @@ import type { EnvironmentPresentation } from "../../state/environments";
 import {
   readSalesFailure,
   salesDeviceKeyStore,
-  salesEnrolmentBlockedReason,
   salesEnvironment,
   useSalesDevice,
+  useSalesDeviceGuard,
 } from "../../state/sales";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -258,11 +258,18 @@ function SalesDevicesSection({ environment }: { readonly environment: Environmen
   const [name, setName] = useState(defaultDeviceName);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<{ title: string; description: string } | null>(null);
-  const blocked = salesEnrolmentBlockedReason(environment);
+  const blockedReason = useSalesDeviceGuard();
+  const blocked = device.blocked;
 
   if (salesEngine === undefined || salesEngine.baseUrl.length === 0) return null;
 
   const enrol = async () => {
+    // Checked again at the press: the client's environments may have changed since render.
+    const blockedNow = blockedReason(device.engine);
+    if (blockedNow !== null) {
+      setFailure({ title: "Enrol from another client", description: blockedNow });
+      return;
+    }
     setBusy(true);
     setFailure(null);
     try {

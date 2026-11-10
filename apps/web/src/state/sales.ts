@@ -15,13 +15,19 @@ import {
   createSalesEnvironmentAtoms,
   isSalesConfigured,
 } from "@t3tools/client-runtime/state/sales";
-import { type EnvironmentId, SalesActionError, type SalesDevice } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  SalesActionError,
+  type SalesActionFailureReason,
+  type SalesDevice,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
-import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
+import { isElectron } from "../env";
 import { type EnvironmentPresentation, useEnvironments } from "./environments";
+import { salesDeviceBlockedReason, type SalesGuardEnvironment } from "./salesDeviceGuard";
 import { useAtomCommand } from "./use-atom-command";
 
 export const salesEnvironment = createSalesEnvironmentAtoms(connectionAtomRuntime);
@@ -57,8 +63,12 @@ export function useSalesState(environmentId: EnvironmentId) {
 const isSalesActionError = Schema.is(SalesActionError);
 
 export interface SalesFailure extends SalesFailureText {
+  /** The typed reason, or null when the request failed outside the engine's answers. */
+  readonly reason: SalesActionFailureReason | null;
   /** The card's version now, when the engine said it moved on. */
   readonly currentHash: string | null;
+  /** The card's state, when the failure names one (`discarded` after a failed reply redraft). */
+  readonly state: string | null;
 }
 
 /** A failed sales command as the person should read it. */
@@ -66,13 +76,20 @@ export function readSalesFailure(result: AtomCommandResult<unknown, unknown>): S
   if (result._tag === "Success") return null;
   const error = squashAtomCommandFailure(result);
   if (isSalesActionError(error)) {
-    return { ...salesFailureText(error.reason, error.message), currentHash: error.currentHash };
+    return {
+      ...salesFailureText(error.reason, error.message),
+      reason: error.reason,
+      currentHash: error.currentHash,
+      state: error.state,
+    };
   }
   return {
     title: "Something went wrong",
     description: error instanceof Error ? error.message : "The request did not complete.",
     reread: false,
+    reason: null,
     currentHash: null,
+    state: null,
   };
 }
 
@@ -125,20 +142,39 @@ export const salesDeviceKeyStore: SalesDeviceKeyStore = {
   remove: (engine) => withStore("readwrite", (store) => store.delete(engine)),
 };
 
+function guardEnvironments(
+  environments: ReadonlyArray<EnvironmentPresentation>,
+): ReadonlyArray<SalesGuardEnvironment> {
+  return environments.map((environment) => ({
+    target: environment.entry.target,
+    // An enabled environment whose settings have not arrived might hold the engine; a disabled
+    // one is not connected, so it is judged by what it last reported, if anything.
+    salesBaseUrl:
+      environment.serverConfig?.settings.salesEngine.baseUrl ??
+      (environment.entry.enabled ? null : ""),
+  }));
+}
+
 /**
- * Why this client may not enrol a device for this environment, or null when it may. A device
- * key is only as safe as the code that holds it: a client served by, or running on, the machine
- * whose server holds the action token is code the agents on that machine can change. So a
- * local connection (the web UI that server serves, or the desktop app's own backend) never
- * enrols. This cannot see a remote connection to the same machine; the docs say so.
+ * Whether this client may enrol or sign with a key for an engine (`salesDeviceBlockedReason`).
+ * The returned check reads the client's environments as they are at the call, so signing checks
+ * again right before it signs, not only when the page rendered.
  */
-export function salesEnrolmentBlockedReason(
-  environment: Pick<EnvironmentPresentation, "entry">,
-): string | null {
-  const target = environment.entry.target;
-  return target._tag === "PrimaryConnectionTarget" || isDesktopLocalConnectionTarget(target)
-    ? "This client runs on, or is served by, the machine that runs the sales agents, so an agent there could use a key enrolled here. Enrol from the desktop app on another computer, or from the hosted web app."
-    : null;
+export function useSalesDeviceGuard(): (engine: string) => string | null {
+  const { environments } = useEnvironments();
+  const latest = useRef(environments);
+  useEffect(() => {
+    latest.current = environments;
+  });
+  return useCallback(
+    (engine: string) =>
+      salesDeviceBlockedReason({
+        isDesktop: isElectron,
+        engine,
+        environments: guardEnvironments(latest.current),
+      }),
+    [],
+  );
 }
 
 /**
@@ -147,6 +183,12 @@ export function salesEnrolmentBlockedReason(
  */
 export function useSalesDevice(environmentId: EnvironmentId, baseUrl: string, canAct: boolean) {
   const engine = salesEngineKey(baseUrl);
+  const { environments } = useEnvironments();
+  const blocked = salesDeviceBlockedReason({
+    isDesktop: isElectron,
+    engine,
+    environments: guardEnvironments(environments),
+  });
   const listDevices = useAtomCommand(salesEnvironment.listDevices, { reportFailure: false });
   const [key, setKey] = useState<SalesDeviceKey | null | undefined>(undefined);
   const [devices, setDevices] = useState<ReadonlyArray<SalesDevice> | null>(null);
@@ -178,6 +220,8 @@ export function useSalesDevice(environmentId: EnvironmentId, baseUrl: string, ca
     devices,
     error,
     state: thisDeviceState(key ?? null, canAct ? devices : null),
+    /** Set when this client must not enrol or sign for this engine; see `salesDeviceGuard`. */
+    blocked,
     reload,
   };
 }
