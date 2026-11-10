@@ -2,6 +2,7 @@ import { QUEUED_TURN_START_GRACE_MS } from "./threadSettled.ts";
 import type {
   OrchestrationLatestTurn,
   OrchestrationSessionStatus,
+  OrchestrationThreadShell,
   ProviderInteractionMode,
 } from "@t3tools/contracts";
 
@@ -149,4 +150,57 @@ export function sortThreadsByAttention<T extends ThreadAttentionInput>(
     (left, right) =>
       (summaries.get(keyFor(left))?.rank ?? 5) - (summaries.get(keyFor(right))?.rank ?? 5),
   );
+}
+
+/** What a thread is doing now, for the person watching it. Clients map it to their own labels. */
+export type ThreadStatus =
+  | "approval"
+  | "input"
+  | "awaiting-parent"
+  | "working"
+  | "monitoring"
+  | "failed"
+  | "ready";
+
+/** The one precedence for a thread's status, shared by every list that shows one. */
+export function resolveThreadStatus(
+  thread: Pick<
+    OrchestrationThreadShell,
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "session"
+    | "backgroundLiveness"
+    | "awaitingParentReplySince"
+  >,
+): ThreadStatus {
+  if (thread.hasPendingApprovals) {
+    return "approval";
+  }
+  if (thread.hasPendingUserInput) {
+    return "input";
+  }
+  if (thread.session?.status === "running" || thread.session?.status === "starting") {
+    return "working";
+  }
+  // A failed session outranks lingering background liveness: the user must
+  // see the failure, not a stale Working.
+  if (thread.session?.status === "error") {
+    return "failed";
+  }
+  // A spawned thread that declared itself blocked on its parent's answer.
+  // Ranked under the live states above (a running turn is still the truth of
+  // "what is happening now") but above background liveness: waiting is the
+  // actionable fact once the turn has ended.
+  if ((thread.awaitingParentReplySince ?? null) !== null && thread.session?.status !== "stopped") {
+    return "awaiting-parent";
+  }
+  // Background work outlives the turn: fleets read as working; monitoring
+  // only when watch loops are the sole live work.
+  if (thread.backgroundLiveness === "working") {
+    return "working";
+  }
+  if (thread.backgroundLiveness === "monitoring") {
+    return "monitoring";
+  }
+  return "ready";
 }
