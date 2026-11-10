@@ -2,17 +2,7 @@ import { buildSalesHome } from "@t3tools/client-runtime/sales/home";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import * as Option from "effect/Option";
-import {
-  ChevronsUpDownIcon,
-  HouseIcon,
-  type LucideIcon,
-  MessagesSquareIcon,
-  SendIcon,
-  SettingsIcon,
-} from "lucide-react";
-import type { ReactNode } from "react";
-
-import type { SalesArea } from "../../routes/sales";
+import { ChevronsUpDownIcon, HouseIcon, SettingsIcon } from "lucide-react";
 
 import { useSalesState, useSalesTarget } from "../../state/sales";
 import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
@@ -25,22 +15,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "../ui/sidebar";
-
-/**
- * The Sales areas with a screen, in sidebar order. A new area shows by adding its line here
- * (and its key to `SalesArea`); groups with no entry are not shown. Counts come from the Home
- * summary where it has an area with the same key.
- */
-const SALES_NAV: ReadonlyArray<{
-  readonly area: SalesArea;
-  readonly label: string;
-  readonly icon: LucideIcon;
-  readonly group: "Work" | "Strategy" | "Records";
-}> = [
-  { area: "outreach", label: "Outreach", icon: SendIcon, group: "Work" },
-  { area: "conversations", label: "Conversations", icon: MessagesSquareIcon, group: "Work" },
-];
-const SALES_NAV_GROUPS = ["Work", "Strategy", "Records"] as const;
+import { SALES_AREAS, type SalesArea } from "./areas";
 
 export function SalesSidebar() {
   const { environment: requested, area } = useSearch({ from: "/sales" });
@@ -131,38 +106,29 @@ function SalesSidebarNav({
             <span>Home</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
+        {SALES_AREAS.map(({ key, label, icon: Icon }) => {
+          const count = counts.get(key) ?? 0;
+          return (
+            <SidebarMenuItem key={key}>
+              <SidebarMenuButton
+                isActive={currentArea === key}
+                aria-label={count > 0 ? `${label}, ${count}` : label}
+                onClick={() => {
+                  onNavigate();
+                  void navigate({
+                    to: "/sales",
+                    search: { ...(requested ? { environment: requested } : {}), area: key },
+                  });
+                }}
+              >
+                <Icon />
+                <span className="flex-1">{label}</span>
+                {count > 0 ? <span className="text-xs tabular-nums">{count}</span> : null}
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          );
+        })}
       </SidebarMenu>
-
-      {SALES_NAV_GROUPS.map((group) => {
-        const entries = SALES_NAV.filter((entry) => entry.group === group);
-        if (entries.length === 0) return null;
-        return (
-          <SalesSidebarGroup key={group} label={group}>
-            {entries.map(({ area, label, icon: Icon }) => {
-              const count = counts.get(area) ?? 0;
-              return (
-                <SidebarMenuItem key={area}>
-                  <SidebarMenuButton
-                    isActive={currentArea === area}
-                    aria-label={count > 0 ? `${label}, ${count}` : label}
-                    onClick={() => {
-                      onNavigate();
-                      void navigate({
-                        to: "/sales",
-                        search: { ...(requested ? { environment: requested } : {}), area },
-                      });
-                    }}
-                  >
-                    <Icon />
-                    <span className="flex-1">{label}</span>
-                    {count > 0 ? <span className="text-xs tabular-nums">{count}</span> : null}
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              );
-            })}
-          </SalesSidebarGroup>
-        );
-      })}
 
       <div className="mt-auto pt-4">
         <SidebarMenu>
@@ -180,20 +146,5 @@ function SalesSidebarNav({
         </SidebarMenu>
       </div>
     </nav>
-  );
-}
-
-function SalesSidebarGroup({
-  label,
-  children,
-}: {
-  readonly label: string;
-  readonly children: ReactNode;
-}) {
-  return (
-    <section aria-label={label} className="pt-4">
-      <h2 className="px-2 pb-1 text-xs text-muted-foreground">{label}</h2>
-      <SidebarMenu>{children}</SidebarMenu>
-    </section>
   );
 }

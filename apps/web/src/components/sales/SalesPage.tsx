@@ -10,7 +10,7 @@ import type { EnvironmentId, SalesLookItem, SalesSnapshot } from "@t3tools/contr
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { ChevronRightIcon, CircleCheckIcon, RefreshCwIcon, TriangleAlertIcon } from "lucide-react";
-import { useState } from "react";
+import { type ComponentType, useState } from "react";
 
 import { isElectron } from "../../env";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
@@ -30,16 +30,25 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import type { SalesArea } from "../../routes/sales";
+import { isSalesArea, SALES_AREAS, type SalesArea } from "./areas";
 import { SalesConversations } from "./SalesConversations";
 import { SalesExternalLink } from "./SalesExternalLink";
 import { SalesOutreach } from "./SalesOutreach";
 
-const isAreaPage = (key: string): key is SalesArea => key === "outreach" || key === "conversations";
-
-const AREA_LABELS: Record<SalesArea, string> = {
-  outreach: "Outreach",
-  conversations: "Conversations",
+/** Each area's screen, given the same props. */
+const AREA_PAGES: Record<
+  SalesArea,
+  ComponentType<{
+    readonly environmentId: EnvironmentId;
+    readonly baseUrl: string;
+    readonly canAct: boolean;
+    /** The selected item from the URL, in the area's own terms. */
+    readonly selected: string | undefined;
+    readonly onSelect: (item: string) => void;
+  }>
+> = {
+  outreach: SalesOutreach,
+  conversations: SalesConversations,
 };
 
 const NOT_CONFIGURED: SalesStatusNotice = {
@@ -64,6 +73,7 @@ export function SalesPage() {
       replace: true,
     });
   const baseUrl = target?.serverConfig?.settings.salesEngine.baseUrl ?? "";
+  const AreaPage = area ? AREA_PAGES[area] : null;
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
@@ -73,21 +83,12 @@ export function SalesPage() {
             <WorkspaceBreadcrumbItem current>Sales</WorkspaceBreadcrumbItem>
             <WorkspaceBreadcrumbSeparator className="hidden md:flex" />
             <WorkspaceBreadcrumbItem className="hidden md:flex">
-              {area ? AREA_LABELS[area] : "Home"}
+              {SALES_AREAS.find((entry) => entry.key === area)?.label ?? "Home"}
             </WorkspaceBreadcrumbItem>
           </WorkspaceBreadcrumb>
         </WorkspacePageHeader>
-        {target && area === "outreach" ? (
-          <SalesOutreach
-            key={target.environmentId}
-            environmentId={target.environmentId}
-            baseUrl={baseUrl}
-            canAct={canAct}
-            selected={item}
-            onSelect={select}
-          />
-        ) : target && area === "conversations" ? (
-          <SalesConversations
+        {target && AreaPage ? (
+          <AreaPage
             key={target.environmentId}
             environmentId={target.environmentId}
             baseUrl={baseUrl}
@@ -232,50 +233,53 @@ function SalesHomeContent({
       ) : null}
 
       <ul aria-label="Work areas" className="divide-y rounded-lg border">
-        {home.areas.map((area) => (
-          <li key={area.key} className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
-            <div className="min-w-40 flex-1">
-              {isAreaPage(area.key) ? (
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
-                  onClick={() =>
-                    void navigate({
-                      to: "/sales",
-                      search: {
-                        ...(environment ? { environment } : {}),
-                        area: area.key as SalesArea,
-                      },
-                    })
-                  }
-                >
-                  {area.label}
-                  <ChevronRightIcon aria-hidden className="size-3.5" />
-                </button>
-              ) : (
-                <p className="text-sm font-medium">{area.label}</p>
-              )}
-              <p className="text-xs text-muted-foreground">{area.status}</p>
-            </div>
-            {area.figures.length > 0 ? (
-              <dl className="flex gap-5">
-                {area.figures.map((figure) => (
-                  <div key={figure.label} className="flex flex-col">
-                    <dt className="text-xs text-muted-foreground">{figure.label}</dt>
-                    <dd className="text-sm tabular-nums">{figure.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            ) : null}
-            <div className="flex w-10 justify-end">
-              {area.count > 0 ? (
-                <Badge variant="warning" aria-label={`${area.count} need you`}>
-                  {area.count}
-                </Badge>
+        {home.areas.map((area) => {
+          const page = isSalesArea(area.key) ? area.key : null;
+          return (
+            <li key={area.key} className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
+              <div className="min-w-40 flex-1">
+                {page ? (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
+                    onClick={() =>
+                      void navigate({
+                        to: "/sales",
+                        search: {
+                          ...(environment ? { environment } : {}),
+                          area: page,
+                        },
+                      })
+                    }
+                  >
+                    {area.label}
+                    <ChevronRightIcon aria-hidden className="size-3.5" />
+                  </button>
+                ) : (
+                  <p className="text-sm font-medium">{area.label}</p>
+                )}
+                <p className="text-xs text-muted-foreground">{area.status}</p>
+              </div>
+              {area.figures.length > 0 ? (
+                <dl className="flex gap-5">
+                  {area.figures.map((figure) => (
+                    <div key={figure.label} className="flex flex-col">
+                      <dt className="text-xs text-muted-foreground">{figure.label}</dt>
+                      <dd className="text-sm tabular-nums">{figure.value}</dd>
+                    </div>
+                  ))}
+                </dl>
               ) : null}
-            </div>
-          </li>
-        ))}
+              <div className="flex w-10 justify-end">
+                {area.count > 0 ? (
+                  <Badge variant="warning" aria-label={`${area.count} need you`}>
+                    {area.count}
+                  </Badge>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
       </ul>
 
       <p className="flex items-start gap-2 text-sm text-muted-foreground">

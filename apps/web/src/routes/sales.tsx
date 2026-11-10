@@ -1,8 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { isSalesArea, type SalesArea } from "../components/sales/areas";
 import { SalesPage } from "../components/sales/SalesPage";
-
-export type SalesArea = "outreach" | "conversations";
 
 export interface SalesSearch {
   readonly environment?: string;
@@ -12,14 +11,12 @@ export interface SalesSearch {
   readonly item?: string;
 }
 
-const AREAS = new Set<string>(["outreach", "conversations"]);
-
 export const Route = createFileRoute("/sales")({
   validateSearch: (raw: Record<string, unknown>): SalesSearch => ({
     ...(typeof raw.environment === "string" && raw.environment
       ? { environment: raw.environment }
       : {}),
-    ...(typeof raw.area === "string" && AREAS.has(raw.area) ? { area: raw.area as SalesArea } : {}),
+    ...(isSalesArea(raw.area) ? { area: raw.area } : {}),
     ...(typeof raw.item === "string" && raw.item ? { item: raw.item } : {}),
   }),
   component: SalesPage,
