@@ -6,6 +6,8 @@ import {
   markHiddenText,
   withoutHiddenCharacters,
 } from "./hiddenText.ts";
+import { hashInput } from "./fixtures/queueItemDetail.ts";
+import { computeContentHash } from "./signing.ts";
 import vectors from "./fixtures/sales-api-vectors.json" with { type: "json" };
 
 const draft = (patch: { to?: string; subject?: string; body?: string }) => ({
@@ -22,8 +24,8 @@ describe("hiddenTextFindings", () => {
   it("passes ordinary email text: accents, emoji, tabs, CRLF and a few blank lines", () => {
     expect(
       tokens({
-        subject: "Café ☕ – “quotes”",
-        body: "Olá Zoë, 👩\u200D💻 👍🏽 🏳️\u200D🌈 1️⃣\r\nTab:\there.\n\n\n\nThree blank lines above.\n",
+        subject: "Café ☕ – “quotes” ❤️",
+        body: "Olá Zoë, Việt ạ 👩\u200D💻 👍🏽 🏳️\u200D🌈 1️⃣ #️⃣ ☺︎\r\nTab:\there.\n\n\n\nThree blank lines above.\n",
       }),
     ).toEqual([]);
     for (const { input } of vectors.contentHash) {
@@ -55,6 +57,23 @@ describe("hiddenTextFindings", () => {
     ]);
   });
 
+  it("finds variation selectors past one per visible character, so they carry no message", () => {
+    // Each selector can stand for a byte: "hi" followed by a payload a reader never sees.
+    expect(tokens({ subject: "hi\u{E0100}\u{E0161}" }).map(({ token }) => token)).toEqual([
+      "⟨U+E0100⟩",
+      "⟨U+E0161⟩",
+    ]);
+    expect(
+      tokens({ body: "❤️\uFE0F x\uFE00 \uFE0F y\u034F\u180B\u17B4" }).map(({ token }) => token),
+    ).toEqual(["⟨U+FE0F⟩", "⟨U+FE00⟩", "⟨U+FE0F⟩", "⟨U+034F⟩", "⟨U+180B⟩", "⟨U+17B4⟩"]);
+  });
+
+  it("finds marks stacked on one letter past what any language writes", () => {
+    expect(tokens({ body: "Hey Ana, z\u0301\u0302\u0303\u0304\u0305 here" })).toEqual([
+      { field: "body", kind: "marks", token: "⟨5 combining marks⟩" },
+    ]);
+  });
+
   it("finds control characters, keeping a body's line breaks, tabs and CRLF endings", () => {
     expect(tokens({ body: "a\x07b\rc\u2028d\x85" }).map(({ token }) => token)).toEqual([
       "⟨U+0007⟩",
@@ -77,6 +96,36 @@ describe("hiddenTextFindings", () => {
     ]);
     expect(tokens({ body: "\n\n\n\nHi" })).toMatchObject([{ token: "⟨4 blank lines⟩\n" }]);
     expect(tokens({ body: `a${" ".repeat(15)}b\n\n\n\nc` })).toEqual([]);
+  });
+
+  it("finds a wall hidden behind invisible characters, and the wall once they are removed", () => {
+    // Lines of only an ignorable character, and a run of spaces split by one, still hide text.
+    const lines = `Hey Ana,\n${"\u034F\n".repeat(4)}P.S. wire it.`;
+    const spaces = `Hey Ana,${" ".repeat(8)}\u034F${" ".repeat(8)}P.S. wire it.`;
+    expect(tokens({ body: lines })).toHaveLength(4);
+    expect(tokens({ body: spaces })).toEqual([
+      { field: "body", kind: "character", token: "⟨U+034F⟩" },
+    ]);
+    expect(tokens({ body: withoutHiddenCharacters("body", lines) })).toEqual([
+      { field: "body", kind: "blank-lines", token: "⟨4 blank lines⟩\n" },
+    ]);
+    expect(tokens({ body: withoutHiddenCharacters("body", spaces) })).toEqual([
+      { field: "body", kind: "spaces", token: "⟨16 spaces⟩" },
+    ]);
+  });
+
+  it("scans the subject and To address as the hash keeps them, trimmed", async () => {
+    const hash = (patch: Partial<typeof hashInput>) =>
+      computeContentHash({ ...hashInput, ...patch });
+    for (const pad of [" ", "\t", "\n", "\uFEFF", "\u2028", "\u00A0", "\u200B", "\u034F"]) {
+      const subject = `${pad}Hi${pad}`;
+      const trimmedByHash = (await hash({ subject })) === (await hash({ subject: "Hi" }));
+      expect(tokens({ subject }).length === 0).toBe(trimmedByHash);
+      const to = `${pad}ana@brand.example${pad}`;
+      const toTrimmedByHash =
+        (await hash({ toAddress: to })) === (await hash({ toAddress: "ana@brand.example" }));
+      expect(tokens({ to }).length === 0).toBe(toTrimmedByHash);
+    }
   });
 
   it("holds the To address to printable ASCII, so a look-alike letter shows", () => {
@@ -117,6 +166,12 @@ describe("withoutHiddenCharacters", () => {
     ).toBe("Hi Ana,\r\nok\nnext 👩\u200D💻\n\n\n\n\nx");
     expect(withoutHiddenCharacters("subject", "Re: creator\nx\u00ADfintech")).toBe(
       "Re: creator xfintech",
+    );
+  });
+
+  it("puts a subject on one line: a CRLF or a run of spaces becomes one space", () => {
+    expect(withoutHiddenCharacters("subject", `Re: creator\r\nx${" ".repeat(20)}fintech`)).toBe(
+      "Re: creator x fintech",
     );
   });
 });

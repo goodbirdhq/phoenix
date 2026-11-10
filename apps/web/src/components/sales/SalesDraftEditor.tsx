@@ -1,5 +1,6 @@
 import { displayedDraft } from "@t3tools/client-runtime/sales/signing";
 import {
+  canRemoveHiddenCharacters,
   type DraftCard,
   type DraftCardState,
   isDirty,
@@ -42,14 +43,19 @@ export function SalesDraftEditor(props: {
     [shown.to, subject, body],
   );
   const inField = (field: DraftField) => findings.filter((finding) => finding.field === field);
-  // A threaded draft keeps its thread's subject. A subject with hidden text is shown as text,
-  // marked, until it is edited: a one-line field would hide it or drop its line breaks.
-  const subjectAsText =
-    !editing || detail.threaded || (state.subjectDraft === null && inField("subject").length > 0);
-  const removable = findings.some(
-    (finding) =>
-      finding.kind === "character" &&
-      (finding.field === "body" || (finding.field === "subject" && !detail.threaded)),
+  const subjectFindings = inField("subject");
+  // A threaded draft keeps its thread's subject: never an input, so hidden text there stays.
+  const subjectNote = detail.threaded
+    ? subjectFindings.length > 0
+      ? "The thread's subject. It has hidden text, so this reply can't be approved"
+      : "The thread's subject"
+    : subjectFindings.length > 0
+      ? "Has hidden text, so it can't be approved"
+      : null;
+  // What an edit can still change and shows as hidden: the To address and a reply's subject
+  // have their own refusals.
+  const stillHidden = findings.filter(
+    (finding) => finding.field === "body" || (finding.field === "subject" && !detail.threaded),
   );
   // Escape leaves an untouched edit; it never throws away typed text.
   const onEscape = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -70,20 +76,23 @@ export function SalesDraftEditor(props: {
             : "Any active mailbox"}
         </HeaderLine>
       </dl>
-      {subjectAsText ? (
+      {!editing || detail.threaded ? (
         <h2 className="text-base font-medium break-words whitespace-pre-wrap">
-          <SalesMarkedText text={subject} findings={inField("subject")} />
-          {detail.threaded || inField("subject").length > 0 ? (
-            <span className="ml-2 text-xs font-normal text-muted-foreground">
-              {inField("subject").length > 0
-                ? "Has hidden text, so it can't be approved"
-                : "The thread's subject"}
-            </span>
-          ) : null}
+          <SalesMarkedText text={subject} findings={subjectFindings} />
+          {subjectNote === null ? null : (
+            <span className="ml-2 text-xs font-normal text-muted-foreground">{subjectNote}</span>
+          )}
         </h2>
       ) : (
         <div className="grid gap-1.5">
           <Label htmlFor={`sales-subject-${id}`}>Subject</Label>
+          {/* A one-line field can't show hidden text, so the subject is also shown marked. */}
+          {subjectNote === null ? null : (
+            <p className="text-sm break-words whitespace-pre-wrap">
+              <SalesMarkedText text={subject} findings={subjectFindings} />
+              <span className="ml-2 text-xs text-muted-foreground">{subjectNote}</span>
+            </p>
+          )}
           <Input
             id={`sales-subject-${id}`}
             size="sm"
@@ -107,18 +116,18 @@ export function SalesDraftEditor(props: {
             onChange={(event) => card.editBody(event.target.value)}
             onKeyDown={onEscape}
           />
-          {findings.length > 0 ? (
+          {stillHidden.length > 0 ? (
             <p className="text-xs text-warning-foreground">
               Still hidden:{" "}
-              {findings
+              {stillHidden
                 .slice(0, 5)
                 .map((finding) => `${finding.token.trim()} in ${findingPlace(body, finding)}`)
                 .join(", ")}
-              {findings.length > 5 ? `, and ${findings.length - 5} more` : ""}.
+              {stillHidden.length > 5 ? `, and ${stillHidden.length - 5} more` : ""}.
             </p>
           ) : null}
           <div className="flex justify-end gap-2">
-            {removable ? (
+            {canRemoveHiddenCharacters(state) ? (
               <Button
                 size="xs"
                 variant="outline"

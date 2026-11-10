@@ -87,7 +87,8 @@ export interface DraftCard {
   /**
    * Opens an edit with the hidden characters taken out of the subject (a new thread's only) and
    * the body (`withoutHiddenCharacters`), since nobody can find one to delete by hand. Saving it
-   * makes a new version, read and verified again like any other.
+   * makes a new version, read and verified again like any other. Offered while
+   * `canRemoveHiddenCharacters`.
    */
   readonly removeHiddenCharacters: () => void;
   /** Drops the edit and returns to the email, showing the engine's newer version if it has one. */
@@ -118,6 +119,29 @@ export const isDirty = (state: DraftCardState) =>
 
 /** Whether the card shows inputs rather than the email: opened for an edit, or holding one. */
 export const isEditing = (state: DraftCardState) => state.editing || isDirty(state);
+
+/**
+ * The edit "Remove hidden characters" makes of the text shown or being edited, or null when it
+ * would change nothing. A threaded draft keeps its thread's subject, so only its body changes.
+ */
+function hiddenCharactersRemoved(state: DraftCardState) {
+  const { detail } = state;
+  if (detail === null) return null;
+  const shown = displayedDraft(detail);
+  const subject = state.subjectDraft ?? shown.subject;
+  const body = state.bodyDraft ?? shown.body;
+  const nextSubject = detail.threaded ? subject : withoutHiddenCharacters("subject", subject);
+  const nextBody = withoutHiddenCharacters("body", body);
+  if (nextSubject === subject && nextBody === body) return null;
+  return {
+    subjectDraft: nextSubject === shown.subject ? null : nextSubject,
+    bodyDraft: nextBody === shown.body ? null : nextBody,
+  };
+}
+
+/** Whether "Remove hidden characters" would change the draft (`removeHiddenCharacters`). */
+export const canRemoveHiddenCharacters = (state: DraftCardState) =>
+  hiddenCharactersRemoved(state) !== null;
 
 /**
  * One draft card: read, edited in place, and acted on. What it shows comes from the card's hash
@@ -244,14 +268,8 @@ export function createDraftCard(
     removeHiddenCharacters: () => {
       const { detail, busy } = state;
       if (detail === null || busy !== null || !cardActions(detail).edit) return;
-      const shown = displayedDraft(detail);
-      const body = withoutHiddenCharacters("body", state.bodyDraft ?? shown.body);
-      const subject = withoutHiddenCharacters("subject", state.subjectDraft ?? shown.subject);
-      set({
-        editing: true,
-        bodyDraft: body === shown.body ? null : body,
-        ...(detail.threaded ? {} : { subjectDraft: subject === shown.subject ? null : subject }),
-      });
+      const edit = hiddenCharactersRemoved(state);
+      if (edit !== null) set({ editing: true, ...edit });
     },
     cancelEdit: () => {
       set({ editing: false, subjectDraft: null, bodyDraft: null, notice: null });

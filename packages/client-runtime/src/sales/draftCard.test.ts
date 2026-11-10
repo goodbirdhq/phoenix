@@ -16,7 +16,12 @@ import type { AtomCommandResult } from "../state/runtime.ts";
 import { computeContentHash, type VerifiedVersion } from "./signing.ts";
 import type { ApproveOutcome } from "./approve.ts";
 import type { SalesDeviceKey, SigningDevice } from "./devices.ts";
-import { createDraftCard, type DraftCardCommands, isEditing } from "./draftCard.ts";
+import {
+  canRemoveHiddenCharacters,
+  createDraftCard,
+  type DraftCardCommands,
+  isEditing,
+} from "./draftCard.ts";
 import { ENGINE_HASH, detail, hashInput } from "./fixtures/queueItemDetail.ts";
 
 // Approval never reads the private key here: signing is `approveVersions`' job.
@@ -265,6 +270,47 @@ describe("draft card hidden text", () => {
         body: "Hey Ana,\n\nWire it.",
       },
     ]);
+  });
+
+  it("fixes a subject whose only hidden text is a run of spaces", async () => {
+    const input = { ...hashInput, subject: `creator${" ".repeat(20)}x fintech` };
+    const spaced = detail({
+      threaded: false,
+      hashInput: input,
+      contentHash: await computeContentHash(input),
+    });
+    const sent: SalesEditInput[] = [];
+    const { card } = setup({
+      served: spaced,
+      commands: {
+        edit: async (edit) => {
+          sent.push(edit);
+          return refused("empty_body");
+        },
+      },
+    });
+    await card.load();
+    expect(canRemoveHiddenCharacters(card.getState())).toBe(true);
+    card.removeHiddenCharacters();
+    expect(canRemoveHiddenCharacters(card.getState())).toBe(false);
+    await card.save();
+    expect(sent).toMatchObject([{ subject: "creator x fintech", body: hashInput.body }]);
+  });
+
+  it("refuses a reply whose thread's subject has hidden text, which no edit can take out", async () => {
+    const input = { ...hashInput, subject: "Re: creator\u200Bx fintech" };
+    const reply = detail({
+      threaded: true,
+      hashInput: input,
+      contentHash: await computeContentHash(input),
+    });
+    const { card, calls } = setup({ served: reply });
+    await card.load();
+    await card.approve(activeDevice);
+    expect(calls.signed).toEqual([]);
+    expect(card.getState().notice?.description).toMatch(/thread's subject has hidden text/u);
+    // The subject is the thread's, so removing hidden characters has nothing to change.
+    expect(canRemoveHiddenCharacters(card.getState())).toBe(false);
   });
 });
 

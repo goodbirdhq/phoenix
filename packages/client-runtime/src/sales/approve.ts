@@ -139,6 +139,9 @@ export async function reviewTickedDraft(
     status: "refused",
     reason,
     text: versionRefusalText(reason, "review"),
-    marked: reason === "address" || reason === "hidden-text" ? result.value : null,
+    marked:
+      reason === "address" || reason === "thread-subject" || reason === "hidden-text"
+        ? result.value
+        : null,
   };
 }

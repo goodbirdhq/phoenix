@@ -91,11 +91,19 @@ export interface VerifiedVersion {
  * - `algorithm`: the engine hashes some other way.
  * - `mismatch`: the shown text is not the hashed version.
  * - `address`: the To address is not plain ASCII, so it may not be the address it looks like.
- * - `hidden-text`: the subject or body has text that would not show (`hiddenTextFindings`),
- *   such as an invisible character, a line break in the subject or a wall of blank lines.
+ * - `thread-subject`: a reply's subject, which is its thread's and cannot be edited, has text
+ *   that would not show (`hiddenTextFindings`).
+ * - `hidden-text`: the subject or body has text that would not show, such as an invisible
+ *   character, a line break in the subject or a wall of blank lines.
  * - `changed`: not the version the person ticked.
  */
-export type VersionRefusal = "algorithm" | "mismatch" | "address" | "hidden-text" | "changed";
+export type VersionRefusal =
+  | "algorithm"
+  | "mismatch"
+  | "address"
+  | "thread-subject"
+  | "hidden-text"
+  | "changed";
 
 export type VersionCheck =
   | { readonly ok: true; readonly version: VerifiedVersion }
@@ -118,6 +126,9 @@ export async function verifyDisplayedVersion(
   if (contentHash !== detail.contentHash.toLowerCase()) return { ok: false, reason: "mismatch" };
   const findings = hiddenTextFindings(displayedDraft(detail));
   if (findings.some((finding) => finding.field === "to")) return { ok: false, reason: "address" };
+  if (detail.threaded && findings.some((finding) => finding.field === "subject")) {
+    return { ok: false, reason: "thread-subject" };
+  }
   if (findings.length > 0) return { ok: false, reason: "hidden-text" };
   return { ok: true, version: { activityId: detail.activityId, contentHash } as VerifiedVersion };
 }

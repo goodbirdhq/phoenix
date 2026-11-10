@@ -1,21 +1,14 @@
 /**
- * Text in a draft that would not show as it is sent. A person signs exactly the To, subject and
- * body they read, so anything an agent could put there that a reader cannot see breaks that:
- * invisible and format characters (zero-width, bidi controls that reorder what is shown, soft
- * hyphens, byte-order marks, tag characters), control characters, and walls of blank lines or
- * spaces that push a paragraph out of view. A To address is held to plain printable ASCII, since a
- * single look-alike letter (a Cyrillic "а") makes it another address, and telling a look-alike
- * from a real internationalised address needs confusable tables that still miss whole-script
- * fakes. An internationalised address cannot be approved here. Signing refuses a draft with any
- * finding (`verifyDisplayedVersion`); the preview marks each one (`markHiddenText`).
- * See docs/internals/sales-approvals.md.
+ * Text in a draft that would not show as it is sent, found so signing can refuse it
+ * (`verifyDisplayedVersion`) and the preview can mark it (`markHiddenText`). Why, and why a To
+ * address is held to plain ASCII: docs/internals/sales-approvals.md.
  */
 
 export type DraftField = "to" | "subject" | "body";
 
 export interface HiddenTextFinding {
   readonly field: DraftField;
-  readonly kind: "character" | "blank-lines" | "spaces";
+  readonly kind: "character" | "blank-lines" | "spaces" | "marks";
   /** Where it is, as UTF-16 offsets into the field's text. */
   readonly start: number;
   readonly end: number;
@@ -27,23 +20,38 @@ export interface HiddenTextFinding {
 const MAX_BLANK_LINES = 3;
 /** Up to this many spaces or tabs in a row read as layout; more are a wall. */
 const MAX_SPACES = 15;
+/** Up to this many combining marks on one letter read as text; more stack over other lines. */
+const MAX_MARKS = 4;
 
-// Unicode's "Other" characters (control, format, surrogate, private use, unassigned), the line
-// and paragraph separators, and the fillers that render as nothing. A zero-width joiner inside
-// an emoji sequence (👩‍💻) is what makes the emoji, so it is allowed there.
-const INVISIBLE =
-  "(?!(?<=\\p{Extended_Pictographic}[\\uFE0F\\u{1F3FB}-\\u{1F3FF}]?)\\u200D\\p{Extended_Pictographic})" +
-  "[\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u2800\\u3164\\uFFA0]";
-const SPACES = `[^\\S\\r\\n]{${MAX_SPACES + 1},}`;
+/**
+ * What renders as nothing or is not text: default-ignorable code points (zero-width and format
+ * characters, variation selectors, Hangul fillers), Unicode's "Other" characters (control,
+ * surrogate, private use, unassigned) and the line and paragraph separators.
+ */
+const NOT_SHOWN = "\\p{Default_Ignorable_Code_Point}\\p{C}\\p{Zl}\\p{Zp}";
+/** A symbol, not a space, that draws as blank. */
+const BRAILLE_BLANK = "\\u2800";
+const INVISIBLE = `[${NOT_SHOWN}${BRAILLE_BLANK}]`;
+/** A zero-width joiner between two emoji is what makes them one (👩‍💻). */
+const EMOJI_JOINER =
+  "(?<=\\p{Extended_Pictographic}[\\uFE0F\\u{1F3FB}-\\u{1F3FF}]?)\\u200D(?=\\p{Extended_Pictographic})";
+/** One text or emoji presentation selector on a visible character picks how it is drawn (❤️, 1️⃣). */
+const PRESENTATION_SELECTOR = `(?<=[^\\s${NOT_SHOWN}${BRAILLE_BLANK}])[\\uFE0E\\uFE0F]`;
+const HIDDEN_CHARACTER = `(?!${EMOJI_JOINER}|${PRESENTATION_SELECTOR})${INVISIBLE}`;
+/** Spaces and tabs; anything else blank is a hidden character. */
+const BLANK = "[\\p{Zs}\\t]";
+const SPACES = `${BLANK}{${MAX_SPACES + 1},}`;
+/** Combining marks that draw: the ignorable ones (variation selectors) are hidden characters. */
+const MARKS = `[^\\P{M}\\p{Default_Ignorable_Code_Point}]{${MAX_MARKS + 1},}`;
 
 const PATTERNS: Record<DraftField, RegExp> = {
   // Anything outside printable ASCII, so a look-alike letter cannot pass for the address.
   to: /[^\x20-\x7E]/gu,
-  subject: new RegExp(`(?<spaces>${SPACES})|${INVISIBLE}`, "gu"),
+  subject: new RegExp(`(?<spaces>${SPACES})|(?<marks>${MARKS})|${HIDDEN_CHARACTER}`, "gu"),
   // A body keeps its line breaks and tabs, and a CR only as part of a CRLF line ending.
   body: new RegExp(
-    `(?<=^|\\n)(?<lines>(?:[^\\S\\n]*\\n){${MAX_BLANK_LINES + 1},})|(?<spaces>${SPACES})|` +
-      `(?![\\n\\t]|\\r\\n)${INVISIBLE}`,
+    `(?<=^|\\n)(?<lines>(?:${BLANK}*\\r?\\n){${MAX_BLANK_LINES + 1},})|(?<spaces>${SPACES})|` +
+      `(?<marks>${MARKS})|(?![\\n\\t]|\\r\\n)${HIDDEN_CHARACTER}`,
     "gu",
   ),
 };
@@ -59,13 +67,17 @@ function findingsIn(field: DraftField, text: string): HiddenTextFinding[] {
   return Array.from(kept.matchAll(PATTERNS[field]), (match): HiddenTextFinding => {
     const start = offset + match.index;
     const end = start + match[0].length;
-    const { lines, spaces } = match.groups ?? {};
+    const { lines, spaces, marks } = match.groups ?? {};
     if (lines !== undefined) {
       const count = lines.split("\n").length - 1;
       return { field, kind: "blank-lines", start, end, token: `⟨${count} blank lines⟩\n` };
     }
     if (spaces !== undefined) {
       return { field, kind: "spaces", start, end, token: `⟨${spaces.length} spaces⟩` };
+    }
+    if (marks !== undefined) {
+      const count = Array.from(marks).length;
+      return { field, kind: "marks", start, end, token: `⟨${count} combining marks⟩` };
     }
     return { field, kind: "character", start, end, token: `⟨${codePoint(match[0])}⟩` };
   });
@@ -122,22 +134,34 @@ export function findingPlace(text: string, finding: HiddenTextFinding): string {
 const LINE_BREAK = /^[\n\r\v\f\x85\u2028\u2029]$/u;
 
 /**
- * A subject or body without its hidden characters, for an edit the person asks for: a character
- * nobody can see cannot be found and deleted by hand. A line break becomes a space in a subject
- * and a plain line break in a body; anything else hidden goes. Blank lines and spaces are left
- * alone, since an edit shows them.
+ * A subject or body without what nobody can find to delete by hand, for an edit the person asks
+ * for. Hidden characters go, but a line break becomes a plain one in a body, and a line break
+ * (CRLF included) or tab becomes one space in a subject. A subject's run of spaces becomes one
+ * space too, since a one-line field scrolls it out of view. Blank lines, a body's spaces and stacked marks stay: an edit shows them.
  */
 export function withoutHiddenCharacters(field: "subject" | "body", text: string): string {
   let out = "";
   let at = 0;
   for (const finding of findingsIn(field, text)) {
-    if (finding.kind !== "character") continue;
-    const char = text.slice(finding.start, finding.end);
-    out += text.slice(at, finding.start);
-    if (LINE_BREAK.test(char) || (field === "subject" && char === "\t")) {
-      out += field === "subject" ? " " : "\n";
-    }
+    const replacement = replacementFor(field, text, finding);
+    if (replacement === null) continue;
+    out += text.slice(at, finding.start) + replacement;
     at = finding.end;
   }
   return out + text.slice(at);
+}
+
+/** What `withoutHiddenCharacters` puts in a finding's place, or null to keep it. */
+function replacementFor(
+  field: "subject" | "body",
+  text: string,
+  { kind, start, end }: HiddenTextFinding,
+): string | null {
+  if (kind === "spaces") return field === "subject" ? " " : null;
+  if (kind !== "character") return null;
+  const char = text.slice(start, end);
+  // The LF of a CRLF stands for both.
+  if (char === "\r" && text[end] === "\n") return "";
+  if (field === "body") return LINE_BREAK.test(char) ? "\n" : "";
+  return LINE_BREAK.test(char) || char === "\t" ? " " : "";
 }

@@ -230,6 +230,10 @@ export function versionRefusalText(reason: VersionRefusal, context: "card" | "re
       return context === "card"
         ? "The To address has characters that are not plain ASCII, marked above, so it may not be the address it looks like. Correct the contact's address and draft it again."
         : "Its To address has characters that are not plain ASCII, marked below, so it may not be the address it looks like.";
+    case "thread-subject":
+      return context === "card"
+        ? "The thread's subject has hidden text, marked above, and a reply keeps it, so Phoenix can't approve this reply. Reply outside Phoenix."
+        : "Its thread's subject has hidden text, marked below, and a reply keeps it, so Phoenix can't approve it.";
     case "hidden-text":
       return context === "card"
         ? "Part of this draft would not show as it is sent: hidden characters or long runs of blank space, marked in the email. Edit them out, then approve."

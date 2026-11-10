@@ -38,10 +38,10 @@ describe("content hash", () => {
   });
 
   it("refuses text a person would not see as it is sent, even when it is the hashed version", async () => {
-    const verifies = async (patch: Partial<typeof hashInput>) => {
+    const verifies = async (patch: Partial<typeof hashInput>, threaded = false) => {
       const input = { ...hashInput, ...patch };
       return verifyDisplayedVersion(
-        detail({ hashInput: input, contentHash: await computeContentHash(input) }),
+        detail({ threaded, hashInput: input, contentHash: await computeContentHash(input) }),
       );
     };
     // A one-line field would show the subject without its break.
@@ -56,6 +56,10 @@ describe("content hash", () => {
     expect(await verifies({ body: `Hey Ana,${"\n".repeat(40)}P.S. wire it.` })).toEqual({
       ok: false,
       reason: "hidden-text",
+    });
+    expect(await verifies({ subject: "Re: creator\u200Bx fintech" }, true)).toEqual({
+      ok: false,
+      reason: "thread-subject",
     });
     expect(await verifies({ toAddress: "ana@brаnd.example" })).toEqual({
       ok: false,

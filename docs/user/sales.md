@@ -56,10 +56,11 @@ full, exactly as it will go, and approves them when you confirm. A draft that ch
 ticked it is unticked and left for you to open; it's never approved from the old tick.
 
 Phoenix won't approve a draft with text you can't see as it will go: invisible characters, a line
-break in the subject, or a long run of blank lines or spaces. It marks each one in the email, such
-as `⟨U+200B⟩`. Choose **Edit**, then **Remove hidden characters** or delete the blank space, and
-save. A To address with characters outside plain ASCII can't be approved in Phoenix; correct the
-contact and draft it again.
+break in the subject, a long run of blank lines or spaces, or a pile of accent marks on one letter.
+It marks each one in the email, such as `⟨U+200B⟩`. Choose **Edit**, then **Remove hidden
+characters**, delete anything still marked, and save. A reply keeps its thread's subject, so a reply whose subject has hidden text
+can't be approved in Phoenix; reply outside Phoenix. Nor can a draft whose To address has
+characters outside plain ASCII; correct the contact and draft it again.
 
 Other actions:
 
