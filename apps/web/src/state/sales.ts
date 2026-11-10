@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  salesEngineKey,
   thisDeviceState,
   type SalesDeviceKey,
   type SalesDeviceKeyStore,
@@ -20,6 +19,7 @@ import {
   SalesActionError,
   type SalesActionFailureReason,
   type SalesDevice,
+  salesEngineKey,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

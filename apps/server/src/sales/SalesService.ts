@@ -33,6 +33,7 @@ import type {
   SalesSnapshot,
   SalesStreamEvent,
 } from "@t3tools/contracts";
+import { salesEngineRoot } from "@t3tools/contracts";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as SalesEngineApi from "./SalesEngineApi.ts";
@@ -191,7 +192,7 @@ const make = Effect.gen(function* () {
       if (!isConfigured(config)) {
         return yield* publish(EMPTY_SNAPSHOT);
       }
-      if (SalesEngineApi.salesApiBaseUrl(config.baseUrl) === null) {
+      if (salesEngineRoot(config.baseUrl) === null) {
         return yield* publish({
           ...EMPTY_SNAPSHOT,
           status: "failed",

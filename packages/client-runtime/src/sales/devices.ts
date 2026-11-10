@@ -15,7 +15,10 @@ import {
  * bytes, this client included.
  */
 export interface SalesDeviceKey {
-  /** The engine it is enrolled with, as `salesEngineKey` gives it. */
+  /**
+   * The engine it is enrolled with, as `salesEngineKey` gives it: one key per engine, whichever
+   * environment reads it, since the engine is what enrols a device.
+   */
   readonly engine: string;
   readonly deviceId: string;
   readonly name: string;
@@ -30,11 +33,6 @@ export interface SalesDeviceKeyStore {
   readonly load: (engine: string) => Promise<SalesDeviceKey | null>;
   readonly save: (key: SalesDeviceKey) => Promise<void>;
   readonly remove: (engine: string) => Promise<void>;
-}
-
-/** One key per engine, whichever environment reads it: the engine is what enrols a device. */
-export function salesEngineKey(baseUrl: string): string {
-  return baseUrl.trim().replace(/\/+$/u, "").toLowerCase();
 }
 
 /** Makes a key for `name` and the request that enrols it. Nothing is stored or sent here. */

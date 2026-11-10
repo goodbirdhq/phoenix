@@ -15,6 +15,30 @@ import { IsoDateTime, ProjectId, ThreadId } from "./baseSchemas.ts";
  * it reaches the wire.
  */
 
+/** Where the engine's API sits below the root a person enters. */
+export const SALES_API_PATH = "/api/sales/v1";
+
+/**
+ * The engine root a person entered: trimmed, without trailing slashes or the `/api/sales/v1`
+ * suffix, so the origin and the API base name the same engine. Null when it is not an http or
+ * https URL.
+ */
+export function salesEngineRoot(baseUrl: string): string | null {
+  let root = baseUrl.trim().replace(/\/+$/u, "");
+  if (root.endsWith(SALES_API_PATH))
+    root = root.slice(0, -SALES_API_PATH.length).replace(/\/+$/u, "");
+  if (!URL.canParse(root)) return null;
+  const protocol = new URL(root).protocol;
+  return protocol === "https:" || protocol === "http:" ? root : null;
+}
+
+/**
+ * Which engine a URL names, for comparing settings and keying device keys: the root, in lower
+ * case. Text that is not a URL keys as itself, trimmed and in lower case.
+ */
+export const salesEngineKey = (baseUrl: string) =>
+  (salesEngineRoot(baseUrl) ?? baseUrl.trim()).toLowerCase();
+
 const Count = Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0)));
 const NullableString = Schema.NullOr(Schema.String).pipe(
   Schema.withDecodingDefault(Effect.succeed(null)),

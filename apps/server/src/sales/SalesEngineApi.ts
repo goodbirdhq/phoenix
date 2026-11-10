@@ -18,6 +18,8 @@ import {
   SalesQueue,
   SalesQueueItemDetail,
   SalesSummary,
+  SALES_API_PATH,
+  salesEngineRoot,
 } from "@t3tools/contracts";
 
 /**
@@ -30,7 +32,6 @@ import {
  * made on an enrolled device, which this module only carries.
  */
 
-const API_PATH = "/api/sales/v1";
 const READ_TIMEOUT = "15 seconds";
 /** Edit writes to Notion before it answers, which takes a few seconds and a few requests. */
 const ACTION_TIMEOUT = "45 seconds";
@@ -43,17 +44,11 @@ export interface SalesEngineConfig {
 
 type Half = "read" | "action";
 
-/**
- * The engine root a user enters, normalised to the API base. Accepts the origin with or
- * without the `/api/sales/v1` suffix and trailing slashes. Null when it is not an http(s) URL.
- */
-export function salesApiBaseUrl(baseUrl: string): string | null {
-  const trimmed = baseUrl.trim().replace(/\/+$/u, "");
-  if (!URL.canParse(trimmed)) return null;
-  const protocol = new URL(trimmed).protocol;
-  if (protocol !== "https:" && protocol !== "http:") return null;
-  return trimmed.endsWith(API_PATH) ? trimmed : `${trimmed}${API_PATH}`;
-}
+/** The API base for the URL a person entered; null when it is not an http(s) URL. */
+const salesApiBaseUrl = (baseUrl: string) => {
+  const root = salesEngineRoot(baseUrl);
+  return root === null ? null : `${root}${SALES_API_PATH}`;
+};
 
 const DEFAULT_MESSAGES: Partial<Record<SalesActionFailureReason, string>> = {
   "not-configured": "Sales actions need the engine URL and its action token in Settings.",
