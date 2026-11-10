@@ -1,20 +1,18 @@
-import { buildSalesHome, SALES_WORK_AREAS } from "@t3tools/client-runtime/sales/home";
+import { buildSalesHome } from "@t3tools/client-runtime/sales/home";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
-  BuildingIcon,
   ChevronsUpDownIcon,
   HouseIcon,
-  MegaphoneIcon,
+  type LucideIcon,
   MessagesSquareIcon,
-  SearchIcon,
   SendIcon,
   SettingsIcon,
-  SquareCheckBigIcon,
-  ZapIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
+
+import type { SalesArea } from "../../routes/sales";
 
 import { useSalesState, useSalesTarget } from "../../state/sales";
 import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
@@ -28,13 +26,21 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 
-const AREA_ICONS = {
-  sourcing: SearchIcon,
-  outreach: SendIcon,
-  autopilot: ZapIcon,
-  todo: SquareCheckBigIcon,
-  conversations: MessagesSquareIcon,
-} as const;
+/**
+ * The Sales areas with a screen, in sidebar order. A new area shows by adding its line here
+ * (and its key to `SalesArea`); groups with no entry are not shown. Counts come from the Home
+ * summary where it has an area with the same key.
+ */
+const SALES_NAV: ReadonlyArray<{
+  readonly area: SalesArea;
+  readonly label: string;
+  readonly icon: LucideIcon;
+  readonly group: "Work" | "Strategy" | "Records";
+}> = [
+  { area: "outreach", label: "Outreach", icon: SendIcon, group: "Work" },
+  { area: "conversations", label: "Conversations", icon: MessagesSquareIcon, group: "Work" },
+];
+const SALES_NAV_GROUPS = ["Work", "Strategy", "Records"] as const;
 
 export function SalesSidebar() {
   const { environment: requested, area } = useSearch({ from: "/sales" });
@@ -100,13 +106,13 @@ function SalesSidebarNav({
 }: {
   readonly environmentId: EnvironmentId;
   readonly requested: string | undefined;
-  readonly area: "outreach" | "conversations" | undefined;
+  readonly area: SalesArea | undefined;
   readonly onNavigate: () => void;
 }) {
   const navigate = useNavigate();
   const state = useSalesState(environmentId);
   const summary = Option.getOrNull(state.snapshot)?.summary ?? null;
-  const counts = new Map(
+  const counts: ReadonlyMap<string, number> = new Map(
     summary ? buildSalesHome(summary).areas.map((area) => [area.key, area.count]) : [],
   );
 
@@ -127,44 +133,36 @@ function SalesSidebarNav({
         </SidebarMenuItem>
       </SidebarMenu>
 
-      <SalesSidebarGroup label="Work">
-        {SALES_WORK_AREAS.map((area) => {
-          const Icon = AREA_ICONS[area.key];
-          const count = counts.get(area.key) ?? null;
-          const shown = count !== null && count > 0 ? count : null;
-          if (area.key === "outreach" || area.key === "conversations") {
-            const key = area.key;
-            return (
-              <SidebarMenuItem key={key}>
-                <SidebarMenuButton
-                  isActive={currentArea === key}
-                  aria-label={shown === null ? area.label : `${area.label}, ${shown}`}
-                  onClick={() => {
-                    onNavigate();
-                    void navigate({
-                      to: "/sales",
-                      search: { ...(requested ? { environment: requested } : {}), area: key },
-                    });
-                  }}
-                >
-                  <Icon />
-                  <span className="flex-1">{area.label}</span>
-                  {shown !== null ? <span className="text-xs tabular-nums">{shown}</span> : null}
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            );
-          }
-          return (
-            <SalesPlaceholderItem key={area.key} icon={<Icon />} label={area.label} count={shown} />
-          );
-        })}
-      </SalesSidebarGroup>
-      <SalesSidebarGroup label="Strategy">
-        <SalesPlaceholderItem icon={<MegaphoneIcon />} label="Campaigns" count={null} />
-      </SalesSidebarGroup>
-      <SalesSidebarGroup label="Records">
-        <SalesPlaceholderItem icon={<BuildingIcon />} label="Accounts" count={null} />
-      </SalesSidebarGroup>
+      {SALES_NAV_GROUPS.map((group) => {
+        const entries = SALES_NAV.filter((entry) => entry.group === group);
+        if (entries.length === 0) return null;
+        return (
+          <SalesSidebarGroup key={group} label={group}>
+            {entries.map(({ area, label, icon: Icon }) => {
+              const count = counts.get(area) ?? 0;
+              return (
+                <SidebarMenuItem key={area}>
+                  <SidebarMenuButton
+                    isActive={currentArea === area}
+                    aria-label={count > 0 ? `${label}, ${count}` : label}
+                    onClick={() => {
+                      onNavigate();
+                      void navigate({
+                        to: "/sales",
+                        search: { ...(requested ? { environment: requested } : {}), area },
+                      });
+                    }}
+                  >
+                    <Icon />
+                    <span className="flex-1">{label}</span>
+                    {count > 0 ? <span className="text-xs tabular-nums">{count}</span> : null}
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
+          </SalesSidebarGroup>
+        );
+      })}
 
       <div className="mt-auto pt-4">
         <SidebarMenu>
@@ -197,26 +195,5 @@ function SalesSidebarGroup({
       <h2 className="px-2 pb-1 text-xs text-muted-foreground">{label}</h2>
       <SidebarMenu>{children}</SidebarMenu>
     </section>
-  );
-}
-
-/** An area that has no screen yet: listed so the shape of Sales is visible, not clickable. */
-function SalesPlaceholderItem({
-  icon,
-  label,
-  count,
-}: {
-  readonly icon: ReactNode;
-  readonly label: string;
-  readonly count: number | null;
-}) {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton disabled aria-label={count === null ? label : `${label}, ${count}`}>
-        {icon}
-        <span className="flex-1">{label}</span>
-        {count !== null ? <span className="text-xs tabular-nums">{count}</span> : null}
-      </SidebarMenuButton>
-    </SidebarMenuItem>
   );
 }

@@ -1,5 +1,7 @@
 import {
   buildSalesHome,
+  engineDayNote,
+  lookItemView,
   salesStatusNotice,
   type SalesHome,
   type SalesStatusNotice,
@@ -11,6 +13,7 @@ import { ChevronRightIcon, CircleCheckIcon, RefreshCwIcon, TriangleAlertIcon } f
 import { useState } from "react";
 
 import { isElectron } from "../../env";
+import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { salesEnvironment, useSalesState, useSalesTarget } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { PageHeading } from "../patterns/PageHeading";
@@ -29,6 +32,7 @@ import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import type { SalesArea } from "../../routes/sales";
 import { SalesConversations } from "./SalesConversations";
+import { SalesExternalLink } from "./SalesExternalLink";
 import { SalesOutreach } from "./SalesOutreach";
 
 const isAreaPage = (key: string): key is SalesArea => key === "outreach" || key === "conversations";
@@ -166,6 +170,7 @@ const formatTime = (iso: string | null) => {
   const ms = iso === null ? Number.NaN : Date.parse(iso);
   return Number.isNaN(ms) ? null : timeFormat.format(ms);
 };
+const viewerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 function SalesHomeContent({
   home,
@@ -185,14 +190,16 @@ function SalesHomeContent({
   const navigate = useNavigate();
   const { environment } = useSearch({ from: "/sales" });
   const readAt = formatTime(snapshot.summaryReadAt);
+  const readAgo =
+    snapshot.summaryReadAt === null ? "" : formatRelativeTimeLabel(snapshot.summaryReadAt);
   const summary = snapshot.summary;
   return (
     <>
       <PageHeading
         title={home.headline}
         description={[
-          readAt ? `Updated ${readAt}` : null,
-          summary?.day && summary.timezone ? `${summary.day}, ${summary.timezone}` : null,
+          readAgo ? `Updated ${readAgo}` : null,
+          summary ? engineDayNote(summary, viewerTimeZone) : null,
           offline ? "Offline" : null,
         ]
           .filter(Boolean)
@@ -261,7 +268,7 @@ function SalesHomeContent({
               </dl>
             ) : null}
             <div className="flex w-10 justify-end">
-              {area.count !== null && area.count > 0 ? (
+              {area.count > 0 ? (
                 <Badge variant="warning" aria-label={`${area.count} need you`}>
                   {area.count}
                 </Badge>
@@ -295,17 +302,24 @@ function NeedsALook({ items }: { readonly items: ReadonlyArray<SalesLookItem> })
     <section aria-label="Needs a look" className="space-y-2">
       <h2 className="text-sm font-medium">Needs a look</h2>
       <ul className="space-y-1.5">
-        {items.slice(0, LOOK_LIMIT).map((item) => (
-          <li
-            key={[item.at, item.what, item.who, item.subject, item.why].join("\u0000")}
-            className="text-xs"
-          >
-            <span className="text-foreground">
-              {[item.who, item.subject].filter(Boolean).join(" · ") || item.what}
-            </span>
-            {item.why ? <span className="text-muted-foreground"> — {item.why}</span> : null}
-          </li>
-        ))}
+        {items.slice(0, LOOK_LIMIT).map((item) => {
+          const view = lookItemView(item);
+          return (
+            <li
+              key={[item.at, item.what, item.who, item.subject, item.why].join("\u0000")}
+              className="text-xs"
+            >
+              <span className="text-foreground">{view.title}</span>
+              {view.why ? <span className="text-muted-foreground"> — {view.why}</span> : null}
+              {view.notionUrl ? (
+                <span className="text-muted-foreground">
+                  {" · "}
+                  <SalesExternalLink href={view.notionUrl}>Open in Notion</SalesExternalLink>
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

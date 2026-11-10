@@ -1,8 +1,8 @@
-import { SalesSummary } from "@t3tools/contracts";
+import { type SalesLookItem, SalesSummary } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildSalesHome } from "./home.ts";
+import { buildSalesHome, engineDayNote, lookItemView } from "./home.ts";
 
 const decodeSummary = Schema.decodeUnknownSync(SalesSummary);
 
@@ -34,13 +34,12 @@ describe("buildSalesHome", () => {
     expect(home.needsYou).toBe(5);
     expect(home.headline).toBe("5 things need you");
     expect(home.areas.map((area) => [area.key, area.count])).toEqual([
-      ["sourcing", null],
       ["outreach", 2],
       ["autopilot", 1],
       ["todo", 1],
       ["conversations", 1],
     ]);
-    expect(home.areas[3]?.figures).toContainEqual({ label: "Invites left", value: "1 of 7" });
+    expect(home.areas[2]?.figures).toContainEqual({ label: "Invites left", value: "1 of 7" });
     expect(home.health).toEqual({
       ok: true,
       line: "8 mailboxes active · 1 of 42 cold sends today",
@@ -95,5 +94,62 @@ describe("buildSalesHome", () => {
       }),
     );
     expect(home.health.line).toMatch(/^Dispatcher looks stopped: its next tick is overdue/);
+  });
+});
+
+describe("lookItemView", () => {
+  const look = (patch: Partial<SalesLookItem>): SalesLookItem => ({
+    what: "inbound",
+    at: null,
+    who: null,
+    subject: null,
+    why: null,
+    ...patch,
+  });
+
+  it("names the person and subject when the engine sends a name", () => {
+    expect(lookItemView(look({ who: "Ada", subject: "Re: hello", why: "Unclassified" }))).toEqual({
+      title: "Ada · Re: hello",
+      why: "Unclassified",
+      notionUrl: null,
+    });
+  });
+
+  it("never shows a page id as the who, and links the page instead", () => {
+    expect(
+      lookItemView(
+        look({ who: "40fada73-1b2c-4d5e-8f90-1234567890ab", subject: null, why: "No mailbox" }),
+      ),
+    ).toEqual({
+      title: "No mailbox",
+      why: null,
+      notionUrl: "https://www.notion.so/40fada731b2c4d5e8f901234567890ab",
+    });
+  });
+
+  it("falls back to what happened when nothing else is known", () => {
+    expect(lookItemView(look({ what: "skip" })).title).toBe("A skipped send");
+    expect(lookItemView(look({ what: "new-kind" })).title).toBe("Something");
+  });
+});
+
+describe("engineDayNote", () => {
+  const summary = (timezone: string | null) =>
+    decodeSummary({
+      generatedAt: "2026-11-09T18:30:00.000Z",
+      day: "2026-11-09",
+      timezone,
+      dispatcher: quietDispatcher,
+    });
+
+  it("stays quiet when the engine keeps the viewer's time zone", () => {
+    expect(engineDayNote(summary("Europe/London"), "Europe/London")).toBeNull();
+    expect(engineDayNote(summary(null), "Europe/London")).toBeNull();
+  });
+
+  it("names the engine's day and place when its zone differs", () => {
+    expect(engineDayNote(summary("America/Los_Angeles"), "Europe/London")).toMatch(
+      /^Engine day .*9.* \(Los Angeles\)$/u,
+    );
   });
 });
