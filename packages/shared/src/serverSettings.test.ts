@@ -391,6 +391,30 @@ describe("serverSettings helpers", () => {
     });
   });
 
+  it("replaces the Sales run selection whole, keeping the rest of the section", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      salesEngine: {
+        ...DEFAULT_SERVER_SETTINGS.salesEngine,
+        agentsProjectId: "project-birdhouse",
+        runModelSelection: createModelSelection(ProviderInstanceId.make("claudeAgent"), "a", [
+          { id: "effort", value: "high" },
+        ]),
+      },
+    };
+    const next = applyServerSettingsPatch(current, {
+      salesEngine: {
+        runModelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+      },
+    });
+    expect(next.salesEngine.runModelSelection).toEqual({ instanceId: "codex", model: "gpt-5" });
+    expect(next.salesEngine.agentsProjectId).toBe("project-birdhouse");
+    expect(
+      applyServerSettingsPatch(next, { salesEngine: { runModelSelection: null } }).salesEngine
+        .runModelSelection,
+    ).toBeNull();
+  });
+
   it("clears source control writer selection with null", () => {
     const current = {
       ...DEFAULT_SERVER_SETTINGS,
