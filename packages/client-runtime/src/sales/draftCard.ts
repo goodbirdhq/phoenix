@@ -35,7 +35,7 @@ export interface DraftCardState {
   readonly lostText: string | null;
   /** The action running now. One runs at a time: a press while one runs does nothing. */
   readonly busy: "approve" | "edit" | "dispatch" | "discard" | "unapprove" | null;
-  /** The note for Redraft with notes, or null while that form is closed. */
+  /** The note for the card's redraft plan, or null while that form is closed. */
   readonly redraftNote: string | null;
 }
 
@@ -57,8 +57,8 @@ export interface DraftCardCommands {
   readonly confirm: (message: string) => Promise<boolean> | undefined;
   /** Called after every action, so a page can read its own list again. */
   readonly onChanged: () => void;
-  /** Called when a reply redraft discarded the answer but its run did not start. */
-  readonly onAnswerDiscarded: (message: string) => void;
+  /** Called when a plan discarded the draft but the run that replaces it did not start. */
+  readonly onDiscardedWithoutRun: (message: string) => void;
 }
 
 export interface DraftCard {
@@ -165,7 +165,7 @@ export function createDraftCard(
       }
       const failure = readSalesFailure(result);
       failureNotice(failure);
-      if (failure.state === "discarded") commands().onAnswerDiscarded(failure.description);
+      if (failure.state === "discarded") commands().onDiscardedWithoutRun(failure.description);
       if (failure.reread) await load();
     });
 

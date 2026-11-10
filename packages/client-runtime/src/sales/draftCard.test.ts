@@ -75,7 +75,7 @@ function setup(options: {
     },
     confirm: () => Promise.resolve(true),
     onChanged: () => {},
-    onAnswerDiscarded: () => {},
+    onDiscardedWithoutRun: () => {},
     ...options.commands,
   };
   const card = createDraftCard(commands, served.contentHash);
@@ -235,12 +235,12 @@ describe("draft card actions", () => {
     expect(calls.discarded).toEqual([ENGINE_HASH]);
   });
 
-  it("tells the page when a reply redraft discarded the answer but did not start", async () => {
+  it("tells the page when a plan discarded the draft but its run did not start", async () => {
     const discarded: string[] = [];
     const { card } = setup({
       commands: {
         dispatch: async () => refused("dispatch-failed", "discarded"),
-        onAnswerDiscarded: (message) => discarded.push(message),
+        onDiscardedWithoutRun: (message) => discarded.push(message),
       },
     });
     await card.load();

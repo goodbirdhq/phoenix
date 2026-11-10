@@ -92,8 +92,7 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const crypto = yield* Crypto.Crypto;
 
-  const failed = (message: string) => () =>
-    salesActionError("dispatch-failed", { message });
+  const failed = (message: string) => () => salesActionError("dispatch-failed", { message });
   const randomUUID = crypto.randomUUIDv4.pipe(Effect.mapError(failed("Could not start a thread.")));
 
   /** The agents project and how a new thread there starts, by that project's own defaults. */
@@ -200,9 +199,7 @@ const make = Effect.gen(function* () {
         createdAt,
       })
       .pipe(
-        Effect.mapError((error) =>
-          salesActionError("dispatch-failed", { message: error.message }),
-        ),
+        Effect.mapError((error) => salesActionError("dispatch-failed", { message: error.message })),
       );
   });
 
@@ -220,8 +217,7 @@ const make = Effect.gen(function* () {
     yield* Effect.annotateCurrentSpan({ skill: plan.skill });
 
     // The bootstrap creates the thread and starts its turn in one step, so the start can still
-    // fail after the discard. That error says the card is gone, and its `state` lets the client
-    // send the person to the conversation to start again.
+    // fail after the discard. That error carries `state: "discarded"`: the card is gone.
     const discarded = plan.discardFirst && plan.card !== null;
     if (discarded) yield* sales.discard(plan.card);
     const threadId = ThreadId.make(`${salesDispatchThreadPrefix(input)}${yield* randomUUID}`);
@@ -229,7 +225,7 @@ const make = Effect.gen(function* () {
       Effect.mapError((error) =>
         discarded
           ? salesActionError("dispatch-failed", {
-              message: `The draft was discarded, but the run that replaces it did not start (${error.message}). Start it again from the conversation.`,
+              message: `The draft was discarded, but the run that replaces it did not start: ${error.message}`,
               state: "discarded",
             })
           : error,

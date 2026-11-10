@@ -19,7 +19,7 @@ export function useDraftCard(props: {
   readonly activityId: string;
   readonly listedHash: string | null;
   readonly onChanged?: () => void;
-  readonly onAnswerDiscarded?: (message: string) => void;
+  readonly onDiscardedWithoutRun?: (message: string) => void;
 }): readonly [DraftCard, ReturnType<DraftCard["getState"]>] {
   const { environmentId, activityId } = props;
   const getQueueItem = useAtomCommand(salesEnvironment.getQueueItem, { reportFailure: false });
@@ -38,7 +38,7 @@ export function useDraftCard(props: {
     approveVersions,
     confirm: (message) => requestConfirmDialog(message, { variant: "destructive" }),
     onChanged: () => props.onChanged?.(),
-    onAnswerDiscarded: (message) => props.onAnswerDiscarded?.(message),
+    onDiscardedWithoutRun: (message) => props.onDiscardedWithoutRun?.(message),
   };
   const [card] = useState(() => createDraftCard(commands, props.listedHash));
   // Later actions use this render's callbacks.

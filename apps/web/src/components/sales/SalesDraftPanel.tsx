@@ -48,8 +48,8 @@ export function SalesDraftPanel({
   readonly allowResearch?: boolean;
   /** Called after any action, so a page can read its own list again. */
   readonly onChanged?: () => void;
-  /** Called when a reply redraft discarded the answer but its run did not start. */
-  readonly onAnswerDiscarded?: (message: string) => void;
+  /** Called when a plan discarded the draft but the run that replaces it did not start. */
+  readonly onDiscardedWithoutRun?: (message: string) => void;
   readonly ref?: Ref<SalesDraftPanelHandle>;
 }) {
   const { environmentId, activityId } = props;

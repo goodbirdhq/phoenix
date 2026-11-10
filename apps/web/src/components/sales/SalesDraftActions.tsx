@@ -137,9 +137,8 @@ function RedraftForm(props: {
         onChange={(event) => card.setRedraftNote(event.target.value)}
       />
       <p className="text-xs text-muted-foreground">
-        {plan.discardFirst
-          ? "This discards this draft, then starts a run that drafts a new one with your note."
-          : "This starts a run in the sales agents project that rewrites this draft with your note."}
+        {plan.discardFirst ? "This discards this draft, then starts " : "This starts "}
+        {plan.title} in the sales agents project with your note.
       </p>
       <div className="flex justify-end gap-2">
         <Button size="xs" variant="outline" onClick={card.toggleRedraft}>
@@ -150,7 +149,7 @@ function RedraftForm(props: {
           size="xs"
           disabled={props.busy !== null || (plan.noteRequired && safeSalesNote(note).length === 0)}
         >
-          {props.busy === "dispatch" ? "Starting…" : "Start redraft"}
+          {props.busy === "dispatch" ? "Starting…" : plan.title}
         </Button>
       </div>
     </form>

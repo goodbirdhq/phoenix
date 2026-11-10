@@ -320,9 +320,9 @@ function ConversationDetailView({
             device={props.device}
             approveLabel="Approve answer"
             discardLabel="No reply needed"
-            // The answer is gone and its run did not start: the Draft an answer form takes over
-            // once the conversation is read again, and shows why.
-            onAnswerDiscarded={setDispatchError}
+            // The draft is gone and its run did not start: the conversation's own plans take
+            // over once it is read again, and this shows why.
+            onDiscardedWithoutRun={setDispatchError}
             onChanged={() => {
               void props.onChanged();
               void load();
