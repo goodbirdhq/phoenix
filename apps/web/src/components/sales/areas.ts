@@ -1,4 +1,12 @@
-import { type LucideIcon, MessagesSquareIcon, SendIcon } from "lucide-react";
+import {
+  ActivityIcon,
+  type LucideIcon,
+  MegaphoneIcon,
+  MessagesSquareIcon,
+  SendIcon,
+  SquareCheckBigIcon,
+  ZapIcon,
+} from "lucide-react";
 
 /**
  * The Sales areas with a screen, in sidebar order. An entry here is what the route accepts, the
@@ -10,7 +18,11 @@ import { type LucideIcon, MessagesSquareIcon, SendIcon } from "lucide-react";
  */
 export const SALES_AREAS = [
   { key: "outreach", label: "Outreach", icon: SendIcon },
+  { key: "autopilot", label: "Autopilot", icon: ZapIcon },
+  { key: "todo", label: "To do", icon: SquareCheckBigIcon },
   { key: "conversations", label: "Conversations", icon: MessagesSquareIcon },
+  { key: "campaigns", label: "Campaigns", icon: MegaphoneIcon },
+  { key: "health", label: "Health", icon: ActivityIcon },
 ] as const satisfies ReadonlyArray<{
   readonly key: string;
   readonly label: string;

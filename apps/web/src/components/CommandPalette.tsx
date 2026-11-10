@@ -44,10 +44,14 @@ import {
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
+  ActivityIcon,
   ArrowLeftIcon,
   CalendarClockIcon,
+  MegaphoneIcon,
   MessagesSquareIcon,
   SendIcon,
+  SquareCheckBigIcon,
+  ZapIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -2297,6 +2301,46 @@ function OpenCommandPaletteDialog(props: {
         icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
         run: async () => {
           await navigate({ to: "/sales", search: { area: "conversations" } });
+        },
+      },
+      {
+        kind: "action",
+        value: "action:sales:autopilot",
+        searchTerms: ["sales", "autopilot", "sends", "today", "scheduled", "chases"],
+        title: "Open Sales autopilot",
+        icon: <ZapIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({ to: "/sales", search: { area: "autopilot" } });
+        },
+      },
+      {
+        kind: "action",
+        value: "action:sales:todo",
+        searchTerms: ["sales", "to do", "todo", "tasks", "linkedin", "connect"],
+        title: "Open Sales to do",
+        icon: <SquareCheckBigIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({ to: "/sales", search: { area: "todo" } });
+        },
+      },
+      {
+        kind: "action",
+        value: "action:sales:campaigns",
+        searchTerms: ["sales", "campaigns", "funnel", "replies", "steps"],
+        title: "Open Sales campaigns",
+        icon: <MegaphoneIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({ to: "/sales", search: { area: "campaigns" } });
+        },
+      },
+      {
+        kind: "action",
+        value: "action:sales:health",
+        searchTerms: ["sales", "health", "mailboxes", "engine", "bounces", "sync"],
+        title: "Open Sales health",
+        icon: <ActivityIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({ to: "/sales", search: { area: "health" } });
         },
       },
     );

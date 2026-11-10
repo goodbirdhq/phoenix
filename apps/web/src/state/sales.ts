@@ -18,14 +18,18 @@ import {
   canActOnSales,
   createSalesEnvironmentAtoms,
   isSalesConfigured,
+  salesViewOf,
 } from "@t3tools/client-runtime/state/sales";
 import {
   type EnvironmentId,
   type SalesDevice,
   type SalesDispatchSource,
+  type SalesViewName,
   salesDispatchThreadPrefix,
   salesEngineKey,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -68,6 +72,18 @@ export function useSalesTarget(requested: string | undefined) {
 /** Subscribes the environment's Sales stream while mounted; the server polls only then. */
 export function useSalesState(environmentId: EnvironmentId) {
   return useAtomValue(salesEnvironment.stateValueAtom(environmentId));
+}
+
+/**
+ * One area's engine list, subscribed while mounted; the server reads it only while some client
+ * is. `failed` means the stream itself failed (an older server, say), not the engine.
+ */
+export function useSalesView<View extends SalesViewName>(environmentId: EnvironmentId, view: View) {
+  const result = useAtomValue(salesEnvironment.view({ environmentId, input: { view } }));
+  return {
+    read: salesViewOf(Option.getOrNull(AsyncResult.value(result)), view),
+    failed: AsyncResult.isFailure(result),
+  };
 }
 
 /**

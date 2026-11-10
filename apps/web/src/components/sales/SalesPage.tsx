@@ -31,9 +31,13 @@ import {
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { isSalesArea, SALES_AREAS, type SalesArea } from "./areas";
+import { SalesAutopilot } from "./SalesAutopilot";
+import { SalesCampaigns } from "./SalesCampaigns";
 import { SalesConversations } from "./SalesConversations";
 import { SalesExternalLink } from "./SalesExternalLink";
+import { SalesHealth } from "./SalesHealth";
 import { SalesOutreach } from "./SalesOutreach";
+import { SalesTodo } from "./SalesTodo";
 
 /** Each area's screen, given the same props. */
 const AREA_PAGES: Record<
@@ -48,7 +52,11 @@ const AREA_PAGES: Record<
   }>
 > = {
   outreach: SalesOutreach,
+  autopilot: SalesAutopilot,
+  todo: SalesTodo,
   conversations: SalesConversations,
+  campaigns: SalesCampaigns,
+  health: SalesHealth,
 };
 
 const NOT_CONFIGURED: SalesStatusNotice = {
@@ -293,7 +301,18 @@ function SalesHomeContent({
         ) : (
           <TriangleAlertIcon aria-hidden className="mt-0.5 size-4 shrink-0" />
         )}
-        <span>{home.health.line}</span>
+        <button
+          type="button"
+          className="text-left hover:underline"
+          onClick={() =>
+            void navigate({
+              to: "/sales",
+              search: { ...(environment ? { environment } : {}), area: "health" },
+            })
+          }
+        >
+          {home.health.line}
+        </button>
       </p>
 
       {summary && summary.needsALook.items.length > 0 ? (
