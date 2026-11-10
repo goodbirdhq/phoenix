@@ -431,8 +431,9 @@ export type SalesTask = typeof SalesTask.Type;
 export const SalesTaskList = Schema.Struct({
   generatedAt: Schema.String,
   items: Schema.Array(SalesTask).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  /** Today's connection-request budget. */
+  /** Today's connection-request budget. `day` is the engine's today, `YYYY-MM-DD`. */
   budget: group({
+    day: NullableString,
     dailyLimit: NullableCount,
     available: NullableCount,
   }),

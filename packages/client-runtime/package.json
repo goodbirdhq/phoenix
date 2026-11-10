@@ -111,6 +111,10 @@
       "types": "./src/schedules/index.ts",
       "default": "./src/schedules/index.ts"
     },
+    "./sales/autopilot": {
+      "types": "./src/sales/autopilot.ts",
+      "default": "./src/sales/autopilot.ts"
+    },
     "./sales/approve": {
       "types": "./src/sales/approve.ts",
       "default": "./src/sales/approve.ts"
@@ -135,6 +139,10 @@
       "types": "./src/sales/home.ts",
       "default": "./src/sales/home.ts"
     },
+    "./sales/mailboxes": {
+      "types": "./src/sales/mailboxes.ts",
+      "default": "./src/sales/mailboxes.ts"
+    },
     "./sales/outreach": {
       "types": "./src/sales/outreach.ts",
       "default": "./src/sales/outreach.ts"
@@ -146,6 +154,14 @@
     "./sales/signing": {
       "types": "./src/sales/signing.ts",
       "default": "./src/sales/signing.ts"
+    },
+    "./sales/tasks": {
+      "types": "./src/sales/tasks.ts",
+      "default": "./src/sales/tasks.ts"
+    },
+    "./sales/time": {
+      "types": "./src/sales/time.ts",
+      "default": "./src/sales/time.ts"
     },
     "./state/auth": {
       "types": "./src/state/auth.ts",

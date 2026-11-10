@@ -3,6 +3,8 @@ import {
   type EnvironmentId,
   type SalesSnapshot,
   type SalesStreamEvent,
+  type SalesView,
+  type SalesViewName,
   type ServerConfig,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -17,10 +19,11 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
-import { subscribeDynamic } from "../rpc/client.ts";
+import { subscribe, subscribeDynamic } from "../rpc/client.ts";
 import {
   createAtomCommandScheduler,
   createEnvironmentRpcCommand,
+  createEnvironmentSubscriptionAtomFamily,
   followStreamInEnvironment,
 } from "./runtime.ts";
 
@@ -193,6 +196,19 @@ function salesStateChanges(environmentId: EnvironmentId) {
   );
 }
 
+export type SalesViewOf<View extends SalesViewName> = Extract<SalesView, { readonly view: View }>;
+
+/** The read of `view`, or null when `value` is none or another view's. */
+export const salesViewOf = <View extends SalesViewName>(
+  value: SalesView | null,
+  view: View,
+): SalesViewOf<View> | null =>
+  // The union cannot narrow on a generic discriminant; the check above is the narrowing.
+  value !== null && value.view === view ? (value as SalesViewOf<View>) : null;
+
+/** How long a view stays subscribed after its screen goes: long enough to flip back, no longer. */
+const SALES_VIEW_IDLE_MS = 5_000;
+
 /**
  * Sales atoms per environment. Reading `stateValueAtom` subscribes the environment's server,
  * which polls its engine only while some client is subscribed; unmount to let it stop.
@@ -223,6 +239,18 @@ export function createSalesEnvironmentAtoms<R, E>(
   } as const;
   return {
     stateValueAtom,
+    /**
+     * One area's engine list (`sales.subscribeView`). Reading it subscribes, and the server reads
+     * that list only while some client does, so it lets go shortly after its screen unmounts.
+     */
+    view: createEnvironmentSubscriptionAtomFamily(runtime, {
+      label: "environment-data:sales:view",
+      subscribe: (input: { readonly view: SalesViewName }) =>
+        subscribe(SALES_WS_METHODS.subscribeView, input, {
+          supports: (config) => config.environment.capabilities.sales === true,
+        }),
+      idleTtlMs: SALES_VIEW_IDLE_MS,
+    }),
     /** Asks the engine now. The new snapshot also arrives on the subscription. */
     refresh: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:sales:refresh",

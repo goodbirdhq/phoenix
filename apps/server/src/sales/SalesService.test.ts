@@ -894,7 +894,11 @@ it.effect("decodes the task list and fills what a smaller answer leaves out", ()
       tasks.data?.items[0]?.contact.linkedinUrl,
       "https://www.linkedin.com/in/ana",
     );
-    assert.deepStrictEqual(tasks.data?.budget, { dailyLimit: 7, available: 1 });
+    assert.deepStrictEqual(tasks.data?.budget, {
+      day: "2026-11-09",
+      dailyLimit: 7,
+      available: 1,
+    });
 
     // `/health` answers with nothing but the common fields here.
     const health = yield* (yield* watchView("health")).nextWith((view) => view.status === "ready");

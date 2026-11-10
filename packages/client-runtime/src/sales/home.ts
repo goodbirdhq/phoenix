@@ -178,8 +178,10 @@ export interface SalesStatusNotice {
   readonly action: "settings" | "retry" | null;
 }
 
-/** What to say for a snapshot that is not a fresh summary. Null when it is. */
-export function salesStatusNotice(snapshot: SalesSnapshot): SalesStatusNotice | null {
+/** What to say for a snapshot, or an area's read, that is not a fresh answer. Null when it is. */
+export function salesStatusNotice(
+  snapshot: Pick<SalesSnapshot, "status" | "message">,
+): SalesStatusNotice | null {
   const description = snapshot.message ?? "";
   switch (snapshot.status) {
     case "ready":

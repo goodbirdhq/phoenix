@@ -54,6 +54,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof ORCHESTRATION_WS_METHODS.subscribeThread
   | typeof SCHEDULE_WS_METHODS.subscribe
   | typeof SALES_WS_METHODS.subscribe
+  | typeof SALES_WS_METHODS.subscribeView
   | typeof WS_METHODS.subscribeAuthAccess
   | typeof WS_METHODS.subscribeServerConfig
   | typeof WS_METHODS.subscribeServerLifecycle
