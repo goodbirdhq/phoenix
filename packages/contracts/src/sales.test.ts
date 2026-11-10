@@ -1,7 +1,12 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { SalesActionError, salesEngineKey, salesEngineRoot } from "./sales.ts";
+import {
+  SalesActionError,
+  salesDispatchThreadPrefix,
+  salesEngineKey,
+  salesEngineRoot,
+} from "./sales.ts";
 
 describe("salesEngineRoot", () => {
   it("reads the origin and the API base as the same engine", () => {
@@ -64,5 +69,17 @@ describe("SalesActionError", () => {
       state: null,
     });
     expect(error.origin).toBe("transport");
+  });
+});
+
+describe("dispatch thread ids", () => {
+  it("keeps one card's prefix from matching another's", () => {
+    const id = `${salesDispatchThreadPrefix({ activityId: "act-10" })}t1`;
+    expect(id.startsWith(salesDispatchThreadPrefix({ activityId: "act-1" }))).toBe(false);
+    expect(
+      `${salesDispatchThreadPrefix({ activityId: "a:b" })}t1`.startsWith(
+        salesDispatchThreadPrefix({ activityId: "a" }),
+      ),
+    ).toBe(false);
   });
 });

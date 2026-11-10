@@ -6,6 +6,7 @@ import type {
   SalesEditResult,
   SalesQueueItemDetail,
 } from "@t3tools/contracts";
+import { safeSalesNote } from "@t3tools/contracts";
 
 import type { AtomCommandResult } from "../state/runtime.ts";
 import type { ApproveOutcome } from "./approve.ts";
@@ -34,7 +35,7 @@ export interface DraftCardState {
   readonly lostText: string | null;
   /** The action running now. One runs at a time: a press while one runs does nothing. */
   readonly busy: "approve" | "edit" | "dispatch" | "discard" | "unapprove" | null;
-  /** The note for Redraft with notes, or null while that form is closed. */
+  /** The note for the card's redraft plan, or null while that form is closed. */
   readonly redraftNote: string | null;
 }
 
@@ -56,8 +57,8 @@ export interface DraftCardCommands {
   readonly confirm: (message: string) => Promise<boolean> | undefined;
   /** Called after every action, so a page can read its own list again. */
   readonly onChanged: () => void;
-  /** Called when a reply redraft discarded the answer but its run did not start. */
-  readonly onAnswerDiscarded: (message: string) => void;
+  /** Called when a plan discarded the draft but the run that replaces it did not start. */
+  readonly onDiscardedWithoutRun: (message: string) => void;
 }
 
 export interface DraftCard {
@@ -164,7 +165,7 @@ export function createDraftCard(
       }
       const failure = readSalesFailure(result);
       failureNotice(failure);
-      if (failure.state === "discarded") commands().onAnswerDiscarded(failure.description);
+      if (failure.state === "discarded") commands().onDiscardedWithoutRun(failure.description);
       if (failure.reread) await load();
     });
 
@@ -303,24 +304,30 @@ export function createDraftCard(
         await load();
       }),
 
-    research: () =>
-      state.detail === null
-        ? Promise.resolve()
-        : dispatch({ action: "research", activityId: state.detail.activityId }),
+    research: () => {
+      const plan = state.detail?.dispatch.research ?? null;
+      if (state.detail === null || plan === null) return Promise.resolve();
+      return dispatch({
+        activityId: state.detail.activityId,
+        action: "research",
+        expectedHash: plan.card?.expectedHash ?? null,
+        note: "",
+      });
+    },
 
     toggleRedraft: () => set({ redraftNote: state.redraftNote === null ? "" : null }),
     setRedraftNote: (note) => set({ redraftNote: note }),
     startRedraft: () => {
       const { detail, redraftNote } = state;
-      if (detail === null || redraftNote === null || redraftNote.trim().length === 0) {
-        return Promise.resolve();
-      }
-      // A reply redraft discards this card first, so read it again after.
+      const plan = detail?.dispatch.redraft ?? null;
+      if (detail === null || plan === null || redraftNote === null) return Promise.resolve();
+      if (plan.noteRequired && safeSalesNote(redraftNote).length === 0) return Promise.resolve();
+      // A plan may discard this card first, so read it again after.
       return dispatch(
         {
-          action: "redraft",
           activityId: detail.activityId,
-          expectedHash: detail.contentHash,
+          action: "redraft",
+          expectedHash: plan.card?.expectedHash ?? null,
           note: redraftNote,
         },
         load,

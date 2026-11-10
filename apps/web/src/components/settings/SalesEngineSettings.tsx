@@ -209,8 +209,8 @@ function SalesEngineForm({ environmentId }: { readonly environmentId: Environmen
             </SelectPopup>
           </Select>
           <p className="text-xs text-muted-foreground">
-            Research this and Redraft with notes start a thread in this project, the checkout that
-            holds the sales workflows, the way a new thread there would start.
+            Runs started from Sales open a thread in this project, the checkout that holds the sales
+            workflows, the way a new thread there would start.
           </p>
         </div>
         <div className="flex justify-end gap-2">

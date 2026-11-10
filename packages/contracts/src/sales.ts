@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, ProjectId, ThreadId } from "./baseSchemas.ts";
+import { IsoDateTime, ThreadId } from "./baseSchemas.ts";
 
 /**
  * The Sales area reads one external sales engine. Phoenix stores none of this:
@@ -215,6 +215,65 @@ export const SalesHashInput = Schema.Struct({
 });
 export type SalesHashInput = typeof SalesHashInput.Type;
 
+/**
+ * `DispatchAction`: a thread Phoenix may start, built whole by the engine. `prompt` holds
+ * `SALES_NOTE_TOKEN` exactly once; `fillSalesNote` puts the person's note there. `skill` is a
+ * record of what runs and is never branched on.
+ */
+export const SalesDispatchAction = Schema.Struct({
+  title: Schema.String,
+  skill: Text,
+  prompt: Schema.String,
+  noteRequired: Bool,
+  discardFirst: Bool,
+  /** The card this action rewrites or replaces, at the version the plan was built for. */
+  card: nullable(Schema.Struct({ activityId: Schema.String, expectedHash: Schema.String })),
+});
+export type SalesDispatchAction = typeof SalesDispatchAction.Type;
+
+/** The plans the engine may offer, by the name a dispatch asks for. */
+const SalesDispatchActionName = Schema.Literals(["redraft", "research", "answer"]);
+
+/** `dispatch`: what may be started from a card or a conversation. Null is not offered. */
+export const SalesDispatchPlans = Schema.Record(
+  SalesDispatchActionName,
+  nullable(SalesDispatchAction),
+).pipe(Schema.withDecodingDefault(Effect.succeed({})));
+export type SalesDispatchPlans = typeof SalesDispatchPlans.Type;
+
+/** Where the note goes in a dispatch prompt. */
+export const SALES_NOTE_TOKEN = "{{note}}";
+/** The line the engine's workflows find the person's note by. The engine owns its wording. */
+const SALES_NOTE_LINE = "Note from Gabriel:";
+const SALES_NOTE_MAX_CHARS = 2000;
+
+/**
+ * The person's note as it may enter a prompt: line breaks become LF, every other control
+ * character or line separator a space, blank lines and trailing white space go, and it is cut to
+ * 2,000 code points. Empty means no note.
+ */
+export function safeSalesNote(note: string): string {
+  const lines = note
+    .replace(/\r\n?/gu, "\n")
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, (char) => (char === "\n" ? char : " "))
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0);
+  return Array.from(lines.join("\n").trim()).slice(0, SALES_NOTE_MAX_CHARS).join("").trim();
+}
+
+/**
+ * A dispatch prompt with the note block in place of `SALES_NOTE_TOKEN`, or nothing there when
+ * the safe note is empty. Null for a prompt that does not hold the token exactly once. Split and
+ * joined, never `String.replace`, which would read `$&` in a note as a pattern.
+ */
+export function fillSalesNote(prompt: string, note: string): string | null {
+  const parts = prompt.split(SALES_NOTE_TOKEN);
+  if (parts.length !== 2) return null;
+  const safe = safeSalesNote(note);
+  return parts[0] + (safe.length > 0 ? `\n${SALES_NOTE_LINE}\n${safe}` : "") + parts[1];
+}
+
 /** `GET /queue/:activityId`: one card in any state, with the full body and its hash inputs. */
 export const SalesQueueItemDetail = Schema.Struct({
   ...SalesQueueItem.fields,
@@ -223,6 +282,7 @@ export const SalesQueueItemDetail = Schema.Struct({
   hashInput: SalesHashInput,
   /** The engine's name for its hash. A client refuses to sign under one it does not know. */
   hashAlgorithm: Schema.String,
+  dispatch: SalesDispatchPlans,
 });
 export type SalesQueueItemDetail = typeof SalesQueueItemDetail.Type;
 
@@ -307,6 +367,7 @@ export const SalesConversationDetail = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   drafts: Schema.Array(SalesQueueItem).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  dispatch: SalesDispatchPlans,
 });
 export type SalesConversationDetail = typeof SalesConversationDetail.Type;
 
@@ -437,40 +498,46 @@ export const SalesEditResult = Schema.Struct({
 export type SalesEditResult = typeof SalesEditResult.Type;
 
 /**
- * What a dispatch starts, in the configured sales agents project:
- * - `research`: `prospect-research` for the card's account, its contact as the candidate.
- * - `redraft`: rewrite a waiting draft with a note. A first touch, chase or revisit is rewritten
- *   in place by its workflow; a reply draft is discarded (for `expectedHash`) and drafted again,
- *   since the reply drafter cannot edit a row.
- * - `draft-reply`: draft an answer for a conversation that has none.
+ * Start one of the engine's dispatch plans, from the card (`activityId`) or the conversation
+ * (`contactKey`) that offered it. `expectedHash` is the plan's `card.expectedHash` as the person
+ * saw it, or null for a plan without a card.
  */
 export const SalesDispatchInput = Schema.Union([
-  Schema.Struct({ action: Schema.Literal("research"), activityId: Schema.String }),
   Schema.Struct({
-    action: Schema.Literal("redraft"),
     activityId: Schema.String,
-    expectedHash: Schema.String,
+    action: SalesDispatchActionName,
+    expectedHash: Schema.NullOr(Schema.String),
     note: Schema.String,
   }),
   Schema.Struct({
-    action: Schema.Literal("draft-reply"),
     contactKey: Schema.String,
+    action: SalesDispatchActionName,
+    expectedHash: Schema.NullOr(Schema.String),
     note: Schema.String,
   }),
 ]);
 export type SalesDispatchInput = typeof SalesDispatchInput.Type;
 
-/** A thread a dispatch started. `target` is the card's activityId or the contact's key. */
-export const SalesDispatch = Schema.Struct({
-  target: Schema.String,
-  action: Schema.Literals(["research", "redraft", "draft-reply"]),
-  skill: Schema.String,
-  threadId: ThreadId,
-  projectId: ProjectId,
-  title: Schema.String,
-  startedAt: IsoDateTime,
-});
+/** A thread a dispatch started. */
+export const SalesDispatch = Schema.Struct({ threadId: ThreadId, title: Schema.String });
 export type SalesDispatch = typeof SalesDispatch.Type;
+
+/** The card (`activityId`) or conversation (`contactKey`) a dispatch started from. */
+export type SalesDispatchSource = { readonly activityId: string } | { readonly contactKey: string };
+
+/**
+ * The one definition of a dispatched thread's id: `sales:card:<activityId>:<uuid>` or
+ * `sales:contact:<contactKey>:<uuid>`, the key URI-encoded so it holds no `:`. The source is part
+ * of the id, so the read model remembers it across restarts. The contact key is the CRM's Contact
+ * page id, not an email, so the id carries no personal data and needs no hashing.
+ *
+ * This is the prefix of every id dispatched from one source: a source's runs are the threads
+ * whose id starts with it.
+ */
+export const salesDispatchThreadPrefix = (source: SalesDispatchSource) =>
+  "activityId" in source
+    ? `sales:card:${encodeURIComponent(source.activityId)}:`
+    : `sales:contact:${encodeURIComponent(source.contactKey)}:`;
 
 /**
  * The refusal codes the engine sends (`error` in its error body), spelled as it spells them. A
@@ -502,7 +569,7 @@ export type SalesEngineFailureCode = typeof SalesEngineFailureCode.Type;
 
 /**
  * Why a sales request failed, as clients show it. Each reason has one origin, except the few
- * engine codes Phoenix also raises itself (`stale_hash`, `not_open`, `bad_request`) when it
+ * engine codes Phoenix also raises itself (`stale_hash`, `bad_request`) when it
  * checks a card before dispatching.
  *
  * Phoenix refused before asking the engine:
@@ -587,8 +654,6 @@ export const SalesSnapshot = Schema.Struct({
   summaryReadAt: Schema.NullOr(IsoDateTime),
   /** When the server last asked the engine, successfully or not. */
   checkedAt: Schema.NullOr(IsoDateTime),
-  /** Threads dispatched from Sales since the server started, newest first. Memory only. */
-  dispatches: Schema.Array(SalesDispatch).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type SalesSnapshot = typeof SalesSnapshot.Type;
 

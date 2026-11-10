@@ -18,7 +18,6 @@ import type {
   SalesConversationList,
   SalesDevice,
   SalesDeviceList,
-  SalesDispatch,
   SalesEditInput,
   SalesEditResult,
   SalesEngineSettings,
@@ -37,13 +36,7 @@ import * as SalesEngineApi from "./SalesEngineApi.ts";
 /** The engine suggests about a minute for `/summary` and `/queue`; nothing there changes faster. */
 export const SALES_POLL_INTERVAL = "60 seconds";
 
-/** Dispatches the snapshot remembers. They live in memory only, so a restart forgets them. */
-const DISPATCH_MEMORY = 50;
-
-/** A snapshot without the dispatch list, which outlives engine reads and engine changes. */
-type EngineSnapshot = Omit<SalesSnapshot, "dispatches">;
-
-const EMPTY_SNAPSHOT: EngineSnapshot = {
+const EMPTY_SNAPSHOT: SalesSnapshot = {
   status: "not-configured",
   message: null,
   summary: null,
@@ -116,8 +109,6 @@ export class SalesService extends Context.Service<
       input: SalesEnrolDeviceInput,
     ) => Effect.Effect<SalesDevice, SalesActionError>;
     readonly revokeDevice: (deviceId: string) => Effect.Effect<SalesDevice, SalesActionError>;
-    /** Remembers a thread Sales started, so every client can link it from its card. */
-    readonly recordDispatch: (dispatch: SalesDispatch) => Effect.Effect<void>;
   }
 >()("t3/sales/SalesService") {}
 
@@ -171,7 +162,7 @@ const salesStreamEvents = (snapshots: Stream.Stream<SalesSnapshot>) =>
 const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
-  const state = yield* SubscriptionRef.make<SalesSnapshot>({ ...EMPTY_SNAPSHOT, dispatches: [] });
+  const state = yield* SubscriptionRef.make<SalesSnapshot>(EMPTY_SNAPSHOT);
   /** The engine the snapshot's summary came from, so a new URL or token drops the old one. */
   const lastConfigKey = yield* Ref.make<string | null>(null);
   const readConfig = serverSettings.getSettings.pipe(
@@ -184,12 +175,8 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  /** Replaces what the engine said, keeping the dispatch list. */
-  const publish = (snapshot: EngineSnapshot) =>
-    SubscriptionRef.updateAndGet(state, (current) => ({
-      ...snapshot,
-      dispatches: current.dispatches,
-    }));
+  const publish = (snapshot: SalesSnapshot) =>
+    SubscriptionRef.set(state, snapshot).pipe(Effect.as(snapshot));
 
   const readEngine = (config: SalesEngineSettings) =>
     Effect.gen(function* () {
@@ -317,11 +304,6 @@ const make = Effect.gen(function* () {
     enrolDevice: (input) => withEngine((config) => SalesEngineApi.enrolDevice(config, input)),
     revokeDevice: (deviceId) =>
       withEngine((config) => SalesEngineApi.revokeDevice(config, deviceId)),
-    recordDispatch: (dispatch) =>
-      SubscriptionRef.update(state, (current) => ({
-        ...current,
-        dispatches: [dispatch, ...current.dispatches].slice(0, DISPATCH_MEMORY),
-      })),
   });
 });
 

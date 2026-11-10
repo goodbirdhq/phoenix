@@ -13,12 +13,19 @@ import {
   type SalesKeyPlatform,
 } from "@t3tools/client-runtime/sales/device-guard";
 import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
+import { dispatchedThreads } from "@t3tools/client-runtime/sales/outreach";
 import {
   canActOnSales,
   createSalesEnvironmentAtoms,
   isSalesConfigured,
 } from "@t3tools/client-runtime/state/sales";
-import { type EnvironmentId, type SalesDevice, salesEngineKey } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type SalesDevice,
+  type SalesDispatchSource,
+  salesDispatchThreadPrefix,
+  salesEngineKey,
+} from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -26,6 +33,7 @@ import { isElectron } from "../env";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { isHostedStaticApp } from "../hostedPairing";
 import { type EnvironmentPresentation, useEnvironments } from "./environments";
+import { useEnvironmentThreadTitles } from "./entities";
 import { useAtomCommand } from "./use-atom-command";
 
 export const salesEnvironment = createSalesEnvironmentAtoms(connectionAtomRuntime);
@@ -56,6 +64,13 @@ export function useSalesTarget(requested: string | undefined) {
 /** Subscribes the environment's Sales stream while mounted; the server polls only then. */
 export function useSalesState(environmentId: EnvironmentId) {
   return useAtomValue(salesEnvironment.stateValueAtom(environmentId));
+}
+
+/** The threads dispatched from a card or a conversation, from the environment's read model. */
+export function useDispatchedThreads(environmentId: EnvironmentId, source: SalesDispatchSource) {
+  const titles = useEnvironmentThreadTitles(environmentId);
+  const prefix = salesDispatchThreadPrefix(source);
+  return useMemo(() => dispatchedThreads(titles, prefix), [titles, prefix]);
 }
 
 // --- Device keys ------------------------------------------------------------------------------

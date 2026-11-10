@@ -5,7 +5,11 @@ import {
 } from "@t3tools/client-runtime/sales/draft-card";
 import { checkSigning, thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
 import { cardActions } from "@t3tools/client-runtime/sales/outreach";
-import type { SalesQueueItemDetail } from "@t3tools/contracts";
+import {
+  type SalesDispatchAction,
+  type SalesQueueItemDetail,
+  safeSalesNote,
+} from "@t3tools/contracts";
 
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
@@ -33,6 +37,7 @@ export function SalesDraftActions(props: {
     );
   }
   const actions = cardActions(detail);
+  const { redraft, research } = detail.dispatch;
   const busy = state.busy !== null;
   const { refusal } = checkSigning(device);
   return (
@@ -63,19 +68,19 @@ export function SalesDraftActions(props: {
               Edit
             </Button>
           ) : null}
-          {actions.redraft ? (
+          {redraft ? (
             <Button size="sm" variant="outline" disabled={busy} onClick={card.toggleRedraft}>
-              Redraft with notes
+              {redraft.title}
             </Button>
           ) : null}
-          {props.allowResearch && detail.contact.accountName ? (
+          {props.allowResearch && research ? (
             <Button
               size="sm"
               variant="outline"
               disabled={busy}
               onClick={() => void card.research()}
             >
-              Research this
+              {research.title}
             </Button>
           ) : null}
           {actions.discard ? (
@@ -95,13 +100,13 @@ export function SalesDraftActions(props: {
           </p>
         ) : null}
       </div>
-      {state.redraftNote !== null ? (
+      {redraft && state.redraftNote !== null ? (
         <RedraftForm
           card={card}
+          plan={redraft}
           note={state.redraftNote}
           busy={state.busy}
           activityId={detail.activityId}
-          isReply={detail.kind === "reply"}
         />
       ) : null}
     </>
@@ -110,12 +115,12 @@ export function SalesDraftActions(props: {
 
 function RedraftForm(props: {
   readonly card: DraftCard;
+  readonly plan: SalesDispatchAction;
   readonly note: string;
   readonly busy: DraftCardState["busy"];
   readonly activityId: string;
-  readonly isReply: boolean;
 }) {
-  const { card, note } = props;
+  const { card, plan, note } = props;
   return (
     <form
       className="grid gap-2 rounded-lg border p-3"
@@ -132,16 +137,19 @@ function RedraftForm(props: {
         onChange={(event) => card.setRedraftNote(event.target.value)}
       />
       <p className="text-xs text-muted-foreground">
-        {props.isReply
-          ? "This discards the waiting answer, then starts a run that drafts a new one with your note."
-          : "This starts a run in the sales agents project that rewrites this draft with your note."}
+        {plan.discardFirst ? "This discards this draft, then starts " : "This starts "}
+        {plan.title} in the sales agents project with your note.
       </p>
       <div className="flex justify-end gap-2">
         <Button size="xs" variant="outline" onClick={card.toggleRedraft}>
           Cancel
         </Button>
-        <Button type="submit" size="xs" disabled={props.busy !== null || note.trim().length === 0}>
-          {props.busy === "dispatch" ? "Starting…" : "Start redraft"}
+        <Button
+          type="submit"
+          size="xs"
+          disabled={props.busy !== null || (plan.noteRequired && safeSalesNote(note).length === 0)}
+        >
+          {props.busy === "dispatch" ? "Starting…" : plan.title}
         </Button>
       </div>
     </form>

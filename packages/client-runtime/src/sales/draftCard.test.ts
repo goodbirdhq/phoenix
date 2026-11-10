@@ -1,7 +1,7 @@
 import {
-  ProjectId,
   SalesActionError,
   type SalesActionFailureReason,
+  type SalesDispatchInput,
   type SalesQueueItemDetail,
   ThreadId,
 } from "@t3tools/contracts";
@@ -75,7 +75,7 @@ function setup(options: {
     },
     confirm: () => Promise.resolve(true),
     onChanged: () => {},
-    onAnswerDiscarded: () => {},
+    onDiscardedWithoutRun: () => {},
     ...options.commands,
   };
   const card = createDraftCard(commands, served.contentHash);
@@ -235,12 +235,12 @@ describe("draft card actions", () => {
     expect(calls.discarded).toEqual([ENGINE_HASH]);
   });
 
-  it("tells the page when a reply redraft discarded the answer but did not start", async () => {
+  it("tells the page when a plan discarded the draft but its run did not start", async () => {
     const discarded: string[] = [];
     const { card } = setup({
       commands: {
         dispatch: async () => refused("dispatch-failed", "discarded"),
-        onAnswerDiscarded: (message) => discarded.push(message),
+        onDiscardedWithoutRun: (message) => discarded.push(message),
       },
     });
     await card.load();
@@ -251,23 +251,52 @@ describe("draft card actions", () => {
   });
 
   it("links the thread a dispatch started and closes the redraft form", async () => {
-    const thread = {
-      target: "act-1",
-      action: "redraft" as const,
-      skill: "chase-drafting",
-      threadId: ThreadId.make("thread-1"),
-      projectId: ProjectId.make("project-1"),
-      title: "Redraft Ana",
-      startedAt: "2026-11-10T09:00:00.000Z",
-    };
+    const thread = { threadId: ThreadId.make("sales:card:act-1:t1"), title: "Redraft for Ana" };
+    const sent: SalesDispatchInput[] = [];
     const { card } = setup({
-      commands: { dispatch: async () => AsyncResult.success(thread) },
+      commands: {
+        dispatch: async (input) => {
+          sent.push(input);
+          return AsyncResult.success(thread);
+        },
+      },
     });
     await card.load();
     card.toggleRedraft();
     card.setRedraftNote("Shorter.");
     await card.startRedraft();
+    // Bound to the version of the card the plan was built for.
+    expect(sent).toEqual([
+      { activityId: "act-1", action: "redraft", expectedHash: ENGINE_HASH, note: "Shorter." },
+    ]);
     expect(card.getState().redraftNote).toBeNull();
     expect(card.getState().notice).toMatchObject({ title: "Run started", thread });
+  });
+
+  it("starts nothing the engine does not offer, or that needs a note and has none", async () => {
+    const sent: SalesDispatchInput[] = [];
+    const commands = {
+      dispatch: async (input: SalesDispatchInput) => {
+        sent.push(input);
+        return refused<never>("dispatch-failed");
+      },
+    };
+    const needsNote = setup({ commands });
+    await needsNote.card.load();
+    needsNote.card.toggleRedraft();
+    needsNote.card.setRedraftNote(" \n\t ");
+    await needsNote.card.startRedraft();
+
+    const offered = detail().dispatch;
+    const none = setup({
+      served: detail({ dispatch: { ...offered, redraft: null, research: null } }),
+      commands,
+    });
+    await none.card.load();
+    none.card.toggleRedraft();
+    none.card.setRedraftNote("Shorter.");
+    await none.card.startRedraft();
+    await none.card.research();
+    expect(sent).toEqual([]);
   });
 });

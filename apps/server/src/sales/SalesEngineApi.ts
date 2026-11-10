@@ -76,7 +76,7 @@ const PHOENIX_REASONS = new Set<SalesActionFailureReason>([
 ]);
 
 /** Engine codes Phoenix also raises when it checks a card itself, before asking the engine. */
-type CheckedByPhoenix = Extract<SalesEngineFailureCode, "stale_hash" | "not_open" | "bad_request">;
+type CheckedByPhoenix = Extract<SalesEngineFailureCode, "stale_hash" | "bad_request">;
 
 interface FailureExtra {
   readonly message?: string;

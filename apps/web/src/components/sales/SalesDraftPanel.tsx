@@ -1,11 +1,11 @@
 import { displayedDraft } from "@t3tools/client-runtime/sales/signing";
 import type { DraftNotice } from "@t3tools/client-runtime/sales/draft-card";
 import { kindLabel, stateLabel } from "@t3tools/client-runtime/sales/outreach";
-import type { EnvironmentId, SalesDispatch, SalesQueueItemDetail } from "@t3tools/contracts";
+import type { EnvironmentId, SalesQueueItemDetail } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { type Ref, useImperativeHandle, useRef } from "react";
 
-import type { useSalesDevice } from "../../state/sales";
+import { type useSalesDevice, useDispatchedThreads } from "../../state/sales";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Spinner } from "../ui/spinner";
@@ -43,18 +43,18 @@ export function SalesDraftPanel({
   readonly listedHash: string | null;
   readonly canAct: boolean;
   readonly device: SalesDeviceView;
-  readonly dispatches: ReadonlyArray<SalesDispatch>;
   readonly approveLabel?: string;
   readonly discardLabel?: string;
   readonly allowResearch?: boolean;
   /** Called after any action, so a page can read its own list again. */
   readonly onChanged?: () => void;
-  /** Called when a reply redraft discarded the answer but its run did not start. */
-  readonly onAnswerDiscarded?: (message: string) => void;
+  /** Called when a plan discarded the draft but the run that replaces it did not start. */
+  readonly onDiscardedWithoutRun?: (message: string) => void;
   readonly ref?: Ref<SalesDraftPanelHandle>;
 }) {
   const { environmentId, activityId } = props;
   const [card, state] = useDraftCard(props);
+  const threads = useDispatchedThreads(environmentId, { activityId });
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const focusBody = () => bodyRef.current?.focus();
   useImperativeHandle(ref, () => ({ approve: () => void card.approve(props.device), focusBody }));
@@ -67,8 +67,6 @@ export function SalesDraftPanel({
       </div>
     );
   }
-  const threads = props.dispatches.filter((entry) => entry.target === activityId);
-
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
       <DraftHeading detail={detail} />
