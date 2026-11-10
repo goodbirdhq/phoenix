@@ -11,6 +11,7 @@ import {
 import { RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useEnvironmentConnected } from "../../state/environments";
 import { salesEnvironment, useSalesDevice } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
@@ -46,7 +47,10 @@ const INTENT_VARIANT: Record<string, "success" | "warning" | "error" | "secondar
   unsubscribe: "error",
 };
 
-/** Replies by contact, and each contact's history with our drafted answer. Read on demand. */
+/**
+ * Replies by contact, and each contact's history with our drafted answer. Read once the
+ * environment is connected, and again on reconnect.
+ */
 export function SalesConversations(props: {
   readonly environmentId: EnvironmentId;
   readonly baseUrl: string;
@@ -63,6 +67,7 @@ export function SalesConversations(props: {
   const [loading, setLoading] = useState(false);
   const device = useSalesDevice(environmentId, props.baseUrl, canAct);
   const panel = useRef<SalesDraftPanelHandle>(null);
+  const connected = useEnvironmentConnected(environmentId);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -80,8 +85,8 @@ export function SalesConversations(props: {
   }, [environmentId, listConversations]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (connected) void load();
+  }, [connected, load]);
 
   const items = useMemo(() => sortConversations(list?.items ?? []), [list]);
   const current = items.find((item) => item.contactKey === props.selected) ?? items[0] ?? null;
@@ -102,9 +107,9 @@ export function SalesConversations(props: {
       <Empty>
         <EmptyHeader>
           <EmptyTitle>
-            {failure ? "Conversations are unavailable" : "Reading conversations…"}
+            {failure && connected ? "Conversations are unavailable" : "Reading conversations…"}
           </EmptyTitle>
-          {failure ? <EmptyDescription>{failure}</EmptyDescription> : null}
+          {failure && connected ? <EmptyDescription>{failure}</EmptyDescription> : null}
         </EmptyHeader>
       </Empty>
     );
@@ -223,6 +228,7 @@ function ConversationDetailView({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
+  const connected = useEnvironmentConnected(environmentId);
 
   const load = useCallback(async () => {
     const result = await getConversation({
@@ -234,8 +240,8 @@ function ConversationDetailView({
   }, [conversation.contactKey, environmentId, getConversation]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (connected) void load();
+  }, [connected, load]);
 
   const { onChanged } = props;
   // A run that drafted an answer settles: read the conversation and the list once more.
@@ -300,7 +306,7 @@ function ConversationDetailView({
             </p>
           ) : null}
           {detail === null ? (
-            failure ? (
+            failure && connected ? (
               <p className="text-sm text-muted-foreground">{failure}</p>
             ) : (
               <Spinner />

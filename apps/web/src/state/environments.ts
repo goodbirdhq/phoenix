@@ -70,6 +70,14 @@ export function useEnvironment(
   );
 }
 
+/**
+ * Whether the environment is connected now. A one-shot read lists this as an effect dependency,
+ * so it waits for the connection instead of failing on a fresh load, and reads again on reconnect.
+ */
+export function useEnvironmentConnected(environmentId: EnvironmentId | null): boolean {
+  return useEnvironment(environmentId)?.connection.phase === "connected";
+}
+
 export function usePrimaryEnvironment(): EnvironmentPresentation | null {
   return useEnvironment(usePrimaryEnvironmentId());
 }

@@ -32,7 +32,11 @@ import { connectionAtomRuntime } from "../connection/runtime";
 import { isElectron } from "../env";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { isHostedStaticApp } from "../hostedPairing";
-import { type EnvironmentPresentation, useEnvironments } from "./environments";
+import {
+  type EnvironmentPresentation,
+  useEnvironmentConnected,
+  useEnvironments,
+} from "./environments";
 import { useEnvironmentThreadTitles } from "./entities";
 import { useAtomCommand } from "./use-atom-command";
 
@@ -182,8 +186,9 @@ export function useApproveVersions(environmentId: EnvironmentId) {
 }
 
 /**
- * This device's key for the environment's engine and the engine's device list. Rereads the
- * list when the window regains focus, since a device turns active by a press in Slack.
+ * This device's key for the environment's engine and the engine's device list, read once
+ * connected. Rereads the list on reconnect and when the window regains focus, since a device
+ * turns active by a press in Slack.
  */
 export function useSalesDevice(environmentId: EnvironmentId, baseUrl: string, canAct: boolean) {
   const engine = salesEngineKey(baseUrl);
@@ -193,10 +198,11 @@ export function useSalesDevice(environmentId: EnvironmentId, baseUrl: string, ca
   const [key, setKey] = useState<SalesDeviceKey | null | undefined>(undefined);
   const [devices, setDevices] = useState<ReadonlyArray<SalesDevice> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const connected = useEnvironmentConnected(environmentId);
 
   const reload = useCallback(async () => {
     setKey(await salesDeviceKeyStore.load(engine).catch(() => null));
-    if (!canAct) return;
+    if (!canAct || !connected) return;
     const result = await listDevices({ environmentId, input: {} });
     if (result._tag === "Success") {
       setDevices(result.value.items);
@@ -204,7 +210,7 @@ export function useSalesDevice(environmentId: EnvironmentId, baseUrl: string, ca
     } else {
       setError(readSalesFailure(result).description);
     }
-  }, [canAct, engine, environmentId, listDevices]);
+  }, [canAct, connected, engine, environmentId, listDevices]);
 
   useEffect(() => {
     void reload();
