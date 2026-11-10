@@ -71,6 +71,54 @@ it("fills the engine's prompt with the note block", () => {
   );
 });
 
+// The engine's prompt for a reply redraft, as `prompt()` in birdhouse
+// `engine/src/sales/dispatch-plan.ts` renders it.
+const engineReplyPrompt = (lastTargetLine: string) =>
+  [
+    "Read `.claude/skills/reply-drafting/SKILL.md` in this repo and follow it. Your",
+    "working directory is the birdhouse checkout.",
+    "",
+    "Gabriel dispatched this run from Phoenix against one target. Take the",
+    "workflow's path for a run handed a target, and work this target only:",
+    "",
+    lastTargetLine,
+    "",
+    "End with a short report. Your final message is the run's report, so put in",
+    "it what the workflow's report section asks for. Nobody will read the",
+    "transcript.",
+    "",
+    "If the skill file, or the workflow file it names, does not exist, stop and",
+    "say so. Never improvise the task: a missing file means the workflow was",
+    "retired.",
+  ].join("\n");
+
+it("fills an engine-shaped plan, the note on its own lines after the target", () => {
+  const checked = SalesDispatch.checkPlan(
+    {
+      activityId: "act-reply",
+      action: "redraft",
+      expectedHash: HASH,
+      note: "Shorter,\r\n\r\nand mention Tuesday.  ",
+    },
+    plans({
+      redraft: {
+        title: "Redraft for Ana Ruiz",
+        skill: "reply-drafting",
+        prompt: engineReplyPrompt("Contact: https://www.notion.so/contact1{{note}}"),
+        noteRequired: true,
+        discardFirst: true,
+        card: { activityId: "act-reply", expectedHash: HASH },
+      },
+    }),
+  );
+  assert.strictEqual(
+    "_tag" in checked ? null : checked.prompt,
+    engineReplyPrompt(
+      "Contact: https://www.notion.so/contact1\nNote from Gabriel:\nShorter,\nand mention Tuesday.",
+    ),
+  );
+});
+
 it("starts nothing the fresh plan no longer offers", () => {
   const checked = SalesDispatch.checkPlan(
     { activityId: "act-1", action: "redraft", expectedHash: HASH, note: "Shorter." },
