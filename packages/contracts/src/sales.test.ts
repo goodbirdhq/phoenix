@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   SalesActionError,
-  parseSalesDispatchThreadId,
   salesDispatchThreadPrefix,
   salesEngineKey,
   salesEngineRoot,
@@ -74,18 +73,6 @@ describe("SalesActionError", () => {
 });
 
 describe("dispatch thread ids", () => {
-  it("reads back the card or conversation each id was made for", () => {
-    for (const source of [
-      { activityId: "act-1" },
-      { activityId: "act-10" },
-      { contactKey: "3a2b9c1d-0000-4000-8000-000000000001" },
-      { activityId: "a:b" },
-      { contactKey: "key:with:colons%" },
-    ]) {
-      expect(parseSalesDispatchThreadId(`${salesDispatchThreadPrefix(source)}t1`)).toEqual(source);
-    }
-  });
-
   it("keeps one card's prefix from matching another's", () => {
     const id = `${salesDispatchThreadPrefix({ activityId: "act-10" })}t1`;
     expect(id.startsWith(salesDispatchThreadPrefix({ activityId: "act-1" }))).toBe(false);
@@ -94,11 +81,5 @@ describe("dispatch thread ids", () => {
         salesDispatchThreadPrefix({ activityId: "a" }),
       ),
     ).toBe(false);
-  });
-
-  it("reads any other thread as not dispatched", () => {
-    for (const id of ["thread-4", "sales:card:a:b:t1", "sales:card::t1", "sales:card:%zz:t1"]) {
-      expect(parseSalesDispatchThreadId(id)).toBeNull();
-    }
   });
 });

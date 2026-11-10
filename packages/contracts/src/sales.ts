@@ -531,26 +531,13 @@ export type SalesDispatchSource = { readonly activityId: string } | { readonly c
  * of the id, so the read model remembers it across restarts. The contact key is the CRM's Contact
  * page id, not an email, so the id carries no personal data and needs no hashing.
  *
- * This is the prefix of every id dispatched from one source; `parseSalesDispatchThreadId` reads
- * the source back.
+ * This is the prefix of every id dispatched from one source: a source's runs are the threads
+ * whose id starts with it.
  */
 export const salesDispatchThreadPrefix = (source: SalesDispatchSource) =>
   "activityId" in source
     ? `sales:card:${encodeURIComponent(source.activityId)}:`
     : `sales:contact:${encodeURIComponent(source.contactKey)}:`;
-
-/** The source a thread was dispatched from, or null for any other thread. */
-export function parseSalesDispatchThreadId(threadId: string): SalesDispatchSource | null {
-  const [, kind, encoded] = /^sales:(card|contact):([^:]+):[^:]+$/u.exec(threadId) ?? [];
-  if (encoded === undefined) return null;
-  try {
-    const key = decodeURIComponent(encoded);
-    return kind === "card" ? { activityId: key } : { contactKey: key };
-  } catch {
-    // Not an id Phoenix made: its key is not URI-encoded.
-    return null;
-  }
-}
 
 /**
  * The refusal codes the engine sends (`error` in its error body), spelled as it spells them. A
