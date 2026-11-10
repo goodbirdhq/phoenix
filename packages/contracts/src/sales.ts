@@ -517,12 +517,11 @@ export type SalesMailboxList = typeof SalesMailboxList.Type;
 export const SalesHealth = Schema.Struct({
   generatedAt: Schema.String,
   healthy: Bool,
-  /** One line per finding, with `&`, `<` and `>` escaped for Slack. */
+  /**
+   * Slack mrkdwn, a line per finding, with `&`, `<` and `>` escaped. It already names any
+   * scheduled run that has not finished (`overdueRuns`), so Phoenix reads no more than this.
+   */
   text: Text,
-  /** Scheduled workflows that have not reported finishing since they were last due. */
-  overdueRuns: Schema.Array(Schema.Struct({ workflow: Schema.String, dueAt: NullableString })).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
 });
 export type SalesHealth = typeof SalesHealth.Type;
 

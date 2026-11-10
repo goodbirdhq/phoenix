@@ -10,7 +10,7 @@ export function taskActionLabel(action: string): string {
     case "dm":
       return "Message";
     default:
-      return action.length > 0 ? action[0]!.toUpperCase() + action.slice(1) : "Task";
+      return "LinkedIn task";
   }
 }
 
@@ -35,9 +35,9 @@ export function taskDueLabel(dueOn: string | null, today: string | null): string
 }
 
 export interface SalesTaskGroups {
-  /** On a Slack card, ready to do. */
+  /** Posted to Slack, ready to do. */
   readonly ready: ReadonlyArray<SalesTask>;
-  /** Not on a card yet; the engine posts them as the budget allows. */
+  /** Not posted yet; the engine posts them as the budget allows. */
   readonly upcoming: ReadonlyArray<SalesTask>;
 }
 

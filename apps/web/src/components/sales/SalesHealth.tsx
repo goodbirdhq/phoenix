@@ -1,32 +1,43 @@
-import { healthLines, mailboxState, poolLine } from "@t3tools/client-runtime/sales/mailboxes";
+import {
+  healthLines,
+  mailboxFacts,
+  mailboxState,
+  mailboxStatusLabel,
+  mailboxStatusTone,
+  poolLine,
+} from "@t3tools/client-runtime/sales/health";
 import { salesTime } from "@t3tools/client-runtime/sales/time";
 import type { EnvironmentId, SalesMailbox, SalesMailboxList } from "@t3tools/contracts";
 import { CircleCheckIcon, TriangleAlertIcon } from "lucide-react";
 
-import { useNowMinute } from "../../hooks/useNowMinute";
+import { useNowMs } from "../../hooks/useNowMinute";
 import { useSalesView } from "../../state/sales";
 import { Badge } from "../ui/badge";
-import { SalesViewFrame } from "./SalesViewFrame";
+import { SalesViewPage, SalesViewRead } from "./SalesViewFrame";
 
-const STATUS_VARIANT: Record<string, "info" | "warning" | "outline"> = {
-  warming: "info",
-  benched: "warning",
-  retired: "outline",
-};
-
-const at = (iso: string | null, now: number) => salesTime(iso, now)?.local ?? null;
-
-/** The engine's health check as it would read now, and the mailbox pool. Read-only. */
+/**
+ * The engine's health check as it would read now, and the mailbox pool. Read-only. Each is its
+ * own engine list, so either shows while the other is missing.
+ */
 export function SalesHealth({ environmentId }: { readonly environmentId: EnvironmentId }) {
-  const { read, failed } = useSalesView(environmentId, "health");
-  const now = Date.parse(`${useNowMinute()}:00Z`);
+  const now = useNowMs();
   return (
-    <SalesViewFrame title="Health" read={read} failed={failed}>
-      {(health) => {
-        const [headline, ...findings] = healthLines(health.text);
-        return (
-          <>
-            <section aria-label="Engine" className="space-y-2">
+    <SalesViewPage title="Health">
+      <EngineHealth environmentId={environmentId} />
+      <SalesMailboxes environmentId={environmentId} now={now} />
+    </SalesViewPage>
+  );
+}
+
+function EngineHealth({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const { read, failed } = useSalesView(environmentId, "health");
+  return (
+    <section aria-label="Engine" className="space-y-2">
+      <SalesViewRead name="Engine health" read={read} failed={failed} inline>
+        {(health) => {
+          const [headline, ...findings] = healthLines(health.text);
+          return (
+            <>
               <p className="flex items-start gap-2 text-sm">
                 {health.healthy ? (
                   <CircleCheckIcon aria-hidden className="mt-0.5 size-4 shrink-0" />
@@ -44,25 +55,11 @@ export function SalesHealth({ environmentId }: { readonly environmentId: Environ
                   ))}
                 </ul>
               ) : null}
-              {health.overdueRuns.length > 0 ? (
-                <div className="pl-6 text-xs">
-                  <p className="font-medium">Scheduled runs that have not finished</p>
-                  <ul className="text-muted-foreground">
-                    {health.overdueRuns.map((run) => (
-                      <li key={run.workflow}>
-                        {run.workflow}
-                        {run.dueAt ? `, due ${at(run.dueAt, now)}` : ""}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-            </section>
-            <SalesMailboxes environmentId={environmentId} now={now} />
-          </>
-        );
-      }}
-    </SalesViewFrame>
+            </>
+          );
+        }}
+      </SalesViewRead>
+    </section>
   );
 }
 
@@ -83,19 +80,15 @@ function SalesMailboxes({
           <span className="font-normal text-muted-foreground"> · {poolLine(list.items)}</span>
         ) : null}
       </h2>
-      {list === null ? (
-        <p className="text-sm text-muted-foreground">
-          {failed || (read !== null && read.status !== "loading")
-            ? (read?.message ?? "Could not read the mailboxes.")
-            : "Reading mailboxes…"}
-        </p>
-      ) : (
-        <ul className="divide-y rounded-lg border">
-          {list.items.map((mailbox) => (
-            <MailboxRow key={mailbox.address} mailbox={mailbox} list={list} now={now} />
-          ))}
-        </ul>
-      )}
+      <SalesViewRead name="Mailboxes" read={read} failed={failed} inline>
+        {(mailboxes) => (
+          <ul className="divide-y rounded-lg border">
+            {mailboxes.items.map((mailbox) => (
+              <MailboxRow key={mailbox.address} mailbox={mailbox} list={mailboxes} now={now} />
+            ))}
+          </ul>
+        )}
+      </SalesViewRead>
     </section>
   );
 }
@@ -107,27 +100,13 @@ function MailboxRow(props: {
 }) {
   const { mailbox, now } = props;
   const state = mailboxState(mailbox, props.list.bounceRule, now);
-  const variant = STATUS_VARIANT[mailbox.status];
-  const synced = at(mailbox.lastSyncedAt, now);
-  const next = state.restingUntil
-    ? `Resting until ${at(state.restingUntil, now)}`
-    : state.nextSendAt
-      ? `Next send ${at(state.nextSendAt, now)}`
-      : null;
-  const facts = [
-    `${mailbox.coldSentToday} of ${mailbox.dailyCap} cold today`,
-    mailbox.repliesSentToday > 0 ? `${mailbox.repliesSentToday} replies` : null,
-    mailbox.bouncesToday > 0 ? `${mailbox.bouncesToday} bounced today` : null,
-    mailbox.hardBouncesInWindow > 0
-      ? `${mailbox.hardBouncesInWindow} of ${props.list.bounceRule.threshold} hard bounces before it is benched`
-      : null,
-    next,
-  ].filter(Boolean);
+  const tone = mailboxStatusTone(mailbox.status);
+  const synced = salesTime(mailbox.lastSyncedAt, now)?.local ?? null;
   return (
     <li className="space-y-0.5 px-4 py-3">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="min-w-0 truncate text-sm">{mailbox.address}</span>
-        {variant ? <Badge variant={variant}>{mailbox.status}</Badge> : null}
+        {tone ? <Badge variant={tone}>{mailboxStatusLabel(mailbox.status)}</Badge> : null}
         {state.nearBench ? <Badge variant="warning">One bounce from benched</Badge> : null}
         <span className="ml-auto text-xs text-muted-foreground">
           {state.syncStale ? (
@@ -139,7 +118,9 @@ function MailboxRow(props: {
           ) : null}
         </span>
       </div>
-      <p className="text-xs text-muted-foreground">{facts.join(" · ")}</p>
+      <p className="text-xs text-muted-foreground">
+        {mailboxFacts(mailbox, props.list.bounceRule, now)}
+      </p>
       {mailbox.statusReason ? (
         <p className="text-xs text-muted-foreground">{mailbox.statusReason}</p>
       ) : null}

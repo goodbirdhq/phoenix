@@ -1,7 +1,10 @@
 import type { SalesLookItem, SalesSnapshot, SalesSummary } from "@t3tools/contracts";
 
+import { SALES_AREA_LABELS, type SalesArea } from "./areas.ts";
+import { safeHttpUrl } from "./links.ts";
+
 /** The work areas the engine's summary covers, in the order Home lists them. */
-export type SalesWorkAreaKey = "outreach" | "autopilot" | "todo" | "conversations";
+type SalesWorkAreaKey = Extract<SalesArea, "outreach" | "autopilot" | "todo" | "conversations">;
 
 export interface SalesHomeFigure {
   readonly label: string;
@@ -41,7 +44,7 @@ function outreach(summary: SalesSummary): SalesHomeArea {
         : "Nothing waits for approval";
   return {
     key: "outreach",
-    label: "Outreach",
+    label: SALES_AREA_LABELS.outreach,
     count: awaiting.total,
     status,
     figures: [
@@ -63,7 +66,7 @@ function autopilot(summary: SalesSummary): SalesHomeArea {
         : `${today.sent} sent, ${today.scheduled} scheduled today`;
   return {
     key: "autopilot",
-    label: "Autopilot",
+    label: SALES_AREA_LABELS.autopilot,
     // Refusals get a normal card, so Outreach already counts them.
     count: today.failed,
     status,
@@ -71,6 +74,7 @@ function autopilot(summary: SalesSummary): SalesHomeArea {
       { label: "Sent", value: String(today.sent) },
       { label: "Scheduled", value: String(today.scheduled) },
       { label: "Held", value: String(today.held) },
+      ...(today.paused > 0 ? [{ label: "Paused", value: String(today.paused) }] : []),
     ],
   };
 }
@@ -81,11 +85,11 @@ function todo(summary: SalesSummary): SalesHomeArea {
     onSlack > 0
       ? `${plural(onSlack, "LinkedIn task")} ready to do`
       : pending > 0
-        ? `${plural(pending, "LinkedIn task")} not yet on a card`
+        ? `${plural(pending, "LinkedIn task")} not posted yet`
         : "No LinkedIn tasks";
   return {
     key: "todo",
-    label: "To do",
+    label: SALES_AREA_LABELS.todo,
     count: onSlack,
     status,
     figures: [
@@ -103,7 +107,7 @@ function conversations(summary: SalesSummary): SalesHomeArea {
   const drafted = awaitingAnswer - awaitingAnswerWithoutDraft;
   return {
     key: "conversations",
-    label: "Conversations",
+    label: SALES_AREA_LABELS.conversations,
     // A reply with a drafted answer already counts under Outreach, as a draft waiting.
     count: awaitingAnswerWithoutDraft,
     status:
@@ -218,7 +222,7 @@ export interface SalesLookItemView {
   /** Who and what, never a bare id. */
   readonly title: string;
   readonly why: string | null;
-  /** The Notion page `who` names, when the engine sent its id instead of a name. */
+  /** The Notion page it is about: the engine's link, or the page an id in `who` names. */
   readonly notionUrl: string | null;
 }
 
@@ -236,7 +240,9 @@ export function lookItemView(item: SalesLookItem): SalesLookItemView {
   return {
     title,
     why: title === item.why ? null : item.why,
-    notionUrl: pageId === null ? null : `https://www.notion.so/${pageId.replaceAll("-", "")}`,
+    notionUrl:
+      safeHttpUrl(item.notionUrl) ??
+      (pageId === null ? null : `https://www.notion.so/${pageId.replaceAll("-", "")}`),
   };
 }
 

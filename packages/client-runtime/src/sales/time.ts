@@ -14,24 +14,47 @@ export interface SalesTimeOptions {
   readonly locale?: string;
 }
 
-const formatter = (locale: string | undefined, timeZone: string | undefined, weekday: boolean) =>
-  new Intl.DateTimeFormat(locale, {
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+/** One formatter per locale and options: building one is far dearer than formatting with it. */
+const formatter = (locale: string | undefined, options: Intl.DateTimeFormatOptions) => {
+  const key = JSON.stringify([locale ?? null, options]);
+  let cached = formatters.get(key);
+  if (cached === undefined) {
+    cached = new Intl.DateTimeFormat(locale, options);
+    formatters.set(key, cached);
+  }
+  return cached;
+};
+
+const clock = (locale: string | undefined, timeZone: string | undefined, weekday: boolean) =>
+  formatter(locale, {
     timeZone,
     ...(weekday ? { weekday: "short" } : {}),
     hour: "numeric",
     minute: "2-digit",
   });
 
+/** The calendar day an instant falls on in a zone; en-CA writes it as `YYYY-MM-DD`. */
 const dayKey = (ms: number, timeZone: string | undefined) =>
-  new Intl.DateTimeFormat("en-CA", { timeZone }).format(ms);
+  formatter("en-CA", { timeZone }).format(ms);
 
+const knownZones = new Map<string, boolean>();
 const isZone = (zone: string) => {
-  try {
-    return new Intl.DateTimeFormat("en", { timeZone: zone }).resolvedOptions().timeZone !== "";
-  } catch {
-    return false;
+  let known = knownZones.get(zone);
+  if (known === undefined) {
+    try {
+      formatter("en", { timeZone: zone });
+      known = true;
+    } catch {
+      known = false;
+    }
+    knownZones.set(zone, known);
   }
+  return known;
 };
+
+const parse = (iso: string | null) => (iso === null ? Number.NaN : Date.parse(iso));
 
 /** A sales instant for display, with `now` deciding what "today" is. Null for a missing or unreadable one. */
 export function salesTime(
@@ -39,16 +62,40 @@ export function salesTime(
   now: number,
   options: SalesTimeOptions = {},
 ): SalesTime | null {
-  const ms = iso === null ? Number.NaN : Date.parse(iso);
+  const ms = parse(iso);
   if (Number.isNaN(ms)) return null;
   const { locale, localZone } = options;
-  const local = formatter(locale, localZone, dayKey(ms, localZone) !== dayKey(now, localZone));
+  const local = clock(locale, localZone, dayKey(ms, localZone) !== dayKey(now, localZone)).format(
+    ms,
+  );
   const theirZone = options.theirZone;
-  if (!theirZone || !isZone(theirZone)) return { local: local.format(ms), theirs: null };
+  if (!theirZone || !isZone(theirZone)) return { local, theirs: null };
   const otherDay = dayKey(ms, theirZone) !== dayKey(ms, localZone);
-  const theirs = formatter(locale, theirZone, otherDay).format(ms);
-  const sameClock = theirs === formatter(locale, localZone, otherDay).format(ms);
-  return { local: local.format(ms), theirs: sameClock ? null : `${theirs} their time` };
+  const theirs = clock(locale, theirZone, otherDay).format(ms);
+  const sameClock = theirs === clock(locale, localZone, otherDay).format(ms);
+  return { local, theirs: sameClock ? null : `${theirs} their time` };
+}
+
+/** `Nov 9, 9:23 AM`: an instant in a history, where the date always matters. Null when unreadable. */
+export function salesDateTime(iso: string | null, locale?: string): string | null {
+  const ms = parse(iso);
+  return Number.isNaN(ms)
+    ? null
+    : formatter(locale, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(ms);
+}
+
+/**
+ * What a screen kept from an earlier read says beside the error that followed it, or null with
+ * no read to show.
+ */
+export function staleReadNote(readAt: string | null, now: number): string | null {
+  const at = salesTime(readAt, now);
+  return at === null ? null : `Showing what the engine said at ${at.local}.`;
 }
 
 /** A `YYYY-MM-DD` day as `Thu 12 Nov`, read as a calendar day with no zone. */
@@ -56,7 +103,7 @@ export function salesDay(day: string, locale?: string): string {
   const ms = Date.parse(`${day}T12:00:00Z`);
   return Number.isNaN(ms)
     ? day
-    : new Intl.DateTimeFormat(locale, {
+    : formatter(locale, {
         timeZone: "UTC",
         weekday: "short",
         day: "numeric",

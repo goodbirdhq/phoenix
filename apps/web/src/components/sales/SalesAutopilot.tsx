@@ -1,9 +1,13 @@
-import { autopilotTimeline } from "@t3tools/client-runtime/sales/autopilot";
+import {
+  autopilotDetail,
+  autopilotTimeline,
+  outOfOfficeLabel,
+} from "@t3tools/client-runtime/sales/autopilot";
 import { salesDay, salesTime } from "@t3tools/client-runtime/sales/time";
 import type { EnvironmentId, SalesAutopilotItem } from "@t3tools/contracts";
 import { useState } from "react";
 
-import { useNowMinute } from "../../hooks/useNowMinute";
+import { useNowMs } from "../../hooks/useNowMinute";
 import { useSalesView } from "../../state/sales";
 import { Badge } from "../ui/badge";
 import { Label } from "../ui/label";
@@ -14,7 +18,7 @@ import { SalesContactLine, SalesViewFrame } from "./SalesViewFrame";
 export function SalesAutopilot({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const { read, failed } = useSalesView(environmentId, "autopilot");
   const [includePressed, setIncludePressed] = useState(false);
-  const now = Date.parse(`${useNowMinute()}:00Z`);
+  const now = useNowMs();
   return (
     <SalesViewFrame
       title="Autopilot"
@@ -64,12 +68,7 @@ export function SalesAutopilot({ environmentId }: { readonly environmentId: Envi
 /** One send. Hold and resume will sit at the end of this row once the engine offers them. */
 function AutopilotRow({ item, now }: { readonly item: SalesAutopilotItem; readonly now: number }) {
   const at = salesTime(item.at, now, { theirZone: item.contact.effectiveTimeZone });
-  const detail = [
-    item.step === null ? null : `Email ${item.step}`,
-    item.campaign,
-    item.mailbox ? `from ${item.mailbox}` : null,
-    item.approval === "press" ? "approved by you" : null,
-  ].filter(Boolean);
+  const detail = autopilotDetail(item);
   return (
     <li className="flex gap-4 px-4 py-3">
       <div className="w-24 shrink-0 text-sm tabular-nums">
@@ -87,15 +86,11 @@ function AutopilotRow({ item, now }: { readonly item: SalesAutopilotItem; readon
           <SalesContactLine contact={item.contact} />
           {item.outOfOffice ? (
             <Badge variant="info" title={item.outOfOffice.window || undefined}>
-              {item.outOfOffice.returnOn
-                ? `Away until ${salesDay(item.outOfOffice.returnOn)}`
-                : "Out of office"}
+              {outOfOfficeLabel(item.outOfOffice)}
             </Badge>
           ) : null}
         </div>
-        {detail.length > 0 ? (
-          <p className="truncate text-xs text-muted-foreground">{detail.join(" · ")}</p>
-        ) : null}
+        {detail ? <p className="truncate text-xs text-muted-foreground">{detail}</p> : null}
         {item.reason ? <p className="text-xs text-muted-foreground">{item.reason}</p> : null}
       </div>
     </li>

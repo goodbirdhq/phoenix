@@ -129,6 +129,14 @@ describe("lookItemView", () => {
     });
   });
 
+  it("links the page the engine names, but only over https", () => {
+    const named = look({ who: "Ada", activityId: "act-1" });
+    expect(lookItemView({ ...named, notionUrl: "https://www.notion.so/act1" }).notionUrl).toBe(
+      "https://www.notion.so/act1",
+    );
+    expect(lookItemView({ ...named, notionUrl: "javascript:alert(1)" }).notionUrl).toBeNull();
+  });
+
   it("falls back to what happened when nothing else is known", () => {
     expect(lookItemView(look({ what: "skip" })).title).toBe("A skipped send");
     expect(lookItemView(look({ what: "new-kind" })).title).toBe("Something");

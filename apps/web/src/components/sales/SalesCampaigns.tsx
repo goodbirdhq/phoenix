@@ -1,13 +1,15 @@
+import {
+  campaignFigures,
+  campaignName,
+  emailStepLabel,
+  withShare,
+} from "@t3tools/client-runtime/sales/campaigns";
 import type { EnvironmentId, SalesCampaign } from "@t3tools/contracts";
 
 import { useSalesView } from "../../state/sales";
 import { SalesViewFrame } from "./SalesViewFrame";
 
-/** `3 (25%)`: a count, and its share of `of` when there is one to take. */
-const withShare = (count: number, of: number) =>
-  of > 0 && count > 0 ? `${count} (${Math.round((count / of) * 100)}%)` : String(count);
-
-/** People and steps by campaign, from what the engine sent and the replies it read. */
+/** People and steps by campaign, from the emails sent and the replies they got. */
 export function SalesCampaigns({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const { read, failed } = useSalesView(environmentId, "campaigns");
   return (
@@ -15,11 +17,11 @@ export function SalesCampaigns({ environmentId }: { readonly environmentId: Envi
       title="Campaigns"
       read={read}
       failed={failed}
-      description={() => "From the engine's sends and the replies it classified."}
+      description={() => "Counted from the emails sent and the replies to them."}
     >
       {(list) =>
         list.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">The engine has sent no cold email yet.</p>
+          <p className="text-sm text-muted-foreground">No cold email has gone out yet.</p>
         ) : (
           <div className="space-y-6">
             {list.items.map((campaign) => (
@@ -35,21 +37,13 @@ export function SalesCampaigns({ environmentId }: { readonly environmentId: Envi
 const cell = "px-3 py-2 text-right tabular-nums";
 
 function CampaignFunnel({ campaign }: { readonly campaign: SalesCampaign }) {
-  const figures = [
-    { label: "People", value: String(campaign.contacts) },
-    { label: "Replied", value: withShare(campaign.replied, campaign.contacts) },
-    { label: "Positive", value: withShare(campaign.positive, campaign.contacts) },
-    { label: "Declined", value: String(campaign.declined) },
-    { label: "Bounced", value: String(campaign.bounced) },
-  ];
+  const name = campaignName(campaign.campaign);
   return (
-    <section aria-label={campaign.campaign ?? "No campaign"} className="rounded-lg border">
+    <section aria-label={name} className="rounded-lg border">
       <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2 px-4 py-3">
-        <h2 className="min-w-40 flex-1 text-sm font-medium">
-          {campaign.campaign ?? "No campaign"}
-        </h2>
+        <h2 className="min-w-40 flex-1 text-sm font-medium">{name}</h2>
         <dl className="flex flex-wrap gap-5">
-          {figures.map((figure) => (
+          {campaignFigures(campaign).map((figure) => (
             <div key={figure.label} className="flex flex-col">
               <dt className="text-xs text-muted-foreground">{figure.label}</dt>
               <dd className="text-sm tabular-nums">{figure.value}</dd>
@@ -71,7 +65,7 @@ function CampaignFunnel({ campaign }: { readonly campaign: SalesCampaign }) {
           <tbody>
             {campaign.steps.map((step) => (
               <tr key={step.step} className="border-t">
-                <td className="px-4 py-2">Email {step.step}</td>
+                <td className="px-4 py-2">{emailStepLabel(step.step)}</td>
                 <td className={cell}>{step.sent}</td>
                 <td className={cell}>{withShare(step.replied, step.sent)}</td>
                 <td className={cell}>{step.positive}</td>

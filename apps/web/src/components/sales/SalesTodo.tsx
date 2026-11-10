@@ -1,3 +1,4 @@
+import { safeHttpUrl } from "@t3tools/client-runtime/sales/links";
 import {
   connectionLabel,
   groupTasks,
@@ -18,7 +19,8 @@ import {
 } from "../ui/anchoredCopyToast";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { ExternalLink, SalesContactLine, SalesViewFrame, safeHttpUrl } from "./SalesViewFrame";
+import { SalesExternalLink } from "./SalesExternalLink";
+import { SalesContactLine, SalesViewFrame } from "./SalesViewFrame";
 
 /** The LinkedIn checklist: what to do by hand, and today's invite budget. Read-only. */
 export function SalesTodo({ environmentId }: { readonly environmentId: EnvironmentId }) {
@@ -38,7 +40,7 @@ export function SalesTodo({ environmentId }: { readonly environmentId: Environme
         return (
           <div className="space-y-6">
             <TaskSection label="Ready" tasks={ready} today={list.budget.day} />
-            <TaskSection label="Not on a card yet" tasks={upcoming} today={list.budget.day} />
+            <TaskSection label="Not posted yet" tasks={upcoming} today={list.budget.day} />
           </div>
         );
       }}
@@ -77,7 +79,7 @@ function TaskRow({ task, today }: { readonly task: SalesTask; readonly today: st
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <Badge variant="outline">{taskActionLabel(task.action)}</Badge>
         <SalesContactLine contact={task.contact} />
-        {linkedin ? <ExternalLink href={linkedin}>LinkedIn</ExternalLink> : null}
+        {linkedin ? <SalesExternalLink href={linkedin}>LinkedIn</SalesExternalLink> : null}
         <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
           {task.frontOfQueue ? <span>First in line</span> : null}
           {connection ? <span>{connection}</span> : null}

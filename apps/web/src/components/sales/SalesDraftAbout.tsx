@@ -1,7 +1,8 @@
+import { safeHttpUrl } from "@t3tools/client-runtime/sales/links";
 import type { SalesQueueItemDetail } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 
-import { SalesExternalLink, safeHttpUrl } from "./SalesExternalLink";
+import { SalesExternalLink } from "./SalesExternalLink";
 
 /**
  * Who a draft is to and where it came from, from what the engine carries. Shows only what is

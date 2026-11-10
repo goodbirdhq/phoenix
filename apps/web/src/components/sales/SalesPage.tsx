@@ -1,3 +1,4 @@
+import type { SalesArea } from "@t3tools/client-runtime/sales/areas";
 import {
   buildSalesHome,
   engineDayNote,
@@ -6,6 +7,7 @@ import {
   type SalesHome,
   type SalesStatusNotice,
 } from "@t3tools/client-runtime/sales/home";
+import { salesTime, staleReadNote } from "@t3tools/client-runtime/sales/time";
 import type { EnvironmentId, SalesLookItem, SalesSnapshot } from "@t3tools/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import * as Option from "effect/Option";
@@ -13,6 +15,7 @@ import { ChevronRightIcon, CircleCheckIcon, RefreshCwIcon, TriangleAlertIcon } f
 import { type ComponentType, useState } from "react";
 
 import { isElectron } from "../../env";
+import { useNowMs } from "../../hooks/useNowMinute";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { salesEnvironment, useSalesState, useSalesTarget } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -30,7 +33,7 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { isSalesArea, SALES_AREAS, type SalesArea } from "./areas";
+import { SALES_AREAS } from "./areas";
 import { SalesAutopilot } from "./SalesAutopilot";
 import { SalesCampaigns } from "./SalesCampaigns";
 import { SalesConversations } from "./SalesConversations";
@@ -174,11 +177,6 @@ function SalesHomeView({ environmentId }: { readonly environmentId: EnvironmentI
   );
 }
 
-const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
-const formatTime = (iso: string | null) => {
-  const ms = iso === null ? Number.NaN : Date.parse(iso);
-  return Number.isNaN(ms) ? null : timeFormat.format(ms);
-};
 const viewerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 function SalesHomeContent({
@@ -198,13 +196,13 @@ function SalesHomeContent({
 }) {
   const navigate = useNavigate();
   const { environment } = useSearch({ from: "/sales" });
-  const readAt = formatTime(snapshot.summaryReadAt);
+  const now = useNowMs();
   // "N min ago" stands still without fresh reads, so a stale summary says when it was read.
   const updated =
     snapshot.summaryReadAt === null
       ? null
       : offline
-        ? readAt
+        ? (salesTime(snapshot.summaryReadAt, now)?.local ?? null)
         : formatRelativeTimeLabel(snapshot.summaryReadAt);
   const summary = snapshot.summary;
   return (
@@ -231,7 +229,7 @@ function SalesHomeContent({
           <TriangleAlertIcon />
           <AlertTitle>{notice.title}</AlertTitle>
           <AlertDescription>
-            {notice.description} {readAt ? `Showing what the engine said at ${readAt}.` : null}
+            {notice.description} {staleReadNote(snapshot.summaryReadAt, now)}
           </AlertDescription>
           {notice.action === "settings" ? (
             <Button
@@ -246,53 +244,43 @@ function SalesHomeContent({
       ) : null}
 
       <ul aria-label="Work areas" className="divide-y rounded-lg border">
-        {home.areas.map((area) => {
-          const page = isSalesArea(area.key) ? area.key : null;
-          return (
-            <li key={area.key} className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
-              <div className="min-w-40 flex-1">
-                {page ? (
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
-                    onClick={() =>
-                      void navigate({
-                        to: "/sales",
-                        search: {
-                          ...(environment ? { environment } : {}),
-                          area: page,
-                        },
-                      })
-                    }
-                  >
-                    {area.label}
-                    <ChevronRightIcon aria-hidden className="size-3.5" />
-                  </button>
-                ) : (
-                  <p className="text-sm font-medium">{area.label}</p>
-                )}
-                <p className="text-xs text-muted-foreground">{area.status}</p>
-              </div>
-              {area.figures.length > 0 ? (
-                <dl className="flex gap-5">
-                  {area.figures.map((figure) => (
-                    <div key={figure.label} className="flex flex-col">
-                      <dt className="text-xs text-muted-foreground">{figure.label}</dt>
-                      <dd className="text-sm tabular-nums">{figure.value}</dd>
-                    </div>
-                  ))}
-                </dl>
+        {home.areas.map((area) => (
+          <li key={area.key} className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
+            <div className="min-w-40 flex-1">
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
+                onClick={() =>
+                  void navigate({
+                    to: "/sales",
+                    search: { ...(environment ? { environment } : {}), area: area.key },
+                  })
+                }
+              >
+                {area.label}
+                <ChevronRightIcon aria-hidden className="size-3.5" />
+              </button>
+              <p className="text-xs text-muted-foreground">{area.status}</p>
+            </div>
+            {area.figures.length > 0 ? (
+              <dl className="flex gap-5">
+                {area.figures.map((figure) => (
+                  <div key={figure.label} className="flex flex-col">
+                    <dt className="text-xs text-muted-foreground">{figure.label}</dt>
+                    <dd className="text-sm tabular-nums">{figure.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+            <div className="flex w-10 justify-end">
+              {area.count > 0 ? (
+                <Badge variant="warning" aria-label={`${area.count} need you`}>
+                  {area.count}
+                </Badge>
               ) : null}
-              <div className="flex w-10 justify-end">
-                {area.count > 0 ? (
-                  <Badge variant="warning" aria-label={`${area.count} need you`}>
-                    {area.count}
-                  </Badge>
-                ) : null}
-              </div>
-            </li>
-          );
-        })}
+            </div>
+          </li>
+        ))}
       </ul>
 
       <p className="flex items-start gap-2 text-sm text-muted-foreground">

@@ -64,3 +64,8 @@ function getSnapshot(): string {
 export function useNowMinute(): string {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
+
+/** The same clock as epoch milliseconds: the start of the current UTC minute. */
+export function useNowMs(): number {
+  return Date.parse(`${useNowMinute()}:00Z`);
+}

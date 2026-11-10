@@ -1,4 +1,7 @@
-import type { SalesAutopilotItem } from "@t3tools/contracts";
+import type { SalesAutopilotItem, SalesOutOfOffice } from "@t3tools/contracts";
+
+import { emailStepLabel } from "./campaigns.ts";
+import { salesDay } from "./time.ts";
 
 /** Today's states, in the order the timeline shows them: what needs a look, what is to come, done. */
 const STATES = [
@@ -46,3 +49,19 @@ export function autopilotTimeline(
   ].filter((group) => group.items.length > 0);
   return { groups, shown: shown.length, pressedHidden: items.length - shown.length };
 }
+
+/** A send's line under its contact: `Email 2 · Fintech Q4 · from gabe@… · approved by you`. */
+export function autopilotDetail(item: SalesAutopilotItem): string {
+  return [
+    item.step === null ? null : emailStepLabel(item.step),
+    item.campaign,
+    item.mailbox ? `from ${item.mailbox}` : null,
+    item.approval === "press" ? "approved by you" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** `Away until Thu 12 Nov`, or `Out of office` when their auto-reply names no day. */
+export const outOfOfficeLabel = (outOfOffice: SalesOutOfOffice) =>
+  outOfOffice.returnOn ? `Away until ${salesDay(outOfOffice.returnOn)}` : "Out of office";
