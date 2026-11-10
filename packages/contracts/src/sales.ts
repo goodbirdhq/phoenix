@@ -231,14 +231,15 @@ export const SalesDispatchAction = Schema.Struct({
 });
 export type SalesDispatchAction = typeof SalesDispatchAction.Type;
 
+/** The plans the engine may offer, by the name a dispatch asks for. */
+const SalesDispatchActionName = Schema.Literals(["redraft", "research", "answer"]);
+
 /** `dispatch`: what may be started from a card or a conversation. Null is not offered. */
-export const SalesDispatchPlans = group({
-  redraft: nullable(SalesDispatchAction),
-  research: nullable(SalesDispatchAction),
-  answer: nullable(SalesDispatchAction),
-});
+export const SalesDispatchPlans = Schema.Record(
+  SalesDispatchActionName,
+  nullable(SalesDispatchAction),
+).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type SalesDispatchPlans = typeof SalesDispatchPlans.Type;
-export type SalesDispatchActionKey = keyof SalesDispatchPlans;
 
 /** Where the note goes in a dispatch prompt. */
 export const SALES_NOTE_TOKEN = "{{note}}";
@@ -504,13 +505,13 @@ export type SalesEditResult = typeof SalesEditResult.Type;
 export const SalesDispatchInput = Schema.Union([
   Schema.Struct({
     activityId: Schema.String,
-    action: Schema.Literals(["redraft", "research", "answer"]),
+    action: SalesDispatchActionName,
     expectedHash: Schema.NullOr(Schema.String),
     note: Schema.String,
   }),
   Schema.Struct({
     contactKey: Schema.String,
-    action: Schema.Literals(["redraft", "research", "answer"]),
+    action: SalesDispatchActionName,
     expectedHash: Schema.NullOr(Schema.String),
     note: Schema.String,
   }),
@@ -521,17 +522,35 @@ export type SalesDispatchInput = typeof SalesDispatchInput.Type;
 export const SalesDispatch = Schema.Struct({ threadId: ThreadId, title: Schema.String });
 export type SalesDispatch = typeof SalesDispatch.Type;
 
+/** The card (`activityId`) or conversation (`contactKey`) a dispatch started from. */
+export type SalesDispatchSource = { readonly activityId: string } | { readonly contactKey: string };
+
 /**
- * The thread id prefix of every thread dispatched from one card or conversation. The target is
- * part of the id, so the read model remembers it: the threads started from a target are the
- * threads whose id starts with this. The key is URI-encoded, so it holds no `:`.
+ * The one definition of a dispatched thread's id: `sales:card:<activityId>:<uuid>` or
+ * `sales:contact:<contactKey>:<uuid>`, the key URI-encoded so it holds no `:`. The source is part
+ * of the id, so the read model remembers it across restarts. The contact key is the CRM's Contact
+ * page id, not an email, so the id carries no personal data and needs no hashing.
+ *
+ * This is the prefix of every id dispatched from one source; `parseSalesDispatchThreadId` reads
+ * the source back.
  */
-export const salesDispatchThreadPrefix = (
-  target: { readonly activityId: string } | { readonly contactKey: string },
-) =>
-  "activityId" in target
-    ? `sales:card:${encodeURIComponent(target.activityId)}:`
-    : `sales:contact:${encodeURIComponent(target.contactKey)}:`;
+export const salesDispatchThreadPrefix = (source: SalesDispatchSource) =>
+  "activityId" in source
+    ? `sales:card:${encodeURIComponent(source.activityId)}:`
+    : `sales:contact:${encodeURIComponent(source.contactKey)}:`;
+
+/** The source a thread was dispatched from, or null for any other thread. */
+export function parseSalesDispatchThreadId(threadId: string): SalesDispatchSource | null {
+  const [, kind, encoded] = /^sales:(card|contact):([^:]+):[^:]+$/u.exec(threadId) ?? [];
+  if (encoded === undefined) return null;
+  try {
+    const key = decodeURIComponent(encoded);
+    return kind === "card" ? { activityId: key } : { contactKey: key };
+  } catch {
+    // Not an id Phoenix made: its key is not URI-encoded.
+    return null;
+  }
+}
 
 /**
  * The refusal codes the engine sends (`error` in its error body), spelled as it spells them. A

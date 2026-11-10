@@ -3,7 +3,6 @@ import {
   type SalesDispatch,
   type SalesQueueItem,
   type ThreadId,
-  salesDispatchThreadPrefix,
 } from "@t3tools/contracts";
 
 /** A list group of the Outreach page: one campaign's open cards, oldest first. */
@@ -148,14 +147,13 @@ export function sortConversations(
 }
 
 /**
- * The threads started from a card or a conversation, read from an environment's thread titles:
- * each one's id begins with the target's prefix (`salesDispatchThreadPrefix`).
+ * The threads dispatched from one card or conversation, read from an environment's thread titles.
+ * `prefix` is that source's `salesDispatchThreadPrefix`.
  */
 export function dispatchedThreads(
   titles: ReadonlyMap<ThreadId, string>,
-  target: { readonly activityId: string } | { readonly contactKey: string },
+  prefix: string,
 ): ReadonlyArray<SalesDispatch> {
-  const prefix = salesDispatchThreadPrefix(target);
   return [...titles]
     .filter(([threadId]) => threadId.startsWith(prefix))
     .map(([threadId, title]) => ({ threadId, title }));

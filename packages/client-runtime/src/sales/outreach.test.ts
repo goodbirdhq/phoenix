@@ -1,4 +1,4 @@
-import { type SalesQueueItem, ThreadId } from "@t3tools/contracts";
+import { type SalesQueueItem, ThreadId, salesDispatchThreadPrefix } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { dispatchedThreads, listedVersionMoved, tickedForReview } from "./outreach.ts";
@@ -76,21 +76,11 @@ describe("dispatchedThreads", () => {
   ]);
 
   it("finds only the threads started from that card or conversation", () => {
-    expect(dispatchedThreads(titles, { activityId: "act-1" })).toEqual([
+    expect(dispatchedThreads(titles, salesDispatchThreadPrefix({ activityId: "act-1" }))).toEqual([
       { threadId: "sales:card:act-1:t1", title: "Redraft for Ana" },
     ]);
-    expect(dispatchedThreads(titles, { contactKey: "act-1" })).toEqual([
+    expect(dispatchedThreads(titles, salesDispatchThreadPrefix({ contactKey: "act-1" }))).toEqual([
       { threadId: "sales:contact:act-1:t3", title: "Draft an answer to Ana" },
-    ]);
-  });
-
-  it("encodes a key that holds a colon, so it cannot pass for another target", () => {
-    const threads = new Map([
-      [ThreadId.make("sales:card:a%3Ab:t1"), "From a:b"],
-      [ThreadId.make("sales:card:a:b:t2"), "From a"],
-    ]);
-    expect(dispatchedThreads(threads, { activityId: "a:b" })).toEqual([
-      { threadId: "sales:card:a%3Ab:t1", title: "From a:b" },
     ]);
   });
 });

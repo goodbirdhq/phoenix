@@ -19,7 +19,13 @@ import {
   createSalesEnvironmentAtoms,
   isSalesConfigured,
 } from "@t3tools/client-runtime/state/sales";
-import { type EnvironmentId, type SalesDevice, salesEngineKey } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type SalesDevice,
+  type SalesDispatchSource,
+  salesDispatchThreadPrefix,
+  salesEngineKey,
+} from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -60,12 +66,11 @@ export function useSalesState(environmentId: EnvironmentId) {
   return useAtomValue(salesEnvironment.stateValueAtom(environmentId));
 }
 
-/** The threads started from a card or a conversation, from the environment's read model. */
-export function useDispatchedThreads(
-  environmentId: EnvironmentId,
-  target: { readonly activityId: string } | { readonly contactKey: string },
-) {
-  return dispatchedThreads(useEnvironmentThreadTitles(environmentId), target);
+/** The threads dispatched from a card or a conversation, from the environment's read model. */
+export function useDispatchedThreads(environmentId: EnvironmentId, source: SalesDispatchSource) {
+  const titles = useEnvironmentThreadTitles(environmentId);
+  const prefix = salesDispatchThreadPrefix(source);
+  return useMemo(() => dispatchedThreads(titles, prefix), [titles, prefix]);
 }
 
 // --- Device keys ------------------------------------------------------------------------------
