@@ -48,6 +48,11 @@ export interface SalesDispatchPlan {
 /**
  * The dispatch prompt, word for word as the agents repo's README gives it, with the key, the
  * target lines and the note filled in. The note and the line above it are left out when empty.
+ *
+ * `Note from Gabriel:` is a literal the birdhouse workflows key on to find the person's note,
+ * so it must match the README's template exactly; change both together. Target lines carry
+ * card text (names from the CRM, which agents write), so `planDispatch` reduces every such
+ * value to one line before it gets here: no card can add a line, a fake note included.
  */
 export function buildDispatchPrompt(plan: SalesDispatchPlan): string {
   const note = plan.note.trim();
@@ -119,6 +124,7 @@ interface DispatchCard {
   readonly approved: boolean;
   readonly contact: SalesContactRef;
   readonly rowName: string;
+  readonly contentHash: string;
 }
 
 /** The plan for a dispatch, or why it cannot run. Pure, so the tests can pin every case. */
@@ -155,6 +161,10 @@ export function planDispatch(
         return noTarget(
           `Phoenix does not know which workflow writes "${oneLine(target.rowName)}".`,
         );
+      }
+      // The redraft rewrites what the person saw; a card that moved on since is shown again.
+      if (input.expectedHash.toLowerCase() !== target.contentHash.toLowerCase()) {
+        return salesActionError("stale_hash", { currentHash: target.contentHash });
       }
       if (target.approved) {
         return salesActionError("dispatch-failed", {
@@ -341,14 +351,27 @@ const make = Effect.gen(function* () {
     const planned = planDispatch(input, target);
     if ("_tag" in planned) return yield* planned;
 
-    if (input.action === "redraft" && planned.plan.skill === "reply-drafting") {
-      // Discard the waiting reply for the version the user saw; a newer one stops here.
+    // A reply is drafted again rather than rewritten, so its waiting answer goes first, for the
+    // version the user saw; a newer one stops here. The bootstrap creates the thread and starts
+    // its turn in one step, so the start can still fail after the discard. That error says the
+    // answer is gone, and its `state` lets the client offer Draft an answer.
+    const discardsFirst = input.action === "redraft" && planned.plan.skill === "reply-drafting";
+    if (discardsFirst) {
       yield* sales.discard({ activityId: input.activityId, expectedHash: input.expectedHash });
     }
     const started = yield* startThread(project, {
       prompt: buildDispatchPrompt(planned.plan),
       title: planned.title,
-    });
+    }).pipe(
+      Effect.mapError((error) =>
+        discardsFirst
+          ? salesActionError("dispatch-failed", {
+              message: `The waiting answer was discarded, but the run that drafts a new one did not start (${error.message}). Choose Draft an answer in Conversations to start it again.`,
+              state: "discarded",
+            })
+          : error,
+      ),
+    );
     const record: SalesDispatch = {
       target: input.action === "draft-reply" ? input.contactKey : input.activityId,
       action: input.action,

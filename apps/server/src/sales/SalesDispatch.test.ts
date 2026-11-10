@@ -1,6 +1,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import {
+  OrchestrationDispatchCommandError,
   ProjectId,
   SalesActionError,
   type SalesContactRef,
@@ -41,6 +42,7 @@ const card = (kind: string | null, approved = false) => ({
   approved,
   contact,
   rowName: "Draft chase to Ana - Brand",
+  contentHash: "h",
 });
 
 it("fills the agents repo's dispatch prompt word for word", () => {
@@ -116,6 +118,17 @@ it("refuses to redraft an approved draft or one without a note", () => {
     card("chase"),
   );
   assert.isTrue("_tag" in noNote && noNote.reason === "bad_request");
+});
+
+it("refuses to redraft a card that changed since the person saw it", () => {
+  for (const kind of ["first", "chase", "reply"]) {
+    const planned = SalesDispatch.planDispatch(
+      { action: "redraft", activityId: "a", expectedHash: "older", note: "Shorter." },
+      card(kind),
+    );
+    assert.isTrue("_tag" in planned && planned.reason === "stale_hash");
+    assert.strictEqual("_tag" in planned ? planned.currentHash : null, "h");
+  }
 });
 
 it("researches the account by name with the contact as the candidate", () => {
@@ -207,7 +220,10 @@ const provider = {
   models: [{ slug: "gpt-5", isDefault: true }],
 } as unknown as ServerProvider;
 
-function makeDispatchLayer(input: { readonly agentsProjectId: string }) {
+function makeDispatchLayer(input: {
+  readonly agentsProjectId: string;
+  readonly bootstrapFails?: boolean;
+}) {
   const calls: Array<string> = [];
   const commands: Array<ThreadTurnBootstrap.ThreadTurnStartCommand> = [];
   const sales = Layer.mock(SalesService.SalesService)({
@@ -248,7 +264,9 @@ function makeDispatchLayer(input: { readonly agentsProjectId: string }) {
     bootstrapTurnStart: (command) => {
       calls.push("bootstrap");
       commands.push(command);
-      return Effect.succeed({ sequence: 1 });
+      return input.bootstrapFails
+        ? Effect.fail(new OrchestrationDispatchCommandError({ message: "No worktree." }))
+        : Effect.succeed({ sequence: 1 });
     },
   });
   const layer = SalesDispatch.layer.pipe(
@@ -312,5 +330,31 @@ it.effect("discards nothing when there is no agents project to run the redraft",
     assert.isTrue(isSalesActionError(error));
     assert.strictEqual(isSalesActionError(error) ? error.reason : null, "no-agents-project");
     assert.deepStrictEqual(calls, []);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("says the answer was discarded when the run that replaces it fails to start", () => {
+  const { layer, calls } = makeDispatchLayer({
+    agentsProjectId: "project-birdhouse",
+    bootstrapFails: true,
+  });
+  return Effect.gen(function* () {
+    const dispatch = yield* SalesDispatch.SalesDispatchService;
+    const exit = yield* dispatch
+      .dispatch({
+        action: "redraft",
+        activityId: "act-reply",
+        expectedHash: "a".repeat(64),
+        note: "x",
+      })
+      .pipe(Effect.exit);
+    const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : null;
+    assert.isTrue(isSalesActionError(error));
+    if (isSalesActionError(error)) {
+      assert.strictEqual(error.reason, "dispatch-failed");
+      assert.strictEqual(error.state, "discarded");
+      assert.include(error.message, "Draft an answer");
+    }
+    assert.deepStrictEqual(calls, [`discard:${"a".repeat(64)}`, "bootstrap"]);
   }).pipe(Effect.provide(layer));
 });
