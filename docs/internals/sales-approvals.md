@@ -65,7 +65,10 @@ rather than in each view. Traps that follow from this:
   exactly as hashed. The fix is an edit, which makes a new version that is read
   and verified again; "Remove hidden characters" takes out what nobody can find
   to delete by hand. A reply keeps its thread's subject, so hidden text there
-  cannot be edited out and the reply cannot be approved here.
+  cannot be edited out and the reply cannot be approved here. A version that
+  swapped in just before or during the press was not seen either
+  (`VERSION_SETTLE_MS`), so a new Approve entry point must pass `intentAt`,
+  when the person's intent began (`DraftCard.approve`).
 - **A To address is plain ASCII.** One look-alike letter (a Cyrillic "а")
   makes it another address, and telling look-alikes from real
   internationalised addresses needs confusable tables that still miss

@@ -19,6 +19,15 @@ import { holdOutcome, resumeOutcome, type SalesHoldOutcome } from "./hold.ts";
 import { cardActions, listedVersionMoved } from "./outreach.ts";
 import { displayedDraft, type VerifiedVersion, verifyDisplayedVersion } from "./signing.ts";
 
+/**
+ * How long a newly swapped-in version must stay on screen before one press signs it. A read
+ * that lands as the person reaches for Approve (a run finishing, the list moving, a reconnect)
+ * would otherwise be signed after a glance; 1.5 s is about the shortest time to see that the
+ * text moved, well under the time it takes to read it, and short enough not to slow a person
+ * who is reading.
+ */
+export const VERSION_SETTLE_MS = 1500;
+
 export interface DraftNotice {
   readonly tone: "success" | "warning" | "error";
   readonly title: string;
@@ -94,8 +103,13 @@ export interface DraftCard {
   /** Drops the edit and returns to the email, showing the engine's newer version if it has one. */
   readonly cancelEdit: () => void;
   readonly save: () => Promise<void>;
-  /** Approves the version shown, after hashing that text again here. */
-  readonly approve: (device: SigningDevice) => Promise<void>;
+  /**
+   * Approves the version shown, after hashing that text again here. `intentAt` is when the
+   * person's press began on the card's clock (a pointer or key going down, the palette
+   * opening); it defaults to now. While the version shown swapped in within
+   * `VERSION_SETTLE_MS`, or after `intentAt`, the press only says so and signs nothing.
+   */
+  readonly approve: (device: SigningDevice, intentAt?: number) => Promise<void>;
   /** Pauses a route chase, or withdraws a person's approval; the notice says which. */
   readonly hold: () => Promise<void>;
   /** Gives a paused route chase back to the autopilot, for the version shown. */
@@ -143,17 +157,25 @@ function hiddenCharactersRemoved(state: DraftCardState) {
 export const canRemoveHiddenCharacters = (state: DraftCardState) =>
   hiddenCharactersRemoved(state) !== null;
 
+/** The text a person checks before approving (`displayedDraft`). */
+type ShownText = ReturnType<typeof displayedDraft>;
+
+const sameText = (a: ShownText, b: ShownText) =>
+  a.to === b.to && a.subject === b.subject && a.body === b.body;
+
 /**
  * One draft card: read, edited in place, and acted on. What it shows comes from the card's hash
  * inputs, and `approve` signs only a version it has just hashed from exactly that text
  * (`verifyDisplayedVersion`); a draft that moved on is read again and shown, never signed for
  * the person. Framework-free: a view subscribes and renders `getState()`.
  *
- * A view hands in its latest callbacks with `setCommands`.
+ * A view hands in its latest callbacks with `setCommands`. `now` is the clock for
+ * `VERSION_SETTLE_MS` and `intentAt`: monotonic, and the one DOM event timestamps use.
  */
 export function createDraftCard(
   initialCommands: DraftCardCommands,
   initialListedHash: string | null,
+  now: () => number = () => performance.now(),
 ): DraftCard {
   let current = initialCommands;
   const commands = () => current;
@@ -169,6 +191,11 @@ export function createDraftCard(
     redraftNote: null,
   };
   let listedHash = initialListedHash;
+  /**
+   * When the version shown last swapped for another. The first read is not a swap, nor is the
+   * read after the person's own save when it shows exactly the text they saved.
+   */
+  let swappedAt = Number.NEGATIVE_INFINITY;
   const listeners = new Set<() => void>();
   const set = (patch: Partial<DraftCardState>) => {
     state = { ...state, ...patch };
@@ -176,9 +203,15 @@ export function createDraftCard(
   };
   const notify = (notice: DraftNotice | null) => set({ notice });
 
-  const load = async () => {
+  /** Reads the card. `saved` is the text a save just submitted. */
+  const load = async (saved?: ShownText) => {
     const result = await commands().getQueueItem();
     if (result._tag === "Success") {
+      const shownHash = state.detail?.contentHash;
+      const swapped = shownHash !== undefined && shownHash !== result.value.contentHash;
+      // The text read back decides it, never the hash the engine reported for the save.
+      const ownSave = saved !== undefined && sameText(saved, displayedDraft(result.value));
+      if (swapped && !ownSave) swappedAt = now();
       set({
         detail: result.value,
         loadFailure: null,
@@ -239,7 +272,7 @@ export function createDraftCard(
     setCommands: (next) => {
       current = next;
     },
-    load,
+    load: () => load(),
 
     setListedHash: (next) => {
       const previous = listedHash;
@@ -300,7 +333,11 @@ export function createDraftCard(
                 : "It needs an approval before it goes.",
             },
           });
-          await load();
+          await load({
+            ...shown,
+            subject: detail.threaded || subject === null ? shown.subject : subject,
+            body,
+          });
           return;
         }
         const failure = readSalesFailure(result);
@@ -311,7 +348,8 @@ export function createDraftCard(
         }
       }),
 
-    approve: async (device) => {
+    approve: async (device, intentAt) => {
+      const pressedAt = now();
       if (state.detail === null || state.busy !== null) return;
       // Approval signs the email as shown, so not while the inputs are open, typed in or not.
       if (isEditing(state)) {
@@ -332,6 +370,15 @@ export function createDraftCard(
             description: versionRefusalText(check.reason, "card"),
           });
           await load();
+          return;
+        }
+        // After the refusals, so a version that can never be signed says so first.
+        if (pressedAt - swappedAt < VERSION_SETTLE_MS || swappedAt > (intentAt ?? pressedAt)) {
+          notify({
+            tone: "warning",
+            title: "This draft just changed",
+            description: "Read it, then press Approve again.",
+          });
           return;
         }
         const [outcome] = await commands().approveVersions(device, [check.version]);

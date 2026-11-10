@@ -49,7 +49,8 @@ approved until you withdraw their approval.
 Select one to read it, edit the body
 (and the subject on a new thread), and approve it. Phoenix approves only the exact text on screen.
 If the draft changed since you read it, Phoenix shows the new version and asks you to approve
-again. Saving an edit withdraws any approval of the old version.
+again. If a new version appears just as you press Approve, that press only says so: read it,
+then press Approve again. Saving an edit withdraws any approval of the old version.
 
 To approve several at once, tick them and choose **Approve**. Phoenix shows each ticked draft in
 full, exactly as it will go, and approves them when you confirm. A draft that changed after you

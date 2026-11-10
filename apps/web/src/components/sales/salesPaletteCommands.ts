@@ -7,7 +7,8 @@ export interface SalesPaletteCommand {
   readonly keywords: ReadonlyArray<string>;
   /** The key label shown beside it; null when the command is unbound. */
   readonly shortcut?: string | null;
-  readonly run: () => void;
+  /** `openedAt`: when the palette opened, on `performance.now()`'s clock. */
+  readonly run: (openedAt: number) => void;
 }
 
 let current: ReadonlyArray<SalesPaletteCommand> = [];
