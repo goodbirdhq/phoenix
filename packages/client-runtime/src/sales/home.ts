@@ -1,6 +1,6 @@
 import type { SalesSnapshot, SalesSummary } from "@t3tools/contracts";
 
-/** The work areas of the Sales sidebar, in order. */
+/** The work areas of the Sales sidebar, in order. `page` is set where the area has a screen. */
 export const SALES_WORK_AREAS = [
   { key: "sourcing", label: "Sourcing" },
   { key: "outreach", label: "Outreach" },
@@ -106,15 +106,19 @@ function todo(summary: SalesSummary): SalesHomeArea {
 }
 
 function conversations(summary: SalesSummary): SalesHomeArea {
-  const awaiting = summary.replies.awaitingAnswer;
+  const { awaitingAnswer, awaitingAnswerWithoutDraft } = summary.replies;
+  const drafted = awaitingAnswer - awaitingAnswerWithoutDraft;
   return {
     key: "conversations",
     label: "Conversations",
-    count: awaiting,
+    // A reply with a drafted answer already counts under Outreach, as a draft waiting.
+    count: awaitingAnswerWithoutDraft,
     status:
-      awaiting > 0
-        ? `${plural(awaiting, "reply", "replies")} ${awaiting === 1 ? "waits" : "wait"} for an answer`
-        : "Every reply has an answer",
+      awaitingAnswerWithoutDraft > 0
+        ? `${plural(awaitingAnswerWithoutDraft, "reply", "replies")} ${awaitingAnswerWithoutDraft === 1 ? "has" : "have"} no answer drafted`
+        : drafted > 0
+          ? `${plural(drafted, "answer")} drafted, waiting for approval`
+          : "Every reply has an answer",
     figures: [
       { label: "Reply drafts", value: String(summary.drafts.awaiting.reply) },
       { label: "Replies sent today", value: String(summary.sendsToday.replies) },

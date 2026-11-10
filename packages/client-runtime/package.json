@@ -111,9 +111,21 @@
       "types": "./src/schedules/index.ts",
       "default": "./src/schedules/index.ts"
     },
+    "./sales/approval": {
+      "types": "./src/sales/approval.ts",
+      "default": "./src/sales/approval.ts"
+    },
+    "./sales/devices": {
+      "types": "./src/sales/devices.ts",
+      "default": "./src/sales/devices.ts"
+    },
     "./sales/home": {
       "types": "./src/sales/home.ts",
       "default": "./src/sales/home.ts"
+    },
+    "./sales/outreach": {
+      "types": "./src/sales/outreach.ts",
+      "default": "./src/sales/outreach.ts"
     },
     "./state/auth": {
       "types": "./src/state/auth.ts",

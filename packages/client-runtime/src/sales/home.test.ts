@@ -24,7 +24,8 @@ describe("buildSalesHome", () => {
         // Refused route chases also sit in drafts.awaiting, so only failures count here.
         autopilotToday: { sent: 1, scheduled: 1, failed: 1, refused: 1 },
         linkedin: { onSlack: 1, pending: 3, budget: { dailyLimit: 7, available: 1 } },
-        replies: { awaitingAnswer: 1 },
+        // One reply has its answer drafted (counted under Outreach), one has none.
+        replies: { awaitingAnswer: 2, awaitingAnswerWithoutDraft: 1 },
         mailboxes: { active: 8 },
         sendsToday: { cold: 1, coldCap: 42 },
         dispatcher: quietDispatcher,
@@ -44,6 +45,21 @@ describe("buildSalesHome", () => {
       ok: true,
       line: "8 mailboxes active · 1 of 42 cold sends today",
     });
+  });
+
+  it("counts a reply whose answer is drafted once, as a draft waiting", () => {
+    const home = buildSalesHome(
+      decodeSummary({
+        generatedAt: "2026-11-09T18:30:00.000Z",
+        drafts: { awaiting: { total: 1, reply: 1 } },
+        replies: { awaitingAnswer: 1, awaitingAnswerWithoutDraft: 0 },
+        dispatcher: quietDispatcher,
+      }),
+    );
+    expect(home.needsYou).toBe(1);
+    expect(home.areas.find((area) => area.key === "conversations")?.status).toBe(
+      "1 answer drafted, waiting for approval",
+    );
   });
 
   it("reads an empty summary as nothing to do", () => {
