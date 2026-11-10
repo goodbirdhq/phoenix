@@ -45,6 +45,19 @@ const makeServerSettingsLayer = () =>
   );
 
 /** Like `makeServerSettingsLayer`, but also exposes the secret store for assertions. */
+/** Saves a sales engine URL with both tokens, for the URL change tests. */
+const configureSalesEngine = Effect.gen(function* () {
+  const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+  const saved = yield* serverSettings.updateSettings({
+    salesEngine: {
+      baseUrl: "https://engine.example.com",
+      readToken: "sales-read",
+      actionToken: "sales-action",
+    },
+  });
+  return { serverSettings, saved };
+});
+
 const makeServerSettingsLayerWithSecrets = () =>
   ServerSettingsModule.layer.pipe(
     Layer.provideMerge(ServerSecretStore.layer),
@@ -1386,6 +1399,74 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       yield* serverSettings.updateSettings({ salesEngine: { readToken: "", actionToken: "" } });
       assert.isTrue(Option.isNone(yield* secrets.get("sales-engine-read-token")));
       assert.isTrue(Option.isNone(yield* secrets.get("sales-engine-action-token")));
+    }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
+  it.effect("clears both tokens when the URL changes alone", () =>
+    Effect.gen(function* () {
+      const { serverSettings } = yield* configureSalesEngine;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+
+      const moved = yield* serverSettings.updateSettings({
+        salesEngine: { baseUrl: "https://other.example.com" },
+      });
+      assert.equal(moved.salesEngine.baseUrl, "https://other.example.com");
+      assert.equal(moved.salesEngine.readToken, "");
+      assert.equal(moved.salesEngine.actionToken, "");
+      assert.isTrue(Option.isNone(yield* secrets.get("sales-engine-read-token")));
+      assert.isTrue(Option.isNone(yield* secrets.get("sales-engine-action-token")));
+    }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
+  it.effect("clears the tokens when the client echoes the redaction marker with a new URL", () =>
+    Effect.gen(function* () {
+      const { serverSettings, saved } = yield* configureSalesEngine;
+      const forClient = ServerSettingsModule.redactServerSettingsForClient(saved).salesEngine;
+
+      const moved = yield* serverSettings.updateSettings({
+        salesEngine: { ...forClient, baseUrl: "https://other.example.com" },
+      });
+      assert.equal(moved.salesEngine.readToken, "");
+      assert.equal(moved.salesEngine.actionToken, "");
+    }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
+  it.effect("keeps new tokens supplied with the new URL", () =>
+    Effect.gen(function* () {
+      const { serverSettings } = yield* configureSalesEngine;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+
+      const moved = yield* serverSettings.updateSettings({
+        salesEngine: {
+          baseUrl: "https://other.example.com",
+          readToken: "other-read",
+          actionToken: "other-action",
+        },
+      });
+      assert.equal(moved.salesEngine.readToken, "other-read");
+      assert.equal(moved.salesEngine.actionToken, "other-action");
+      const stored = yield* secrets.get("sales-engine-read-token");
+      assert.isTrue(Option.isSome(stored));
+    }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
+  it.effect("keeps the tokens when the URL only changes in form", () =>
+    Effect.gen(function* () {
+      const { serverSettings, saved } = yield* configureSalesEngine;
+      const forClient = ServerSettingsModule.redactServerSettingsForClient(saved).salesEngine;
+
+      // The same engine, written with the API suffix and a trailing slash.
+      const kept = yield* serverSettings.updateSettings({
+        salesEngine: { ...forClient, baseUrl: "https://engine.example.com/api/sales/v1/" },
+      });
+      assert.equal(kept.salesEngine.readToken, "sales-read");
+      assert.equal(kept.salesEngine.actionToken, "sales-action");
+
+      const unrelated = yield* serverSettings.updateSettings({
+        salesEngine: { agentsProjectId: "project-birdhouse" },
+      });
+      assert.equal(unrelated.salesEngine.readToken, "sales-read");
+      assert.equal(unrelated.salesEngine.actionToken, "sales-action");
     }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
   );
 

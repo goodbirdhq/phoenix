@@ -17,7 +17,8 @@ Open **Settings › Integrations**, choose the environment that should read the 
 - **Sales agents project** is the project whose checkout holds the sales workflows. Research this
   and Redraft with notes start a thread there, the way a new thread in that project would start.
 
-Tokens are stored by that environment's server and are never shown again.
+Tokens are stored by that environment's server and are never shown again. Changing the engine URL
+clears both tokens, so enter them again for the new engine.
 
 ## Enrol a device
 

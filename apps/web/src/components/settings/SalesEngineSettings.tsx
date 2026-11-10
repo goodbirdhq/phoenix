@@ -102,10 +102,13 @@ function SalesEngineForm({ environmentId }: { readonly environmentId: Environmen
   const newReadToken = readToken.trim();
   const newActionToken = actionToken.trim();
   const isSaved = saved.baseUrl.length > 0 || saved.readToken.length > 0;
+  // The server clears saved tokens when the URL changes, so a new URL needs its own tokens.
+  const urlChanged = baseUrl !== saved.baseUrl;
+  const hasSavedTokens = saved.readToken.length > 0 || saved.actionToken.length > 0;
   const canSave =
     baseUrl.length > 0 &&
-    (newReadToken.length > 0 || saved.readToken.length > 0) &&
-    (baseUrl !== saved.baseUrl || newReadToken.length > 0 || newActionToken.length > 0);
+    (newReadToken.length > 0 || (saved.readToken.length > 0 && !urlChanged)) &&
+    (urlChanged || newReadToken.length > 0 || newActionToken.length > 0);
 
   const save = async (patch: Partial<SalesEngineSettingsValue>) => {
     setSaving(true);
@@ -160,6 +163,11 @@ function SalesEngineForm({ environmentId }: { readonly environmentId: Environmen
             value={baseUrlDraft ?? saved.baseUrl}
             onChange={(event) => setBaseUrlDraft(event.target.value)}
           />
+          {urlChanged && hasSavedTokens ? (
+            <p className="text-xs text-muted-foreground">
+              Changing the URL clears the saved tokens. Enter them again for the new engine.
+            </p>
+          ) : null}
         </div>
         <TokenField
           id={`sales-engine-token-${environmentId}`}

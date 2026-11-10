@@ -57,6 +57,7 @@ import {
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import { salesApiBaseUrl } from "./sales/SalesEngineApi.ts";
 
 export { resolveSourceControlWriterModelSelection } from "@t3tools/shared/serverSettings";
 
@@ -182,6 +183,30 @@ const withSecretSectionValues = (
   bitbucket: sections.bitbucket as ServerSettings["bitbucket"],
   salesEngine: sections.salesEngine as ServerSettings["salesEngine"],
 });
+
+/**
+ * The sales engine tokens are bearer credentials for one host. When a patch points the engine at
+ * a different URL, a token the same patch does not supply anew is cleared, so the server never
+ * sends the old host's tokens to the new one.
+ */
+function clearSalesEngineTokensOnUrlChange(
+  current: ServerSettings,
+  next: ServerSettings,
+  patch: ServerSettingsPatch,
+): ServerSettings {
+  const normalise = (url: string) => salesApiBaseUrl(url) ?? url.trim();
+  if (normalise(current.salesEngine.baseUrl) === normalise(next.salesEngine.baseUrl)) return next;
+  const supplied = (token: string | undefined) =>
+    token !== undefined && token.length > 0 && token !== SECRET_REDACTED;
+  return {
+    ...next,
+    salesEngine: {
+      ...next.salesEngine,
+      readToken: supplied(patch.salesEngine?.readToken) ? next.salesEngine.readToken : "",
+      actionToken: supplied(patch.salesEngine?.actionToken) ? next.salesEngine.actionToken : "",
+    },
+  };
+}
 
 const redactSecret = (value: string) => (value.length > 0 ? SECRET_REDACTED : "");
 
@@ -1052,7 +1077,11 @@ const make = Effect.gen(function* () {
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* getSettingsFromCache;
-        const updated = applyServerSettingsPatch(current, patch);
+        const updated = clearSalesEngineTokensOnUrlChange(
+          current,
+          applyServerSettingsPatch(current, patch),
+          patch,
+        );
         const persisted = yield* persistProviderEnvironmentSecrets(current, updated);
         const next = yield* normalizeServerSettings(persisted.settings);
         const materialized = yield* Effect.uninterruptibleMask(() =>
