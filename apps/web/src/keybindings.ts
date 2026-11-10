@@ -8,8 +8,11 @@ import {
   type ModelPickerJumpKeybindingCommand,
   type ThreadJumpKeybindingCommand,
 } from "@t3tools/contracts";
+import { isCommandPaletteOpen } from "./commandPaletteBus";
 import { isElectron } from "./env";
+import { isEditableFocused } from "./lib/editableFocus";
 import { isMacPlatform } from "./lib/utils";
+import { isModelPickerOpen } from "./modelPickerVisibility";
 
 export interface ShortcutEventLike {
   getModifierState?: (key: "AltGraph") => boolean;
@@ -20,6 +23,13 @@ export interface ShortcutEventLike {
   ctrlKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
+}
+
+/** A key press as a page's own handler reads it. */
+export interface PageShortcutEventLike extends ShortcutEventLike {
+  readonly target: EventTarget | null;
+  readonly isComposing?: boolean;
+  readonly repeat?: boolean;
 }
 
 export interface ShortcutModifierStateLike {
@@ -249,6 +259,25 @@ export function resolveShortcutCommand(
     return binding.command;
   }
   return null;
+}
+
+/**
+ * Whether a page's own key handler (Usage, the Sales lists) should leave a key press alone. Their
+ * defaults are plain letters, so they stand down while the person types or composes text, works
+ * in a dialog or popup, or has the command palette or model picker open.
+ */
+export function isPageShortcutSuppressed(event: PageShortcutEventLike): boolean {
+  const { target } = event;
+  return (
+    event.isComposing === true ||
+    isEditableFocused(target) ||
+    (target instanceof Element &&
+      target.closest(
+        '[role="dialog"], [role="alertdialog"], [aria-modal="true"], [data-slot$="popup"]',
+      ) !== null) ||
+    isCommandPaletteOpen() ||
+    isModelPickerOpen()
+  );
 }
 
 export function formatShortcutKeyLabel(key: string): string {

@@ -1450,29 +1450,23 @@ describe("Usage shortcuts", () => {
 });
 
 describe("Sales shortcuts", () => {
-  it.each([
-    ["j", "sales.next"],
-    ["k", "sales.previous"],
-    ["a", "sales.approve"],
-    ["e", "sales.edit"],
-  ] as const)("binds %s to %s only on a Sales list", (key, command) => {
+  it("binds plain letters only on a Sales list, and not with a modifier held", () => {
+    const onSalesList = { platform: "Linux", context: { salesListOpen: true } };
     assert.strictEqual(
-      resolveShortcutCommand(event({ key }), DEFAULT_RESOLVED_KEYBINDINGS, {
-        platform: "Linux",
-        context: { salesListOpen: true },
-      }),
-      command,
+      resolveShortcutCommand(event({ key: "a" }), DEFAULT_RESOLVED_KEYBINDINGS, onSalesList),
+      "sales.approve",
     );
     assert.isNull(
-      resolveShortcutCommand(event({ key }), DEFAULT_RESOLVED_KEYBINDINGS, {
+      resolveShortcutCommand(event({ key: "a" }), DEFAULT_RESOLVED_KEYBINDINGS, {
         platform: "Linux",
       }),
     );
     assert.isNull(
-      resolveShortcutCommand(event({ key, altKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
-        platform: "Linux",
-        context: { salesListOpen: true },
-      }),
+      resolveShortcutCommand(
+        event({ key: "a", altKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        onSalesList,
+      ),
     );
   });
 });

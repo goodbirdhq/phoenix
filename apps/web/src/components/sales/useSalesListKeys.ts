@@ -1,11 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { shortcutLabelForCommand } from "../../keybindings";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import {
   resolveSalesShortcut,
   SALES_LIST_CONTEXT,
+  SALES_SHORTCUTS,
   type SalesShortcutCommand,
 } from "./salesShortcuts";
 
@@ -35,9 +36,17 @@ export function useSalesListKeys(keys: SalesListKeys): void {
   }, [keybindings]);
 }
 
-/** Looks up a Sales command's current key label; null when it is unbound. */
-export function useSalesShortcutLabel(): (command: SalesShortcutCommand) => string | null {
+/** The Sales list keys with each one's current key label; `key` is null where it is unbound. */
+export function useSalesShortcutKeys() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  return (command) =>
-    shortcutLabelForCommand(keybindings, command, { context: SALES_LIST_CONTEXT });
+  return useMemo(
+    () =>
+      SALES_SHORTCUTS.map((shortcut) => ({
+        ...shortcut,
+        key: shortcutLabelForCommand(keybindings, shortcut.command, {
+          context: SALES_LIST_CONTEXT,
+        }),
+      })),
+    [keybindings],
+  );
 }

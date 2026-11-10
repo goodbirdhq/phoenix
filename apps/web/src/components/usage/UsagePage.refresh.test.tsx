@@ -149,6 +149,7 @@ beforeEach(() => {
   vi.stubGlobal("window", new EventTarget());
   vi.stubGlobal("document", { activeElement: null, querySelector: () => null });
   vi.stubGlobal("HTMLElement", function HTMLElement() {});
+  vi.stubGlobal("Element", function Element() {});
   vi.stubGlobal("navigator", { platform: "Linux" });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-11T12:00:00Z"));

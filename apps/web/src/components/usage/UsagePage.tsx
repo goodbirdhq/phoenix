@@ -32,10 +32,8 @@ import {
 import type { MergedUsage } from "@t3tools/shared/usageMerge";
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
 
-import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { isElectron } from "../../env";
 import { useEscapeToGoBack } from "../../hooks/useNavigateBack";
-import { isModelPickerOpen } from "../../modelPickerVisibility";
 import { environmentPresentations } from "../../state/presentation";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "../../state/server";
 import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
@@ -262,15 +260,7 @@ export function UsagePage() {
   }, [pageTab, connectedLimitsEnvironments]);
 
   const onUsageKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    if (
-      event.defaultPrevented ||
-      event.repeat ||
-      event.isComposing ||
-      pricesOpen ||
-      isCommandPaletteOpen() ||
-      isModelPickerOpen()
-    )
-      return;
+    if (event.defaultPrevented || event.repeat || pricesOpen) return;
 
     const command = resolveUsageShortcut(event, keybindings);
     const metricOption = METRIC_OPTIONS.find((option) => option.command === command);
