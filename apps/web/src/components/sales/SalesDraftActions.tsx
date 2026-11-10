@@ -1,7 +1,6 @@
 import {
   type DraftCard,
   type DraftCardState,
-  isDirty,
   isEditing,
 } from "@t3tools/client-runtime/sales/draft-card";
 import { checkSigning, thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
@@ -47,7 +46,7 @@ export function SalesDraftActions(props: {
           {actions.approve ? (
             <Button
               size="sm"
-              disabled={busy || isDirty(state) || refusal !== null}
+              disabled={busy || isEditing(state) || refusal !== null}
               onClick={() => void card.approve(device)}
             >
               {state.busy === "approve" ? "Signing…" : (props.approveLabel ?? "Approve")}

@@ -263,8 +263,9 @@ export function createDraftCard(
 
     approve: async (device) => {
       if (state.detail === null || state.busy !== null) return;
-      if (isDirty(state)) {
-        notify({ tone: "warning", title: "Save or cancel your edit before approving." });
+      // Approval signs the email as shown, so not while the inputs are open, typed in or not.
+      if (isEditing(state)) {
+        notify({ tone: "warning", title: "Finish or cancel your edit before approving." });
         return;
       }
       const { refusal } = checkSigning(device);

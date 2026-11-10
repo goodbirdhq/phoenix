@@ -111,12 +111,16 @@ describe("draft card approval", () => {
     });
   });
 
-  it("signs nothing while an edit is unsaved, or on a device that cannot sign", async () => {
+  it("signs nothing while an edit is open, or on a device that cannot sign", async () => {
     const { card, calls } = setup({});
     await card.load();
+    card.startEdit();
+    await card.approve(activeDevice);
+    expect(card.getState().notice?.title).toBe("Finish or cancel your edit before approving.");
+
     card.editBody("Hey Ana, rewritten.");
     await card.approve(activeDevice);
-    expect(card.getState().notice?.title).toBe("Save or cancel your edit before approving.");
+    expect(calls.signed).toEqual([]);
 
     card.cancelEdit();
     await card.approve({ ...activeDevice, blocked: "Approve from another computer." });
