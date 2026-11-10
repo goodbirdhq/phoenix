@@ -1,6 +1,10 @@
 import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import type { UsageChartMetric } from "@t3tools/client-runtime/usage/chart-series";
-import { resolveShortcutCommand, type ShortcutEventLike } from "../../keybindings";
+import {
+  isPageShortcutSuppressed,
+  resolveShortcutCommand,
+  type PageShortcutEventLike,
+} from "../../keybindings";
 
 export type UsageMetric = UsageChartMetric | "limits";
 export const METRIC_OPTIONS = [
@@ -18,21 +22,10 @@ export const WINDOW_OPTIONS = [
 
 /** Resolves page shortcuts without taking letters from fields or popup controls. */
 export function resolveUsageShortcut(
-  event: ShortcutEventLike & { target: EventTarget | null },
+  event: PageShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
 ) {
-  const target = event.target;
-  if (
-    target instanceof HTMLElement &&
-    (target.tagName === "INPUT" ||
-      target.tagName === "TEXTAREA" ||
-      target.tagName === "SELECT" ||
-      target.isContentEditable ||
-      target.closest('[role="dialog"], [aria-modal="true"], [data-slot$="popup"]'))
-  ) {
-    return null;
-  }
-
+  if (isPageShortcutSuppressed(event)) return null;
   return resolveShortcutCommand(event, keybindings, {
     context: { usagePageOpen: true },
   });

@@ -75,7 +75,8 @@ Other actions:
 
 **Runs** lists each run started from the draft with its status, including after a restart, but
 not runs you archived. When one finishes, Phoenix reads the draft again so a new version shows.
-Keys: <kbd>J</kbd> and <kbd>K</kbd> move, <kbd>A</kbd> approves, <kbd>E</kbd> edits. The
+Keys: <kbd>J</kbd> and <kbd>K</kbd> move, <kbd>A</kbd> approves, <kbd>E</kbd> edits; change
+them in **Settings › Keybindings**. The
 command palette offers the same actions, and Pause, Withdraw approval or Resume where the selected
 draft allows it.
 

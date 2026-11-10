@@ -12,7 +12,7 @@ import {
 import type { EnvironmentId, SalesQueueItem } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { salesTime } from "@t3tools/client-runtime/sales/time";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useNowMs } from "../../hooks/useNowMinute";
 import { useSalesDevice, useSalesState } from "../../state/sales";
@@ -25,7 +25,25 @@ import type { ApproveOutcome } from "@t3tools/client-runtime/sales/approve";
 import { SalesBatchReview, type TickedDraft } from "./SalesBatchReview";
 import { SalesDraftPanel, type SalesDraftPanelHandle } from "./SalesDraftPanel";
 import { setSalesPaletteCommands } from "./salesPaletteCommands";
-import { useSalesListKeys } from "./useSalesListKeys";
+import type { SalesShortcutCommand } from "./salesShortcuts";
+import { useSalesListKeys, useSalesShortcutKeys } from "./useSalesListKeys";
+
+/** How the command palette offers the list keys on Outreach. */
+const PALETTE_TEXT: Record<
+  SalesShortcutCommand,
+  { readonly title: string; readonly keywords: ReadonlyArray<string> }
+> = {
+  "sales.next": { title: "Next draft", keywords: ["sales", "next", "down", "draft"] },
+  "sales.previous": { title: "Previous draft", keywords: ["sales", "previous", "up", "draft"] },
+  "sales.approve": {
+    title: "Approve the selected draft",
+    keywords: ["sales", "approve", "draft", "outreach", "sign"],
+  },
+  "sales.edit": {
+    title: "Edit the selected draft",
+    keywords: ["sales", "edit", "draft", "outreach"],
+  },
+};
 
 /**
  * Drafts waiting on a person: the list grouped by campaign, and the selected draft read as the
@@ -66,36 +84,33 @@ export function SalesOutreach(props: {
     moveRef.current = move;
   });
 
-  useSalesListKeys({
-    next: () => moveRef.current(1),
-    previous: () => moveRef.current(-1),
-    approve: () => panel.current?.approve(),
-    edit: () => panel.current?.edit(),
-  });
+  // Stable, and each reaches the current list and draft through refs.
+  const actions = useMemo<Record<SalesShortcutCommand, () => void>>(
+    () => ({
+      "sales.next": () => moveRef.current(1),
+      "sales.previous": () => moveRef.current(-1),
+      "sales.approve": () => panel.current?.approve(),
+      "sales.edit": () => panel.current?.edit(),
+    }),
+    [],
+  );
+  useSalesListKeys(actions);
+  const shortcutKeys = useSalesShortcutKeys();
 
   // Hold and Resume are offered only where the selected draft's state allows them.
   const selectedActions = current !== null && canAct ? cardActions(current) : null;
   const holdTitle = current !== null && selectedActions?.hold ? holdLabel(current) : null;
   const canResume = selectedActions?.resume ?? false;
 
-  // Registered again only when what is offered changes; each command reaches the current list
-  // and draft through refs.
+  // Registered again only when what is offered, or a key, changes.
   useEffect(() => {
     setSalesPaletteCommands([
-      {
-        id: "sales:approve",
-        title: "Approve the selected draft",
-        keywords: ["sales", "approve", "draft", "outreach", "sign"],
-        shortcut: "A",
-        run: () => panel.current?.approve(),
-      },
-      {
-        id: "sales:edit",
-        title: "Edit the selected draft",
-        keywords: ["sales", "edit", "draft", "outreach"],
-        shortcut: "E",
-        run: () => panel.current?.edit(),
-      },
+      ...shortcutKeys.map(({ command, key }) => ({
+        id: command,
+        ...PALETTE_TEXT[command],
+        shortcut: key,
+        run: actions[command],
+      })),
       ...(holdTitle === null
         ? []
         : [
@@ -116,23 +131,9 @@ export function SalesOutreach(props: {
             },
           ]
         : []),
-      {
-        id: "sales:next",
-        title: "Next draft",
-        keywords: ["sales", "next", "down", "draft"],
-        shortcut: "J",
-        run: () => moveRef.current(1),
-      },
-      {
-        id: "sales:previous",
-        title: "Previous draft",
-        keywords: ["sales", "previous", "up", "draft"],
-        shortcut: "K",
-        run: () => moveRef.current(-1),
-      },
     ]);
     return () => setSalesPaletteCommands([]);
-  }, [holdTitle, canResume]);
+  }, [actions, shortcutKeys, holdTitle, canResume]);
 
   const approvable = tickedForReview(order, checked);
 
@@ -252,9 +253,7 @@ export function SalesOutreach(props: {
             </section>
           ))}
         </div>
-        <p className="hidden border-t px-3 py-2 text-xs text-muted-foreground md:block">
-          <Kbd>J</Kbd> <Kbd>K</Kbd> move · <Kbd>A</Kbd> approve · <Kbd>E</Kbd> edit
-        </p>
+        <SalesKeysHint keys={shortcutKeys} />
       </aside>
 
       {current ? (
@@ -369,5 +368,21 @@ function BatchOutcomes(props: {
           </p>
         ))}
     </div>
+  );
+}
+
+/** The list's keys as currently bound; a command with no key is left out. */
+function SalesKeysHint(props: { readonly keys: ReturnType<typeof useSalesShortcutKeys> }) {
+  const bound = props.keys.filter((shortcut) => shortcut.key !== null);
+  if (bound.length === 0) return null;
+  return (
+    <p className="hidden border-t px-3 py-2 text-xs text-muted-foreground md:block">
+      {bound.map(({ command, key, hint }, index) => (
+        <Fragment key={command}>
+          {index > 0 ? " · " : null}
+          <Kbd>{key}</Kbd> {hint}
+        </Fragment>
+      ))}
+    </p>
   );
 }

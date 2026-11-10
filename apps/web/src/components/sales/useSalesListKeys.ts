@@ -1,53 +1,52 @@
-import { useEffect, useRef } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { useEffect, useMemo, useRef } from "react";
 
-export interface SalesListKeys {
-  readonly next: () => void;
-  readonly previous: () => void;
-  readonly approve?: () => void;
-  readonly edit?: () => void;
-}
+import { shortcutLabelForCommand } from "../../keybindings";
+import { primaryServerKeybindingsAtom } from "../../state/server";
+import {
+  resolveSalesShortcut,
+  SALES_LIST_CONTEXT,
+  SALES_SHORTCUTS,
+  type SalesShortcutCommand,
+} from "./salesShortcuts";
 
-const isTyping = (target: EventTarget | null) =>
-  target instanceof HTMLElement &&
-  (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+export type SalesListKeys = Partial<Record<SalesShortcutCommand, () => void>>;
 
 /**
- * J and K move through a Sales list, A approves the open draft, E edits it. Plain letters, so
- * they stand down while the person types, holds a modifier, or has a dialog open.
- *
- * Not yet in the keybinding registry (`src/keybindings.ts`), so not rebindable: that needs new
- * `KeybindingCommand`s in contracts, server defaults, a `when` context for the Sales page, and
- * settings labels. Move them there when that lands.
+ * Runs a Sales list's commands from their bindings (J and K move, A approves the open draft,
+ * E edits it, by default; rebindable in Settings › Keybindings).
  */
 export function useSalesListKeys(keys: SalesListKeys): void {
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const current = useRef(keys);
   useEffect(() => {
     current.current = keys;
   });
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (
-        isTyping(event.target) ||
-        document.querySelector("[role='dialog'], [role='alertdialog']")
-      ) {
-        return;
-      }
-      const action =
-        event.key === "j"
-          ? current.current.next
-          : event.key === "k"
-            ? current.current.previous
-            : event.key === "a"
-              ? current.current.approve
-              : event.key === "e"
-                ? current.current.edit
-                : undefined;
+      if (event.defaultPrevented) return;
+      const command = resolveSalesShortcut(event, keybindings);
+      const action = command === null ? undefined : current.current[command];
       if (action === undefined) return;
       event.preventDefault();
       action();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [keybindings]);
+}
+
+/** The Sales list keys with each one's current key label; `key` is null where it is unbound. */
+export function useSalesShortcutKeys() {
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  return useMemo(
+    () =>
+      SALES_SHORTCUTS.map((shortcut) => ({
+        ...shortcut,
+        key: shortcutLabelForCommand(keybindings, shortcut.command, {
+          context: SALES_LIST_CONTEXT,
+        }),
+      })),
+    [keybindings],
+  );
 }

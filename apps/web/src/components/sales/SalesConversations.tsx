@@ -88,10 +88,10 @@ export function SalesConversations(props: {
     if (next) props.onSelect(next.contactKey);
   };
   useSalesListKeys({
-    next: () => move(1),
-    previous: () => move(-1),
-    approve: () => panel.current?.approve(),
-    edit: () => panel.current?.edit(),
+    "sales.next": () => move(1),
+    "sales.previous": () => move(-1),
+    "sales.approve": () => panel.current?.approve(),
+    "sales.edit": () => panel.current?.edit(),
   });
 
   if (list === null) {

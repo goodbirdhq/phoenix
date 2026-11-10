@@ -1448,3 +1448,25 @@ describe("Usage shortcuts", () => {
     );
   });
 });
+
+describe("Sales shortcuts", () => {
+  it("binds plain letters only on a Sales list, and not with a modifier held", () => {
+    const onSalesList = { platform: "Linux", context: { salesListOpen: true } };
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "a" }), DEFAULT_RESOLVED_KEYBINDINGS, onSalesList),
+      "sales.approve",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "a" }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Linux",
+      }),
+    );
+    assert.isNull(
+      resolveShortcutCommand(
+        event({ key: "a", altKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        onSalesList,
+      ),
+    );
+  });
+});

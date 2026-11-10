@@ -36,6 +36,7 @@ import {
   usePanelAnimationSettings,
   usePanelNavigationSuppression,
 } from "../panelAnimations";
+import { isSalesListArea } from "./sales/salesShortcuts";
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
@@ -114,6 +115,9 @@ function SidebarControl({
   compact?: boolean;
 }) {
   const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
+  const salesListOpen = useLocation({
+    select: (location) => location.pathname === "/sales" && isSalesListArea(location.search.area),
+  });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { toggleSidebar } = useSidebar();
   const isSidebarVisible = useSidebarVisibility();
@@ -123,7 +127,7 @@ function SidebarControl({
     !plain && environmentIdentificationMode === "artwork",
   );
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle", {
-    context: { usagePageOpen },
+    context: { usagePageOpen, salesListOpen },
   });
 
   useEffect(() => {
@@ -145,8 +149,9 @@ function SidebarControl({
         return;
       }
       if (
-        resolveShortcutCommand(event, keybindings, { context: { usagePageOpen } }) !==
-        "sidebar.toggle"
+        resolveShortcutCommand(event, keybindings, {
+          context: { usagePageOpen, salesListOpen },
+        }) !== "sidebar.toggle"
       )
         return;
 
@@ -158,7 +163,7 @@ function SidebarControl({
     // Capture before focused editors consume commands such as Mod+B for rich-text formatting.
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [keybindings, toggleSidebar, usagePageOpen]);
+  }, [keybindings, toggleSidebar, usagePageOpen, salesListOpen]);
 
   return (
     // The right-side layout controls carry mr-px (border compensation inside
