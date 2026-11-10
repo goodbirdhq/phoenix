@@ -247,7 +247,9 @@ const make = Effect.gen(function* () {
     key: configKey,
     read: readEngine,
     interval: SALES_POLL_INTERVAL,
-    // While anyone is watching, a settings change reads the new engine at once.
+    // While anyone is watching, a settings change reads the new engine at once. PolledRead only
+    // joins a read still in flight, so this filter is what skips a change that leaves the engine
+    // as last read (any other setting), which would otherwise read the engine again.
     refreshWhen: serverSettings.streamChanges.pipe(
       Stream.filterEffect((settings) =>
         Ref.get(lastConfigKey).pipe(Effect.map((key) => key !== configKey(settings.salesEngine))),
