@@ -5,32 +5,23 @@ import {
   SALES_HASH_ALGORITHM,
   approvalMessage,
   computeContentHash,
-  deviceFingerprint,
   deviceIdFor,
   displayedDraft,
   exportPublicKey,
   generateDeviceKey,
-  shortFingerprint,
   signApproval,
   verifyDisplayedVersion,
   verifyReviewedVersion,
 } from "./approval.ts";
 import { createDeviceKey, thisDeviceState } from "./devices.ts";
+import vectors from "./fixtures/sales-api-vectors.json" with { type: "json" };
 
-/**
- * Hash inputs with the white space the engine normalises, and the hash the engine's own
- * `contentHash()` (birdhouse engine `src/approval/core.ts`, at 80f689f) gives for them.
- */
-const hashInput = {
-  toAddress: "  Ana@Brand.example ",
-  subject: " Re: creator x fintech ",
-  body: "Hey Ana,\n\nThanks for the note — two quick ideas.\n\n  Gabe ",
-  rowName: "Draft chase to Ana - Brand ",
-  step: 2,
-  gmailThreadId: "18f2c0ffee",
-  answers: null,
-};
-const ENGINE_HASH = "add70f992ed114c2f0fc16adc5f24f4fd3980e7a246de05a43421a9a5c700386";
+// A threaded chase from the engine's conformance vectors (see conformance.test.ts).
+const chaseVector = vectors.contentHash.find(
+  (vector) => vector.name === "threaded chase, answers null",
+)!;
+const hashInput = chaseVector.input;
+const ENGINE_HASH = chaseVector.expected;
 
 const detail = (overrides: Partial<SalesQueueItemDetail> = {}): SalesQueueItemDetail => ({
   activityId: "act-1",
@@ -77,10 +68,6 @@ const fromBase64Url = (value: string) =>
   );
 
 describe("content hash", () => {
-  it("matches the engine's hash for the same inputs", async () => {
-    expect(await computeContentHash(hashInput)).toBe(ENGINE_HASH);
-  });
-
   it("lets a client sign only the version it shows", async () => {
     expect(await verifyDisplayedVersion(detail())).toEqual({ ok: true, contentHash: ENGINE_HASH });
     // What the screen shows is the hash inputs, not the preview fields.
@@ -147,9 +134,6 @@ describe("signing", () => {
       contentHash: ENGINE_HASH,
       signedAt: "2026-11-10T09:14:03.120Z",
     });
-    expect(approvalMessage("act-1", ENGINE_HASH, "2026-11-10T09:14:03.120Z")).toBe(
-      `birdhouse-approve:v1\nact-1\n${ENGINE_HASH}\n2026-11-10T09:14:03.120Z`,
-    );
     expect(signed).toMatchObject({
       activityId: "act-1",
       contentHash: ENGINE_HASH,
@@ -191,25 +175,6 @@ describe("signing", () => {
 });
 
 describe("device keys", () => {
-  it("fingerprints the RFC 7638 input the Slack card shows", async () => {
-    const jwk = {
-      kty: "EC" as const,
-      crv: "P-256" as const,
-      x: "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
-      y: "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
-    };
-    const canonical = `{"crv":"P-256","kty":"EC","x":"${jwk.x}","y":"${jwk.y}"}`;
-    const expected = Array.from(
-      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical))),
-      (byte) => byte.toString(16).padStart(2, "0"),
-    ).join("");
-    const fingerprint = await deviceFingerprint(jwk);
-    expect(fingerprint).toBe(expected);
-    expect(shortFingerprint(fingerprint)).toMatch(
-      /^[0-9a-f]{4} [0-9a-f]{4} [0-9a-f]{4} [0-9a-f]{4}$/u,
-    );
-  });
-
   it("makes an enrolment the engine accepts and sends only the public half", async () => {
     const { key, enrol } = await createDeviceKey({
       engine: "https://engine.example.com",
