@@ -1,8 +1,10 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import {
+  type ModelSelection,
   OrchestrationDispatchCommandError,
   ProjectId,
+  ProviderInstanceId,
   SalesActionError,
   type SalesContactRef,
   type SalesConversationDetail,
@@ -229,19 +231,25 @@ const conversation: SalesConversationDetail = {
   }),
 };
 
-const provider = {
-  instanceId: "codex",
-  enabled: true,
-  installed: true,
-  status: "ready",
-  auth: { status: "authenticated" },
-  availability: "available",
-  models: [{ slug: "gpt-5", isDefault: true }],
-} as unknown as ServerProvider;
+const readyProvider = (driver: string, model: string) =>
+  ({
+    instanceId: driver,
+    driver,
+    enabled: true,
+    installed: true,
+    status: "ready",
+    auth: { status: "authenticated" },
+    availability: "available",
+    models: [{ slug: model, isDefault: true }],
+  }) as unknown as ServerProvider;
+const codex = readyProvider("codex", "gpt-5");
+const claude = readyProvider("claudeAgent", "claude-opus-5-5");
 
 function makeDispatchLayer(input: {
   readonly agentsProjectId: string;
   readonly bootstrapFails?: boolean;
+  readonly providers?: ReadonlyArray<ServerProvider>;
+  readonly runModelSelection?: ModelSelection;
 }) {
   const calls: Array<string> = [];
   const commands: Array<ThreadTurnBootstrap.ThreadTurnStartCommand> = [];
@@ -297,13 +305,18 @@ function makeDispatchLayer(input: {
         Layer.mock(T3ProjectFileLoader.T3ProjectFileLoader)({
           load: () => Effect.succeed(Option.none()),
         }),
-        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([provider]) }),
+        Layer.mock(ProviderRegistry)({
+          getProviders: Effect.succeed(input.providers ?? [codex, claude]),
+        }),
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           localStatus: () => Effect.succeed({ isRepo: true, refName: "main" } as never),
         }),
         ServerSettings.layerTest({
           defaultThreadEnvMode: "worktree",
-          salesEngine: { agentsProjectId: input.agentsProjectId },
+          salesEngine: {
+            agentsProjectId: input.agentsProjectId,
+            ...(input.runModelSelection ? { runModelSelection: input.runModelSelection } : {}),
+          },
         }),
         NodeCrypto.layer,
       ),
@@ -337,7 +350,50 @@ it.effect("discards the plan's card for the version shown, then starts its threa
     // The project's default thread mode: a fresh worktree off its current branch.
     assert.strictEqual(command?.bootstrap?.prepareWorktree?.baseBranch, "main");
     assert.strictEqual(command?.bootstrap?.createThread?.projectId, "project-birdhouse");
+    // No agent chosen for Sales runs: Claude Code, not the first provider that could start.
+    assert.deepStrictEqual(command?.modelSelection, {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-opus-5-5",
+    });
+    assert.deepStrictEqual(
+      command?.bootstrap?.createThread?.modelSelection,
+      command?.modelSelection,
+    );
   }).pipe(Effect.provide(layer));
+});
+
+it.effect("runs on the agent chosen for Sales runs", () => {
+  const chosen: ModelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" };
+  const { layer, commands } = makeDispatchLayer({
+    agentsProjectId: "project-birdhouse",
+    runModelSelection: chosen,
+  });
+  return Effect.gen(function* () {
+    const dispatch = yield* SalesDispatch.SalesDispatchService;
+    yield* dispatch.dispatch(redraftReply);
+    assert.deepStrictEqual(commands[0]?.modelSelection, chosen);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("refuses, discarding nothing, when Claude Code is not available", () => {
+  const { layer, calls } = makeDispatchLayer({
+    agentsProjectId: "project-birdhouse",
+    providers: [codex, { ...claude, auth: { status: "unauthenticated" } } as ServerProvider],
+  });
+  return Effect.gen(function* () {
+    const dispatch = yield* SalesDispatch.SalesDispatchService;
+    const exit = yield* dispatch.dispatch(redraftReply).pipe(Effect.exit);
+    const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : null;
+    assert.isTrue(isSalesActionError(error));
+    assert.match(isSalesActionError(error) ? error.message : "", /^Sales runs need Claude Code/u);
+    assert.deepStrictEqual(calls, []);
+  }).pipe(Effect.provide(layer));
+});
+
+it("refuses an agent chosen for Sales runs that cannot start", () => {
+  const chosen: ModelSelection = { instanceId: ProviderInstanceId.make("gone"), model: "x" };
+  const resolved = SalesDispatch.resolveRunModel(chosen, [codex, claude]);
+  assert.isTrue(isSalesActionError(resolved));
 });
 
 it.effect("starts a conversation's plan under the contact, discarding nothing", () => {

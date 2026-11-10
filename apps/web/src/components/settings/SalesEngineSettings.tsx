@@ -1,10 +1,13 @@
 import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
 import { shortFingerprint } from "@t3tools/client-runtime/sales/signing";
 import { createDeviceKey, thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
-import type {
-  EnvironmentId,
-  SalesDevice,
-  SalesEngineSettings as SalesEngineSettingsValue,
+import {
+  isProviderAvailable,
+  type EnvironmentId,
+  type ModelSelection,
+  type SalesDevice,
+  type SalesEngineSettings as SalesEngineSettingsValue,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import { useMemo, useState } from "react";
 
@@ -26,6 +29,8 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { modelSelectionValue } from "../schedules/SchedulesPage.logic";
+import { getDriverOption } from "./providerDriverMeta";
 import { SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -49,6 +54,7 @@ export function SalesEngineSettingsSection() {
           // Drafts belong to one environment; switching must not carry them over.
           key={environment.environmentId}
           environmentId={environment.environmentId}
+          providers={environment.serverConfig.providers}
         />
       </SettingsSection>
       <SalesDevicesSection environment={environment} />
@@ -84,7 +90,84 @@ function TokenField(props: {
   );
 }
 
-function SalesEngineForm({ environmentId }: { readonly environmentId: EnvironmentId }) {
+const DEFAULT_RUN_AGENT = "__default__";
+
+/** Who runs Sales work: Phoenix's default (Claude Code) or any model the environment offers. */
+function SalesRunAgentField(props: {
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly value: ModelSelection | null;
+  readonly onChange: (value: ModelSelection | null) => void;
+}) {
+  const choices = useMemo(
+    () =>
+      props.providers.flatMap((provider) =>
+        provider.enabled && isProviderAvailable(provider)
+          ? provider.models.map((model) => ({
+              selection: { instanceId: provider.instanceId, model: model.slug } as ModelSelection,
+              label: `${provider.displayName ?? provider.instanceId} · ${model.name}`,
+              icon: getDriverOption(provider.driver)?.icon,
+            }))
+          : [],
+      ),
+    [props.providers],
+  );
+  const value = props.value === null ? DEFAULT_RUN_AGENT : modelSelectionValue(props.value);
+  const chosen = choices.find((choice) => modelSelectionValue(choice.selection) === value);
+  const ChosenIcon = chosen?.icon;
+  return (
+    <div className="grid gap-1.5">
+      <Label>Agent for Sales runs</Label>
+      <Select
+        value={value}
+        onValueChange={(next) =>
+          props.onChange(
+            choices.find((choice) => modelSelectionValue(choice.selection) === next)?.selection ??
+              null,
+          )
+        }
+      >
+        <SelectTrigger size="sm" aria-label="Agent for Sales runs">
+          <span className="flex min-w-0 items-center gap-2">
+            {ChosenIcon ? <ChosenIcon className="size-4" /> : null}
+            <span className="truncate">
+              {props.value === null
+                ? "Claude Code (default)"
+                : (chosen?.label ??
+                  `Unavailable · ${props.value.instanceId} · ${props.value.model}`)}
+            </span>
+          </span>
+        </SelectTrigger>
+        <SelectPopup alignItemWithTrigger={false}>
+          <SelectItem value={DEFAULT_RUN_AGENT}>Claude Code (default)</SelectItem>
+          {choices.map((choice) => {
+            const Icon = choice.icon;
+            const key = modelSelectionValue(choice.selection);
+            return (
+              <SelectItem key={key} value={key}>
+                <span className="flex items-center gap-2">
+                  {Icon ? <Icon className="size-4" /> : null}
+                  {choice.label}
+                </span>
+              </SelectItem>
+            );
+          })}
+        </SelectPopup>
+      </Select>
+      <p className="text-xs text-muted-foreground">
+        The agents project&apos;s workflows decide what they need. Phoenix starts Sales runs on
+        Claude Code unless you choose another agent here.
+      </p>
+    </div>
+  );
+}
+
+function SalesEngineForm({
+  environmentId,
+  providers,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly providers: ReadonlyArray<ServerProvider>;
+}) {
   const saved = useEnvironmentSettings(environmentId, (settings) => settings.salesEngine);
   const allProjects = useProjects();
   const projects = useMemo(
@@ -213,6 +296,11 @@ function SalesEngineForm({ environmentId }: { readonly environmentId: Environmen
             workflows, the way a new thread there would start.
           </p>
         </div>
+        <SalesRunAgentField
+          providers={providers}
+          value={saved.runModelSelection}
+          onChange={(runModelSelection) => void save({ runModelSelection })}
+        />
         <div className="flex justify-end gap-2">
           {isSaved ? (
             <Button

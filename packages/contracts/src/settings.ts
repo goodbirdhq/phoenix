@@ -1000,6 +1000,10 @@ export const SalesEngineSettings = Schema.Struct({
   actionToken: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   /** A ProjectId, or "" for none. */
   agentsProjectId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  /** The agent that runs work started from Sales, or null for Phoenix's default: Claude Code. */
+  runModelSelection: Schema.NullOr(ModelSelection).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
 });
 export type SalesEngineSettings = typeof SalesEngineSettings.Type;
 
@@ -1674,6 +1678,8 @@ export const ServerSettingsPatch = Schema.Struct({
       readToken: Schema.optionalKey(TrimmedString),
       actionToken: Schema.optionalKey(TrimmedString),
       agentsProjectId: Schema.optionalKey(TrimmedString),
+      /** Replaces the saved selection whole; null returns to the default. */
+      runModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
     }),
   ),
   providers: Schema.optionalKey(

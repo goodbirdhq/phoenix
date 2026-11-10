@@ -394,6 +394,14 @@ export function applyServerSettingsPatch(
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
       : {}),
+    ...(patch.salesEngine?.runModelSelection !== undefined
+      ? {
+          salesEngine: {
+            ...next.salesEngine,
+            runModelSelection: patch.salesEngine.runModelSelection,
+          },
+        }
+      : {}),
     ...(automaticGitFetchInterval !== undefined ? { automaticGitFetchInterval } : {}),
     ...(providerHealthRefreshInterval !== undefined ? { providerHealthRefreshInterval } : {}),
   };
