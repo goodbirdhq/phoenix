@@ -20,10 +20,14 @@ import {
   SalesDeviceList,
   type SalesEditInput,
   type SalesEnrolDeviceInput,
+  SalesHoldResult,
   SalesQueue,
   SalesQueueItemDetail,
+  type SalesResumeInput,
   SalesSummary,
   SalesTaskList,
+  SalesTaskReport,
+  type SalesTaskReportInput,
   SALES_API_PATH,
   salesEngineRoot,
 } from "@t3tools/contracts";
@@ -120,12 +124,16 @@ export const phoenixCheckFailure = (reason: CheckedByPhoenix, extra: FailureExtr
 
 const ENGINE_CODES = new Set<string>(SalesEngineFailureCode.literals);
 
-/** The engine's `{ error, message, currentHash, state }`. Anything else reads as no body. */
+/**
+ * The engine's `{ error, message, currentHash, state }`; a task's refusal names its `status`
+ * instead of a state. Anything else reads as no body.
+ */
 const ErrorBody = Schema.Struct({
   error: Schema.optional(Schema.String),
   message: Schema.optional(Schema.String),
   currentHash: Schema.optional(Schema.NullOr(Schema.String)),
   state: Schema.optional(Schema.NullOr(Schema.String)),
+  status: Schema.optional(Schema.NullOr(Schema.String)),
 });
 const decodeErrorBody = Schema.decodeUnknownOption(ErrorBody);
 
@@ -137,7 +145,7 @@ function engineFailure(half: Half, httpStatus: number, body: unknown): SalesActi
   const extra = {
     ...(error.message === undefined ? {} : { message: error.message }),
     currentHash: error.currentHash ?? null,
-    state: error.state ?? null,
+    state: error.state ?? error.status ?? null,
   };
   if (httpStatus === 401) {
     return salesActionError("unauthorised", { message: unauthorisedMessage(half) });
@@ -376,14 +384,49 @@ const decodeEdit = Schema.decodeUnknownEffect(
   }),
 );
 
-export const unapprove = (config: SalesEngineConfig, activityId: string) =>
+const decodeHold = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    ...CardAnswer.fields,
+    already: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+    result: SalesHoldResult.fields.result,
+  }),
+);
+const decodeResume = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    ...CardAnswer.fields,
+    already: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  }),
+);
+const decodeTaskReport = Schema.decodeUnknownEffect(SalesTaskReport);
+
+/** Pauses a route chase (kept for Resume) or withdraws a person's approval, as the engine decides. */
+export const hold = (config: SalesEngineConfig, activityId: string) =>
   request(config, {
     half: "action",
     method: "POST",
-    path: "/actions/unapprove",
+    path: "/actions/hold",
     body: { activityId },
-    decode: decodeCard,
-  }).pipe(Effect.map(({ ok: _ok, ...card }) => card));
+    decode: decodeHold,
+  }).pipe(Effect.map(({ ok: _ok, already, result, ...card }) => ({ card, already, result })));
+
+export const resume = (config: SalesEngineConfig, input: SalesResumeInput) =>
+  request(config, {
+    half: "action",
+    method: "POST",
+    path: "/actions/resume",
+    body: input,
+    decode: decodeResume,
+  }).pipe(Effect.map(({ ok: _ok, already, ...card }) => ({ card, already })));
+
+/** Reports what the person did about a LinkedIn task, as a press on its card would. */
+export const reportTask = (config: SalesEngineConfig, input: SalesTaskReportInput) =>
+  request(config, {
+    half: "action",
+    method: "POST",
+    path: path("/actions/tasks", input.taskId),
+    body: { outcome: input.outcome },
+    decode: decodeTaskReport,
+  });
 
 export const edit = (config: SalesEngineConfig, input: SalesEditInput) =>
   request(config, {

@@ -94,6 +94,17 @@ export function listedVersionMoved(
   return listed.toLowerCase() !== shown.toLowerCase();
 }
 
+/**
+ * What a list row shows beside the contact: a scheduled draft says when it goes (the header
+ * already counts it as scheduled); any other state is a badge, since it waits on someone.
+ */
+export function queueRowStatus(
+  item: Pick<SalesQueueItem, "state" | "sendAt">,
+): { readonly badge: string } | { readonly goesAt: string } {
+  if (item.state === "approved" && item.sendAt !== null) return { goesAt: item.sendAt };
+  return { badge: item.state === "awaiting" ? "To review" : stateLabel(item.state) };
+}
+
 export function kindLabel(kind: string | null): string {
   switch (kind) {
     case "first":
@@ -135,17 +146,30 @@ export function stateLabel(state: string): string {
   }
 }
 
-/** What a person can do to a card in this state. */
+/**
+ * What a person can do to a card in this state. Hold takes back whatever approval it has (a
+ * route's is kept for Resume; a person's is withdrawn), and a press approves a paused chase as a
+ * person's.
+ */
 export function cardActions(item: Pick<SalesQueueItem, "state" | "approval">) {
-  const open = ["awaiting", "approved", "held", "refused"].includes(item.state);
-  const approved = item.approval !== null;
+  const open = ["awaiting", "approved", "held", "paused", "refused"].includes(item.state);
   return {
-    approve: item.state === "awaiting",
-    unapprove: open && approved && item.approval?.by !== "route",
+    approve: item.state === "awaiting" || item.state === "paused",
+    hold: open && item.approval !== null,
+    resume: item.state === "paused",
     edit: open,
     discard: open,
   };
 }
+
+/**
+ * What Hold on this card will do, said before the press: a route chase pauses and Resume gives
+ * it back; a person's approval comes off for good.
+ */
+export const holdHint = (item: Pick<SalesQueueItem, "approval">) =>
+  item.approval?.by === "route"
+    ? "Hold pauses it; Resume gives it back to the autopilot."
+    : "Hold takes your approval back; it goes only once you approve it again.";
 
 export function intentLabel(intent: string | null | undefined): string {
   switch (intent) {

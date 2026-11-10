@@ -438,6 +438,11 @@ export const SalesTask = Schema.Struct({
   status: Schema.String,
   /** The engine's day it falls due, `YYYY-MM-DD`. */
   dueOn: NullableString,
+  /**
+   * The day it took a place in the invite budget, or null while it waits for one. A connection
+   * request without a place cannot be reported sent.
+   */
+  admittedOn: NullableString,
   frontOfQueue: Bool,
   contact: SalesContactRef.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   /** The note the card suggests, once posted. */
@@ -447,17 +452,66 @@ export const SalesTask = Schema.Struct({
 });
 export type SalesTask = typeof SalesTask.Type;
 
+/** Today's connection-request budget. `day` is the engine's today, `YYYY-MM-DD`. */
+const SalesTaskBudget = group({
+  day: NullableString,
+  dailyLimit: NullableCount,
+  available: NullableCount,
+});
+export type SalesTaskBudget = typeof SalesTaskBudget.Type;
+
 export const SalesTaskList = Schema.Struct({
   generatedAt: Schema.String,
   items: Schema.Array(SalesTask).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  /** Today's connection-request budget. `day` is the engine's today, `YYYY-MM-DD`. */
-  budget: group({
-    day: NullableString,
-    dailyLimit: NullableCount,
-    available: NullableCount,
-  }),
+  budget: SalesTaskBudget,
 });
 export type SalesTaskList = typeof SalesTaskList.Type;
+
+/** What a person did about a LinkedIn task, as its card reports it. */
+export const SalesTaskOutcome = Schema.Literals([
+  "request_sent",
+  "pending",
+  "connected",
+  "connected_message",
+  "pending_message",
+  "skip",
+]);
+export type SalesTaskOutcome = typeof SalesTaskOutcome.Type;
+
+/**
+ * What each task's card offers, in the order it shows them: the engine's
+ * `LINKEDIN_CARD_OUTCOMES`, which also draws its Slack buttons. An action not listed offers none.
+ */
+export const SALES_TASK_OUTCOMES: Readonly<Record<string, ReadonlyArray<SalesTaskOutcome>>> = {
+  connect: ["request_sent", "pending", "connected", "skip", "connected_message", "pending_message"],
+  dm: ["request_sent", "skip"],
+};
+
+export const SalesTaskReportInput = Schema.Struct({
+  taskId: Schema.String,
+  outcome: SalesTaskOutcome,
+});
+export type SalesTaskReportInput = typeof SalesTaskReportInput.Type;
+
+/**
+ * What a report did. `result` is an open enum: `recorded` (it stands now), `already` (it stood
+ * already), `held` (the engine's live check could not clear it now; `reason` says why, and the task
+ * stays open), `skipped` (the check ruled them out, so it was skipped instead; `reason`), or
+ * `backlog_paused` (a backlog task while backlog admission is off). `budget` is today's after it.
+ */
+export const SalesTaskReport = Schema.Struct({
+  result: Schema.String,
+  reason: NullableString,
+  task: Schema.Struct({
+    id: Schema.String,
+    action: Text,
+    status: Text,
+    outcome: NullableString,
+    connectionState: NullableString,
+  }),
+  budget: SalesTaskBudget,
+});
+export type SalesTaskReport = typeof SalesTaskReport.Type;
 
 export const SalesCampaignStep = Schema.Struct({
   step: Schema.Number,
@@ -539,6 +593,12 @@ export const SalesCardState = Schema.Struct({
   goes: NullableString,
   refusal: NullableString,
   note: NullableString,
+  paused: SalesPause,
+  /**
+   * A send row already exists: `claimed` (going now: nothing taken back stops it), `retry`,
+   * `sent`, `failed`. Null before any attempt.
+   */
+  sendStatus: NullableString,
 });
 export type SalesCardState = typeof SalesCardState.Type;
 
@@ -655,6 +715,32 @@ export const SalesEditResult = Schema.Struct({
 export type SalesEditResult = typeof SalesEditResult.Type;
 
 /**
+ * What Hold did: `paused` a chase the route approved (Resume gives it back), or `unapproved` a
+ * person's approval, which only a fresh press restores. Either way check `card.sendStatus`:
+ * `claimed` means a send was already under way and was not stopped.
+ */
+export const SalesHoldResult = Schema.Struct({
+  card: SalesCardState,
+  already: Schema.Boolean,
+  result: Schema.Literals(["paused", "unapproved"]),
+});
+export type SalesHoldResult = typeof SalesHoldResult.Type;
+
+/** Gives a paused route chase back to the route, for the version the person saw. */
+export const SalesResumeInput = Schema.Struct({
+  activityId: Schema.String,
+  expectedHash: Schema.String,
+});
+export type SalesResumeInput = typeof SalesResumeInput.Type;
+
+export const SalesResumeResult = Schema.Struct({
+  card: SalesCardState,
+  /** It was approved for that version already: it is going. */
+  already: Schema.Boolean,
+});
+export type SalesResumeResult = typeof SalesResumeResult.Type;
+
+/**
  * Start one of the engine's dispatch plans, from the card (`activityId`) or the conversation
  * (`contactKey`) that offered it. `expectedHash` is the plan's `card.expectedHash` as the person
  * saw it, or null for a plan without a card.
@@ -738,6 +824,11 @@ export const SalesEngineFailureCode = Schema.Literals([
   "body_too_long",
   "subject_required",
   "subject_not_editable",
+  "needs_press",
+  "chase_cap",
+  "refused",
+  "not_offered",
+  "not_admitted",
   "other",
 ]);
 export type SalesEngineFailureCode = typeof SalesEngineFailureCode.Type;
@@ -792,7 +883,7 @@ export class SalesActionError extends Schema.TaggedError<SalesActionError>()("Sa
   message: Schema.String,
   /** Set when the card moved on (`stale_hash`, `changed_in_notion`, ...): its version now. */
   currentHash: Schema.NullOr(Schema.String),
-  /** Set for `not_open` and `not_revocable`: the state it is in. */
+  /** Set for `not_open` and `not_revocable`: the state (or a task's status) it is in. */
   state: Schema.NullOr(Schema.String),
 }) {}
 
@@ -849,8 +940,10 @@ export type SalesStreamEvent = typeof SalesStreamEvent.Type;
 
 /**
  * The latest read of one engine list a Sales area shows, sent whenever it says something new.
- * `data` is kept through later errors, so beside a non-ready status it is stale. `readAt` is when
- * `data` was read; reads that find nothing new are not sent, so it can be older than the last read.
+ * `data` is kept through later errors, so beside a non-ready status it is stale. `readAt` is the
+ * last read that succeeded when this was sent. Reads that find nothing new are not sent, so on a
+ * ready view it can lag; a failed read is sent at once, so beside an error it is the last time the
+ * engine confirmed `data`.
  */
 const salesView = <View extends string, Data extends Schema.Top>(view: View, data: Data) =>
   Schema.Struct({
@@ -883,9 +976,11 @@ export const SALES_WS_METHODS = {
   listConversations: "sales.listConversations",
   getConversation: "sales.getConversation",
   approve: "sales.approve",
-  unapprove: "sales.unapprove",
+  hold: "sales.hold",
+  resume: "sales.resume",
   edit: "sales.edit",
   discard: "sales.discard",
+  reportTask: "sales.reportTask",
   listDevices: "sales.listDevices",
   enrolDevice: "sales.enrolDevice",
   revokeDevice: "sales.revokeDevice",

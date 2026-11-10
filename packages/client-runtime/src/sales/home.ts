@@ -1,7 +1,7 @@
 import type { SalesLookItem, SalesSnapshot, SalesSummary } from "@t3tools/contracts";
 
 import { SALES_AREA_LABELS, type SalesArea } from "./areas.ts";
-import { safeHttpUrl } from "./links.ts";
+import { safeHttpsUrl } from "./links.ts";
 
 /** The work areas the engine's summary covers, in the order Home lists them. */
 type SalesWorkAreaKey = Extract<SalesArea, "outreach" | "autopilot" | "todo" | "conversations">;
@@ -35,7 +35,7 @@ const plural = (count: number, one: string, many = `${one}s`) =>
   `${count} ${count === 1 ? one : many}`;
 
 function outreach(summary: SalesSummary): SalesHomeArea {
-  const { awaiting, approvedWaiting, held, refused } = summary.drafts;
+  const { awaiting, approvedWaiting, held, paused, refused } = summary.drafts;
   const status =
     awaiting.total > 0
       ? `${plural(awaiting.total, "draft")} ${awaiting.total === 1 ? "waits" : "wait"} for approval`
@@ -50,6 +50,7 @@ function outreach(summary: SalesSummary): SalesHomeArea {
     figures: [
       { label: "Approved", value: String(approvedWaiting) },
       { label: "Held", value: String(held) },
+      { label: "Paused", value: String(paused) },
       { label: "Refused", value: String(refused) },
     ],
   };
@@ -74,7 +75,7 @@ function autopilot(summary: SalesSummary): SalesHomeArea {
       { label: "Sent", value: String(today.sent) },
       { label: "Scheduled", value: String(today.scheduled) },
       { label: "Held", value: String(today.held) },
-      ...(today.paused > 0 ? [{ label: "Paused", value: String(today.paused) }] : []),
+      { label: "Paused", value: String(today.paused) },
     ],
   };
 }
@@ -241,7 +242,7 @@ export function lookItemView(item: SalesLookItem): SalesLookItemView {
     title,
     why: title === item.why ? null : item.why,
     notionUrl:
-      safeHttpUrl(item.notionUrl) ??
+      safeHttpsUrl(item.notionUrl) ??
       (pageId === null ? null : `https://www.notion.so/${pageId.replaceAll("-", "")}`),
   };
 }

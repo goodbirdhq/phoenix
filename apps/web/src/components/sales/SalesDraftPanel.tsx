@@ -1,12 +1,13 @@
 import { type DraftNotice, isDirty } from "@t3tools/client-runtime/sales/draft-card";
 import { kindLabel, stateLabel } from "@t3tools/client-runtime/sales/outreach";
-import type { EnvironmentId, SalesDispatchSource, SalesQueueItemDetail } from "@t3tools/contracts";
+import type { EnvironmentId, SalesDispatchSource, SalesQueueItem } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { type Ref, useCallback, useImperativeHandle, useMemo, useRef } from "react";
 
 import type { useSalesDevice } from "../../state/sales";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
+import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { SalesDraftAbout } from "./SalesDraftAbout";
 import { SalesDraftActions } from "./SalesDraftActions";
@@ -26,6 +27,7 @@ const STATE_VARIANT: Record<string, "warning" | "success" | "secondary" | "error
   awaiting: "warning",
   approved: "success",
   held: "secondary",
+  paused: "warning",
   refused: "error",
 };
 
@@ -42,6 +44,8 @@ export function SalesDraftPanel({
   readonly activityId: string;
   /** The hash the list shows for this card; a change means the engine has a new version. */
   readonly listedHash: string | null;
+  /** The card as its list shows it, drawn while the full card reads. Never acted on. */
+  readonly listed?: SalesQueueItem;
   readonly canAct: boolean;
   readonly device: SalesDeviceView;
   readonly approveLabel?: string;
@@ -83,6 +87,7 @@ export function SalesDraftPanel({
 
   const detail = state.detail;
   if (detail === null) {
+    if (props.listed && state.loadFailure === null) return <ListedDraft item={props.listed} />;
     return (
       <div className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
         {state.loadFailure ?? <Spinner />}
@@ -138,7 +143,37 @@ export function SalesDraftPanel({
   );
 }
 
-function DraftHeading({ detail }: { readonly detail: SalesQueueItemDetail }) {
+/**
+ * The draft as its list row has it, while the full card reads: who, which email, the subject,
+ * and a quiet stand-in for the body. No actions: Approve signs only the verified full card.
+ */
+function ListedDraft({ item }: { readonly item: SalesQueueItem }) {
+  return (
+    <div className="@container flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="grid max-w-[70ch] min-w-0 content-start gap-4 p-4 @3xl:p-6">
+        <DraftHeading detail={item} />
+        <article aria-label="Email" aria-busy className="grid gap-3 rounded-lg border p-4">
+          <p className="text-xs">
+            <span className="text-muted-foreground">To </span>
+            {item.contact.name ?? item.contact.email ?? "Unknown contact"}
+          </p>
+          <h2 className="text-base font-medium break-words">{item.subject}</h2>
+          <div className="grid gap-2">
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-5/6" />
+            <Skeleton className="h-3 w-2/3" />
+          </div>
+        </article>
+      </div>
+    </div>
+  );
+}
+
+function DraftHeading({
+  detail,
+}: {
+  readonly detail: Pick<SalesQueueItem, "kind" | "stepLabel" | "state">;
+}) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <p className="text-xs text-muted-foreground">

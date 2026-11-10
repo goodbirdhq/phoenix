@@ -41,6 +41,8 @@ const card = (activityId: string, goes: string | null = null) => ({
   goes,
   refusal: null,
   note: null,
+  paused: null,
+  sendStatus: null,
 });
 
 const approvesAll = async (

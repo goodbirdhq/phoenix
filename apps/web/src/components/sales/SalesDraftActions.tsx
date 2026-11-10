@@ -4,7 +4,7 @@ import {
   isEditing,
 } from "@t3tools/client-runtime/sales/draft-card";
 import { checkSigning, thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
-import { cardActions } from "@t3tools/client-runtime/sales/outreach";
+import { cardActions, holdHint } from "@t3tools/client-runtime/sales/outreach";
 import {
   type SalesDispatchAction,
   type SalesQueueItemDetail,
@@ -52,14 +52,14 @@ export function SalesDraftActions(props: {
               {state.busy === "approve" ? "Signing…" : (props.approveLabel ?? "Approve")}
             </Button>
           ) : null}
-          {actions.unapprove ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() => void card.unapprove()}
-            >
-              Unapprove
+          {actions.resume ? (
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => void card.resume()}>
+              {state.busy === "resume" ? "Resuming…" : "Resume"}
+            </Button>
+          ) : null}
+          {actions.hold ? (
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => void card.hold()}>
+              {state.busy === "hold" ? "Holding…" : "Hold"}
             </Button>
           ) : null}
           {actions.edit && !isEditing(state) ? (
@@ -96,6 +96,12 @@ export function SalesDraftActions(props: {
         {actions.approve ? (
           <p className="text-xs text-muted-foreground">
             {refusal?.description ?? thisDeviceDescription(device.state, device.key)}
+          </p>
+        ) : null}
+        {actions.hold ? <p className="text-xs text-muted-foreground">{holdHint(detail)}</p> : null}
+        {actions.resume ? (
+          <p className="text-xs text-muted-foreground">
+            Paused. Resume gives it back to the autopilot; approving sends it as yours.
           </p>
         ) : null}
       </div>

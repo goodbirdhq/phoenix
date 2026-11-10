@@ -1393,8 +1393,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(SALES_WS_METHODS.approve, sales.approve(input), {
             "rpc.aggregate": "sales",
           }),
-        [SALES_WS_METHODS.unapprove]: (input) =>
-          observeRpcEffect(SALES_WS_METHODS.unapprove, sales.unapprove(input.activityId), {
+        [SALES_WS_METHODS.hold]: (input) =>
+          observeRpcEffect(SALES_WS_METHODS.hold, sales.hold(input.activityId), {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.resume]: (input) =>
+          observeRpcEffect(SALES_WS_METHODS.resume, sales.resume(input), {
             "rpc.aggregate": "sales",
           }),
         [SALES_WS_METHODS.edit]: (input) =>
@@ -1403,6 +1407,10 @@ const makeWsRpcLayer = (
           }),
         [SALES_WS_METHODS.discard]: (input) =>
           observeRpcEffect(SALES_WS_METHODS.discard, sales.discard(input), {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.reportTask]: (input) =>
+          observeRpcEffect(SALES_WS_METHODS.reportTask, sales.reportTask(input), {
             "rpc.aggregate": "sales",
           }),
         [SALES_WS_METHODS.listDevices]: () =>

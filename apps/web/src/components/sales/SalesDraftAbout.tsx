@@ -1,4 +1,4 @@
-import { safeHttpUrl } from "@t3tools/client-runtime/sales/links";
+import { safeHttpsUrl } from "@t3tools/client-runtime/sales/links";
 import type { SalesQueueItemDetail } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 
@@ -10,9 +10,9 @@ import { SalesExternalLink } from "./SalesExternalLink";
  */
 export function SalesDraftAbout({ detail }: { readonly detail: SalesQueueItemDetail }) {
   const { contact } = detail;
-  const linkedin = safeHttpUrl(contact.linkedinUrl);
-  const contactPage = safeHttpUrl(contact.notionUrl);
-  const rowPage = safeHttpUrl(detail.notionUrl);
+  const linkedin = safeHttpsUrl(contact.linkedinUrl);
+  const contactPage = safeHttpsUrl(contact.notionUrl);
+  const rowPage = safeHttpsUrl(detail.notionUrl);
   const person = [contact.name, contact.accountName].filter(Boolean).join(" · ");
   const hasPerson =
     person !== "" ||

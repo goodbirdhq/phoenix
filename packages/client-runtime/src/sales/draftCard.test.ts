@@ -1,7 +1,9 @@
 import {
   SalesActionError,
   type SalesActionFailureReason,
+  type SalesCardState,
   type SalesDispatchInput,
+  type SalesHoldResult,
   type SalesQueueItemDetail,
   ThreadId,
 } from "@t3tools/contracts";
@@ -58,7 +60,8 @@ function setup(options: {
       calls.discarded.push(expectedHash);
       return refused("not_open");
     },
-    unapprove: async () => refused("not_approved"),
+    hold: async () => refused("not_approved"),
+    resume: async () => refused("needs_press"),
     dispatch: async () => refused("dispatch-failed"),
     approveVersions: async (_device, versions) => {
       calls.signed.push(...versions);
@@ -239,6 +242,8 @@ describe("draft card read and edit", () => {
               goes: null,
               refusal: null,
               note: null,
+              paused: null,
+              sendStatus: null,
             },
             approvalLapsed: false,
           }),
@@ -268,6 +273,70 @@ describe("draft card read and edit", () => {
     await open.card.load();
     open.card.editBody("Unsaved.");
     expect(isEditing(open.card.getState())).toBe(true);
+  });
+});
+
+const cardState = (patch: Partial<SalesCardState> = {}): SalesCardState => ({
+  activityId: "act-1",
+  contentHash: ENGINE_HASH,
+  state: "open",
+  approved: false,
+  approvedBy: null,
+  sendAt: null,
+  goes: null,
+  refusal: null,
+  note: null,
+  paused: null,
+  sendStatus: null,
+  ...patch,
+});
+
+describe("draft card hold and resume", () => {
+  it("says a person's approval was withdrawn, and a route chase paused", async () => {
+    let result: SalesHoldResult["result"] = "unapproved";
+    const { card } = setup({
+      commands: {
+        hold: async () => AsyncResult.success({ card: cardState(), already: false, result }),
+      },
+    });
+    await card.load();
+    await card.hold();
+    expect(card.getState().notice).toMatchObject({ tone: "success", title: "Approval withdrawn" });
+    result = "paused";
+    await card.hold();
+    expect(card.getState().notice).toMatchObject({ tone: "success", title: "Paused" });
+  });
+
+  it("never calls a send that was already claimed stopped", async () => {
+    const { card } = setup({
+      commands: {
+        hold: async () =>
+          AsyncResult.success({
+            card: cardState({ sendStatus: "claimed" }),
+            already: false,
+            result: "paused",
+          }),
+      },
+    });
+    await card.load();
+    await card.hold();
+    expect(card.getState().notice).toMatchObject({ tone: "warning", title: "Already going" });
+  });
+
+  it("resumes the version shown, and explains a resume that needs a press", async () => {
+    const asked: string[] = [];
+    const { card } = setup({
+      commands: {
+        resume: async (expectedHash) => {
+          asked.push(expectedHash);
+          return refused("needs_press");
+        },
+      },
+    });
+    await card.load();
+    await card.resume();
+    expect(asked).toEqual([ENGINE_HASH]);
+    expect(card.getState().notice).toMatchObject({ tone: "warning", title: "Needs your approval" });
   });
 });
 

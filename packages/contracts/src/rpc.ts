@@ -320,9 +320,14 @@ import {
   SalesEditInput,
   SalesEditResult,
   SalesEnrolDeviceInput,
+  SalesHoldResult,
   SalesQueueItemDetail,
+  SalesResumeInput,
+  SalesResumeResult,
   SalesSnapshot,
   SalesStreamEvent,
+  SalesTaskReport,
+  SalesTaskReportInput,
   SalesView,
   SalesViewName,
 } from "./sales.ts";
@@ -1594,9 +1599,17 @@ const WsSalesApproveRpc = Rpc.make(SALES_WS_METHODS.approve, {
   error: SalesRpcError,
 });
 
-const WsSalesUnapproveRpc = Rpc.make(SALES_WS_METHODS.unapprove, {
+/** Pauses a route chase, or takes a person's approval back. Never makes anything go. */
+const WsSalesHoldRpc = Rpc.make(SALES_WS_METHODS.hold, {
   payload: Schema.Struct({ activityId: Schema.String }),
-  success: SalesCardState,
+  success: SalesHoldResult,
+  error: SalesRpcError,
+});
+
+/** Gives a paused route chase back to the route; never a person's approval. */
+const WsSalesResumeRpc = Rpc.make(SALES_WS_METHODS.resume, {
+  payload: SalesResumeInput,
+  success: SalesResumeResult,
   error: SalesRpcError,
 });
 
@@ -1609,6 +1622,12 @@ const WsSalesEditRpc = Rpc.make(SALES_WS_METHODS.edit, {
 const WsSalesDiscardRpc = Rpc.make(SALES_WS_METHODS.discard, {
   payload: Schema.Struct({ activityId: Schema.String, expectedHash: Schema.String }),
   success: SalesCardState,
+  error: SalesRpcError,
+});
+
+const WsSalesReportTaskRpc = Rpc.make(SALES_WS_METHODS.reportTask, {
+  payload: SalesTaskReportInput,
+  success: SalesTaskReport,
   error: SalesRpcError,
 });
 
@@ -1795,9 +1814,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsSalesListConversationsRpc,
   WsSalesGetConversationRpc,
   WsSalesApproveRpc,
-  WsSalesUnapproveRpc,
+  WsSalesHoldRpc,
+  WsSalesResumeRpc,
   WsSalesEditRpc,
   WsSalesDiscardRpc,
+  WsSalesReportTaskRpc,
   WsSalesListDevicesRpc,
   WsSalesEnrolDeviceRpc,
   WsSalesRevokeDeviceRpc,

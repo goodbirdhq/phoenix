@@ -12,8 +12,10 @@ against a key it enrolled only after a person pressed Approve device on the
 key's Slack card. The server only carries signed items to the engine
 (`SalesEngineApi.approve`). No MCP tool, scheduled task or other server path
 approves, and adding one would need a key the server must never hold.
-Unapprove, Edit and Discard take the token alone, because none of them can make
-anything go.
+Hold, Edit, Discard and LinkedIn task reports take the token alone, because none
+of them can make anything go. Resume does too, because it only gives a paused
+route chase back to the engine's cold chase route: no person's approval is
+involved, and the engine refuses it (`needs_press`) once the card moved on.
 
 ## The key never leaves the client
 

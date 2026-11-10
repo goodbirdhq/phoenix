@@ -12,8 +12,9 @@ Open **Settings › Integrations**, choose the environment that should read the 
 
 - **Engine URL** and **Read token** (the engine's `SALES_READ_TOKEN`) show Sales in the sidebar
   footer on web and desktop.
-- **Action token** (the engine's `SALES_ACTION_TOKEN`) lets Phoenix unapprove, edit and discard
-  drafts, and carry approvals signed on an enrolled device. On its own it approves nothing.
+- **Action token** (the engine's `SALES_ACTION_TOKEN`) lets Phoenix hold, resume, edit and discard
+  drafts, report LinkedIn tasks, and carry approvals signed on an enrolled device. On its own it
+  approves nothing.
 - **Sales agents project** is the project whose checkout holds the sales workflows. Redraft and
   research runs start a thread there with the project's thread mode and permissions.
 - **Agent for Sales runs** is the provider and model those threads use, whatever the project's
@@ -40,11 +41,12 @@ running there.
 
 Each browser and each desktop app is its own device. Clearing its site data removes the key; enrol
 again to make a new one. **Revoke** stops a device from signing. Drafts it already approved stay
-approved until you unapprove them.
+approved until you hold them.
 
 ## Approve drafts
 
-**Outreach** lists the drafts waiting, grouped by campaign. Select one to read it, edit the body
+**Outreach** lists the drafts waiting, grouped by campaign; a scheduled draft shows when it goes.
+Select one to read it, edit the body
 (and the subject on a new thread), and approve it. Phoenix approves only the exact text on screen.
 If the draft changed since you read it, Phoenix shows the new version and asks you to approve
 again. Saving an edit withdraws any approval of the old version.
@@ -55,7 +57,10 @@ ticked it is unticked and left for you to open; it's never approved from the old
 
 Other actions:
 
-- **Unapprove** withdraws an approval before the draft goes.
+- **Hold** takes an approval back before the draft goes. On a draft you approved, it withdraws
+  your approval: it goes only once you approve it again. On a chase the autopilot approved, it
+  pauses it, and **Resume** gives it back.
+- If the send had already started, Phoenix says so: holding can't stop a send under way.
 - **Discard** drops a draft for good. It's never sent.
 - The engine may offer runs, such as a redraft with your note or research on the account, and
   names each button. Some runs discard the draft first; the form says so. If such a run fails to
@@ -77,8 +82,11 @@ nobody has drafted an answer, the engine may offer a run that drafts one.
 
 **Autopilot** lists what the engine sends today without a press, done and to come, grouped by
 state: failed, retrying, needs your approval, held by the engine, paused, sending, scheduled and
-sent. **Paused** is a chase someone held with **Hold these** in Slack; approving its card sends
-it. Each send shows who it's to, which email it is, the mailbox, and why it's held, refused or
+sent. **Pause** holds a scheduled send and **Resume** gives a paused one back; **Pause all** and
+**Resume all** do the same for every one of today's, one at a time, and say how each went.
+Resume can be refused: the autopilot sends only so many chases a day, so a paused chase may have
+to wait until tomorrow, and a chase that changed since it was paused needs your approval in
+Outreach. A paused chase also shows in Outreach, where approving it sends it as yours. Each send shows who it's to, which email it is, the mailbox, and why it's held, refused or
 failed. Times are on your clock, with the contact's beside it when theirs reads differently.
 **Away until** marks a contact whose out-of-office covers today; the engine doesn't pause for it,
 so check whether the send should go. Turn on **Include approved by you** to see the drafts you
@@ -87,9 +95,12 @@ Outreach.
 
 ## Work the LinkedIn checklist
 
-**To do** lists the LinkedIn connection requests and messages to send by hand, ready ones first,
-with the contact's LinkedIn link, the suggested text and a button to copy it. The heading shows
-how many invites today's budget has left. Mark tasks done in Slack for now.
+**To do** lists the LinkedIn connection requests and messages to send by hand, with the contact's
+LinkedIn link, the suggested text and a button to copy it. Once you've done one, choose **Mark as
+sent**, or say what happened instead (already connected, skip, and so on); Phoenix shows what the
+engine recorded, and the heading shows how many invites today's budget has left. Tasks not posted
+yet wait for invite budget and are folded away; a connection request there can't be marked sent
+until it gets a place.
 
 ## Read campaign results
 
@@ -120,5 +131,5 @@ an answer, it keeps showing that answer, marked with the time it was read.
 ## What Phoenix can't do
 
 Phoenix never sends email, and it can't approve without a press on an enrolled device. Agents and
-scheduled tasks can't approve either. Holding sends, marking LinkedIn tasks done and decision
-cards stay in Slack.
+scheduled tasks can't approve either. Decision cards, and a LinkedIn task's **Something else**
+box, stay in Slack.

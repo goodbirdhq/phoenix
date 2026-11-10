@@ -151,6 +151,8 @@ const cardState = {
   goes: "Tue 10 Nov, 09:14 their time",
   refusal: null,
   note: null,
+  paused: null,
+  sendStatus: null,
 };
 
 type Responder = (request: HttpClientRequest.HttpClientRequest) => Response | "network-error";
@@ -508,8 +510,41 @@ it.effect("relays actions on the action token and returns the card as it stands"
           : null;
       bodies.push({ path: pathOf(request), method: request.method, body });
       switch (pathOf(request)) {
-        case "/api/sales/v1/actions/unapprove":
-          return Response.json({ ok: true, ...cardState, approved: false, approvedBy: null });
+        case "/api/sales/v1/actions/hold":
+          return Response.json({
+            ok: true,
+            already: false,
+            result: "paused",
+            ...cardState,
+            approved: false,
+            approvedBy: null,
+            paused: { by: "phoenix", at: "2026-11-10T08:00:00.000Z" },
+            sendStatus: "claimed",
+          });
+        case "/api/sales/v1/actions/resume":
+          return Response.json({
+            ok: true,
+            already: false,
+            ...cardState,
+            approvedBy: "route:cold-chases",
+          });
+        case "/api/sales/v1/actions/tasks/task%2F1":
+          return Response.json({
+            ok: true,
+            result: "held",
+            reason: "Their Contact is suppressed.",
+            task: {
+              id: "task/1",
+              action: "connect",
+              status: "posted",
+              outcome: null,
+              connectionState: "unknown",
+              skipReason: null,
+              reportedAt: null,
+              logged: false,
+            },
+            budget: { day: "2026-11-10", dailyLimit: 7, sentToday: 3, available: 2 },
+          });
         case "/api/sales/v1/actions/edit":
           return Response.json({ ok: true, approvalLapsed: true, ...cardState, approved: false });
         case "/api/sales/v1/actions/discard":
@@ -521,8 +556,19 @@ it.effect("relays actions on the action token and returns the card as it stands"
   });
   return Effect.gen(function* () {
     const sales = yield* SalesService.SalesService;
-    const unapproved = yield* sales.unapprove("act-1");
-    assert.strictEqual(unapproved.approved, false);
+    const held = yield* sales.hold("act-1");
+    assert.strictEqual(held.result, "paused");
+    assert.strictEqual(held.already, false);
+    assert.strictEqual(held.card.approved, false);
+    assert.strictEqual(held.card.sendStatus, "claimed");
+    assert.deepStrictEqual(held.card.paused, { by: "phoenix", at: "2026-11-10T08:00:00.000Z" });
+    const resumed = yield* sales.resume({ activityId: "act-1", expectedHash: "a".repeat(64) });
+    assert.strictEqual(resumed.card.approvedBy, "route:cold-chases");
+    assert.strictEqual(resumed.card.paused, null);
+    const report = yield* sales.reportTask({ taskId: "task/1", outcome: "request_sent" });
+    assert.strictEqual(report.result, "held");
+    assert.strictEqual(report.reason, "Their Contact is suppressed.");
+    assert.deepStrictEqual(report.budget, { day: "2026-11-10", dailyLimit: 7, available: 2 });
     const edited = yield* sales.edit({
       activityId: "act-1",
       expectedHash: "a".repeat(64),
@@ -537,7 +583,16 @@ it.effect("relays actions on the action token and returns the card as it stands"
       assert.strictEqual(request.headers.authorization, "Bearer action-token");
       assert.strictEqual(request.method, "POST");
     }
-    assert.deepStrictEqual(bodies[1]?.body, {
+    assert.deepStrictEqual(
+      bodies.slice(0, 3).map(({ path, body }) => [path, body]),
+      [
+        ["/api/sales/v1/actions/hold", { activityId: "act-1" }],
+        ["/api/sales/v1/actions/resume", { activityId: "act-1", expectedHash: "a".repeat(64) }],
+        // The task id is a path segment, escaped; only the outcome goes in the body.
+        ["/api/sales/v1/actions/tasks/task%2F1", { outcome: "request_sent" }],
+      ],
+    );
+    assert.deepStrictEqual(bodies[3]?.body, {
       activityId: "act-1",
       expectedHash: "a".repeat(64),
       body: "Hey Ana,\n\nNew words.",
@@ -623,13 +678,73 @@ it.effect("maps every engine refusal to a typed reason", () => {
   }).pipe(Effect.provide(layer));
 });
 
+it.effect(
+  "maps Resume's and a task report's refusals, and a task's status, to typed reasons",
+  () => {
+    const { layer, setResponder } = makeLayer({});
+    return Effect.gen(function* () {
+      const sales = yield* SalesService.SalesService;
+      const resume = sales.resume({ activityId: "act-1", expectedHash: "a".repeat(64) });
+      const cases: ReadonlyArray<
+        readonly [unknown, number, Effect.Effect<unknown, SalesActionError>, string, string | null]
+      > = [
+        [{ error: "needs_press", currentHash: "c".repeat(64) }, 409, resume, "needs_press", null],
+        [{ error: "chase_cap", currentHash: "c".repeat(64) }, 409, resume, "chase_cap", null],
+        [{ error: "refused", refusal: "Bounced before." }, 409, resume, "refused", null],
+        [
+          { error: "not_offered", action: "dm" },
+          400,
+          sales.reportTask({ taskId: "t1", outcome: "pending" }),
+          "not_offered",
+          null,
+        ],
+        [
+          { error: "not_admitted", status: "pending" },
+          409,
+          sales.reportTask({ taskId: "t1", outcome: "request_sent" }),
+          "not_admitted",
+          "pending",
+        ],
+        [
+          { error: "not_open", status: "skipped", outcome: "skip" },
+          409,
+          sales.reportTask({ taskId: "t1", outcome: "connected" }),
+          "not_open",
+          "skipped",
+        ],
+      ];
+      for (const [body, status, action, reason, state] of cases) {
+        setResponder(() => Response.json(body, { status }));
+        const error = failureOf(yield* action.pipe(Effect.exit));
+        assert.isTrue(isSalesActionError(error));
+        if (isSalesActionError(error)) {
+          assert.strictEqual(error.reason, reason);
+          assert.strictEqual(error.origin, "engine");
+          assert.strictEqual(error.state, state);
+        }
+      }
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("reads an answer whose Hold result it does not know as unreadable, not as paused", () => {
+  const { layer } = makeLayer({
+    respond: () => Response.json({ ok: true, result: "something_new", ...cardState }),
+  });
+  return Effect.gen(function* () {
+    const sales = yield* SalesService.SalesService;
+    const error = failureOf(yield* sales.hold("act-1").pipe(Effect.exit));
+    assert.strictEqual(isSalesActionError(error) ? error.reason : null, "unreadable-answer");
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("refuses actions without an action token and sends nothing", () => {
   const { layer, requests } = makeLayer({
     salesEngine: { baseUrl: "https://engine.example.com", readToken: "read-token" },
   });
   return Effect.gen(function* () {
     const sales = yield* SalesService.SalesService;
-    const error = failureOf(yield* sales.unapprove("act-1").pipe(Effect.exit));
+    const error = failureOf(yield* sales.hold("act-1").pipe(Effect.exit));
     assert.isTrue(isSalesActionError(error));
     assert.strictEqual(isSalesActionError(error) ? error.reason : null, "not-configured");
     assert.strictEqual(isSalesActionError(error) ? error.origin : null, "phoenix");
@@ -647,7 +762,7 @@ it.effect("refuses actions on a URL that is not http(s) as Phoenix's own refusal
   });
   return Effect.gen(function* () {
     const sales = yield* SalesService.SalesService;
-    const error = failureOf(yield* sales.unapprove("act-1").pipe(Effect.exit));
+    const error = failureOf(yield* sales.hold("act-1").pipe(Effect.exit));
     assert.isTrue(isSalesActionError(error));
     if (isSalesActionError(error)) {
       assert.strictEqual(error.reason, "bad-url");
@@ -751,9 +866,9 @@ it.effect("reads the queue again after an action while someone watches", () => {
   let unapproved = false;
   const { layer, requests } = makeLayer({
     respond: (request) => {
-      if (pathOf(request) === "/api/sales/v1/actions/unapprove") {
+      if (pathOf(request) === "/api/sales/v1/actions/hold") {
         unapproved = true;
-        return Response.json({ ok: true, ...cardState, approved: false });
+        return Response.json({ ok: true, result: "unapproved", ...cardState, approved: false });
       }
       // After the action the engine reports the card in another state.
       return unapproved && pathOf(request).endsWith("/queue")
@@ -768,7 +883,7 @@ it.effect("reads the queue again after an action while someone watches", () => {
     assert.strictEqual(summaryReads(requests), 1);
     assert.strictEqual(ready.snapshot.status, "ready");
     // The action itself publishes nothing, so the next event is the read it set off.
-    yield* sales.unapprove("act-1");
+    yield* sales.hold("act-1");
     yield* watcher.nextWith(() => true);
     assert.strictEqual(summaryReads(requests), 2);
     yield* Scope.close(watcher.scope, Exit.void);
@@ -1103,6 +1218,72 @@ it.effect("never shows a new watcher the list of an engine the settings no longe
     const opening = yield* Queue.take(second.views);
     assert.strictEqual(opening.status, "loading");
     assert.strictEqual(opening.data, null);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect(
+  "reads today's sends again after a Hold, and the tasks after a report, while watched",
+  () => {
+    const acted = new Set<string>();
+    const { layer } = makeLayer({
+      respond: (request) => {
+        const path = pathOf(request);
+        if (path === "/api/sales/v1/actions/hold") {
+          acted.add("/autopilot/today");
+          return Response.json({ ok: true, result: "paused", ...cardState, approved: false });
+        }
+        if (path === "/api/sales/v1/actions/tasks/t1") {
+          acted.add("/tasks");
+          return Response.json({
+            ok: true,
+            result: "recorded",
+            task: { id: "t1", action: "connect", status: "done" },
+            budget: {},
+          });
+        }
+        // After its action, each list reads as emptied.
+        const view = path.replace("/api/sales/v1", "");
+        return acted.has(view)
+          ? Response.json({ version: 1, generatedAt: "2026-11-09T18:31:00.000Z", items: [] })
+          : viewResponder(request);
+      },
+    });
+    const emptied = (view: SalesView) =>
+      view.status === "ready" &&
+      (view.view === "autopilot" || view.view === "tasks") &&
+      view.data?.items.length === 0;
+    return Effect.gen(function* () {
+      const sales = yield* SalesService.SalesService;
+      const autopilot = yield* watchView("autopilot");
+      yield* autopilot.nextWith((view) => view.status === "ready");
+      const tasks = yield* watchView("tasks");
+      yield* tasks.nextWith((view) => view.status === "ready");
+
+      yield* sales.hold("act-1");
+      yield* autopilot.nextWith(emptied);
+      yield* sales.reportTask({ taskId: "t1", outcome: "request_sent" });
+      yield* tasks.nextWith(emptied);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("sends a failed read with the last read that succeeded, not the first", () => {
+  // The second read finds nothing new, so nothing is sent; the third fails.
+  let reads = 0;
+  const { layer } = makeLayer({
+    respond: (request) => {
+      reads += 1;
+      return reads >= 3 ? "network-error" : viewResponder(request);
+    },
+  });
+  return Effect.gen(function* () {
+    const watcher = yield* watchView("tasks");
+    const first = yield* watcher.nextWith((view) => view.status === "ready");
+    yield* TestClock.adjust(SalesService.SALES_POLL_INTERVAL);
+    yield* TestClock.adjust(SalesService.SALES_POLL_INTERVAL);
+    const failed = yield* watcher.nextWith((view) => view.status !== "ready");
+    assert.isString(first.readAt);
+    assert.isAbove(Date.parse(failed.readAt ?? ""), Date.parse(first.readAt ?? ""));
   }).pipe(Effect.provide(layer));
 });
 

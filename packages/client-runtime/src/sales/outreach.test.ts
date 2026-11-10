@@ -2,8 +2,10 @@ import { type SalesQueueItem, ThreadId, salesDispatchThreadPrefix } from "@t3too
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  cardActions,
   dispatchedThreads,
   listedVersionMoved,
+  queueRowStatus,
   queueSummary,
   tickedForReview,
 } from "./outreach.ts";
@@ -125,5 +127,51 @@ describe("queueSummary", () => {
 
   it("reads an empty list as nothing waiting", () => {
     expect(queueSummary([])).toBe("Nothing waits");
+  });
+});
+
+describe("cardActions", () => {
+  const route = { by: "route", slackUserId: null, deviceId: null, at: null };
+  const press = { by: "press", slackUserId: "U1", deviceId: null, at: null };
+
+  it("holds any approval, and resumes or approves only a paused chase", () => {
+    expect(cardActions({ state: "approved", approval: press })).toMatchObject({
+      hold: true,
+      resume: false,
+      approve: false,
+    });
+    expect(cardActions({ state: "paused", approval: null })).toMatchObject({
+      hold: false,
+      resume: true,
+      approve: true,
+      edit: true,
+      discard: true,
+    });
+    expect(cardActions({ state: "held", approval: route }).hold).toBe(true);
+    expect(cardActions({ state: "awaiting", approval: null })).toMatchObject({
+      hold: false,
+      resume: false,
+      approve: true,
+    });
+  });
+
+  it("offers nothing on a closed card", () => {
+    expect(cardActions({ state: "sent", approval: press })).toEqual({
+      approve: false,
+      hold: false,
+      resume: false,
+      edit: false,
+      discard: false,
+    });
+  });
+});
+
+describe("queueRowStatus", () => {
+  it("says when a scheduled draft goes, and badges the states that wait on someone", () => {
+    const sendAt = "2026-11-10T17:23:00.000Z";
+    expect(queueRowStatus({ state: "approved", sendAt })).toEqual({ goesAt: sendAt });
+    expect(queueRowStatus({ state: "approved", sendAt: null })).toEqual({ badge: "Approved" });
+    expect(queueRowStatus({ state: "awaiting", sendAt: null })).toEqual({ badge: "To review" });
+    expect(queueRowStatus({ state: "paused", sendAt: null })).toEqual({ badge: "Paused" });
   });
 });

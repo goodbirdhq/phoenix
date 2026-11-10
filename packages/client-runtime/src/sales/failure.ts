@@ -93,6 +93,27 @@ function salesFailureText(
       return text("A new thread needs a subject");
     case "subject_not_editable":
       return text("This draft's subject is its thread's", "Only the body can change.");
+    case "needs_press":
+      return text(
+        "Needs your approval",
+        "It changed, was refused or was approved by a person since it was paused, so only your approval sends it now. Open it in Outreach.",
+        true,
+      );
+    case "chase_cap":
+      return text(
+        "Today's automated chases are used up",
+        "It stays paused. Resume it tomorrow, or approve it yourself in Outreach.",
+      );
+    case "refused":
+      return text("The engine refuses to send it", message, true);
+    case "not_offered":
+      return text("That outcome isn't offered for this task", message, true);
+    case "not_admitted":
+      return text(
+        "No invite place for this request yet",
+        "It waits for a place in today's invite budget, so it can't be reported sent yet.",
+        true,
+      );
     case "no-agents-project":
       return text("Choose the sales agents project", message);
     case "agents-project-missing":

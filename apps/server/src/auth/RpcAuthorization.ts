@@ -46,9 +46,11 @@ export const RPC_REQUIRED_SCOPES = {
   // Approve only relays signatures a device made; the server cannot make one. It is still a
   // write, like every action and dispatch.
   [SALES_WS_METHODS.approve]: AuthOrchestrationOperateScope,
-  [SALES_WS_METHODS.unapprove]: AuthOrchestrationOperateScope,
+  [SALES_WS_METHODS.hold]: AuthOrchestrationOperateScope,
+  [SALES_WS_METHODS.resume]: AuthOrchestrationOperateScope,
   [SALES_WS_METHODS.edit]: AuthOrchestrationOperateScope,
   [SALES_WS_METHODS.discard]: AuthOrchestrationOperateScope,
+  [SALES_WS_METHODS.reportTask]: AuthOrchestrationOperateScope,
   [SALES_WS_METHODS.enrolDevice]: AuthOrchestrationOperateScope,
   [SALES_WS_METHODS.revokeDevice]: AuthOrchestrationOperateScope,
   [SALES_WS_METHODS.dispatch]: AuthOrchestrationOperateScope,

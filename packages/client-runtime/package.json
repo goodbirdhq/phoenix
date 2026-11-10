@@ -147,6 +147,10 @@
       "types": "./src/sales/health.ts",
       "default": "./src/sales/health.ts"
     },
+    "./sales/hold": {
+      "types": "./src/sales/hold.ts",
+      "default": "./src/sales/hold.ts"
+    },
     "./sales/home": {
       "types": "./src/sales/home.ts",
       "default": "./src/sales/home.ts"
