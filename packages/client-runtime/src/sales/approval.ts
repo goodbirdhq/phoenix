@@ -1,7 +1,6 @@
 import type {
   SalesDevicePublicKey,
   SalesHashInput,
-  SalesQueueItem,
   SalesQueueItemDetail,
   SalesSignedApproval,
 } from "@t3tools/contracts";
@@ -76,21 +75,28 @@ export type VerifiedVersion =
   | { readonly ok: true; readonly contentHash: string }
   | {
       readonly ok: false;
-      /** `algorithm`: the engine hashes some other way. `mismatch`: the shown text is not the hashed version. */
-      readonly reason: "algorithm" | "mismatch";
+      /**
+       * - `algorithm`: the engine hashes some other way.
+       * - `mismatch`: the shown text is not the hashed version.
+       * - `subject-lines`: the subject has a line break, which a subject line cannot show.
+       * - `changed`: not the version the person ticked.
+       */
+      readonly reason: "algorithm" | "mismatch" | "subject-lines" | "changed";
     };
 
 /**
  * Whether this client may sign for the draft as shown: the engine names the hash this client
  * knows, and hashing the displayed text gives the engine's `contentHash`. A mismatch means the
  * card moved on between reads, or something between here and the engine changed one side:
- * either way, read it again rather than sign.
+ * either way, read it again rather than sign. A subject with a line break is refused, since a
+ * one-line field would show it without the break and the person would not see what is hashed.
  */
 export async function verifyDisplayedVersion(
   detail: SalesQueueItemDetail,
   subtle: SubtleCrypto = globalThis.crypto.subtle,
 ): Promise<VerifiedVersion> {
   if (detail.hashAlgorithm !== SALES_HASH_ALGORITHM) return { ok: false, reason: "algorithm" };
+  if (/[\r\n]/u.test(detail.hashInput.subject)) return { ok: false, reason: "subject-lines" };
   const contentHash = await computeContentHash(detail.hashInput, subtle);
   return contentHash === detail.contentHash.toLowerCase()
     ? { ok: true, contentHash }
@@ -98,23 +104,21 @@ export async function verifyDisplayedVersion(
 }
 
 /**
- * Whether a card read for a batch approval is the version the list showed: the same hash, and
- * the text the list displayed (subject and the 280-character preview) agrees with the full text
- * that hash covers. A batch signs from the list, so this ties each signature to what was on
- * screen, as `verifyDisplayedVersion` does for the open draft.
+ * Whether a draft in the batch review may be signed: the review step shows `detail` in full, it
+ * verifies as `verifyDisplayedVersion` does, and the recomputed hash is also the one captured
+ * when the person ticked the row. A row whose content moved on after the tick is `changed` and
+ * is never signed from that tick.
  */
-export function listedVersionMatches(
-  listed: SalesQueueItem,
+export async function verifyReviewedVersion(
   detail: SalesQueueItemDetail,
-): boolean {
-  if (listed.activityId !== detail.activityId) return false;
-  if (listed.contentHash.toLowerCase() !== detail.contentHash.toLowerCase()) return false;
-  if (listed.subject.trim() !== detail.hashInput.subject.trim()) return false;
-  const body = detail.hashInput.body.replace(/\s+/gu, " ").trim();
-  const preview = listed.bodyPreview;
-  return preview.endsWith("...")
-    ? body.startsWith(preview.slice(0, -3).trimEnd())
-    : body === preview.trim();
+  tickedHash: string,
+  subtle: SubtleCrypto = globalThis.crypto.subtle,
+): Promise<VerifiedVersion> {
+  const verified = await verifyDisplayedVersion(detail, subtle);
+  if (!verified.ok) return verified;
+  return verified.contentHash === tickedHash.toLowerCase()
+    ? verified
+    : { ok: false, reason: "changed" };
 }
 
 /**

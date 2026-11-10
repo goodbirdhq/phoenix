@@ -316,6 +316,9 @@ function ConversationDetailView({
             dispatches={dispatches}
             approveLabel="Approve answer"
             discardLabel="No reply needed"
+            // The answer is gone and its run did not start: the Draft an answer form takes over
+            // once the conversation is read again, and shows why.
+            onAnswerDiscarded={setDispatchError}
             onChanged={() => {
               void props.onChanged();
               void load();

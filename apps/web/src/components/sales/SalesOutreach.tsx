@@ -1,34 +1,25 @@
-import {
-  listedVersionMatches,
-  verifyDisplayedVersion,
-} from "@t3tools/client-runtime/sales/approval";
 import { thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
 import {
   groupQueue,
   kindLabel,
   queueOrder,
   stateLabel,
+  tickedForReview,
 } from "@t3tools/client-runtime/sales/outreach";
 import type { EnvironmentId, SalesDispatch, SalesQueueItem } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { ExternalLinkIcon } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import {
-  readSalesFailure,
-  salesEnvironment,
-  useSalesDevice,
-  useSalesState,
-} from "../../state/sales";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { useSalesDevice, useSalesState } from "../../state/sales";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { Kbd } from "../ui/kbd";
 import type { ApproveOutcome } from "./salesApproval";
-import { useApproveVersions } from "./salesApproval";
+import { SalesBatchReview, type TickedDraft } from "./SalesBatchReview";
 import { SalesDraftPanel, type SalesDraftPanelHandle } from "./SalesDraftPanel";
 import { setSalesPaletteCommands } from "./salesPaletteCommands";
 import { useSalesListKeys } from "./useSalesListKeys";
@@ -53,11 +44,10 @@ export function SalesOutreach(props: {
   const current = order.find((item) => item.activityId === props.selected) ?? order[0] ?? null;
   const device = useSalesDevice(environmentId, props.baseUrl, canAct);
   const panel = useRef<SalesDraftPanelHandle>(null);
-  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
-  const [batchBusy, setBatchBusy] = useState(false);
+  /** Ticked rows, each with the hash it had when ticked: a tick covers that version only. */
+  const [checked, setChecked] = useState<ReadonlyMap<string, string>>(new Map());
+  const [reviewing, setReviewing] = useState<ReadonlyArray<TickedDraft> | null>(null);
   const [outcomes, setOutcomes] = useState<ReadonlyArray<ApproveOutcome>>([]);
-  const getQueueItem = useAtomCommand(salesEnvironment.getQueueItem, { reportFailure: false });
-  const approveVersions = useApproveVersions(environmentId);
   const dispatches = snapshot?.dispatches ?? [];
 
   const move = (delta: number) => {
@@ -114,52 +104,34 @@ export function SalesOutreach(props: {
     return () => setSalesPaletteCommands([]);
   }, []);
 
-  const approvable = order.filter(
-    (item) => checked.has(item.activityId) && item.state === "awaiting",
-  );
+  const approvable = tickedForReview(order, checked);
 
-  /**
-   * Each checked draft is read again and signed on its own, and only when it is still the
-   * version the list shows. A row that moved on is left for the person to read again.
-   */
-  const approveChecked = async () => {
-    if (device.key === null || device.state !== "active" || approvable.length === 0) return;
-    setBatchBusy(true);
-    const refused: ApproveOutcome[] = [];
-    const versions: Array<{ activityId: string; contentHash: string }> = [];
-    try {
-      for (const row of approvable) {
-        const result = await getQueueItem({ environmentId, input: { activityId: row.activityId } });
-        if (result._tag !== "Success") {
-          refused.push({
-            activityId: row.activityId,
-            ok: false,
-            text: readSalesFailure(result)?.description ?? "Could not read it.",
-            stale: false,
-          });
-          continue;
-        }
-        const verified = await verifyDisplayedVersion(result.value);
-        if (!listedVersionMatches(row, result.value) || !verified.ok) {
-          refused.push({
-            activityId: row.activityId,
-            ok: false,
-            text: "It changed since the list was read. Open it and look before approving.",
-            stale: true,
-          });
-          continue;
-        }
-        versions.push({ activityId: row.activityId, contentHash: verified.contentHash });
+  const untick = useCallback((activityId: string) => {
+    setChecked((previous) => {
+      const next = new Map(previous);
+      next.delete(activityId);
+      return next;
+    });
+  }, []);
+
+  /** "Approve N" opens the review step; nothing is signed until it is confirmed there. */
+  const reviewChecked = () => {
+    if (approvable.length === 0) return;
+    setOutcomes([]);
+    setReviewing(approvable.map((row) => ({ row, tickedHash: checked.get(row.activityId) ?? "" })));
+  };
+
+  const finishReview = (all: ReadonlyArray<ApproveOutcome>) => {
+    setReviewing(null);
+    setOutcomes(all);
+    // Approved rows are done, and a stale row's tick was for a version that is gone.
+    setChecked((previous) => {
+      const next = new Map(previous);
+      for (const outcome of all) {
+        if (outcome.ok || outcome.stale) next.delete(outcome.activityId);
       }
-      const approved = versions.length > 0 ? await approveVersions(device.key, versions) : [];
-      const all = [...approved, ...refused];
-      setOutcomes(all);
-      setChecked(
-        new Set(all.filter((outcome) => !outcome.ok).map((outcome) => outcome.activityId)),
-      );
-    } finally {
-      setBatchBusy(false);
-    }
+      return next;
+    });
   };
 
   if (queue === null) {
@@ -186,20 +158,30 @@ export function SalesOutreach(props: {
             {order.length === 0 ? "Nothing waits" : `${order.length} open`}
             {snapshot?.status !== "ready" && snapshot?.message ? " · stale" : ""}
           </span>
-          {canAct && checked.size > 0 ? (
+          {canAct && approvable.length > 0 ? (
             <Button
               size="xs"
-              disabled={batchBusy || device.state !== "active" || approvable.length === 0}
-              onClick={() => void approveChecked()}
+              disabled={reviewing !== null || device.state !== "active" || device.blocked !== null}
+              onClick={reviewChecked}
             >
-              {batchBusy ? "Signing…" : `Approve ${approvable.length}`}
+              {`Approve ${approvable.length}`}
             </Button>
           ) : null}
         </div>
-        {canAct && checked.size > 0 && device.state !== "active" ? (
+        {canAct && approvable.length > 0 && (device.state !== "active" || device.blocked) ? (
           <p className="border-b px-3 py-2 text-xs text-muted-foreground">
-            {thisDeviceDescription(device.state, device.key)}
+            {device.blocked ?? thisDeviceDescription(device.state, device.key)}
           </p>
+        ) : null}
+        {reviewing !== null ? (
+          <SalesBatchReview
+            environmentId={environmentId}
+            drafts={reviewing}
+            device={device}
+            onUntick={untick}
+            onDone={finishReview}
+            onClose={() => setReviewing(null)}
+          />
         ) : null}
         {outcomes.length > 0 ? (
           <BatchOutcomes outcomes={outcomes} order={order} onDismiss={() => setOutcomes([])} />
@@ -220,11 +202,14 @@ export function SalesOutreach(props: {
                     item={item}
                     selected={item.activityId === current?.activityId}
                     checkable={canAct && item.state === "awaiting"}
-                    checked={checked.has(item.activityId)}
+                    // A tick shows only while the row still has the version that was ticked.
+                    checked={
+                      checked.get(item.activityId)?.toLowerCase() === item.contentHash.toLowerCase()
+                    }
                     onCheck={(value) =>
                       setChecked((previous) => {
-                        const next = new Set(previous);
-                        if (value) next.add(item.activityId);
+                        const next = new Map(previous);
+                        if (value) next.set(item.activityId, item.contentHash);
                         else next.delete(item.activityId);
                         return next;
                       })

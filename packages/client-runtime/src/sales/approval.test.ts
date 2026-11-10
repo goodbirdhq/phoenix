@@ -9,11 +9,11 @@ import {
   deviceIdFor,
   displayedDraft,
   exportPublicKey,
-  listedVersionMatches,
   generateDeviceKey,
   shortFingerprint,
   signApproval,
   verifyDisplayedVersion,
+  verifyReviewedVersion,
 } from "./approval.ts";
 import { createDeviceKey, thisDeviceState } from "./devices.ts";
 
@@ -94,6 +94,12 @@ describe("content hash", () => {
     expect(await verifyDisplayedVersion(tampered)).toEqual({ ok: false, reason: "mismatch" });
   });
 
+  it("refuses a subject with a line break, which a subject line cannot show", async () => {
+    const twoLines = { ...hashInput, subject: "Re: creator\nx fintech" };
+    const shown = detail({ hashInput: twoLines, contentHash: await computeContentHash(twoLines) });
+    expect(await verifyDisplayedVersion(shown)).toEqual({ ok: false, reason: "subject-lines" });
+  });
+
   it("refuses a hash it does not know how to recompute", async () => {
     const other = detail({ hashAlgorithm: "sha512 of something else" });
     expect(await verifyDisplayedVersion(other)).toEqual({ ok: false, reason: "algorithm" });
@@ -101,22 +107,31 @@ describe("content hash", () => {
 });
 
 describe("batch approval", () => {
-  it("signs a listed row only when the card is still the version the list showed", () => {
-    const shown = detail();
-    const listed = {
-      ...shown,
-      bodyPreview: "Hey Ana, Thanks for the note — two quick ideas. Gabe",
-    };
-    expect(listedVersionMatches(listed, shown)).toBe(true);
-    // A cut preview matches the start of the body.
-    expect(listedVersionMatches({ ...listed, bodyPreview: "Hey Ana, Thanks for..." }, shown)).toBe(
-      true,
-    );
-    // The card moved on since the list was read.
-    expect(listedVersionMatches({ ...listed, contentHash: "0".repeat(64) }, shown)).toBe(false);
-    // The list showed other words than the hash covers.
-    expect(listedVersionMatches({ ...listed, bodyPreview: "Wire the money." }, shown)).toBe(false);
-    expect(listedVersionMatches({ ...listed, subject: "Another subject" }, shown)).toBe(false);
+  it("signs a reviewed draft only when it is the version the person ticked", async () => {
+    expect(await verifyReviewedVersion(detail(), ENGINE_HASH.toUpperCase())).toEqual({
+      ok: true,
+      contentHash: ENGINE_HASH,
+    });
+  });
+
+  it("refuses a draft whose content moved on after the tick, even when it verifies", async () => {
+    // The next poll swapped the card for a new, self-consistent version: the engine's hash and
+    // the hash inputs agree, but the person ticked the old one.
+    const newer = { ...hashInput, body: "Hey Ana,\n\nOne more idea.\n" };
+    const moved = detail({ hashInput: newer, contentHash: await computeContentHash(newer) });
+    expect(await verifyDisplayedVersion(moved)).toMatchObject({ ok: true });
+    expect(await verifyReviewedVersion(moved, ENGINE_HASH)).toEqual({
+      ok: false,
+      reason: "changed",
+    });
+  });
+
+  it("refuses a reviewed draft whose text is not the hashed version", async () => {
+    const tampered = detail({ hashInput: { ...hashInput, body: "Wire the money." } });
+    expect(await verifyReviewedVersion(tampered, ENGINE_HASH)).toEqual({
+      ok: false,
+      reason: "mismatch",
+    });
   });
 });
 

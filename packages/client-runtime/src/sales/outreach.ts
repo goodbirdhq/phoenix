@@ -30,6 +30,38 @@ export function groupQueue(items: ReadonlyArray<SalesQueueItem>): ReadonlyArray<
 export const queueOrder = (groups: ReadonlyArray<SalesQueueGroup>) =>
   groups.flatMap((group) => group.items);
 
+/**
+ * The ticked rows a batch may take to its review step: still waiting, and still listed with the
+ * hash captured when the person ticked them (`ticked` maps activity id to that hash). A row the
+ * next poll swapped for a new version drops out, so a tick never carries over to content the
+ * person has not looked at.
+ */
+export function tickedForReview(
+  order: ReadonlyArray<SalesQueueItem>,
+  ticked: ReadonlyMap<string, string>,
+): ReadonlyArray<SalesQueueItem> {
+  return order.filter(
+    (item) =>
+      item.state === "awaiting" &&
+      ticked.get(item.activityId)?.toLowerCase() === item.contentHash.toLowerCase(),
+  );
+}
+
+/**
+ * Whether an open draft should be read again because the list now reports another version of
+ * it. Only a change in the listed hash counts: a read that still disagrees with the list (the
+ * list lags the engine, or the engine moved on again) must not trigger another read, or the two
+ * would chase each other.
+ */
+export function listedVersionMoved(
+  previousListed: string | null,
+  listed: string | null,
+  shown: string | null,
+): boolean {
+  if (listed === null || shown === null || listed === previousListed) return false;
+  return listed.toLowerCase() !== shown.toLowerCase();
+}
+
 export function kindLabel(kind: string | null): string {
   switch (kind) {
     case "first":
@@ -201,6 +233,32 @@ export function salesFailureText(
       return text("Could not start the run");
     case "other":
       return text("The engine refused that");
+  }
+}
+
+/**
+ * What a person is told about each draft in an approve request that failed as a whole. The
+ * engine refused before approving anything for some reasons; for the rest (a timeout, a dropped
+ * connection, an engine error) the request may have landed, so the outcome is unknown and the
+ * page should read the queue again rather than claim nothing was approved.
+ */
+export function approveRequestFailure(
+  reason: SalesActionFailureReason | null,
+  description: string | null,
+): { readonly unknown: boolean; readonly text: string } {
+  switch (reason) {
+    case "not-configured":
+    case "api-off":
+    case "actions-off":
+    case "unauthorised":
+    case "budget":
+    case "bad_request":
+      return { unknown: false, text: description ?? "The engine refused the request." };
+    default:
+      return {
+        unknown: true,
+        text: "Phoenix could not tell whether the engine approved it. The queue has been read again; check its state before approving again.",
+      };
   }
 }
 

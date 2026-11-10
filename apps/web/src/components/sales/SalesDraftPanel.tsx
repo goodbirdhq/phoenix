@@ -1,6 +1,11 @@
 import { displayedDraft, verifyDisplayedVersion } from "@t3tools/client-runtime/sales/approval";
 import { thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
-import { cardActions, kindLabel, stateLabel } from "@t3tools/client-runtime/sales/outreach";
+import {
+  cardActions,
+  kindLabel,
+  listedVersionMoved,
+  stateLabel,
+} from "@t3tools/client-runtime/sales/outreach";
 import type {
   EnvironmentId,
   SalesDispatch,
@@ -65,6 +70,8 @@ export function SalesDraftPanel({
   readonly allowResearch?: boolean;
   /** Called after any action, so a page can read its own list again. */
   readonly onChanged?: () => void;
+  /** Called when a reply redraft discarded the answer but its run did not start. */
+  readonly onAnswerDiscarded?: (message: string) => void;
   readonly ref?: Ref<SalesDraftPanelHandle>;
 }) {
   const { environmentId, activityId, device, canAct } = props;
@@ -103,10 +110,14 @@ export function SalesDraftPanel({
     void load();
   }, [load]);
 
-  // The engine has a new version of this card. Show it, unless the person is mid-edit.
+  // The engine has a new version of this card. Show it, unless the person is mid-edit. Only a
+  // change in the listed hash reads again, so a read that disagrees with the list cannot loop.
   const listedHash = props.listedHash;
+  const previousListedHash = useRef(listedHash);
   useEffect(() => {
-    if (detail === null || listedHash === null || listedHash === detail.contentHash) return;
+    const previous = previousListedHash.current;
+    previousListedHash.current = listedHash;
+    if (!listedVersionMoved(previous, listedHash, detail?.contentHash ?? null)) return;
     if (dirty) {
       setNotice({
         tone: "warning",
@@ -134,6 +145,14 @@ export function SalesDraftPanel({
       setNotice({ tone: "warning", title: "Save or cancel your edit before approving." });
       return;
     }
+    if (device.blocked !== null) {
+      setNotice({
+        tone: "warning",
+        title: "This client cannot approve",
+        description: device.blocked,
+      });
+      return;
+    }
     if (device.key === null || device.state !== "active") {
       setNotice({
         tone: "warning",
@@ -152,7 +171,9 @@ export function SalesDraftPanel({
           description:
             verified.reason === "algorithm"
               ? "The engine hashes drafts in a way this version of Phoenix does not know. Update Phoenix."
-              : "The text shown is not the version the engine reports. It has been read again; look before approving.",
+              : verified.reason === "subject-lines"
+                ? "The subject has a line break. Edit it onto one line, then approve."
+                : "The text shown is not the version the engine reports. It has been read again; look before approving.",
         });
         await load();
         return;
@@ -231,16 +252,26 @@ export function SalesDraftPanel({
       const failure = readSalesFailure(result);
       if (failure === null) return;
       setNotice({ tone: "error", title: failure.title, description: failure.description });
+      if (failure.state === "discarded") props.onAnswerDiscarded?.(failure.description);
       if (failure.reread) await load();
     });
 
   const discardDraft = () =>
     run("discard", async () => {
-      const confirmed = await (requestConfirmDialog(
+      const confirmation = requestConfirmDialog(
         `${props.discardLabel ?? "Discard this draft"}?\nIt is never sent. The Notion row becomes a note.`,
         { variant: "destructive" },
-      ) ?? Promise.resolve(true));
-      if (!confirmed) return;
+      );
+      // No dialog to ask in means no confirmation, so nothing is discarded.
+      if (confirmation === undefined) {
+        setNotice({
+          tone: "error",
+          title: "Could not ask to confirm",
+          description: "Nothing was discarded.",
+        });
+        return;
+      }
+      if (!(await confirmation)) return;
       const result = await discard({
         environmentId,
         input: { activityId, expectedHash: detail.contentHash },
@@ -264,7 +295,7 @@ export function SalesDraftPanel({
           {detail.stepLabel ? ` · ${detail.stepLabel}` : ""}
         </h2>
         <Badge variant={STATE_VARIANT[detail.state] ?? "outline"}>{stateLabel(detail.state)}</Badge>
-        <span className="min-w-0 flex-1 truncate text-right text-xs text-muted-foreground">
+        <span className="min-w-0 flex-1 text-right text-xs break-all whitespace-pre-wrap text-muted-foreground">
           To {shown.to}
           {detail.mailbox.address ? ` from ${detail.mailbox.address}` : ""}
         </span>
@@ -298,9 +329,15 @@ export function SalesDraftPanel({
 
       <div className="grid gap-1.5">
         <Label htmlFor={`sales-subject-${activityId}`}>Subject</Label>
-        {detail.threaded ? (
-          <p id={`sales-subject-${activityId}`} className="text-sm">
-            {subject} <span className="text-xs text-muted-foreground">· the thread's subject</span>
+        {detail.threaded || (subjectDraft === null && /[\r\n]/u.test(subject)) ? (
+          // Shown as text, line breaks and all: a one-line field would hide what is hashed.
+          <p id={`sales-subject-${activityId}`} className="text-sm whitespace-pre-wrap">
+            {subject}{" "}
+            <span className="text-xs text-muted-foreground">
+              {detail.threaded
+                ? "· the thread's subject"
+                : "· has a line break, so it can't be approved"}
+            </span>
           </p>
         ) : (
           <Input
@@ -333,6 +370,8 @@ export function SalesDraftPanel({
                 setSubjectDraft(null);
                 setBodyDraft(null);
                 setNotice(null);
+                // The engine moved on during the edit: show its version now.
+                if (listedHash !== null && listedHash !== detail.contentHash) void load();
               }}
             >
               Cancel
@@ -358,7 +397,9 @@ export function SalesDraftPanel({
             {actions.approve ? (
               <Button
                 size="sm"
-                disabled={busy !== null || dirty || device.state !== "active"}
+                disabled={
+                  busy !== null || dirty || device.state !== "active" || device.blocked !== null
+                }
                 onClick={approve}
               >
                 {busy === "approve" ? "Signing…" : (props.approveLabel ?? "Approve")}
@@ -424,7 +465,7 @@ export function SalesDraftPanel({
           </div>
           {actions.approve ? (
             <p className="text-xs text-muted-foreground">
-              {thisDeviceDescription(device.state, device.key)}
+              {device.blocked ?? thisDeviceDescription(device.state, device.key)}
             </p>
           ) : null}
         </div>

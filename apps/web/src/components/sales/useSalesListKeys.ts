@@ -14,6 +14,10 @@ const isTyping = (target: EventTarget | null) =>
 /**
  * J and K move through a Sales list, A approves the open draft, E edits it. Plain letters, so
  * they stand down while the person types, holds a modifier, or has a dialog open.
+ *
+ * Not yet in the keybinding registry (`src/keybindings.ts`), so not rebindable: that needs new
+ * `KeybindingCommand`s in contracts, server defaults, a `when` context for the Sales page, and
+ * settings labels. Move them there when that lands.
  */
 export function useSalesListKeys(keys: SalesListKeys): void {
   const current = useRef(keys);
