@@ -24,11 +24,16 @@ import type {
   SalesEngineSettings,
   SalesEngineStatus,
   SalesEnrolDeviceInput,
+  SalesHoldResult,
   SalesQueue,
   SalesQueueItemDetail,
+  SalesResumeInput,
+  SalesResumeResult,
   SalesSnapshot,
   SalesStreamEvent,
   SalesSummary,
+  SalesTaskReport,
+  SalesTaskReportInput,
   SalesView,
   SalesViewName,
 } from "@t3tools/contracts";
@@ -95,6 +100,7 @@ const isConfigured = (config: SalesEngineSettings) =>
  *
  * Nothing here can approve a send. `approve` carries presses a client signed with a device key
  * this server never holds; the engine checks each signature against the device it enrolled.
+ * `resume` gives back only what no person approved: a route chase someone paused.
  */
 export class SalesService extends Context.Service<
   SalesService,
@@ -120,12 +126,24 @@ export class SalesService extends Context.Service<
     readonly approve: (
       input: SalesApproveInput,
     ) => Effect.Effect<SalesApproveResult, SalesActionError>;
-    readonly unapprove: (activityId: string) => Effect.Effect<SalesCardState, SalesActionError>;
+    /**
+     * Pauses a chase the route approved, or takes a person's approval back (`result` says which).
+     * A send already claimed is not stopped: see `card.sendStatus`.
+     */
+    readonly hold: (activityId: string) => Effect.Effect<SalesHoldResult, SalesActionError>;
+    /** Gives a paused route chase back to the route, for the version the person saw. */
+    readonly resume: (
+      input: SalesResumeInput,
+    ) => Effect.Effect<SalesResumeResult, SalesActionError>;
     readonly edit: (input: SalesEditInput) => Effect.Effect<SalesEditResult, SalesActionError>;
     readonly discard: (input: {
       readonly activityId: string;
       readonly expectedHash: string;
     }) => Effect.Effect<SalesCardState, SalesActionError>;
+    /** Reports what the person did about a LinkedIn task, as a press on its card would. */
+    readonly reportTask: (
+      input: SalesTaskReportInput,
+    ) => Effect.Effect<SalesTaskReport, SalesActionError>;
     readonly listDevices: Effect.Effect<SalesDeviceList, SalesActionError>;
     readonly enrolDevice: (
       input: SalesEnrolDeviceInput,
@@ -332,7 +350,10 @@ const make = Effect.gen(function* () {
     checkedAt: read.checkedAt,
   });
 
-  /** One area's list, sent to a watcher only when a read says something new. */
+  /**
+   * One area's list, sent to a watcher only when a read says something new. A failed read
+   * changes the status, so it is sent at once with `readAt` the last read that succeeded.
+   */
   const makeView = <View extends SalesViewName>(
     view: View,
     read: (
@@ -341,8 +362,9 @@ const make = Effect.gen(function* () {
     interval: Duration.Input = SALES_POLL_INTERVAL,
   ) =>
     engineList({ name: view, read, interval }).pipe(
-      Effect.map((list) =>
-        list.watch.pipe(
+      Effect.map((list) => ({
+        refreshIfWatched: list.refreshIfWatched,
+        watch: list.watch.pipe(
           Effect.map((reads) =>
             reads.pipe(
               Stream.changesWith((a, b) =>
@@ -356,12 +378,15 @@ const make = Effect.gen(function* () {
             ),
           ),
         ),
-      ),
+      })),
     );
 
   const views: Record<
     SalesViewName,
-    Effect.Effect<Stream.Stream<SalesView>, never, Scope.Scope>
+    {
+      readonly watch: Effect.Effect<Stream.Stream<SalesView>, never, Scope.Scope>;
+      readonly refreshIfWatched: Effect.Effect<void>;
+    }
   > = {
     autopilot: yield* makeView("autopilot", SalesEngineApi.readAutopilotToday),
     tasks: yield* makeView("tasks", SalesEngineApi.readTasks),
@@ -382,11 +407,19 @@ const make = Effect.gen(function* () {
     );
 
   /**
-   * After an action changed a card, read the queue again so every watching client sees it. In
-   * the background, and only while someone watches: the caller already has the card's new state.
+   * After an action changed what the engine lists, read those lists again so every watching
+   * client sees it. In the background, and only while someone watches: the caller already has
+   * the action's answer.
    */
-  const changesCards = <A, E>(effect: Effect.Effect<A, E>) =>
-    effect.pipe(Effect.tap(() => snapshotList.refreshIfWatched));
+  const rereads =
+    (...lists: ReadonlyArray<{ readonly refreshIfWatched: Effect.Effect<void> }>) =>
+    <A, E>(effect: Effect.Effect<A, E>) =>
+      effect.pipe(Effect.tap(() => Effect.forEach(lists, (list) => list.refreshIfWatched)));
+  const changesCards = rereads(snapshotList);
+  /** Hold and Resume move a send on today's Autopilot too. */
+  const changesSends = rereads(snapshotList, views.autopilot);
+  /** A report closes a task, spends budget, and moves the summary's LinkedIn counts. */
+  const changesTasks = rereads(snapshotList, views.tasks);
 
   return SalesService.of({
     getSnapshot: snapshotList.current.pipe(Effect.map(toSnapshot)),
@@ -394,7 +427,7 @@ const make = Effect.gen(function* () {
     subscribe: snapshotList.watch.pipe(
       Effect.map((reads) => reads.pipe(Stream.map(toSnapshot), salesStreamEvents)),
     ),
-    subscribeView: (view) => views[view],
+    subscribeView: (view) => views[view].watch,
     getQueueItem: (activityId) =>
       withEngine((config) => SalesEngineApi.readQueueItem(config, activityId)),
     listConversations: withEngine(SalesEngineApi.readConversations),
@@ -406,10 +439,13 @@ const make = Effect.gen(function* () {
           Effect.map((results) => ({ results })),
         ),
       ),
-    unapprove: (activityId) =>
-      changesCards(withEngine((config) => SalesEngineApi.unapprove(config, activityId))),
+    hold: (activityId) =>
+      changesSends(withEngine((config) => SalesEngineApi.hold(config, activityId))),
+    resume: (input) => changesSends(withEngine((config) => SalesEngineApi.resume(config, input))),
     edit: (input) => changesCards(withEngine((config) => SalesEngineApi.edit(config, input))),
     discard: (input) => changesCards(withEngine((config) => SalesEngineApi.discard(config, input))),
+    reportTask: (input) =>
+      changesTasks(withEngine((config) => SalesEngineApi.reportTask(config, input))),
     listDevices: withEngine(SalesEngineApi.listDevices),
     enrolDevice: (input) => withEngine((config) => SalesEngineApi.enrolDevice(config, input)),
     revokeDevice: (deviceId) =>

@@ -268,6 +268,8 @@ function makeDispatchLayer(input: {
         goes: null,
         refusal: null,
         note: null,
+        paused: null,
+        sendStatus: null,
       });
     },
   });

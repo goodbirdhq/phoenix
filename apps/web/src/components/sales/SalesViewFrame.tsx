@@ -1,5 +1,5 @@
 import { salesStatusNotice } from "@t3tools/client-runtime/sales/home";
-import { safeHttpUrl } from "@t3tools/client-runtime/sales/links";
+import { safeHttpsUrl } from "@t3tools/client-runtime/sales/links";
 import { staleReadNote } from "@t3tools/client-runtime/sales/time";
 import type { SalesContactRef, SalesEngineStatus } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -145,7 +145,7 @@ function SalesViewEmpty(props: {
 /** The contact's name, linked to their Notion page, then their account. */
 export function SalesContactLine({ contact }: { readonly contact: SalesContactRef }) {
   const name = contact.name ?? contact.email ?? "Unnamed contact";
-  const page = safeHttpUrl(contact.notionUrl);
+  const page = safeHttpsUrl(contact.notionUrl);
   return (
     <span className="min-w-0 truncate text-sm">
       {page ? <SalesExternalLink href={page}>{name}</SalesExternalLink> : name}

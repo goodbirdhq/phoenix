@@ -20,9 +20,9 @@ describe("buildSalesHome", () => {
     const home = buildSalesHome(
       decodeSummary({
         generatedAt: "2026-11-09T18:30:00.000Z",
-        drafts: { awaiting: { total: 2, reply: 1 }, refused: 1 },
+        drafts: { awaiting: { total: 2, reply: 1 }, refused: 1, paused: 1 },
         // Refused route chases also sit in drafts.awaiting, so only failures count here.
-        autopilotToday: { sent: 1, scheduled: 1, failed: 1, refused: 1 },
+        autopilotToday: { sent: 1, scheduled: 1, failed: 1, refused: 1, paused: 2 },
         linkedin: { onSlack: 1, pending: 3, budget: { dailyLimit: 7, available: 1 } },
         // One reply has its answer drafted (counted under Outreach), one has none.
         replies: { awaitingAnswer: 2, awaitingAnswerWithoutDraft: 1 },
@@ -40,6 +40,9 @@ describe("buildSalesHome", () => {
       ["conversations", 1],
     ]);
     expect(home.areas[2]?.figures).toContainEqual({ label: "Invites left", value: "1 of 7" });
+    // Paused sends show beside held ones, in Outreach and in Autopilot.
+    expect(home.areas[0]?.figures).toContainEqual({ label: "Paused", value: "1" });
+    expect(home.areas[1]?.figures).toContainEqual({ label: "Paused", value: "2" });
     expect(home.health).toEqual({
       ok: true,
       line: "8 mailboxes active · 1 of 42 cold sends today",

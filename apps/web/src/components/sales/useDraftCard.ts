@@ -26,7 +26,8 @@ export function useDraftCard(props: {
 }): readonly [DraftCard, ReturnType<DraftCard["getState"]>] {
   const { environmentId, activityId } = props;
   const getQueueItem = useAtomCommand(salesEnvironment.getQueueItem, { reportFailure: false });
-  const unapprove = useAtomCommand(salesEnvironment.unapprove, { reportFailure: false });
+  const hold = useAtomCommand(salesEnvironment.hold, { reportFailure: false });
+  const resume = useAtomCommand(salesEnvironment.resume, { reportFailure: false });
   const edit = useAtomCommand(salesEnvironment.edit, { reportFailure: false });
   const discard = useAtomCommand(salesEnvironment.discard, { reportFailure: false });
   const dispatch = useAtomCommand(salesEnvironment.dispatch, { reportFailure: false });
@@ -36,7 +37,8 @@ export function useDraftCard(props: {
     getQueueItem: () => getQueueItem({ environmentId, input: { activityId } }),
     edit: (input) => edit({ environmentId, input }),
     discard: (expectedHash) => discard({ environmentId, input: { activityId, expectedHash } }),
-    unapprove: () => unapprove({ environmentId, input: { activityId } }),
+    hold: () => hold({ environmentId, input: { activityId } }),
+    resume: (expectedHash) => resume({ environmentId, input: { activityId, expectedHash } }),
     dispatch: (input) => dispatch({ environmentId, input }),
     approveVersions,
     confirm: (message) => requestConfirmDialog(message, { variant: "destructive" }),

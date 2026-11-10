@@ -4,7 +4,9 @@ import type {
   SalesDispatchInput,
   SalesEditInput,
   SalesEditResult,
+  SalesHoldResult,
   SalesQueueItemDetail,
+  SalesResumeResult,
 } from "@t3tools/contracts";
 import { safeSalesNote } from "@t3tools/contracts";
 
@@ -12,6 +14,7 @@ import type { AtomCommandResult } from "../state/runtime.ts";
 import type { ApproveOutcome } from "./approve.ts";
 import { checkSigning, type SigningDevice } from "./devices.ts";
 import { readSalesFailure, versionRefusalText } from "./failure.ts";
+import { holdOutcome, resumeOutcome, type SalesHoldOutcome } from "./hold.ts";
 import { cardActions, listedVersionMoved } from "./outreach.ts";
 import { displayedDraft, type VerifiedVersion, verifyDisplayedVersion } from "./signing.ts";
 
@@ -39,7 +42,7 @@ export interface DraftCardState {
   /** Text from an edit the engine refused because the card moved on, kept so it is not lost. */
   readonly lostText: string | null;
   /** The action running now. One runs at a time: a press while one runs does nothing. */
-  readonly busy: "approve" | "edit" | "dispatch" | "discard" | "unapprove" | null;
+  readonly busy: "approve" | "edit" | "dispatch" | "discard" | "hold" | "resume" | null;
   /** The note for the card's redraft plan, or null while that form is closed. */
   readonly redraftNote: string | null;
 }
@@ -49,7 +52,8 @@ export interface DraftCardCommands {
   readonly getQueueItem: () => Promise<AtomCommandResult<SalesQueueItemDetail, unknown>>;
   readonly edit: (input: SalesEditInput) => Promise<AtomCommandResult<SalesEditResult, unknown>>;
   readonly discard: (expectedHash: string) => Promise<AtomCommandResult<SalesCardState, unknown>>;
-  readonly unapprove: () => Promise<AtomCommandResult<SalesCardState, unknown>>;
+  readonly hold: () => Promise<AtomCommandResult<SalesHoldResult, unknown>>;
+  readonly resume: (expectedHash: string) => Promise<AtomCommandResult<SalesResumeResult, unknown>>;
   readonly dispatch: (
     input: SalesDispatchInput,
   ) => Promise<AtomCommandResult<SalesDispatch, unknown>>;
@@ -84,7 +88,10 @@ export interface DraftCard {
   readonly save: () => Promise<void>;
   /** Approves the version shown, after hashing that text again here. */
   readonly approve: (device: SigningDevice) => Promise<void>;
-  readonly unapprove: () => Promise<void>;
+  /** Pauses a route chase, or withdraws a person's approval; the notice says which. */
+  readonly hold: () => Promise<void>;
+  /** Gives a paused route chase back to the autopilot, for the version shown. */
+  readonly resume: () => Promise<void>;
   /** Asks `${label}?` and discards the card if the person confirms. */
   readonly discard: (label: string) => Promise<void>;
   readonly research: () => Promise<void>;
@@ -92,6 +99,12 @@ export interface DraftCard {
   readonly setRedraftNote: (note: string) => void;
   readonly startRedraft: () => Promise<void>;
 }
+
+const holdNotice = ({ tone, title, description }: SalesHoldOutcome): DraftNotice => ({
+  tone,
+  title,
+  description,
+});
 
 export const isDirty = (state: DraftCardState) =>
   state.subjectDraft !== null || state.bodyDraft !== null;
@@ -295,11 +308,15 @@ export function createDraftCard(
       });
     },
 
-    unapprove: () =>
-      run("unapprove", async () => {
-        const failure = readSalesFailure(await commands().unapprove());
-        if (failure === null) notify({ tone: "success", title: "Approval withdrawn" });
-        else failureNotice(failure);
+    hold: () =>
+      run("hold", async () => {
+        notify(holdNotice(holdOutcome(await commands().hold())));
+        await load();
+      }),
+
+    resume: () =>
+      run("resume", async (detail) => {
+        notify(holdNotice(resumeOutcome(await commands().resume(detail.contentHash))));
         await load();
       }),
 

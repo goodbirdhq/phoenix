@@ -263,9 +263,9 @@ function SalesEngineForm({
       <fieldset disabled={saving} className="contents">
         <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
           The server reads outreach status from this engine and shows it under Sales. Phoenix stores
-          no sales data; the engine and Notion stay the record. The action token lets Phoenix
-          unapprove, edit and discard drafts and carry approvals signed on an enrolled device; by
-          itself it approves nothing.
+          no sales data; the engine and Notion stay the record. The action token lets Phoenix hold,
+          resume, edit and discard drafts, report LinkedIn tasks, and carry approvals signed on an
+          enrolled device; by itself it approves nothing.
         </p>
         <div className="grid gap-1.5">
           <Label htmlFor={`sales-engine-url-${environmentId}`}>Engine URL</Label>

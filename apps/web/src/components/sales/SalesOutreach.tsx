@@ -1,16 +1,20 @@
 import { checkSigning } from "@t3tools/client-runtime/sales/devices";
 import {
+  cardActions,
   groupQueue,
+  holdLabel,
   kindLabel,
   queueOrder,
+  queueRowStatus,
   queueSummary,
-  stateLabel,
   tickedForReview,
 } from "@t3tools/client-runtime/sales/outreach";
 import type { EnvironmentId, SalesQueueItem } from "@t3tools/contracts";
 import * as Option from "effect/Option";
+import { salesTime } from "@t3tools/client-runtime/sales/time";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useNowMs } from "../../hooks/useNowMinute";
 import { useSalesDevice, useSalesState } from "../../state/sales";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -42,6 +46,7 @@ export function SalesOutreach(props: {
   const order = useMemo(() => queueOrder(groups), [groups]);
   const current = order.find((item) => item.activityId === props.selected) ?? order[0] ?? null;
   const device = useSalesDevice(environmentId, props.baseUrl, canAct);
+  const now = useNowMs();
   const signingRefusal = checkSigning(device).refusal;
   const panel = useRef<SalesDraftPanelHandle>(null);
   /** Ticked rows, each with the hash it had when ticked: a tick covers that version only. */
@@ -68,7 +73,13 @@ export function SalesOutreach(props: {
     edit: () => panel.current?.edit(),
   });
 
-  // Registered once; each command reaches the current list and draft through refs.
+  // Hold and Resume are offered only where the selected draft's state allows them.
+  const selectedActions = current !== null && canAct ? cardActions(current) : null;
+  const holdTitle = current !== null && selectedActions?.hold ? holdLabel(current) : null;
+  const canResume = selectedActions?.resume ?? false;
+
+  // Registered again only when what is offered changes; each command reaches the current list
+  // and draft through refs.
   useEffect(() => {
     setSalesPaletteCommands([
       {
@@ -85,6 +96,26 @@ export function SalesOutreach(props: {
         shortcut: "E",
         run: () => panel.current?.edit(),
       },
+      ...(holdTitle === null
+        ? []
+        : [
+            {
+              id: "sales:hold",
+              title: `Selected draft: ${holdTitle}`,
+              keywords: ["sales", "hold", "pause", "withdraw", "approval", "draft", "outreach"],
+              run: () => panel.current?.hold(),
+            },
+          ]),
+      ...(canResume
+        ? [
+            {
+              id: "sales:resume",
+              title: "Selected draft: Resume",
+              keywords: ["sales", "resume", "unpause", "autopilot", "draft", "outreach"],
+              run: () => panel.current?.resume(),
+            },
+          ]
+        : []),
       {
         id: "sales:next",
         title: "Next draft",
@@ -101,7 +132,7 @@ export function SalesOutreach(props: {
       },
     ]);
     return () => setSalesPaletteCommands([]);
-  }, []);
+  }, [holdTitle, canResume]);
 
   const approvable = tickedForReview(order, checked);
 
@@ -200,6 +231,7 @@ export function SalesOutreach(props: {
                     key={item.activityId}
                     item={item}
                     selected={item.activityId === current?.activityId}
+                    now={now}
                     checkable={canAct && item.state === "awaiting"}
                     // A tick shows only while the row still has the version that was ticked.
                     checked={
@@ -232,6 +264,7 @@ export function SalesOutreach(props: {
           environmentId={environmentId}
           activityId={current.activityId}
           listedHash={current.contentHash}
+          listed={current}
           canAct={canAct}
           device={device}
           allowResearch
@@ -244,16 +277,26 @@ export function SalesOutreach(props: {
   );
 }
 
+const ROW_BADGE: Record<string, "warning" | "success" | "error" | "outline"> = {
+  awaiting: "outline",
+  approved: "success",
+  paused: "warning",
+  refused: "error",
+};
+
 function QueueRow(props: {
   readonly item: SalesQueueItem;
   readonly selected: boolean;
   readonly checkable: boolean;
   readonly checked: boolean;
+  /** The clock "today" is read against for when a scheduled draft goes. */
+  readonly now: number;
   readonly onCheck: (checked: boolean) => void;
   readonly onSelect: () => void;
 }) {
   const { item } = props;
   const who = item.contact.name ?? item.contact.email ?? "Unknown contact";
+  const status = queueRowStatus(item);
   return (
     <li
       aria-selected={props.selected}
@@ -277,18 +320,13 @@ function QueueRow(props: {
               <span className="text-muted-foreground"> · {item.contact.accountName}</span>
             ) : null}
           </span>
-          {item.state === "awaiting" ? null : (
-            <Badge
-              size="sm"
-              variant={
-                item.state === "approved"
-                  ? "success"
-                  : item.state === "refused"
-                    ? "error"
-                    : "secondary"
-              }
-            >
-              {stateLabel(item.state)}
+          {"goesAt" in status ? (
+            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+              {salesTime(status.goesAt, props.now)?.local}
+            </span>
+          ) : (
+            <Badge size="sm" variant={ROW_BADGE[item.state] ?? "secondary"}>
+              {status.badge}
             </Badge>
           )}
         </span>

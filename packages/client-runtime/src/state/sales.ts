@@ -290,9 +290,15 @@ export function createSalesEnvironmentAtoms<R, E>(
       scheduler,
       concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
     }),
-    unapprove: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:sales:unapprove",
-      tag: SALES_WS_METHODS.unapprove,
+    hold: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:hold",
+      tag: SALES_WS_METHODS.hold,
+      scheduler,
+      concurrency: perCard,
+    }),
+    resume: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:resume",
+      tag: SALES_WS_METHODS.resume,
       scheduler,
       concurrency: perCard,
     }),
@@ -307,6 +313,16 @@ export function createSalesEnvironmentAtoms<R, E>(
       tag: SALES_WS_METHODS.discard,
       scheduler,
       concurrency: perCard,
+    }),
+    /** Reports on one task run one at a time, so two presses never race on it. */
+    reportTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:sales:report-task",
+      tag: SALES_WS_METHODS.reportTask,
+      scheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => `${environmentId}:task:${input.taskId}`,
+      },
     }),
     enrolDevice: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:sales:enrol-device",

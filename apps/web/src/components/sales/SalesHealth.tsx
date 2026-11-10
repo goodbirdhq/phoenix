@@ -50,8 +50,10 @@ function EngineHealth({ environmentId }: { readonly environmentId: EnvironmentId
               </p>
               {findings.length > 0 ? (
                 <ul className="space-y-1 pl-6 text-xs text-muted-foreground">
-                  {findings.map((line) => (
-                    <li key={line}>{line}</li>
+                  {findings.map((line, index) => (
+                    // Findings are lines of one message: fixed in place, and two can read the same.
+                    // oxlint-disable-next-line react/no-array-index-key
+                    <li key={index}>{line}</li>
                   ))}
                 </ul>
               ) : null}

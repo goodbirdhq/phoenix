@@ -1,7 +1,7 @@
 import { ExternalLinkIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-/** A link out of Phoenix, such as a Notion page, opened in a new tab. Pass it `safeHttpUrl`'s. */
+/** A link out of Phoenix, such as a Notion page, opened in a new tab. Pass it `safeHttpsUrl`'s. */
 export function SalesExternalLink(props: { readonly href: string; readonly children: ReactNode }) {
   return (
     <a

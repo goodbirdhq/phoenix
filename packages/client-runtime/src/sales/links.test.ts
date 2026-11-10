@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { safeHttpUrl } from "./links.ts";
+import { safeHttpsUrl } from "./links.ts";
 
-describe("safeHttpUrl", () => {
+describe("safeHttpsUrl", () => {
   it("keeps a well-formed https URL", () => {
-    expect(safeHttpUrl("https://www.notion.so/abc123")).toBe("https://www.notion.so/abc123");
+    expect(safeHttpsUrl("https://www.notion.so/abc123")).toBe("https://www.notion.so/abc123");
   });
 
   it("refuses every other scheme, and text that is not a URL", () => {
@@ -20,7 +20,7 @@ describe("safeHttpUrl", () => {
       "",
       null,
     ]) {
-      expect(safeHttpUrl(value)).toBeNull();
+      expect(safeHttpsUrl(value)).toBeNull();
     }
   });
 });
