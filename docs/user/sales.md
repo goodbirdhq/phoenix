@@ -27,10 +27,11 @@ sends the engine its public half, and shows a fingerprint. The engine posts a ca
 check that its fingerprint matches the one on your screen, then press **Approve device**. Until
 then the device can't approve.
 
-Enrol from a client the machine that runs your agents can't change: the desktop app on another
-computer, or the hosted web app. Phoenix refuses to enrol from the web page that machine serves
-and from a desktop app whose own server is that machine. It can't tell when a remote connection
-reaches that same machine, so don't enrol from a client running there.
+Enrol and approve from a client the machine that runs your agents can't change: the hosted web
+app, or the desktop app on another computer. Phoenix refuses to enrol or approve from a web page
+served by a Phoenix server, and from a desktop app whose own server reads the same sales engine.
+It can't tell when a remote connection reaches that same machine, so don't enrol from a client
+running there.
 
 Each browser and each desktop app is its own device. Clearing its site data removes the key; enrol
 again to make a new one. **Revoke** stops a device from signing. Drafts it already approved stay
@@ -43,15 +44,17 @@ approved until you unapprove them.
 If the draft changed since you read it, Phoenix shows the new version and asks you to approve
 again. Saving an edit withdraws any approval of the old version.
 
-To approve several at once, tick them and choose **Approve**. Each is signed on its own, and any
-that changed since the list was read are left for you to open.
+To approve several at once, tick them and choose **Approve**. Phoenix shows each ticked draft in
+full, exactly as it will go, and approves them when you confirm. A draft that changed after you
+ticked it is unticked and left for you to open; it's never approved from the old tick.
 
 Other actions:
 
 - **Unapprove** withdraws an approval before the draft goes.
 - **Discard** drops a draft for good. It's never sent.
 - **Redraft with notes** starts a run that rewrites the draft with your note. A reply is
-  discarded first and drafted again, since the reply drafter can't edit a draft.
+  discarded first and drafted again, since the reply drafter can't edit a draft. If that run
+  fails to start, the answer is already gone: choose **Draft an answer** in Conversations.
 - **Research this** starts a research run for the draft's account.
 
 The page links each run it started. Keys: <kbd>J</kbd> and <kbd>K</kbd> move, <kbd>A</kbd>
