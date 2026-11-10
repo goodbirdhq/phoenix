@@ -827,6 +827,44 @@ const viewFixtures: Record<string, unknown> = {
     ],
     budget: { day: "2026-11-09", dailyLimit: 7, sentToday: 2, available: 1 },
   },
+  "/campaigns": {
+    version: 1,
+    generatedAt: "2026-11-09T18:30:00.000Z",
+    items: [
+      {
+        campaign: "Fintech Q4",
+        contacts: 12,
+        replied: 3,
+        positive: 1,
+        declined: 1,
+        bounced: 0,
+        steps: [{ step: 1, sent: 12, bounced: 0, replied: 2, positive: 1, openRate: 0.5 }],
+      },
+      { campaign: null, contacts: 2 },
+    ],
+  },
+  "/mailboxes": {
+    version: 1,
+    generatedAt: "2026-11-09T18:30:00.000Z",
+    bounceRule: { window: 20, threshold: 3 },
+    items: [
+      {
+        address: "gabe@trygoodbird.com",
+        status: "active",
+        statusReason: null,
+        dailyCap: 6,
+        coldSentToday: 2,
+        repliesSentToday: 1,
+        bouncesToday: 0,
+        hardBouncesInWindow: 1,
+        restUntil: "2026-11-09T18:40:00.000Z",
+        nextSlotAt: null,
+        lastSyncedAt: "2026-11-09T18:20:00.000Z",
+        provider: "google",
+      },
+      { address: "new@trygoodbird.com", status: "warming" },
+    ],
+  },
 };
 
 const viewResponder: Responder = (request) => {
@@ -904,8 +942,46 @@ it.effect("decodes the task list and fills what a smaller answer leaves out", ()
     const health = yield* (yield* watchView("health")).nextWith((view) => view.status === "ready");
     assert.strictEqual(health.view, "health");
     if (health.view !== "health") return;
-    assert.deepStrictEqual(health.data?.overdueRuns, []);
+    assert.strictEqual(health.data?.text, "");
     assert.strictEqual(health.data?.healthy, false);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("decodes the campaign list, and names no campaign as null", () => {
+  const { layer } = makeLayer({ respond: viewResponder });
+  return Effect.gen(function* () {
+    const read = yield* (yield* watchView("campaigns")).nextWith((view) => view.status === "ready");
+    if (read.view !== "campaigns") return assert.fail(`got ${read.view}`);
+    const [named, unnamed] = read.data?.items ?? [];
+    assert.deepStrictEqual(named?.steps, [
+      { step: 1, sent: 12, bounced: 0, replied: 2, positive: 1 },
+    ]);
+    assert.deepInclude(unnamed, { campaign: null, contacts: 2, replied: 0, steps: [] });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("decodes the mailbox pool with its bounce rule", () => {
+  const { layer } = makeLayer({ respond: viewResponder });
+  return Effect.gen(function* () {
+    const read = yield* (yield* watchView("mailboxes")).nextWith((view) => view.status === "ready");
+    if (read.view !== "mailboxes") return assert.fail(`got ${read.view}`);
+    assert.deepStrictEqual(read.data?.bounceRule, { window: 20, threshold: 3 });
+    const [sending, warming] = read.data?.items ?? [];
+    assert.deepInclude(sending, { restUntil: "2026-11-09T18:40:00.000Z", hardBouncesInWindow: 1 });
+    assert.notProperty(sending ?? {}, "provider");
+    assert.deepInclude(warming, { status: "warming", dailyCap: 0, lastSyncedAt: null });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("asks nothing for a view of an engine that is not configured", () => {
+  const { layer, requests } = makeLayer({
+    respond: viewResponder,
+    salesEngine: { baseUrl: "", readToken: "" },
+  });
+  return Effect.gen(function* () {
+    const read = yield* (yield* watchView("tasks")).nextWith((view) => view.status !== "loading");
+    assert.strictEqual(read.status, "not-configured");
+    assert.strictEqual(requests.length, 0);
   }).pipe(Effect.provide(layer));
 });
 

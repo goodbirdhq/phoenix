@@ -833,14 +833,10 @@ export const SalesView = Schema.Union([
   salesView("health", SalesHealth),
 ]);
 export type SalesView = typeof SalesView.Type;
-export type SalesViewName = SalesView["view"];
-export const SalesViewName = Schema.Literals([
-  "autopilot",
-  "tasks",
-  "campaigns",
-  "mailboxes",
-  "health",
-] satisfies ReadonlyArray<SalesViewName>);
+export const SalesViewName = Schema.Literals(
+  SalesView.members.map((member) => member.fields.view.literal),
+);
+export type SalesViewName = typeof SalesViewName.Type;
 
 export const SALES_WS_METHODS = {
   getSnapshot: "sales.getSnapshot",

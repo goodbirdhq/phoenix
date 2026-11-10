@@ -1,5 +1,6 @@
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
@@ -23,9 +24,11 @@ import type {
   SalesEngineSettings,
   SalesEngineStatus,
   SalesEnrolDeviceInput,
+  SalesQueue,
   SalesQueueItemDetail,
   SalesSnapshot,
   SalesStreamEvent,
+  SalesSummary,
   SalesView,
   SalesViewName,
 } from "@t3tools/contracts";
@@ -37,13 +40,26 @@ import * as SalesEngineApi from "./SalesEngineApi.ts";
 
 /** The engine suggests about a minute for `/summary` and `/queue`; nothing there changes faster. */
 export const SALES_POLL_INTERVAL = "60 seconds";
+/** Campaign figures move with sends and replies over days; a minute's precision buys nothing. */
+const CAMPAIGNS_POLL_INTERVAL = "5 minutes";
 
-const EMPTY_SNAPSHOT: SalesSnapshot = {
-  status: "not-configured",
+/**
+ * The latest read of one engine list. `data` is kept through later errors, so beside a non-ready
+ * status it is stale; `readAt` is when it was read and `checkedAt` when the engine was last asked.
+ */
+interface EngineRead<A> {
+  readonly status: SalesEngineStatus;
+  readonly message: string | null;
+  readonly data: A | null;
+  readonly readAt: string | null;
+  readonly checkedAt: string | null;
+}
+
+const UNREAD: EngineRead<never> = {
+  status: "loading",
   message: null,
-  summary: null,
-  queue: null,
-  summaryReadAt: null,
+  data: null,
+  readAt: null,
   checkedAt: null,
 };
 
@@ -165,29 +181,22 @@ const salesStreamEvents = (snapshots: Stream.Stream<SalesSnapshot>) =>
     ),
   );
 
-/** A view's read without its `view` tag. */
-interface ViewRead<A> {
-  readonly status: SalesEngineStatus;
-  readonly message: string | null;
-  readonly data: A | null;
-  readonly readAt: string | null;
-}
-
-const EMPTY_VIEW: ViewRead<never> = { status: "loading", message: null, data: null, readAt: null };
-
-/** A view read with what moves on every read blanked: our read time and the engine's. */
-const viewWithoutReadTimes = <A extends { readonly generatedAt: string }>(read: ViewRead<A>) => ({
+/** A view read with what moves on every read blanked: our read times and the engine's. */
+const viewWithoutReadTimes = <A extends { readonly generatedAt: string }>(read: EngineRead<A>) => ({
   ...read,
   readAt: null,
+  checkedAt: null,
   data: read.data === null ? null : { ...read.data, generatedAt: "" },
 });
+
+/** What a view sends for each name: that view's engine list. */
+type ViewData<View extends SalesViewName> = NonNullable<
+  Extract<SalesView, { readonly view: View }>["data"]
+>;
 
 const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
-  const state = yield* SubscriptionRef.make<SalesSnapshot>(EMPTY_SNAPSHOT);
-  /** The engine the snapshot's summary came from, so a new URL or token drops the old one. */
-  const lastConfigKey = yield* Ref.make<string | null>(null);
   const readConfig = serverSettings.getSettings.pipe(
     Effect.map((settings) => settings.salesEngine),
     Effect.catch((error) =>
@@ -198,195 +207,164 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  const publish = (snapshot: SalesSnapshot) =>
-    SubscriptionRef.set(state, snapshot).pipe(Effect.as(snapshot));
-
-  const readEngine = (config: SalesEngineSettings) =>
-    Effect.gen(function* () {
-      const key = configKey(config);
-      const sameEngine = (yield* Ref.getAndSet(lastConfigKey, key)) === key;
-      const previous = sameEngine ? yield* SubscriptionRef.get(state) : EMPTY_SNAPSHOT;
-      const checkedAt = DateTime.formatIso(yield* DateTime.now);
-
-      if (!isConfigured(config)) {
-        return yield* publish(EMPTY_SNAPSHOT);
-      }
-      if (salesEngineRoot(config.baseUrl) === null) {
-        return yield* publish({
-          ...EMPTY_SNAPSHOT,
-          status: "failed",
-          message: "The sales engine URL must be an http or https URL.",
-          checkedAt,
-        });
-      }
-      if (!sameEngine) {
-        yield* publish({ ...EMPTY_SNAPSHOT, status: "loading" });
-      }
-
-      const engine = engineConfig(config);
-      const result = yield* Effect.all(
-        [SalesEngineApi.readSummary(engine), SalesEngineApi.readQueue(engine)],
-        { concurrency: 2 },
-      ).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.result);
-      if (Result.isSuccess(result)) {
-        const [summary, queue] = result.success;
-        return yield* publish({
-          status: "ready",
-          message: null,
-          summary,
-          queue,
-          summaryReadAt: checkedAt,
-          checkedAt,
-        });
-      }
-      const error = result.failure;
-      yield* Effect.logWarning("failed to read the sales engine", { reason: error.reason });
-      // Keep the last answer through an error so the screen can show it as stale.
-      return yield* publish({
-        status: statusFor(error),
-        message: error.message,
-        summary: previous.summary,
-        queue: previous.queue,
-        summaryReadAt: previous.summaryReadAt,
-        checkedAt,
-      });
-    });
-
-  const engineRead = yield* PolledRead.make({
-    input: readConfig,
-    key: configKey,
-    read: readEngine,
-    interval: SALES_POLL_INTERVAL,
-    // While anyone is watching, a settings change reads the new engine at once. PolledRead only
-    // joins a read still in flight, so this filter is what skips a change that leaves the engine
-    // as last read (any other setting), which would otherwise read the engine again.
-    refreshWhen: serverSettings.streamChanges.pipe(
-      Stream.filterEffect((settings) =>
-        Ref.get(lastConfigKey).pipe(Effect.map((key) => key !== configKey(settings.salesEngine))),
-      ),
-    ),
-  });
-
   /**
-   * The snapshot, unless the settings now name a different engine than the one it came from;
-   * then it belongs to the old engine and is dropped, so nobody sees it under the new settings.
+   * One engine list, read for whoever watches it: polled only while someone does, the last
+   * answer kept beside a later error, and dropped once the settings name another engine. A URL or
+   * token change while watched reads the new engine at once.
    */
-  const currentSnapshot = Effect.gen(function* () {
-    const key = configKey(yield* readConfig);
-    const last = yield* Ref.get(lastConfigKey);
-    if (last === null || last === key) return yield* SubscriptionRef.get(state);
-    yield* Ref.set(lastConfigKey, null);
-    return yield* publish(EMPTY_SNAPSHOT);
-  });
-
-  // A new subscriber first drops a snapshot from an engine the settings no longer name, since
-  // the stream starts with the current snapshot.
-  const subscribe = currentSnapshot.pipe(
-    Effect.andThen(engineRead.watch),
-    Effect.as(SubscriptionRef.changes(state).pipe(salesStreamEvents)),
-  );
-
-  /**
-   * One engine list an area shows, read like the snapshot: polled only while someone watches,
-   * the last answer kept beside a later error, and dropped when the settings name another engine.
-   * A subscriber is sent a read only when it says something new.
-   */
-  const makeView = <A extends { readonly generatedAt: string }>(
-    read: (
+  const engineList = <A>(options: {
+    /** For the logs. */
+    readonly name: string;
+    readonly read: (
       config: SalesEngineApi.SalesEngineConfig,
-    ) => Effect.Effect<A, SalesActionError, HttpClient.HttpClient>,
-    tag: (read: ViewRead<A>) => SalesView,
-  ) =>
+    ) => Effect.Effect<A, SalesActionError, HttpClient.HttpClient>;
+    readonly interval: Duration.Input;
+  }) =>
     Effect.gen(function* () {
-      const view = yield* SubscriptionRef.make<ViewRead<A>>(EMPTY_VIEW);
-      const viewConfigKey = yield* Ref.make<string | null>(null);
+      const state = yield* SubscriptionRef.make<EngineRead<A>>(UNREAD);
+      /** The engine `state` came from. */
+      const lastConfigKey = yield* Ref.make<string | null>(null);
+      const publish = (read: EngineRead<A>) => SubscriptionRef.setAndGet(state, read);
 
-      const readView = (config: SalesEngineSettings) =>
+      const readEngine = (config: SalesEngineSettings) =>
         Effect.gen(function* () {
           const key = configKey(config);
-          if ((yield* Ref.getAndSet(viewConfigKey, key)) !== key) {
-            yield* SubscriptionRef.set(view, EMPTY_VIEW);
+          const sameEngine = (yield* Ref.getAndSet(lastConfigKey, key)) === key;
+          const checkedAt = DateTime.formatIso(yield* DateTime.now);
+          if (!isConfigured(config)) {
+            return yield* publish({ ...UNREAD, status: "not-configured" });
           }
-          const result = yield* read(engineConfig(config)).pipe(
-            Effect.provideService(HttpClient.HttpClient, httpClient),
-            Effect.result,
-          );
-          const readAt = DateTime.formatIso(yield* DateTime.now);
+          if (salesEngineRoot(config.baseUrl) === null) {
+            return yield* publish({
+              ...UNREAD,
+              status: "failed",
+              message: "The sales engine URL must be an http or https URL.",
+              checkedAt,
+            });
+          }
+          if (!sameEngine) yield* publish(UNREAD);
+
+          const result = yield* options
+            .read(engineConfig(config))
+            .pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.result);
           if (Result.isSuccess(result)) {
-            return yield* SubscriptionRef.set(view, {
+            return yield* publish({
               status: "ready",
               message: null,
               data: result.success,
-              readAt,
+              readAt: checkedAt,
+              checkedAt,
             });
           }
           const error = result.failure;
-          if (error.reason !== "not-configured") {
-            yield* Effect.logWarning("failed to read a sales engine list", {
-              reason: error.reason,
-            });
-          }
-          yield* SubscriptionRef.update(view, (previous) => ({
+          yield* Effect.logWarning("failed to read the sales engine", {
+            list: options.name,
+            reason: error.reason,
+          });
+          return yield* SubscriptionRef.updateAndGet(state, (previous) => ({
             ...previous,
             status: statusFor(error),
             message: error.message,
+            checkedAt,
           }));
         });
 
       const polled = yield* PolledRead.make({
         input: readConfig,
         key: configKey,
-        read: readView,
-        interval: SALES_POLL_INTERVAL,
+        read: readEngine,
+        interval: options.interval,
+        // PolledRead only joins a read still in flight, so this filter is what skips a change
+        // that leaves the engine as last read (any other setting), which would read it again.
         refreshWhen: serverSettings.streamChanges.pipe(
           Stream.filterEffect((settings) =>
-            Ref.get(viewConfigKey).pipe(
+            Ref.get(lastConfigKey).pipe(
               Effect.map((key) => key !== configKey(settings.salesEngine)),
             ),
           ),
         ),
       });
 
-      /** Drops data from an engine the settings no longer name, before a new watcher sees it. */
-      const dropOtherEngine = Effect.gen(function* () {
+      /** The latest read, unless the settings now name another engine: then it is dropped. */
+      const current = Effect.gen(function* () {
         const key = configKey(yield* readConfig);
-        const last = yield* Ref.get(viewConfigKey);
-        if (last === null || last === key) return;
-        yield* Ref.set(viewConfigKey, null);
-        yield* SubscriptionRef.set(view, EMPTY_VIEW);
+        const last = yield* Ref.get(lastConfigKey);
+        if (last === null || last === key) return yield* SubscriptionRef.get(state);
+        yield* Ref.set(lastConfigKey, null);
+        return yield* publish(UNREAD);
       });
 
-      return dropOtherEngine.pipe(
-        Effect.andThen(polled.watch),
-        Effect.as(
-          SubscriptionRef.changes(view).pipe(
-            Stream.changesWith((a, b) =>
-              Equal.equals(viewWithoutReadTimes(a), viewWithoutReadTimes(b)),
+      return {
+        current,
+        refresh: polled.refresh,
+        refreshIfWatched: polled.refreshIfWatched,
+        /**
+         * Polls while the scope is open, and every read from now on, starting with the current
+         * one. The old engine's read is dropped first, since the stream starts with it.
+         */
+        watch: current.pipe(
+          Effect.andThen(polled.watch),
+          Effect.as(SubscriptionRef.changes(state)),
+        ),
+      };
+    });
+
+  const snapshotList = yield* engineList({
+    name: "summary",
+    read: (engine) =>
+      Effect.all(
+        { summary: SalesEngineApi.readSummary(engine), queue: SalesEngineApi.readQueue(engine) },
+        { concurrency: 2 },
+      ),
+    interval: SALES_POLL_INTERVAL,
+  });
+  const toSnapshot = (
+    read: EngineRead<{ readonly summary: SalesSummary; readonly queue: SalesQueue }>,
+  ): SalesSnapshot => ({
+    status: read.status,
+    message: read.message,
+    summary: read.data?.summary ?? null,
+    queue: read.data?.queue ?? null,
+    summaryReadAt: read.readAt,
+    checkedAt: read.checkedAt,
+  });
+
+  /** One area's list, sent to a watcher only when a read says something new. */
+  const makeView = <View extends SalesViewName>(
+    view: View,
+    read: (
+      config: SalesEngineApi.SalesEngineConfig,
+    ) => Effect.Effect<ViewData<View>, SalesActionError, HttpClient.HttpClient>,
+    interval: Duration.Input = SALES_POLL_INTERVAL,
+  ) =>
+    engineList({ name: view, read, interval }).pipe(
+      Effect.map((list) =>
+        list.watch.pipe(
+          Effect.map((reads) =>
+            reads.pipe(
+              Stream.changesWith((a, b) =>
+                Equal.equals(viewWithoutReadTimes(a), viewWithoutReadTimes(b)),
+              ),
+              // The union cannot narrow on a generic `view`; `read` above ties data to it.
+              Stream.map(
+                ({ status, message, data, readAt }) =>
+                  ({ view, status, message, data, readAt }) as SalesView,
+              ),
             ),
-            Stream.map(tag),
           ),
         ),
-      );
-    });
+      ),
+    );
 
   const views: Record<
     SalesViewName,
     Effect.Effect<Stream.Stream<SalesView>, never, Scope.Scope>
   > = {
-    autopilot: yield* makeView(SalesEngineApi.readAutopilotToday, (read) => ({
-      view: "autopilot",
-      ...read,
-    })),
-    tasks: yield* makeView(SalesEngineApi.readTasks, (read) => ({ view: "tasks", ...read })),
-    campaigns: yield* makeView(SalesEngineApi.readCampaigns, (read) => ({
-      view: "campaigns",
-      ...read,
-    })),
-    mailboxes: yield* makeView(SalesEngineApi.readMailboxes, (read) => ({
-      view: "mailboxes",
-      ...read,
-    })),
-    health: yield* makeView(SalesEngineApi.readHealth, (read) => ({ view: "health", ...read })),
+    autopilot: yield* makeView("autopilot", SalesEngineApi.readAutopilotToday),
+    tasks: yield* makeView("tasks", SalesEngineApi.readTasks),
+    campaigns: yield* makeView("campaigns", SalesEngineApi.readCampaigns, CAMPAIGNS_POLL_INTERVAL),
+    mailboxes: yield* makeView("mailboxes", SalesEngineApi.readMailboxes),
+    health: yield* makeView("health", SalesEngineApi.readHealth),
   };
 
   /** Runs one engine call against the current settings. */
@@ -405,12 +383,14 @@ const make = Effect.gen(function* () {
    * the background, and only while someone watches: the caller already has the card's new state.
    */
   const changesCards = <A, E>(effect: Effect.Effect<A, E>) =>
-    effect.pipe(Effect.tap(() => engineRead.refreshIfWatched));
+    effect.pipe(Effect.tap(() => snapshotList.refreshIfWatched));
 
   return SalesService.of({
-    getSnapshot: currentSnapshot,
-    refresh: engineRead.refresh,
-    subscribe,
+    getSnapshot: snapshotList.current.pipe(Effect.map(toSnapshot)),
+    refresh: snapshotList.refresh.pipe(Effect.map(toSnapshot)),
+    subscribe: snapshotList.watch.pipe(
+      Effect.map((reads) => reads.pipe(Stream.map(toSnapshot), salesStreamEvents)),
+    ),
     subscribeView: (view) => views[view],
     getQueueItem: (activityId) =>
       withEngine((config) => SalesEngineApi.readQueueItem(config, activityId)),
