@@ -1,6 +1,7 @@
 import type {
   SalesDevicePublicKey,
   SalesHashInput,
+  SalesQueueItem,
   SalesQueueItemDetail,
   SalesSignedApproval,
 } from "@t3tools/contracts";
@@ -12,7 +13,7 @@ import * as DateTime from "effect/DateTime";
  * client hashed itself from the text it shows. A tampered server can show one text and send a
  * hash of another, so the hash the engine reports is checked, never trusted. Only WebCrypto,
  * so web, desktop and (with a WebCrypto implementation) mobile share it.
- * See docs/internals/sales-signed-approvals.md.
+ * See docs/internals/sales-approvals.md.
  */
 
 /** The engine's name for its content hash (`hashAlgorithm` on `GET /queue/:activityId`). */
@@ -94,6 +95,26 @@ export async function verifyDisplayedVersion(
   return contentHash === detail.contentHash.toLowerCase()
     ? { ok: true, contentHash }
     : { ok: false, reason: "mismatch" };
+}
+
+/**
+ * Whether a card read for a batch approval is the version the list showed: the same hash, and
+ * the text the list displayed (subject and the 280-character preview) agrees with the full text
+ * that hash covers. A batch signs from the list, so this ties each signature to what was on
+ * screen, as `verifyDisplayedVersion` does for the open draft.
+ */
+export function listedVersionMatches(
+  listed: SalesQueueItem,
+  detail: SalesQueueItemDetail,
+): boolean {
+  if (listed.activityId !== detail.activityId) return false;
+  if (listed.contentHash.toLowerCase() !== detail.contentHash.toLowerCase()) return false;
+  if (listed.subject.trim() !== detail.hashInput.subject.trim()) return false;
+  const body = detail.hashInput.body.replace(/\s+/gu, " ").trim();
+  const preview = listed.bodyPreview;
+  return preview.endsWith("...")
+    ? body.startsWith(preview.slice(0, -3).trimEnd())
+    : body === preview.trim();
 }
 
 /**

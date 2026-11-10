@@ -610,7 +610,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "sales-engine",
     title: "Sales engine",
     to: "/settings/integrations",
-    searchTerms: ["sales outreach crm engine url read token notion approvals"],
+    searchTerms: [
+      "sales outreach crm engine url read action token notion approvals agents project birdhouse",
+    ],
+    environmentOnly: true,
+  },
+  {
+    id: "sales-devices",
+    title: "Sales devices",
+    to: "/settings/integrations",
+    searchTerms: ["sales approve device enrol enroll key fingerprint revoke slack sign"],
     environmentOnly: true,
   },
   {

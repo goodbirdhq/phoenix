@@ -7,7 +7,7 @@ import {
 import type { EnvironmentId, SalesLookItem, SalesSnapshot } from "@t3tools/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import * as Option from "effect/Option";
-import { CircleCheckIcon, RefreshCwIcon, TriangleAlertIcon } from "lucide-react";
+import { ChevronRightIcon, CircleCheckIcon, RefreshCwIcon, TriangleAlertIcon } from "lucide-react";
 import { useState } from "react";
 
 import { isElectron } from "../../env";
@@ -27,6 +27,16 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import type { SalesArea } from "../../routes/sales";
+import { SalesConversations } from "./SalesConversations";
+import { SalesOutreach } from "./SalesOutreach";
+
+const isAreaPage = (key: string): key is SalesArea => key === "outreach" || key === "conversations";
+
+const AREA_LABELS: Record<SalesArea, string> = {
+  outreach: "Outreach",
+  conversations: "Conversations",
+};
 
 const NOT_CONFIGURED: SalesStatusNotice = {
   title: "Sales is not set up",
@@ -36,8 +46,20 @@ const NOT_CONFIGURED: SalesStatusNotice = {
 };
 
 export function SalesPage() {
-  const { environment: requested } = useSearch({ from: "/sales" });
-  const { isReady, target } = useSalesTarget(requested);
+  const { environment: requested, area, item } = useSearch({ from: "/sales" });
+  const { isReady, target, canAct } = useSalesTarget(requested);
+  const navigate = useNavigate();
+  const select = (next: string) =>
+    void navigate({
+      to: "/sales",
+      search: {
+        ...(requested ? { environment: requested } : {}),
+        ...(area ? { area } : {}),
+        item: next,
+      },
+      replace: true,
+    });
+  const baseUrl = target?.serverConfig?.settings.salesEngine.baseUrl ?? "";
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
@@ -46,22 +68,44 @@ export function SalesPage() {
           <WorkspaceBreadcrumb ariaLabel="Sales breadcrumb">
             <WorkspaceBreadcrumbItem current>Sales</WorkspaceBreadcrumbItem>
             <WorkspaceBreadcrumbSeparator className="hidden md:flex" />
-            <WorkspaceBreadcrumbItem className="hidden md:flex">Home</WorkspaceBreadcrumbItem>
+            <WorkspaceBreadcrumbItem className="hidden md:flex">
+              {area ? AREA_LABELS[area] : "Home"}
+            </WorkspaceBreadcrumbItem>
           </WorkspaceBreadcrumb>
         </WorkspacePageHeader>
-        <ScrollArea className="min-h-0 flex-1">
-          <WorkspacePageContainer>
-            {target ? (
-              <SalesHomeView key={target.environmentId} environmentId={target.environmentId} />
-            ) : isReady ? (
-              <SalesNotice notice={NOT_CONFIGURED} />
-            ) : (
-              <SalesNotice
-                notice={{ title: "Loading environments…", description: "", action: null }}
-              />
-            )}
-          </WorkspacePageContainer>
-        </ScrollArea>
+        {target && area === "outreach" ? (
+          <SalesOutreach
+            key={target.environmentId}
+            environmentId={target.environmentId}
+            baseUrl={baseUrl}
+            canAct={canAct}
+            selected={item}
+            onSelect={select}
+          />
+        ) : target && area === "conversations" ? (
+          <SalesConversations
+            key={target.environmentId}
+            environmentId={target.environmentId}
+            baseUrl={baseUrl}
+            canAct={canAct}
+            selected={item}
+            onSelect={select}
+          />
+        ) : (
+          <ScrollArea className="min-h-0 flex-1">
+            <WorkspacePageContainer>
+              {target ? (
+                <SalesHomeView key={target.environmentId} environmentId={target.environmentId} />
+              ) : isReady ? (
+                <SalesNotice notice={NOT_CONFIGURED} />
+              ) : (
+                <SalesNotice
+                  notice={{ title: "Loading environments…", description: "", action: null }}
+                />
+              )}
+            </WorkspacePageContainer>
+          </ScrollArea>
+        )}
       </div>
     </SidebarInset>
   );
@@ -139,6 +183,7 @@ function SalesHomeContent({
   readonly onRefresh: () => void;
 }) {
   const navigate = useNavigate();
+  const { environment } = useSearch({ from: "/sales" });
   const readAt = formatTime(snapshot.summaryReadAt);
   const summary = snapshot.summary;
   return (
@@ -183,7 +228,26 @@ function SalesHomeContent({
         {home.areas.map((area) => (
           <li key={area.key} className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
             <div className="min-w-40 flex-1">
-              <p className="text-sm font-medium">{area.label}</p>
+              {isAreaPage(area.key) ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
+                  onClick={() =>
+                    void navigate({
+                      to: "/sales",
+                      search: {
+                        ...(environment ? { environment } : {}),
+                        area: area.key as SalesArea,
+                      },
+                    })
+                  }
+                >
+                  {area.label}
+                  <ChevronRightIcon aria-hidden className="size-3.5" />
+                </button>
+              ) : (
+                <p className="text-sm font-medium">{area.label}</p>
+              )}
               <p className="text-xs text-muted-foreground">{area.status}</p>
             </div>
             {area.figures.length > 0 ? (

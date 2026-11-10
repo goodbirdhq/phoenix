@@ -9,6 +9,7 @@ import {
   deviceIdFor,
   displayedDraft,
   exportPublicKey,
+  listedVersionMatches,
   generateDeviceKey,
   shortFingerprint,
   signApproval,
@@ -96,6 +97,26 @@ describe("content hash", () => {
   it("refuses a hash it does not know how to recompute", async () => {
     const other = detail({ hashAlgorithm: "sha512 of something else" });
     expect(await verifyDisplayedVersion(other)).toEqual({ ok: false, reason: "algorithm" });
+  });
+});
+
+describe("batch approval", () => {
+  it("signs a listed row only when the card is still the version the list showed", () => {
+    const shown = detail();
+    const listed = {
+      ...shown,
+      bodyPreview: "Hey Ana, Thanks for the note — two quick ideas. Gabe",
+    };
+    expect(listedVersionMatches(listed, shown)).toBe(true);
+    // A cut preview matches the start of the body.
+    expect(listedVersionMatches({ ...listed, bodyPreview: "Hey Ana, Thanks for..." }, shown)).toBe(
+      true,
+    );
+    // The card moved on since the list was read.
+    expect(listedVersionMatches({ ...listed, contentHash: "0".repeat(64) }, shown)).toBe(false);
+    // The list showed other words than the hash covers.
+    expect(listedVersionMatches({ ...listed, bodyPreview: "Wire the money." }, shown)).toBe(false);
+    expect(listedVersionMatches({ ...listed, subject: "Another subject" }, shown)).toBe(false);
   });
 });
 
