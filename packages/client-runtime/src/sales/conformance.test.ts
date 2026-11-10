@@ -6,7 +6,7 @@ import {
   computeContentHash,
   deviceFingerprint,
   shortFingerprint,
-} from "./approval.ts";
+} from "./signing.ts";
 // The engine's conformance vectors, copied verbatim from goodbirdhq/birdhouse
 // `engine/docs/sales-api-vectors.json` at d3d6c38fa256bb2c672055191252d54c842947bb. Copy the file
 // again when the engine changes it; never edit the copy.

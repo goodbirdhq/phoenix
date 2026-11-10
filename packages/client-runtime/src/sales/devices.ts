@@ -7,7 +7,7 @@ import {
   exportPublicKey,
   generateDeviceKey,
   shortFingerprint,
-} from "./approval.ts";
+} from "./signing.ts";
 
 /**
  * This client's device key for one engine. The private key is a non-extractable CryptoKey: a

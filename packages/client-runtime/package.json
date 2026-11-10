@@ -111,10 +111,6 @@
       "types": "./src/schedules/index.ts",
       "default": "./src/schedules/index.ts"
     },
-    "./sales/approval": {
-      "types": "./src/sales/approval.ts",
-      "default": "./src/sales/approval.ts"
-    },
     "./sales/approve": {
       "types": "./src/sales/approve.ts",
       "default": "./src/sales/approve.ts"
@@ -142,6 +138,10 @@
     "./sales/outreach": {
       "types": "./src/sales/outreach.ts",
       "default": "./src/sales/outreach.ts"
+    },
+    "./sales/signing": {
+      "types": "./src/sales/signing.ts",
+      "default": "./src/sales/signing.ts"
     },
     "./state/auth": {
       "types": "./src/state/auth.ts",

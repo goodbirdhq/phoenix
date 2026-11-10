@@ -8,7 +8,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { AtomCommandResult } from "../state/runtime.ts";
-import type { VerifiedVersion } from "./approval.ts";
+import type { VerifiedVersion } from "./signing.ts";
 import { approveVersions, reviewTickedDraft } from "./approve.ts";
 import { ENGINE_HASH, detail } from "./fixtures/queueItemDetail.ts";
 

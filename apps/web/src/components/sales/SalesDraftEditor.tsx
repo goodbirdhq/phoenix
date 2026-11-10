@@ -1,4 +1,4 @@
-import { displayedDraft } from "@t3tools/client-runtime/sales/approval";
+import { displayedDraft } from "@t3tools/client-runtime/sales/signing";
 import { cardActions } from "@t3tools/client-runtime/sales/outreach";
 import {
   type DraftCard,

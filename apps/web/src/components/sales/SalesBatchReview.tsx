@@ -1,4 +1,4 @@
-import { displayedDraft } from "@t3tools/client-runtime/sales/approval";
+import { displayedDraft } from "@t3tools/client-runtime/sales/signing";
 import {
   type ApproveOutcome,
   type ReviewedDraft,

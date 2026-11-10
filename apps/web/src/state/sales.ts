@@ -4,7 +4,7 @@ import {
   type SalesDeviceKey,
   type SalesDeviceKeyStore,
 } from "@t3tools/client-runtime/sales/devices";
-import { signApproval, type VerifiedVersion } from "@t3tools/client-runtime/sales/approval";
+import { signApproval, type VerifiedVersion } from "@t3tools/client-runtime/sales/signing";
 import { approveVersions } from "@t3tools/client-runtime/sales/approve";
 import {
   salesDeviceBlockedReason,

@@ -1,4 +1,4 @@
-import { displayedDraft } from "@t3tools/client-runtime/sales/approval";
+import { displayedDraft } from "@t3tools/client-runtime/sales/signing";
 import type { DraftNotice } from "@t3tools/client-runtime/sales/draft-card";
 import { kindLabel, stateLabel } from "@t3tools/client-runtime/sales/outreach";
 import type { EnvironmentId, SalesDispatch, SalesQueueItemDetail } from "@t3tools/contracts";

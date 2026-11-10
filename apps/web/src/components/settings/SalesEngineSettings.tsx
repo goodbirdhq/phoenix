@@ -1,5 +1,5 @@
 import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
-import { shortFingerprint } from "@t3tools/client-runtime/sales/approval";
+import { shortFingerprint } from "@t3tools/client-runtime/sales/signing";
 import { createDeviceKey, thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
 import type {
   EnvironmentId,

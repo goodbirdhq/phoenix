@@ -1,6 +1,6 @@
 import type { SalesQueueItemDetail } from "@t3tools/contracts";
 
-import { SALES_HASH_ALGORITHM } from "../approval.ts";
+import { SALES_HASH_ALGORITHM } from "../signing.ts";
 import vectors from "./sales-api-vectors.json" with { type: "json" };
 
 // A threaded chase from the engine's conformance vectors (see conformance.test.ts).

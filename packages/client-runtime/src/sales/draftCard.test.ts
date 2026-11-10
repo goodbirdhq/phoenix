@@ -10,7 +10,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { AtomCommandResult } from "../state/runtime.ts";
-import type { VerifiedVersion } from "./approval.ts";
+import type { VerifiedVersion } from "./signing.ts";
 import type { ApproveOutcome } from "./approve.ts";
 import type { SalesDeviceKey } from "./devices.ts";
 import { createDraftCard, type DraftCardCommands, type DraftCardDevice } from "./draftCard.ts";

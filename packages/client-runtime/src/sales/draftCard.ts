@@ -8,7 +8,7 @@ import type {
 } from "@t3tools/contracts";
 
 import type { AtomCommandResult } from "../state/runtime.ts";
-import { displayedDraft, type VerifiedVersion, verifyDisplayedVersion } from "./approval.ts";
+import { displayedDraft, type VerifiedVersion, verifyDisplayedVersion } from "./signing.ts";
 import type { ApproveOutcome } from "./approve.ts";
 import { type SalesDeviceKey, type ThisDeviceState, thisDeviceDescription } from "./devices.ts";
 import { readSalesFailure } from "./failure.ts";

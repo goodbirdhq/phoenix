@@ -7,7 +7,7 @@ import {
 } from "@t3tools/contracts";
 
 import type { AtomCommandResult } from "../state/runtime.ts";
-import { type VerifiedVersion, verifyReviewedVersion } from "./approval.ts";
+import { type VerifiedVersion, verifyReviewedVersion } from "./signing.ts";
 import { approveFailureText, approveRequestFailure, readSalesFailure } from "./failure.ts";
 
 /** What happened to one approval, for the person who pressed. */

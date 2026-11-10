@@ -11,7 +11,7 @@ import {
   signApproval,
   verifyDisplayedVersion,
   verifyReviewedVersion,
-} from "./approval.ts";
+} from "./signing.ts";
 import { createDeviceKey, thisDeviceState } from "./devices.ts";
 import { ENGINE_HASH, detail, hashInput } from "./fixtures/queueItemDetail.ts";
 
