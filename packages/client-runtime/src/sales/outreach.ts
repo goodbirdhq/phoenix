@@ -30,6 +30,38 @@ export function groupQueue(items: ReadonlyArray<SalesQueueItem>): ReadonlyArray<
 export const queueOrder = (groups: ReadonlyArray<SalesQueueGroup>) =>
   groups.flatMap((group) => group.items);
 
+/** What each card state counts as in the list header, in the order the header lists them. */
+const SUMMARY_WORDS = ["to review", "refused", "held", "scheduled", "approved"];
+
+const summaryWord = (item: Pick<SalesQueueItem, "state" | "sendAt">) => {
+  switch (item.state) {
+    case "awaiting":
+      return "to review";
+    case "approved":
+      return item.sendAt === null ? "approved" : "scheduled";
+    default:
+      return stateLabel(item.state).toLowerCase();
+  }
+};
+
+/** The list header: what the open cards wait on, such as "2 to review · 8 scheduled". */
+export function queueSummary(items: ReadonlyArray<Pick<SalesQueueItem, "state" | "sendAt">>) {
+  if (items.length === 0) return "Nothing waits";
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const word = summaryWord(item);
+    counts.set(word, (counts.get(word) ?? 0) + 1);
+  }
+  const rank = (word: string) => {
+    const index = SUMMARY_WORDS.indexOf(word);
+    return index === -1 ? SUMMARY_WORDS.length : index;
+  };
+  return [...counts]
+    .sort(([left], [right]) => rank(left) - rank(right))
+    .map(([word, count]) => `${count} ${word}`)
+    .join(" · ");
+}
+
 /**
  * The ticked rows a batch may take to its review step: still waiting, and still listed with the
  * hash captured when the person ticked them (`ticked` maps activity id to that hash). A row the
@@ -147,14 +179,14 @@ export function sortConversations(
 }
 
 /**
- * The threads dispatched from one card or conversation, read from an environment's thread titles.
- * `prefix` is that source's `salesDispatchThreadPrefix`.
+ * The threads dispatched from some cards or conversations, read from an environment's thread
+ * titles. `prefixes` are those sources' `salesDispatchThreadPrefix`es.
  */
 export function dispatchedThreads(
   titles: ReadonlyMap<ThreadId, string>,
-  prefix: string,
+  prefixes: ReadonlyArray<string>,
 ): ReadonlyArray<SalesDispatch> {
   return [...titles]
-    .filter(([threadId]) => threadId.startsWith(prefix))
+    .filter(([threadId]) => prefixes.some((prefix) => threadId.startsWith(prefix)))
     .map(([threadId, title]) => ({ threadId, title }));
 }

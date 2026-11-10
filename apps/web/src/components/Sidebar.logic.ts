@@ -1,7 +1,9 @@
 import {
   sortThreadsByAttention,
   hasUnreadThreadCompletion,
+  resolveThreadStatus,
   type ThreadAttentionInput,
+  type ThreadStatus,
 } from "@t3tools/client-runtime/state/thread-attention";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
@@ -836,14 +838,7 @@ export function isContextMenuPointerDown(input: {
 // whether it finished, asked a question, or proposed a plan.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
-export type SidebarThreadStatus =
-  | "approval"
-  | "input"
-  | "awaiting-parent"
-  | "working"
-  | "monitoring"
-  | "failed"
-  | "ready";
+export type SidebarThreadStatus = ThreadStatus;
 
 export function shouldRecedeSidebarThread(input: {
   status: SidebarThreadStatus;
@@ -860,47 +855,8 @@ export function shouldRecedeSidebarThread(input: {
   return false;
 }
 
-type SidebarThreadStatusInput = Pick<
-  SidebarThreadSummary,
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "session"
-  | "backgroundLiveness"
-  | "awaitingParentReplySince"
->;
-
-export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
-  if (thread.hasPendingApprovals) {
-    return "approval";
-  }
-  if (thread.hasPendingUserInput) {
-    return "input";
-  }
-  if (thread.session?.status === "running" || thread.session?.status === "starting") {
-    return "working";
-  }
-  // A failed session outranks lingering background liveness: the user must
-  // see the failure, not a stale Working (review finding).
-  if (thread.session?.status === "error") {
-    return "failed";
-  }
-  // A spawned thread that declared itself blocked on its parent's answer.
-  // Ranked under the live states above (a running turn is still the truth of
-  // "what is happening now") but above background liveness: waiting is the
-  // actionable fact once the turn has ended.
-  if ((thread.awaitingParentReplySince ?? null) !== null && thread.session?.status !== "stopped") {
-    return "awaiting-parent";
-  }
-  // Background work outlives the turn: fleets read as working; monitoring
-  // only when watch loops are the sole live work.
-  if (thread.backgroundLiveness === "working") {
-    return "working";
-  }
-  if (thread.backgroundLiveness === "monitoring") {
-    return "monitoring";
-  }
-  return "ready";
-}
+// The precedence is shared with every client (`resolveThreadStatus`).
+export const resolveSidebarThreadStatus = resolveThreadStatus;
 
 /** Working beta: threads busy with work that does not need the user fold into
     the Working shelf. Approvals, questions, plan prompts, and failures stay

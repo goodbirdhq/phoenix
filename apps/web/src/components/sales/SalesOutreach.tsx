@@ -3,16 +3,15 @@ import {
   groupQueue,
   kindLabel,
   queueOrder,
+  queueSummary,
   stateLabel,
   tickedForReview,
 } from "@t3tools/client-runtime/sales/outreach";
 import type { EnvironmentId, SalesQueueItem } from "@t3tools/contracts";
-import { Link } from "@tanstack/react-router";
 import * as Option from "effect/Option";
-import { ExternalLinkIcon } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useDispatchedThreads, useSalesDevice, useSalesState } from "../../state/sales";
+import { useSalesDevice, useSalesState } from "../../state/sales";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -25,8 +24,8 @@ import { setSalesPaletteCommands } from "./salesPaletteCommands";
 import { useSalesListKeys } from "./useSalesListKeys";
 
 /**
- * Drafts waiting on a person: the list grouped by campaign, the selected draft editable in
- * place, and what the engine knows about how it came about.
+ * Drafts waiting on a person: the list grouped by campaign, and the selected draft read as the
+ * email it will be, with what the engine knows about who it is to.
  */
 export function SalesOutreach(props: {
   readonly environmentId: EnvironmentId;
@@ -66,7 +65,7 @@ export function SalesOutreach(props: {
     next: () => moveRef.current(1),
     previous: () => moveRef.current(-1),
     approve: () => panel.current?.approve(),
-    edit: () => panel.current?.focusBody(),
+    edit: () => panel.current?.edit(),
   });
 
   // Registered once; each command reaches the current list and draft through refs.
@@ -84,7 +83,7 @@ export function SalesOutreach(props: {
         title: "Edit the selected draft",
         keywords: ["sales", "edit", "draft", "outreach"],
         shortcut: "E",
-        run: () => panel.current?.focusBody(),
+        run: () => panel.current?.edit(),
       },
       {
         id: "sales:next",
@@ -148,14 +147,14 @@ export function SalesOutreach(props: {
   }
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(15rem,20rem)_minmax(0,1fr)] xl:grid-cols-[minmax(15rem,20rem)_minmax(0,1fr)_minmax(15rem,19rem)]">
+    <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(15rem,20rem)_minmax(0,1fr)]">
       <aside
         aria-label="Drafts waiting"
         className="flex min-h-0 flex-col border-b md:border-r md:border-b-0"
       >
         <div className="flex items-center gap-2 border-b px-3 py-2">
           <span className="flex-1 text-xs text-muted-foreground">
-            {order.length === 0 ? "Nothing waits" : `${order.length} open`}
+            {queueSummary(order)}
             {snapshot?.status !== "ready" && snapshot?.message ? " · stale" : ""}
           </span>
           {canAct && approvable.length > 0 ? (
@@ -236,12 +235,11 @@ export function SalesOutreach(props: {
           canAct={canAct}
           device={device}
           allowResearch
+          showAbout
         />
       ) : (
         <div className="hidden md:block" />
       )}
-
-      {current ? <SalesContextPanel item={current} environmentId={environmentId} /> : null}
     </div>
   );
 }
@@ -333,116 +331,5 @@ function BatchOutcomes(props: {
           </p>
         ))}
     </div>
-  );
-}
-
-function ContextSection({
-  title,
-  children,
-}: {
-  readonly title: string;
-  readonly children: ReactNode;
-}) {
-  return (
-    <section className="grid gap-1">
-      <h3 className="text-xs text-muted-foreground">{title}</h3>
-      <div className="grid gap-1 text-sm">{children}</div>
-    </section>
-  );
-}
-
-function ExternalLink({ href, children }: { readonly href: string; readonly children: ReactNode }) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="inline-flex items-center gap-1 underline"
-    >
-      {children}
-      <ExternalLinkIcon aria-hidden className="size-3" />
-    </a>
-  );
-}
-
-const safeHttpUrl = (value: string | null) =>
-  value !== null && value.startsWith("https://") && URL.canParse(value) ? value : null;
-
-/**
- * Who the draft is to and how it came about, from what the engine carries. The engine has no
- * research, sources or job title for a draft, so those say where to look instead.
- */
-function SalesContextPanel(props: {
-  readonly item: SalesQueueItem;
-  readonly environmentId: EnvironmentId;
-}) {
-  const { item } = props;
-  const threads = useDispatchedThreads(props.environmentId, { activityId: item.activityId });
-  const contactPage = safeHttpUrl(item.contact.notionUrl);
-  const rowPage = safeHttpUrl(item.notionUrl);
-  const linkedin = safeHttpUrl(item.contact.linkedinUrl);
-  return (
-    <aside
-      aria-label="About this draft"
-      className="hidden min-h-0 flex-col gap-5 overflow-y-auto border-l p-4 xl:flex"
-    >
-      <ContextSection title="Person">
-        <p>{item.contact.name ?? "No name on the card"}</p>
-        {item.contact.accountName ? (
-          <p className="text-muted-foreground">{item.contact.accountName}</p>
-        ) : null}
-        {item.contact.email ? (
-          <p className="text-xs text-muted-foreground">{item.contact.email}</p>
-        ) : null}
-        {item.contact.effectiveTimeZone ? (
-          <p className="text-xs text-muted-foreground">
-            Sends timed in {item.contact.effectiveTimeZone}
-          </p>
-        ) : null}
-        {linkedin ? (
-          <ExternalLink href={linkedin}>LinkedIn</ExternalLink>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            No LinkedIn link: the engine carries none for drafts.
-          </p>
-        )}
-      </ContextSection>
-      <ContextSection title="Why this person">
-        <p className="text-xs text-muted-foreground">
-          The engine does not carry the research or its sources. They are on the Contact's page in
-          Notion.
-        </p>
-        {contactPage ? <ExternalLink href={contactPage}>Contact in Notion</ExternalLink> : null}
-      </ContextSection>
-      <ContextSection title="How it came about">
-        {item.campaign ? <p>Campaign: {item.campaign}</p> : null}
-        {item.stepLabel ? <p>{item.stepLabel} to them</p> : null}
-        {rowPage ? <ExternalLink href={rowPage}>Activity row in Notion</ExternalLink> : null}
-        {threads.length > 0 ? (
-          threads.map((thread) => (
-            <Link
-              key={thread.threadId}
-              to="/$environmentId/$threadId"
-              params={{ environmentId: props.environmentId, threadId: thread.threadId }}
-              className="underline"
-            >
-              {thread.title}
-            </Link>
-          ))
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            The run that drafted it is not known: the engine does not record it.
-          </p>
-        )}
-      </ContextSection>
-      <ContextSection title="Mailbox">
-        <p className="text-xs">
-          {item.mailbox.sticky && item.mailbox.address
-            ? `Leaves from ${item.mailbox.address}`
-            : "Any active mailbox (first touch)"}
-          {item.mailbox.threadState ? ` · thread ${item.mailbox.threadState}` : ""}
-        </p>
-      </ContextSection>
-    </aside>
   );
 }

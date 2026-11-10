@@ -2,17 +2,20 @@ import {
   createDraftCard,
   type DraftCard,
   type DraftCardCommands,
+  isDirty,
 } from "@t3tools/client-runtime/sales/draft-card";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { requestConfirmDialog } from "../../confirmDialog";
+import { useEnvironmentConnected } from "../../state/environments";
 import { salesEnvironment, useApproveVersions } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 /**
- * One draft card (`createDraftCard`) bound to an environment, read on mount and again when the
- * list reports a new hash for it. Pages key the panel by card, so a new card is a new mount.
+ * One draft card (`createDraftCard`) bound to an environment, read once connected, again on a
+ * reconnect unless mid-edit, and when the list reports a new hash for it. Pages key the panel by
+ * card, so a new card is a new mount.
  */
 export function useDraftCard(props: {
   readonly environmentId: EnvironmentId;
@@ -45,9 +48,10 @@ export function useDraftCard(props: {
   useEffect(() => card.setCommands(commands));
   const state = useSyncExternalStore(card.subscribe, card.getState);
 
+  const connected = useEnvironmentConnected(environmentId);
   useEffect(() => {
-    void card.load();
-  }, [card]);
+    if (connected && !isDirty(card.getState())) void card.load();
+  }, [card, connected]);
   useEffect(() => {
     card.setListedHash(props.listedHash);
   }, [card, props.listedHash]);

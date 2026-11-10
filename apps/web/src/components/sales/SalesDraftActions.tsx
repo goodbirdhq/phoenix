@@ -1,7 +1,7 @@
 import {
   type DraftCard,
   type DraftCardState,
-  isDirty,
+  isEditing,
 } from "@t3tools/client-runtime/sales/draft-card";
 import { checkSigning, thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
 import { cardActions } from "@t3tools/client-runtime/sales/outreach";
@@ -26,7 +26,6 @@ export function SalesDraftActions(props: {
   readonly approveLabel: string | undefined;
   readonly discardLabel: string | undefined;
   readonly allowResearch: boolean;
-  readonly onEdit: () => void;
 }) {
   const { card, state, detail, device } = props;
   if (!props.canAct) {
@@ -47,7 +46,7 @@ export function SalesDraftActions(props: {
           {actions.approve ? (
             <Button
               size="sm"
-              disabled={busy || isDirty(state) || refusal !== null}
+              disabled={busy || isEditing(state) || refusal !== null}
               onClick={() => void card.approve(device)}
             >
               {state.busy === "approve" ? "Signing…" : (props.approveLabel ?? "Approve")}
@@ -63,8 +62,8 @@ export function SalesDraftActions(props: {
               Unapprove
             </Button>
           ) : null}
-          {actions.edit ? (
-            <Button size="sm" variant="outline" onClick={props.onEdit}>
+          {actions.edit && !isEditing(state) ? (
+            <Button size="sm" variant="outline" disabled={busy} onClick={card.startEdit}>
               Edit
             </Button>
           ) : null}

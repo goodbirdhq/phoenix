@@ -13,7 +13,7 @@ import type { AtomCommandResult } from "../state/runtime.ts";
 import type { VerifiedVersion } from "./signing.ts";
 import type { ApproveOutcome } from "./approve.ts";
 import type { SalesDeviceKey, SigningDevice } from "./devices.ts";
-import { createDraftCard, type DraftCardCommands } from "./draftCard.ts";
+import { createDraftCard, type DraftCardCommands, isEditing } from "./draftCard.ts";
 import { ENGINE_HASH, detail, hashInput } from "./fixtures/queueItemDetail.ts";
 
 // Approval never reads the private key here: signing is `approveVersions`' job.
@@ -111,12 +111,16 @@ describe("draft card approval", () => {
     });
   });
 
-  it("signs nothing while an edit is unsaved, or on a device that cannot sign", async () => {
+  it("signs nothing while an edit is open, or on a device that cannot sign", async () => {
     const { card, calls } = setup({});
     await card.load();
+    card.startEdit();
+    await card.approve(activeDevice);
+    expect(card.getState().notice?.title).toBe("Finish or cancel your edit before approving.");
+
     card.editBody("Hey Ana, rewritten.");
     await card.approve(activeDevice);
-    expect(card.getState().notice?.title).toBe("Save or cancel your edit before approving.");
+    expect(calls.signed).toEqual([]);
 
     card.cancelEdit();
     await card.approve({ ...activeDevice, blocked: "Approve from another computer." });
@@ -216,6 +220,54 @@ describe("draft card edits", () => {
     card.cancelEdit();
     await Promise.resolve();
     expect(calls.reads).toBe(2);
+  });
+});
+
+describe("draft card read and edit", () => {
+  it("shows the email until an edit opens, and returns to it on cancel or save", async () => {
+    const { card } = setup({
+      commands: {
+        edit: async (input) =>
+          AsyncResult.success({
+            card: {
+              activityId: input.activityId,
+              contentHash: input.expectedHash,
+              state: "awaiting",
+              approved: false,
+              approvedBy: null,
+              sendAt: null,
+              goes: null,
+              refusal: null,
+              note: null,
+            },
+            approvalLapsed: false,
+          }),
+      },
+    });
+    await card.load();
+    expect(isEditing(card.getState())).toBe(false);
+
+    card.startEdit();
+    expect(isEditing(card.getState())).toBe(true);
+    card.cancelEdit();
+    expect(isEditing(card.getState())).toBe(false);
+
+    card.startEdit();
+    card.editBody("Shorter.");
+    await card.save();
+    expect(isEditing(card.getState())).toBe(false);
+  });
+
+  it("stays in the inputs while an unsaved edit is held, and opens none on a closed card", async () => {
+    const { card } = setup({ served: detail({ state: "sent" }) });
+    await card.load();
+    card.startEdit();
+    expect(card.getState().editing).toBe(false);
+
+    const open = setup({});
+    await open.card.load();
+    open.card.editBody("Unsaved.");
+    expect(isEditing(open.card.getState())).toBe(true);
   });
 });
 

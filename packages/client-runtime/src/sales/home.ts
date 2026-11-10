@@ -1,14 +1,7 @@
-import type { SalesSnapshot, SalesSummary } from "@t3tools/contracts";
+import type { SalesLookItem, SalesSnapshot, SalesSummary } from "@t3tools/contracts";
 
-/** The work areas of the Sales sidebar, in order. `page` is set where the area has a screen. */
-export const SALES_WORK_AREAS = [
-  { key: "sourcing", label: "Sourcing" },
-  { key: "outreach", label: "Outreach" },
-  { key: "autopilot", label: "Autopilot" },
-  { key: "todo", label: "To do" },
-  { key: "conversations", label: "Conversations" },
-] as const;
-export type SalesWorkAreaKey = (typeof SALES_WORK_AREAS)[number]["key"];
+/** The work areas the engine's summary covers, in the order Home lists them. */
+export type SalesWorkAreaKey = "outreach" | "autopilot" | "todo" | "conversations";
 
 export interface SalesHomeFigure {
   readonly label: string;
@@ -18,8 +11,8 @@ export interface SalesHomeFigure {
 export interface SalesHomeArea {
   readonly key: SalesWorkAreaKey;
   readonly label: string;
-  /** Items in this area that wait on a person. Null when the engine says nothing about it. */
-  readonly count: number | null;
+  /** Items in this area that wait on a person. */
+  readonly count: number;
   readonly status: string;
   readonly figures: ReadonlyArray<SalesHomeFigure>;
 }
@@ -126,14 +119,6 @@ function conversations(summary: SalesSummary): SalesHomeArea {
   };
 }
 
-const SOURCING: SalesHomeArea = {
-  key: "sourcing",
-  label: "Sourcing",
-  count: null,
-  status: "Not in the engine's summary yet",
-  figures: [],
-};
-
 function dispatcherProblem(summary: SalesSummary): string | null {
   const dispatcher = summary.dispatcher;
   if (dispatcher.paused === true) return "Dispatcher paused";
@@ -173,14 +158,8 @@ function health(summary: SalesSummary): SalesHome["health"] {
 
 /** What the Sales Home shows for one engine summary. */
 export function buildSalesHome(summary: SalesSummary): SalesHome {
-  const areas = [
-    SOURCING,
-    outreach(summary),
-    autopilot(summary),
-    todo(summary),
-    conversations(summary),
-  ];
-  const needsYou = areas.reduce((total, area) => total + (area.count ?? 0), 0);
+  const areas = [outreach(summary), autopilot(summary), todo(summary), conversations(summary)];
+  const needsYou = areas.reduce((total, area) => total + area.count, 0);
   return {
     needsYou,
     headline:
@@ -222,4 +201,66 @@ export function salesStatusNotice(snapshot: SalesSnapshot): SalesStatusNotice | 
     case "failed":
       return { title: "Could not read the sales engine", description, action: "retry" };
   }
+}
+
+const NOTION_PAGE_ID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/iu;
+
+const LOOK_WHAT: Record<string, string> = {
+  inbound: "Inbound email",
+  send: "A send",
+  skip: "A skipped send",
+  refused: "A refused draft",
+};
+
+export interface SalesLookItemView {
+  /** Who and what, never a bare id. */
+  readonly title: string;
+  readonly why: string | null;
+  /** The Notion page `who` names, when the engine sent its id instead of a name. */
+  readonly notionUrl: string | null;
+}
+
+/**
+ * One "Needs a look" line. The engine may send a CRM page id as `who` where it has no name; that
+ * reads as nothing to a person, so the line falls back to the subject or reason and links the page.
+ */
+export function lookItemView(item: SalesLookItem): SalesLookItemView {
+  const pageId = item.who !== null && NOTION_PAGE_ID.test(item.who) ? item.who : null;
+  const who = pageId === null ? item.who : null;
+  const title =
+    [who, item.subject].filter(Boolean).join(" · ") ||
+    item.why ||
+    (LOOK_WHAT[item.what] ?? "Something");
+  return {
+    title,
+    why: title === item.why ? null : item.why,
+    notionUrl: pageId === null ? null : `https://www.notion.so/${pageId.replaceAll("-", "")}`,
+  };
+}
+
+/**
+ * The engine's day, for the Home's "Updated" line, only when it is not the viewer's own date at
+ * the moment the summary was made: "today" then means the engine's day, not the viewer's. Null
+ * otherwise.
+ */
+export function engineDayNote(summary: SalesSummary, viewerTimeZone: string): string | null {
+  const { day, timezone } = summary;
+  const dayMs = day === null ? Number.NaN : Date.parse(`${day}T00:00:00Z`);
+  const generatedAt = Date.parse(summary.generatedAt);
+  if (Number.isNaN(dayMs) || Number.isNaN(generatedAt)) return null;
+  // en-CA writes a date as YYYY-MM-DD, the engine's form.
+  const viewerDay = new Intl.DateTimeFormat("en-CA", { timeZone: viewerTimeZone }).format(
+    generatedAt,
+  );
+  if (viewerDay === day) return null;
+  const date = new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(dayMs);
+  const place = timezone === null ? null : (timezone.split("/").at(-1) ?? timezone);
+  return place === null
+    ? `Engine day ${date}`
+    : `Engine day ${date} (${place.replaceAll("_", " ")})`;
 }
