@@ -119,6 +119,10 @@
       "types": "./src/sales/devices.ts",
       "default": "./src/sales/devices.ts"
     },
+    "./sales/failure": {
+      "types": "./src/sales/failure.ts",
+      "default": "./src/sales/failure.ts"
+    },
     "./sales/home": {
       "types": "./src/sales/home.ts",
       "default": "./src/sales/home.ts"

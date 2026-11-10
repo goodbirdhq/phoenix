@@ -1,9 +1,13 @@
 import { signApproval } from "@t3tools/client-runtime/sales/approval";
 import type { SalesDeviceKey } from "@t3tools/client-runtime/sales/devices";
-import { approveFailureText, approveRequestFailure } from "@t3tools/client-runtime/sales/outreach";
+import {
+  approveFailureText,
+  approveRequestFailure,
+  readSalesFailure,
+} from "@t3tools/client-runtime/sales/failure";
 import { SALES_APPROVE_BATCH_LIMIT, type EnvironmentId } from "@t3tools/contracts";
 
-import { readSalesFailure, salesEnvironment, useSalesDeviceGuard } from "../../state/sales";
+import { salesEnvironment, useSalesDeviceGuard } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 /** What happened to one approval, for the person who pressed. */
@@ -62,11 +66,7 @@ export function useApproveVersions(environmentId: EnvironmentId) {
       );
       const result = await approve({ environmentId, input: { items } });
       if (result._tag !== "Success") {
-        const failure = readSalesFailure(result);
-        const outcome = approveRequestFailure(
-          failure?.reason ?? null,
-          failure?.description ?? null,
-        );
+        const outcome = approveRequestFailure(readSalesFailure(result)!);
         unknown ||= outcome.unknown;
         for (const version of chunk) {
           outcomes.push({

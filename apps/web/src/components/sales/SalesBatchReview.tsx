@@ -1,10 +1,11 @@
+import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
 import { displayedDraft, verifyReviewedVersion } from "@t3tools/client-runtime/sales/approval";
 import { thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
 import { kindLabel } from "@t3tools/client-runtime/sales/outreach";
 import type { EnvironmentId, SalesQueueItem, SalesQueueItemDetail } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
 
-import { readSalesFailure, salesEnvironment } from "../../state/sales";
+import { salesEnvironment } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";

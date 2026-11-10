@@ -90,7 +90,7 @@ export function notionPageUrl(value: string | null): string | null {
   return url.protocol === "https:" && notion && !/\s/u.test(value) ? url.toString() : null;
 }
 
-const noTarget = (message: string) => salesActionError("no-target", { message });
+const noTarget = (message: string) => salesActionError("phoenix", "no-target", { message });
 
 const contactLine = (contact: SalesContactRef) => {
   const url = notionPageUrl(contact.notionUrl);
@@ -164,17 +164,19 @@ export function planDispatch(
       }
       // The redraft rewrites what the person saw; a card that moved on since is shown again.
       if (input.expectedHash.toLowerCase() !== target.contentHash.toLowerCase()) {
-        return salesActionError("stale_hash", { currentHash: target.contentHash });
+        return salesActionError("phoenix", "stale_hash", { currentHash: target.contentHash });
       }
       if (target.approved) {
-        return salesActionError("dispatch-failed", {
+        return salesActionError("phoenix", "dispatch-failed", {
           message: "Unapprove it first: a workflow never rewrites an approved draft.",
         });
       }
       const line = contactLine(contact);
       if (line === null) return noTarget("The engine has no Notion page for this contact.");
       if (input.note.trim().length === 0) {
-        return salesActionError("bad_request", { message: "Say what the new draft should do." });
+        return salesActionError("phoenix", "bad_request", {
+          message: "Say what the new draft should do.",
+        });
       }
       return {
         plan: { skill, targetLines: [line], note: input.note },
@@ -213,7 +215,8 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const crypto = yield* Crypto.Crypto;
 
-  const failed = (message: string) => () => salesActionError("dispatch-failed", { message });
+  const failed = (message: string) => () =>
+    salesActionError("phoenix", "dispatch-failed", { message });
   const randomUUID = crypto.randomUUIDv4.pipe(Effect.mapError(failed("Could not start a thread.")));
 
   /** The agents project and how a new thread there starts, by that project's own defaults. */
@@ -223,7 +226,7 @@ const make = Effect.gen(function* () {
     );
     const projectIdText = settings.salesEngine.agentsProjectId;
     if (projectIdText.length === 0) {
-      return yield* salesActionError("no-agents-project", {
+      return yield* salesActionError("phoenix", "no-agents-project", {
         message: "Choose the sales agents project in Settings › Integrations first.",
       });
     }
@@ -232,7 +235,7 @@ const make = Effect.gen(function* () {
       .getProjectShellById(projectId)
       .pipe(Effect.mapError(failed("Could not read the sales agents project.")));
     if (Option.isNone(project)) {
-      return yield* salesActionError("agents-project-missing", {
+      return yield* salesActionError("phoenix", "agents-project-missing", {
         message: "The sales agents project chosen in Settings no longer exists here.",
       });
     }
@@ -252,7 +255,7 @@ const make = Effect.gen(function* () {
         ? { instanceId: fallback.instanceId, model: fallbackModel }
         : null);
     if (modelSelection === null) {
-      return yield* salesActionError("dispatch-failed", {
+      return yield* salesActionError("phoenix", "dispatch-failed", {
         message: "No provider is available to run the workflow.",
       });
     }
@@ -320,7 +323,9 @@ const make = Effect.gen(function* () {
         createdAt,
       })
       .pipe(
-        Effect.mapError((error) => salesActionError("dispatch-failed", { message: error.message })),
+        Effect.mapError((error) =>
+          salesActionError("phoenix", "dispatch-failed", { message: error.message }),
+        ),
       );
     return { threadId, createdAt };
   });
@@ -343,7 +348,7 @@ const make = Effect.gen(function* () {
             })),
           );
     if ("state" in target && !OPEN_STATES.has(target.state)) {
-      return yield* salesActionError("not_open", {
+      return yield* salesActionError("phoenix", "not_open", {
         message: "This draft is no longer open.",
         state: target.state,
       });
@@ -365,7 +370,7 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.mapError((error) =>
         discardsFirst
-          ? salesActionError("dispatch-failed", {
+          ? salesActionError("phoenix", "dispatch-failed", {
               message: `The waiting answer was discarded, but the run that drafts a new one did not start (${error.message}). Choose Draft an answer in Conversations to start it again.`,
               state: "discarded",
             })

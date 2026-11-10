@@ -1,3 +1,4 @@
+import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
 import { displayedDraft, verifyDisplayedVersion } from "@t3tools/client-runtime/sales/approval";
 import { thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
 import {
@@ -16,7 +17,7 @@ import { Link } from "@tanstack/react-router";
 import { type Ref, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { requestConfirmDialog } from "../../confirmDialog";
-import { readSalesFailure, salesEnvironment, type useSalesDevice } from "../../state/sales";
+import { salesEnvironment, type useSalesDevice } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";

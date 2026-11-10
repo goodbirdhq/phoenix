@@ -1,3 +1,4 @@
+import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
 import { intentLabel, sortConversations } from "@t3tools/client-runtime/sales/outreach";
 import type {
   EnvironmentId,
@@ -11,12 +12,7 @@ import * as Option from "effect/Option";
 import { RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import {
-  readSalesFailure,
-  salesEnvironment,
-  useSalesDevice,
-  useSalesState,
-} from "../../state/sales";
+import { salesEnvironment, useSalesDevice, useSalesState } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";

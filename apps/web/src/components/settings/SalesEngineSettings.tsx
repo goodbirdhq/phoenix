@@ -1,3 +1,4 @@
+import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
 import { shortFingerprint } from "@t3tools/client-runtime/sales/approval";
 import { createDeviceKey, thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
 import type {
@@ -12,7 +13,6 @@ import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useProjects } from "../../state/entities";
 import type { EnvironmentPresentation } from "../../state/environments";
 import {
-  readSalesFailure,
   salesDeviceKeyStore,
   salesEnvironment,
   useSalesDevice,

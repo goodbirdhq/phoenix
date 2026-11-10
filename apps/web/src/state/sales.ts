@@ -4,24 +4,13 @@ import {
   type SalesDeviceKey,
   type SalesDeviceKeyStore,
 } from "@t3tools/client-runtime/sales/devices";
-import { salesFailureText, type SalesFailureText } from "@t3tools/client-runtime/sales/outreach";
-import {
-  type AtomCommandResult,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
 import {
   canActOnSales,
   createSalesEnvironmentAtoms,
   isSalesConfigured,
 } from "@t3tools/client-runtime/state/sales";
-import {
-  type EnvironmentId,
-  SalesActionError,
-  type SalesActionFailureReason,
-  type SalesDevice,
-  salesEngineKey,
-} from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
+import { type EnvironmentId, type SalesDevice, salesEngineKey } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -59,39 +48,6 @@ export function useSalesTarget(requested: string | undefined) {
 /** Subscribes the environment's Sales stream while mounted; the server polls only then. */
 export function useSalesState(environmentId: EnvironmentId) {
   return useAtomValue(salesEnvironment.stateValueAtom(environmentId));
-}
-
-const isSalesActionError = Schema.is(SalesActionError);
-
-export interface SalesFailure extends SalesFailureText {
-  /** The typed reason, or null when the request failed outside the engine's answers. */
-  readonly reason: SalesActionFailureReason | null;
-  /** The card's version now, when the engine said it moved on. */
-  readonly currentHash: string | null;
-  /** The card's state, when the failure names one (`discarded` after a failed reply redraft). */
-  readonly state: string | null;
-}
-
-/** A failed sales command as the person should read it. */
-export function readSalesFailure(result: AtomCommandResult<unknown, unknown>): SalesFailure | null {
-  if (result._tag === "Success") return null;
-  const error = squashAtomCommandFailure(result);
-  if (isSalesActionError(error)) {
-    return {
-      ...salesFailureText(error.reason, error.message),
-      reason: error.reason,
-      currentHash: error.currentHash,
-      state: error.state,
-    };
-  }
-  return {
-    title: "Something went wrong",
-    description: error instanceof Error ? error.message : "The request did not complete.",
-    reread: false,
-    reason: null,
-    currentHash: null,
-    state: null,
-  };
 }
 
 // --- Device keys ------------------------------------------------------------------------------

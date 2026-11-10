@@ -539,6 +539,8 @@ it.effect("maps every engine refusal to a typed reason", () => {
       [() => Response.json({ error: "budget", message: "Out." }, { status: 503 }), "budget", null],
       [() => Response.json({ error: "unauthorised" }, { status: 401 }), "unauthorised", null],
       [() => Response.json({ error: "a_reason_from_later" }, { status: 409 }), "other", null],
+      // Whatever its spelling, an engine code is the engine's and never one of Phoenix's reasons.
+      [() => Response.json({ error: "not-configured" }, { status: 409 }), "other", null],
       [() => new Response("Internal Server Error", { status: 500 }), "failed", null],
       [() => "network-error", "unreachable", null],
     ];
@@ -552,6 +554,11 @@ it.effect("maps every engine refusal to a typed reason", () => {
       assert.isTrue(isSalesActionError(error));
       if (isSalesActionError(error)) {
         assert.strictEqual(error.reason, reason);
+        // Only an answer Phoenix could not read is the transport's; every other came from the engine.
+        assert.strictEqual(
+          error.origin,
+          reason === "failed" || reason === "unreachable" ? "transport" : "engine",
+        );
         assert.strictEqual(error.currentHash, currentHash);
         assert.isAbove(error.message.length, 0);
         if (reason === "not_open") assert.strictEqual(error.state, "sent");
@@ -569,6 +576,7 @@ it.effect("refuses actions without an action token and sends nothing", () => {
     const error = failureOf(yield* sales.unapprove("act-1").pipe(Effect.exit));
     assert.isTrue(isSalesActionError(error));
     assert.strictEqual(isSalesActionError(error) ? error.reason : null, "not-configured");
+    assert.strictEqual(isSalesActionError(error) ? error.origin : null, "phoenix");
     assert.strictEqual(requests.length, 0);
   }).pipe(Effect.provide(layer));
 });

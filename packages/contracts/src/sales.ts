@@ -473,23 +473,12 @@ export const SalesDispatch = Schema.Struct({
 export type SalesDispatch = typeof SalesDispatch.Type;
 
 /**
- * Why a sales request failed, as clients show it. The engine's own reasons keep its spelling;
- * Phoenix's own are kebab-case:
- * - `not-configured`: no engine URL, or no token for this half of the API.
- * - `api-off` / `actions-off`: the engine has that half turned off.
- * - `unauthorised`, `unreachable`, `budget` (the engine ran out mid-call; read before retrying),
- *   `failed` (any other answer).
- * - `no-agents-project`, `agents-project-missing`, `no-target`, `dispatch-failed`: dispatch.
- * - `other`: an engine reason this build does not know; `message` is the engine's.
+ * The refusal codes the engine sends (`error` in its error body), spelled as it spells them. A
+ * code this build does not know reads as `other`, with the engine's message.
+ * `budget`: the engine ran out of requests mid-call; read before retrying.
  */
-export const SalesActionFailureReason = Schema.Literals([
-  "not-configured",
-  "api-off",
-  "actions-off",
-  "unauthorised",
-  "unreachable",
+export const SalesEngineFailureCode = Schema.Literals([
   "budget",
-  "failed",
   "bad_request",
   "bad_key",
   "device_exists",
@@ -507,15 +496,50 @@ export const SalesActionFailureReason = Schema.Literals([
   "body_too_long",
   "subject_required",
   "subject_not_editable",
+  "other",
+]);
+export type SalesEngineFailureCode = typeof SalesEngineFailureCode.Type;
+
+/**
+ * Why a sales request failed, as clients show it: one of the engine's codes, or one of these:
+ * - `not-configured`: no engine URL, or no token for this half of the API.
+ * - `api-off` / `actions-off`: the engine has that half turned off.
+ * - `unauthorised`: the engine refused the token.
+ * - `unreachable`: the request did not complete.
+ * - `failed`: an answer Phoenix could not read, or an engine URL it cannot use.
+ * - `no-agents-project`, `agents-project-missing`, `no-target`, `dispatch-failed`: dispatch.
+ *
+ * Phoenix itself also uses a few engine codes (`stale_hash`, `not_open`, `bad_request`) when it
+ * checks a card before dispatching; `origin` says who refused.
+ */
+export const SalesActionFailureReason = Schema.Literals([
+  "not-configured",
+  "api-off",
+  "actions-off",
+  "unauthorised",
+  "unreachable",
+  "failed",
   "no-agents-project",
   "agents-project-missing",
   "no-target",
   "dispatch-failed",
-  "other",
+  ...SalesEngineFailureCode.literals,
 ]);
 export type SalesActionFailureReason = typeof SalesActionFailureReason.Type;
 
+/**
+ * Who a sales failure came from, which says whether the request may still have landed:
+ * - `transport`: no engine answer Phoenix could read (unreachable, timed out, an HTTP error
+ *   without the engine's body, a body it could not decode). It may have landed.
+ * - `engine`: the engine answered and refused, with one of its codes or a 401.
+ * - `phoenix`: this server refused before asking the engine (settings, dispatch checks).
+ */
+export const SalesFailureOrigin = Schema.Literals(["transport", "engine", "phoenix"]);
+export type SalesFailureOrigin = typeof SalesFailureOrigin.Type;
+
 export class SalesActionError extends Schema.TaggedError<SalesActionError>()("SalesActionError", {
+  /** Servers before `origin` existed omit it; reading it as `transport` claims the least. */
+  origin: SalesFailureOrigin.pipe(Schema.withDecodingDefault(Effect.succeed("transport"))),
   reason: SalesActionFailureReason,
   message: Schema.String,
   /** Set when the card moved on (`stale_hash`, `changed_in_notion`, ...): its version now. */
