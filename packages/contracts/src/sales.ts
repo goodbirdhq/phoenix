@@ -371,6 +371,144 @@ export const SalesConversationDetail = Schema.Struct({
 });
 export type SalesConversationDetail = typeof SalesConversationDetail.Type;
 
+/** Their newest out-of-office, when it says they are back today or later (`outOfOffice`). */
+export const SalesOutOfOffice = Schema.Struct({
+  returnOn: NullableString,
+  /** The engine's words for the window, from their auto-reply. */
+  window: Text,
+  receivedAt: NullableString,
+});
+export type SalesOutOfOffice = typeof SalesOutOfOffice.Type;
+
+/** One send of today, done or to come, as `GET /autopilot/today` lists it. */
+export const SalesAutopilotItem = Schema.Struct({
+  activityId: Schema.String,
+  /** Open enum: `sent`, `sending`, `retrying`, `failed`, `scheduled`, `held`, `refused`. */
+  state: Schema.String,
+  /** When it went or was tried, its slot, or when it was held or refused. */
+  at: NullableString,
+  /** `route` (the engine approved it, no press), `press`, or null for a send with no card. */
+  approval: NullableString,
+  kind: NullableString,
+  step: NullableCount,
+  contact: SalesContactRef.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  campaign: NullableString,
+  subject: NullableString,
+  mailbox: NullableString,
+  /** Why it is held, refused or failed. */
+  reason: NullableString,
+  outOfOffice: nullable(SalesOutOfOffice),
+});
+export type SalesAutopilotItem = typeof SalesAutopilotItem.Type;
+
+/** `GET /autopilot/today`: what goes out today, or went, in time order. */
+export const SalesAutopilotToday = Schema.Struct({
+  generatedAt: Schema.String,
+  day: NullableString,
+  timezone: NullableString,
+  items: Schema.Array(SalesAutopilotItem).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type SalesAutopilotToday = typeof SalesAutopilotToday.Type;
+
+/** One open LinkedIn task (`GET /tasks`). */
+export const SalesTask = Schema.Struct({
+  id: Schema.String,
+  /** Open enum: `connect` or `dm`. */
+  action: Schema.String,
+  /** `posted`: its card is on Slack. `pending`: not on a card yet. */
+  status: Schema.String,
+  /** The engine's day it falls due, `YYYY-MM-DD`. */
+  dueOn: NullableString,
+  frontOfQueue: Bool,
+  contact: SalesContactRef.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /** The note the card suggests, once posted. */
+  suggestedText: NullableString,
+  /** Open enum: `unknown`, `pending`, `connected`. */
+  connectionState: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("unknown"))),
+});
+export type SalesTask = typeof SalesTask.Type;
+
+export const SalesTaskList = Schema.Struct({
+  generatedAt: Schema.String,
+  items: Schema.Array(SalesTask).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Today's connection-request budget. */
+  budget: group({
+    dailyLimit: NullableCount,
+    available: NullableCount,
+  }),
+});
+export type SalesTaskList = typeof SalesTaskList.Type;
+
+export const SalesCampaignStep = Schema.Struct({
+  step: Schema.Number,
+  sent: Count,
+  bounced: Count,
+  replied: Count,
+  positive: Count,
+});
+export type SalesCampaignStep = typeof SalesCampaignStep.Type;
+
+/** People and steps of one campaign, from what the engine sent (`GET /campaigns`). */
+export const SalesCampaign = Schema.Struct({
+  /** Null collects contacts whose emails carry no campaign. */
+  campaign: NullableString,
+  contacts: Count,
+  replied: Count,
+  positive: Count,
+  declined: Count,
+  bounced: Count,
+  steps: Schema.Array(SalesCampaignStep).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type SalesCampaign = typeof SalesCampaign.Type;
+
+export const SalesCampaignList = Schema.Struct({
+  generatedAt: Schema.String,
+  items: Schema.Array(SalesCampaign).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type SalesCampaignList = typeof SalesCampaignList.Type;
+
+/** One pool mailbox (`GET /mailboxes`). */
+export const SalesMailbox = Schema.Struct({
+  address: Schema.String,
+  /** Open enum: `warming`, `active`, `benched`, `retired`. Only `active` sends. */
+  status: Schema.String,
+  /** Why, for a person. Never parsed. */
+  statusReason: NullableString,
+  dailyCap: Count,
+  coldSentToday: Count,
+  repliesSentToday: Count,
+  bouncesToday: Count,
+  hardBouncesInWindow: Count,
+  /** No cold email before this: its rest after the last send. */
+  restUntil: NullableString,
+  /** The earliest approved slot to come for a send that must leave from it. */
+  nextSlotAt: NullableString,
+  /** When inbound sync last read its whole window. */
+  lastSyncedAt: NullableString,
+});
+export type SalesMailbox = typeof SalesMailbox.Type;
+
+export const SalesMailboxList = Schema.Struct({
+  generatedAt: Schema.String,
+  /** The engine benches a mailbox at `threshold` hard bounces among its last `window` sends. */
+  bounceRule: group({ window: Count, threshold: Count }),
+  items: Schema.Array(SalesMailbox).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type SalesMailboxList = typeof SalesMailboxList.Type;
+
+/** `GET /health`: what the engine's daily health message would say now. */
+export const SalesHealth = Schema.Struct({
+  generatedAt: Schema.String,
+  healthy: Bool,
+  /** One line per finding, with `&`, `<` and `>` escaped for Slack. */
+  text: Text,
+  /** Scheduled workflows that have not reported finishing since they were last due. */
+  overdueRuns: Schema.Array(Schema.Struct({ workflow: Schema.String, dueAt: NullableString })).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+});
+export type SalesHealth = typeof SalesHealth.Type;
+
 /** A card as an action leaves it (`CardState`). */
 export const SalesCardState = Schema.Struct({
   activityId: Schema.String,
@@ -672,10 +810,42 @@ export const SalesStreamEvent = Schema.Union([
 ]);
 export type SalesStreamEvent = typeof SalesStreamEvent.Type;
 
+/**
+ * The latest read of one engine list a Sales area shows, sent whenever it says something new.
+ * `data` is kept through later errors, so beside a non-ready status it is stale. `readAt` is when
+ * `data` was read; reads that find nothing new are not sent, so it can be older than the last read.
+ */
+const salesView = <View extends string, Data extends Schema.Top>(view: View, data: Data) =>
+  Schema.Struct({
+    view: Schema.Literal(view),
+    status: SalesEngineStatus,
+    message: Schema.NullOr(Schema.String),
+    data: Schema.NullOr(data),
+    readAt: Schema.NullOr(IsoDateTime),
+  });
+
+export const SalesView = Schema.Union([
+  salesView("autopilot", SalesAutopilotToday),
+  salesView("tasks", SalesTaskList),
+  salesView("campaigns", SalesCampaignList),
+  salesView("mailboxes", SalesMailboxList),
+  salesView("health", SalesHealth),
+]);
+export type SalesView = typeof SalesView.Type;
+export type SalesViewName = SalesView["view"];
+export const SalesViewName = Schema.Literals([
+  "autopilot",
+  "tasks",
+  "campaigns",
+  "mailboxes",
+  "health",
+] satisfies ReadonlyArray<SalesViewName>);
+
 export const SALES_WS_METHODS = {
   getSnapshot: "sales.getSnapshot",
   refresh: "sales.refresh",
   subscribe: "sales.subscribe",
+  subscribeView: "sales.subscribeView",
   getQueueItem: "sales.getQueueItem",
   listConversations: "sales.listConversations",
   getConversation: "sales.getConversation",

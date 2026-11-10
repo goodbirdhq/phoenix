@@ -26,6 +26,8 @@ import type {
   SalesQueueItemDetail,
   SalesSnapshot,
   SalesStreamEvent,
+  SalesView,
+  SalesViewName,
 } from "@t3tools/contracts";
 import { salesEngineRoot } from "@t3tools/contracts";
 
@@ -87,6 +89,10 @@ export class SalesService extends Context.Service<
     readonly refresh: Effect.Effect<SalesSnapshot>;
     /** The current snapshot, then every change. Polls the engine while the scope is open. */
     readonly subscribe: Effect.Effect<Stream.Stream<SalesStreamEvent>, never, Scope.Scope>;
+    /** One area's engine list now, then every change. Polls that list while the scope is open. */
+    readonly subscribeView: (
+      view: SalesViewName,
+    ) => Effect.Effect<Stream.Stream<SalesView>, never, Scope.Scope>;
     readonly getQueueItem: (
       activityId: string,
     ) => Effect.Effect<SalesQueueItemDetail, SalesActionError>;
@@ -158,6 +164,23 @@ const salesStreamEvents = (snapshots: Stream.Stream<SalesSnapshot>) =>
       },
     ),
   );
+
+/** A view's read without its `view` tag. */
+interface ViewRead<A> {
+  readonly status: SalesEngineStatus;
+  readonly message: string | null;
+  readonly data: A | null;
+  readonly readAt: string | null;
+}
+
+const EMPTY_VIEW: ViewRead<never> = { status: "loading", message: null, data: null, readAt: null };
+
+/** A view read with what moves on every read blanked: our read time and the engine's. */
+const viewWithoutReadTimes = <A extends { readonly generatedAt: string }>(read: ViewRead<A>) => ({
+  ...read,
+  readAt: null,
+  data: read.data === null ? null : { ...read.data, generatedAt: "" },
+});
 
 const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -263,6 +286,109 @@ const make = Effect.gen(function* () {
     Effect.as(SubscriptionRef.changes(state).pipe(salesStreamEvents)),
   );
 
+  /**
+   * One engine list an area shows, read like the snapshot: polled only while someone watches,
+   * the last answer kept beside a later error, and dropped when the settings name another engine.
+   * A subscriber is sent a read only when it says something new.
+   */
+  const makeView = <A extends { readonly generatedAt: string }>(
+    read: (
+      config: SalesEngineApi.SalesEngineConfig,
+    ) => Effect.Effect<A, SalesActionError, HttpClient.HttpClient>,
+    tag: (read: ViewRead<A>) => SalesView,
+  ) =>
+    Effect.gen(function* () {
+      const view = yield* SubscriptionRef.make<ViewRead<A>>(EMPTY_VIEW);
+      const viewConfigKey = yield* Ref.make<string | null>(null);
+
+      const readView = (config: SalesEngineSettings) =>
+        Effect.gen(function* () {
+          const key = configKey(config);
+          if ((yield* Ref.getAndSet(viewConfigKey, key)) !== key) {
+            yield* SubscriptionRef.set(view, EMPTY_VIEW);
+          }
+          const result = yield* read(engineConfig(config)).pipe(
+            Effect.provideService(HttpClient.HttpClient, httpClient),
+            Effect.result,
+          );
+          const readAt = DateTime.formatIso(yield* DateTime.now);
+          if (Result.isSuccess(result)) {
+            return yield* SubscriptionRef.set(view, {
+              status: "ready",
+              message: null,
+              data: result.success,
+              readAt,
+            });
+          }
+          const error = result.failure;
+          if (error.reason !== "not-configured") {
+            yield* Effect.logWarning("failed to read a sales engine list", {
+              reason: error.reason,
+            });
+          }
+          yield* SubscriptionRef.update(view, (previous) => ({
+            ...previous,
+            status: statusFor(error),
+            message: error.message,
+          }));
+        });
+
+      const polled = yield* PolledRead.make({
+        input: readConfig,
+        key: configKey,
+        read: readView,
+        interval: SALES_POLL_INTERVAL,
+        refreshWhen: serverSettings.streamChanges.pipe(
+          Stream.filterEffect((settings) =>
+            Ref.get(viewConfigKey).pipe(
+              Effect.map((key) => key !== configKey(settings.salesEngine)),
+            ),
+          ),
+        ),
+      });
+
+      /** Drops data from an engine the settings no longer name, before a new watcher sees it. */
+      const dropOtherEngine = Effect.gen(function* () {
+        const key = configKey(yield* readConfig);
+        const last = yield* Ref.get(viewConfigKey);
+        if (last === null || last === key) return;
+        yield* Ref.set(viewConfigKey, null);
+        yield* SubscriptionRef.set(view, EMPTY_VIEW);
+      });
+
+      return dropOtherEngine.pipe(
+        Effect.andThen(polled.watch),
+        Effect.as(
+          SubscriptionRef.changes(view).pipe(
+            Stream.changesWith((a, b) =>
+              Equal.equals(viewWithoutReadTimes(a), viewWithoutReadTimes(b)),
+            ),
+            Stream.map(tag),
+          ),
+        ),
+      );
+    });
+
+  const views: Record<
+    SalesViewName,
+    Effect.Effect<Stream.Stream<SalesView>, never, Scope.Scope>
+  > = {
+    autopilot: yield* makeView(SalesEngineApi.readAutopilotToday, (read) => ({
+      view: "autopilot",
+      ...read,
+    })),
+    tasks: yield* makeView(SalesEngineApi.readTasks, (read) => ({ view: "tasks", ...read })),
+    campaigns: yield* makeView(SalesEngineApi.readCampaigns, (read) => ({
+      view: "campaigns",
+      ...read,
+    })),
+    mailboxes: yield* makeView(SalesEngineApi.readMailboxes, (read) => ({
+      view: "mailboxes",
+      ...read,
+    })),
+    health: yield* makeView(SalesEngineApi.readHealth, (read) => ({ view: "health", ...read })),
+  };
+
   /** Runs one engine call against the current settings. */
   const withEngine = <A>(
     call: (
@@ -285,6 +411,7 @@ const make = Effect.gen(function* () {
     getSnapshot: currentSnapshot,
     refresh: engineRead.refresh,
     subscribe,
+    subscribeView: (view) => views[view],
     getQueueItem: (activityId) =>
       withEngine((config) => SalesEngineApi.readQueueItem(config, activityId)),
     listConversations: withEngine(SalesEngineApi.readConversations),
