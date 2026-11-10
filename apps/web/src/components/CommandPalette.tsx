@@ -46,7 +46,6 @@ import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
   CalendarClockIcon,
-  MessagesSquareIcon,
   SendIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
@@ -201,6 +200,7 @@ import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindin
 import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/command";
 import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
+import { SALES_AREAS } from "./sales/areas";
 import { useSalesPaletteCommands } from "./sales/salesPaletteCommands";
 import { useSalesEnvironments } from "../state/sales";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -2278,28 +2278,18 @@ function OpenCommandPaletteDialog(props: {
   });
 
   if (salesConfigured) {
-    actionItems.push(
-      {
+    for (const { key, label, icon: Icon, searchTerms } of SALES_AREAS) {
+      actionItems.push({
         kind: "action",
-        value: "action:sales:outreach",
-        searchTerms: ["sales", "outreach", "drafts", "approve", "queue", "emails"],
-        title: "Open Sales outreach",
-        icon: <SendIcon className={ITEM_ICON_CLASS} />,
+        value: `action:sales:${key}`,
+        searchTerms: ["sales", label.toLowerCase(), ...searchTerms],
+        title: `Open Sales ${label.toLowerCase()}`,
+        icon: <Icon className={ITEM_ICON_CLASS} />,
         run: async () => {
-          await navigate({ to: "/sales", search: { area: "outreach" } });
+          await navigate({ to: "/sales", search: { area: key } });
         },
-      },
-      {
-        kind: "action",
-        value: "action:sales:conversations",
-        searchTerms: ["sales", "conversations", "replies", "answers", "inbox"],
-        title: "Open Sales conversations",
-        icon: <MessagesSquareIcon className={ITEM_ICON_CLASS} />,
-        run: async () => {
-          await navigate({ to: "/sales", search: { area: "conversations" } });
-        },
-      },
-    );
+      });
+    }
   }
   // Offered by the open Sales page: act on its selected draft.
   for (const command of salesCommands) {

@@ -1,6 +1,6 @@
+import { isSalesArea, type SalesArea } from "@t3tools/client-runtime/sales/areas";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { isSalesArea, type SalesArea } from "../components/sales/areas";
 import { SalesPage } from "../components/sales/SalesPage";
 
 export interface SalesSearch {

@@ -10,7 +10,12 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
-import { SalesActionError, type SalesStreamEvent } from "@t3tools/contracts";
+import {
+  SalesActionError,
+  type SalesStreamEvent,
+  type SalesView,
+  type SalesViewName,
+} from "@t3tools/contracts";
 import {
   HttpClient,
   HttpClientError,
@@ -294,9 +299,58 @@ it.effect("decodes the contract's summary and drops fields it does not know", ()
     assert.strictEqual(summary?.needsALook.items[0]?.what, "bounce-unverified");
     assert.strictEqual(summary?.mailboxes.benched, 1);
     assert.strictEqual(summary?.dispatcher.paused, false);
+    // An engine from before Hold and Resume sends no paused counts.
+    assert.strictEqual(summary?.drafts.paused, 0);
+    assert.strictEqual(summary?.needsALook.items[0]?.notionUrl, null);
     assert.notProperty(summary ?? {}, "addedInALaterRelease");
     assert.notProperty(summary?.linkedin.budget ?? {}, "externalToday");
     assert.deepStrictEqual(yield* sales.getSnapshot, snapshot);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reads the paused sends and named needs-a-look of an engine with Hold", () => {
+  const { layer } = makeLayer({
+    respond: (request) =>
+      pathOf(request).endsWith("/summary")
+        ? Response.json({
+            ...summaryFixture,
+            drafts: { ...summaryFixture.drafts, paused: 2 },
+            autopilotToday: { ...summaryFixture.autopilotToday, paused: 1 },
+            needsALook: {
+              ...summaryFixture.needsALook,
+              items: [
+                {
+                  ...summaryFixture.needsALook.items[0],
+                  activityId: "act-9",
+                  notionUrl: "https://www.notion.so/act9",
+                },
+              ],
+            },
+          })
+        : Response.json({
+            version: 1,
+            generatedAt: "2026-11-09T18:30:00.000Z",
+            items: [
+              {
+                ...queueItemFixture,
+                state: "paused",
+                paused: { by: "phoenix", at: "2026-11-09T18:00:00.000Z" },
+              },
+            ],
+          }),
+  });
+  return Effect.gen(function* () {
+    const snapshot = yield* (yield* SalesService.SalesService).refresh;
+    assert.strictEqual(snapshot.summary?.drafts.paused, 2);
+    assert.strictEqual(snapshot.summary?.autopilotToday.paused, 1);
+    assert.deepInclude(snapshot.summary?.needsALook.items[0], {
+      activityId: "act-9",
+      notionUrl: "https://www.notion.so/act9",
+    });
+    assert.deepStrictEqual(snapshot.queue?.items[0]?.paused, {
+      by: "phoenix",
+      at: "2026-11-09T18:00:00.000Z",
+    });
   }).pipe(Effect.provide(layer));
 });
 
@@ -766,5 +820,288 @@ it.effect("sends subscribers only the read time when a poll finds nothing new", 
     const next = yield* watcher.next;
     assert.strictEqual(next.type === "sales-snapshot" ? next.snapshot.queue?.items.length : -1, 0);
     yield* Scope.close(watcher.scope, Exit.void);
+  }).pipe(Effect.provide(layer));
+});
+
+// --- Area views -------------------------------------------------------------------------------
+
+/** The engine's area lists as docs/sales-api.md shows them, each with a field v1 may add later. */
+const viewFixtures: Record<string, unknown> = {
+  "/autopilot/today": {
+    version: 1,
+    generatedAt: "2026-11-09T18:30:00.000Z",
+    day: "2026-11-09",
+    timezone: "America/Los_Angeles",
+    counts: { sent: 1, sending: 0, retrying: 0, failed: 0, scheduled: 1, held: 0, refused: 0 },
+    items: [
+      {
+        activityId: "act-2",
+        state: "scheduled",
+        at: "2026-11-09T21:14:00.000Z",
+        approval: "route",
+        kind: "chase",
+        step: 2,
+        contact: queueItemFixture.contact,
+        campaign: "Fintech Q4",
+        subject: "Re: creator x fintech",
+        mailbox: "gabe@trygoodbird.com",
+        reason: null,
+        outOfOffice: {
+          returnOn: "2026-11-12",
+          window: "until Thursday",
+          receivedAt: "2026-11-08T10:00:00.000Z",
+        },
+        addedInALaterRelease: true,
+      },
+      {
+        activityId: "act-3",
+        state: "paused",
+        at: "2026-11-09T22:00:00.000Z",
+        approval: "route",
+        contact: queueItemFixture.contact,
+        paused: { by: "U123", at: "2026-11-09T17:00:00.000Z" },
+      },
+    ],
+    spotChecks: null,
+  },
+  "/tasks": {
+    version: 1,
+    generatedAt: "2026-11-09T18:30:00.000Z",
+    items: [
+      {
+        id: "task-1",
+        action: "connect",
+        source: "email_sequence",
+        status: "posted",
+        dueOn: "2026-11-05",
+        priority: 0,
+        frontOfQueue: false,
+        contact: { ...queueItemFixture.contact, linkedinUrl: "https://www.linkedin.com/in/ana" },
+        suggestedText: "Hi Ana, ...",
+        connectionState: "unknown",
+        slack: { channel: "C1", ts: "1.2" },
+      },
+    ],
+    budget: { day: "2026-11-09", dailyLimit: 7, sentToday: 2, available: 1 },
+  },
+  "/campaigns": {
+    version: 1,
+    generatedAt: "2026-11-09T18:30:00.000Z",
+    items: [
+      {
+        campaign: "Fintech Q4",
+        contacts: 12,
+        replied: 3,
+        positive: 1,
+        declined: 1,
+        bounced: 0,
+        steps: [{ step: 1, sent: 12, bounced: 0, replied: 2, positive: 1, openRate: 0.5 }],
+      },
+      { campaign: null, contacts: 2 },
+    ],
+  },
+  "/mailboxes": {
+    version: 1,
+    generatedAt: "2026-11-09T18:30:00.000Z",
+    bounceRule: { window: 20, threshold: 3 },
+    items: [
+      {
+        address: "gabe@trygoodbird.com",
+        status: "active",
+        statusReason: null,
+        dailyCap: 6,
+        coldSentToday: 2,
+        repliesSentToday: 1,
+        bouncesToday: 0,
+        hardBouncesInWindow: 1,
+        restUntil: "2026-11-09T18:40:00.000Z",
+        nextSlotAt: null,
+        lastSyncedAt: "2026-11-09T18:20:00.000Z",
+        provider: "google",
+      },
+      { address: "new@trygoodbird.com", status: "warming" },
+    ],
+  },
+};
+
+const viewResponder: Responder = (request) => {
+  const fixture = viewFixtures[pathOf(request).replace("/api/sales/v1", "")];
+  return fixture === undefined
+    ? Response.json({ version: 1, generatedAt: "2026-11-09T18:30:00.000Z" })
+    : Response.json(fixture);
+};
+
+/** Subscribes one view in its own scope, collecting what it sends into a queue. */
+const watchView = (name: SalesViewName) =>
+  Effect.gen(function* () {
+    const sales = yield* SalesService.SalesService;
+    const scope = yield* Scope.make();
+    const views = yield* Queue.unbounded<SalesView>();
+    const stream = yield* sales.subscribeView(name).pipe(Scope.provide(scope));
+    yield* stream.pipe(
+      Stream.runForEach((view) => Queue.offer(views, view)),
+      Effect.forkIn(scope),
+    );
+    const nextWith = (predicate: (view: SalesView) => boolean) =>
+      Effect.gen(function* () {
+        while (true) {
+          const view = yield* Queue.take(views);
+          if (predicate(view)) return view;
+        }
+      });
+    return { scope, views, nextWith };
+  });
+
+it.effect("reads an area's list only while it is watched, and only that list", () => {
+  const { layer, requests } = makeLayer({ respond: viewResponder });
+  return Effect.gen(function* () {
+    yield* TestClock.adjust("10 minutes");
+    assert.strictEqual(requests.length, 0);
+
+    const watcher = yield* watchView("autopilot");
+    const ready = yield* watcher.nextWith((view) => view.status === "ready");
+    assert.deepStrictEqual(
+      requests.map((request) => request.url),
+      ["https://engine.example.com/api/sales/v1/autopilot/today"],
+    );
+    assert.strictEqual(requests[0]?.headers.authorization, "Bearer read-token");
+    assert.strictEqual(ready.view, "autopilot");
+    if (ready.view !== "autopilot") return;
+    const item = ready.data?.items[0];
+    assert.strictEqual(item?.approval, "route");
+    assert.strictEqual(item?.contact.effectiveTimeZone, "Europe/London");
+    assert.strictEqual(item?.outOfOffice?.returnOn, "2026-11-12");
+    assert.strictEqual(item?.paused, null);
+    assert.notProperty(item ?? {}, "addedInALaterRelease");
+    assert.deepStrictEqual(ready.data?.items[1]?.paused, {
+      by: "U123",
+      at: "2026-11-09T17:00:00.000Z",
+    });
+
+    yield* Scope.close(watcher.scope, Exit.void);
+    yield* TestClock.adjust("10 minutes");
+    assert.strictEqual(requests.length, 1);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("decodes the task list and fills what a smaller answer leaves out", () => {
+  const { layer } = makeLayer({ respond: viewResponder });
+  return Effect.gen(function* () {
+    const tasks = yield* (yield* watchView("tasks")).nextWith((view) => view.status === "ready");
+    assert.strictEqual(tasks.view, "tasks");
+    if (tasks.view !== "tasks") return;
+    assert.strictEqual(
+      tasks.data?.items[0]?.contact.linkedinUrl,
+      "https://www.linkedin.com/in/ana",
+    );
+    assert.deepStrictEqual(tasks.data?.budget, {
+      day: "2026-11-09",
+      dailyLimit: 7,
+      available: 1,
+    });
+
+    // `/health` answers with nothing but the common fields here.
+    const health = yield* (yield* watchView("health")).nextWith((view) => view.status === "ready");
+    assert.strictEqual(health.view, "health");
+    if (health.view !== "health") return;
+    assert.strictEqual(health.data?.text, "");
+    assert.strictEqual(health.data?.healthy, false);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("decodes the campaign list, and names no campaign as null", () => {
+  const { layer } = makeLayer({ respond: viewResponder });
+  return Effect.gen(function* () {
+    const read = yield* (yield* watchView("campaigns")).nextWith((view) => view.status === "ready");
+    if (read.view !== "campaigns") return assert.fail(`got ${read.view}`);
+    const [named, unnamed] = read.data?.items ?? [];
+    assert.deepStrictEqual(named?.steps, [
+      { step: 1, sent: 12, bounced: 0, replied: 2, positive: 1 },
+    ]);
+    assert.deepInclude(unnamed, { campaign: null, contacts: 2, replied: 0, steps: [] });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("decodes the mailbox pool with its bounce rule", () => {
+  const { layer } = makeLayer({ respond: viewResponder });
+  return Effect.gen(function* () {
+    const read = yield* (yield* watchView("mailboxes")).nextWith((view) => view.status === "ready");
+    if (read.view !== "mailboxes") return assert.fail(`got ${read.view}`);
+    assert.deepStrictEqual(read.data?.bounceRule, { window: 20, threshold: 3 });
+    const [sending, warming] = read.data?.items ?? [];
+    assert.deepInclude(sending, { restUntil: "2026-11-09T18:40:00.000Z", hardBouncesInWindow: 1 });
+    assert.notProperty(sending ?? {}, "provider");
+    assert.deepInclude(warming, { status: "warming", dailyCap: 0, lastSyncedAt: null });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("asks nothing for a view of an engine that is not configured", () => {
+  const { layer, requests } = makeLayer({
+    respond: viewResponder,
+    salesEngine: { baseUrl: "", readToken: "" },
+  });
+  return Effect.gen(function* () {
+    const read = yield* (yield* watchView("tasks")).nextWith((view) => view.status !== "loading");
+    assert.strictEqual(read.status, "not-configured");
+    assert.strictEqual(requests.length, 0);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("sends a view only when a read says something new", () => {
+  let reads = 0;
+  const { layer, requests } = makeLayer({
+    // Every read is generated anew, and from the fourth on it lists a send.
+    respond: () => {
+      reads += 1;
+      return Response.json({
+        version: 1,
+        generatedAt: `2026-11-09T18:30:${String(reads).padStart(2, "0")}.000Z`,
+        items: reads >= 4 ? [{ activityId: "act-1", state: "sent" }] : [],
+      });
+    },
+  });
+  return Effect.gen(function* () {
+    const watcher = yield* watchView("autopilot");
+    yield* watcher.nextWith((view) => view.status === "ready");
+
+    yield* TestClock.adjust(SalesService.SALES_POLL_INTERVAL);
+    yield* TestClock.adjust(SalesService.SALES_POLL_INTERVAL);
+    yield* TestClock.adjust(SalesService.SALES_POLL_INTERVAL);
+    // Reads two and three said nothing new, so the next thing sent is the fourth.
+    const changed = yield* Queue.take(watcher.views);
+    assert.strictEqual(changed.view === "autopilot" ? changed.data?.items.length : null, 1);
+    assert.strictEqual(requests.length, 4);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps a view's last list beside a failed read", () => {
+  const { layer, setResponder } = makeLayer({ respond: viewResponder });
+  return Effect.gen(function* () {
+    const watcher = yield* watchView("tasks");
+    const ready = yield* watcher.nextWith((view) => view.status === "ready");
+
+    setResponder(() => "network-error");
+    yield* TestClock.adjust(SalesService.SALES_POLL_INTERVAL);
+    const failed = yield* watcher.nextWith((view) => view.status !== "ready");
+    assert.strictEqual(failed.status, "unreachable");
+    assert.isString(failed.message);
+    assert.deepStrictEqual(failed.data, ready.data);
+    assert.strictEqual(failed.readAt, ready.readAt);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("never shows a new watcher the list of an engine the settings no longer name", () => {
+  const { layer } = makeLayer({ respond: viewResponder });
+  return Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const first = yield* watchView("autopilot");
+    yield* first.nextWith((view) => view.status === "ready");
+    yield* Scope.close(first.scope, Exit.void);
+
+    yield* settings.updateSettings({ salesEngine: { readToken: "the-new-token" } });
+    const second = yield* watchView("autopilot");
+    const opening = yield* Queue.take(second.views);
+    assert.strictEqual(opening.status, "loading");
+    assert.strictEqual(opening.data, null);
   }).pipe(Effect.provide(layer));
 });

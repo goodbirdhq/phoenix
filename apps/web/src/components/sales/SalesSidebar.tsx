@@ -1,3 +1,4 @@
+import type { SalesArea } from "@t3tools/client-runtime/sales/areas";
 import { buildSalesHome } from "@t3tools/client-runtime/sales/home";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -15,7 +16,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "../ui/sidebar";
-import { SALES_AREAS, type SalesArea } from "./areas";
+import { SALES_AREAS } from "./areas";
 
 export function SalesSidebar() {
   const { environment: requested, area } = useSearch({ from: "/sales" });

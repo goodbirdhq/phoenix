@@ -191,6 +191,7 @@ const replyCard: SalesQueueItemDetail = {
   contentHash: HASH,
   state: "awaiting",
   approval: null,
+  paused: null,
   sendAt: null,
   goes: null,
   mailbox: { sticky: true, address: "gabe@trygoodbird.com", threadState: "replied" },

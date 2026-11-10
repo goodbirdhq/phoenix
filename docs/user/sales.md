@@ -69,12 +69,46 @@ Open one for the history across your mailboxes and the drafted answer. **Approve
 it, start one of the engine's runs on it, or choose **No reply needed** to discard it. When
 nobody has drafted an answer, the engine may offer a run that drafts one.
 
+## See today's automated sends
+
+**Autopilot** lists what the engine sends today without a press, done and to come, grouped by
+state: failed, retrying, needs your approval, held by the engine, paused, sending, scheduled and
+sent. **Paused** is a chase someone held with **Hold these** in Slack; approving its card sends
+it. Each send shows who it's to, which email it is, the mailbox, and why it's held, refused or
+failed. Times are on your clock, with the contact's beside it when theirs reads differently.
+**Away until** marks a contact whose out-of-office covers today; the engine doesn't pause for it,
+so check whether the send should go. Turn on **Include approved by you** to see the drafts you
+approved as well. A send that needs your approval got a normal draft card, so you approve it from
+Outreach.
+
+## Work the LinkedIn checklist
+
+**To do** lists the LinkedIn connection requests and messages to send by hand, ready ones first,
+with the contact's LinkedIn link, the suggested text and a button to copy it. The heading shows
+how many invites today's budget has left. Mark tasks done in Slack for now.
+
+## Read campaign results
+
+**Campaigns** shows, per campaign, the people the engine emailed, how many replied, how many
+replies read as positive or declined, and how many bounced, then the same per email in the
+sequence. These come from the engine's own sends and reply classifications, so they won't match
+the funnel in your CRM, which also counts meetings.
+
+## Check engine and mailbox health
+
+**Health** shows what the engine's daily health message would say now, and any scheduled run that
+hasn't finished. Below it, each mailbox shows its status, cold sends against its daily cap,
+bounces, and its rest or next send. **Mail not read since** means the engine hasn't read that
+mailbox's new mail for over three hours, so replies to it aren't showing up. **One bounce from
+benched** means one more hard bounce and the engine stops sending from it.
+
 ## Read the Home screen
 
 The headline counts what waits on you across the work areas; a reply whose answer is drafted
-counts once, as a draft waiting. Outreach and Conversations open their pages. The line below the
-areas covers mailboxes, today's cold sends, and the engine's dispatcher. Phoenix asks the engine
-about once a minute while Sales is open, and **Refresh** asks straight away.
+counts once, as a draft waiting. Each area opens its page. The line below the areas covers
+mailboxes, today's cold sends, and the engine's dispatcher, and opens **Health**. Phoenix asks the
+engine about once a minute while Sales is open, and **Refresh** asks straight away. Each area page
+asks about once a minute while it's open, and Campaigns every five minutes.
 
 If the engine is off, refuses a token, or can't be reached, Sales says which. When it already had
 an answer, it keeps showing that answer, marked with the time it was read.
@@ -82,5 +116,5 @@ an answer, it keeps showing that answer, marked with the time it was read.
 ## What Phoenix can't do
 
 Phoenix never sends email, and it can't approve without a press on an enrolled device. Agents and
-scheduled tasks can't approve either. Holding sends, LinkedIn tasks and decision cards stay in
-Slack.
+scheduled tasks can't approve either. Holding sends, marking LinkedIn tasks done and decision
+cards stay in Slack.

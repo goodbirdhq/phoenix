@@ -6,9 +6,13 @@ import {
   type SalesActionFailureReason,
   SalesEngineFailureCode,
   type SalesFailureOrigin,
+  SalesHealth,
+  SalesMailboxList,
   SalesApproveFailureReason,
   type SalesApproveInput,
   type SalesApproveItemResult,
+  SalesAutopilotToday,
+  SalesCampaignList,
   SalesCardState,
   SalesConversationDetail,
   SalesConversationList,
@@ -19,6 +23,7 @@ import {
   SalesQueue,
   SalesQueueItemDetail,
   SalesSummary,
+  SalesTaskList,
   SALES_API_PATH,
   salesEngineRoot,
 } from "@t3tools/contracts";
@@ -217,6 +222,11 @@ const decodeQueue = Schema.decodeUnknownEffect(SalesQueue);
 const decodeQueueItem = Schema.decodeUnknownEffect(Schema.Struct({ item: SalesQueueItemDetail }));
 const decodeConversations = Schema.decodeUnknownEffect(SalesConversationList);
 const decodeConversation = Schema.decodeUnknownEffect(SalesConversationDetail);
+const decodeAutopilot = Schema.decodeUnknownEffect(SalesAutopilotToday);
+const decodeTasks = Schema.decodeUnknownEffect(SalesTaskList);
+const decodeCampaigns = Schema.decodeUnknownEffect(SalesCampaignList);
+const decodeMailboxes = Schema.decodeUnknownEffect(SalesMailboxList);
+const decodeHealth = Schema.decodeUnknownEffect(SalesHealth);
 const decodeDevices = Schema.decodeUnknownEffect(SalesDeviceList);
 const decodeDevice = Schema.decodeUnknownEffect(Schema.Struct({ device: SalesDevice }));
 
@@ -251,6 +261,26 @@ export const readConversation = (config: SalesEngineConfig, contactKey: string) 
     path: path("/conversations", contactKey),
     decode: decodeConversation,
   });
+
+export const readAutopilotToday = (config: SalesEngineConfig) =>
+  request(config, {
+    half: "read",
+    method: "GET",
+    path: "/autopilot/today",
+    decode: decodeAutopilot,
+  });
+
+export const readTasks = (config: SalesEngineConfig) =>
+  request(config, { half: "read", method: "GET", path: "/tasks", decode: decodeTasks });
+
+export const readCampaigns = (config: SalesEngineConfig) =>
+  request(config, { half: "read", method: "GET", path: "/campaigns", decode: decodeCampaigns });
+
+export const readMailboxes = (config: SalesEngineConfig) =>
+  request(config, { half: "read", method: "GET", path: "/mailboxes", decode: decodeMailboxes });
+
+export const readHealth = (config: SalesEngineConfig) =>
+  request(config, { half: "read", method: "GET", path: "/health", decode: decodeHealth });
 
 // --- Actions and devices (action token) -------------------------------------------------------
 

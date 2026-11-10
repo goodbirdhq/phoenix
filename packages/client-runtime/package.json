@@ -111,6 +111,18 @@
       "types": "./src/schedules/index.ts",
       "default": "./src/schedules/index.ts"
     },
+    "./sales/areas": {
+      "types": "./src/sales/areas.ts",
+      "default": "./src/sales/areas.ts"
+    },
+    "./sales/autopilot": {
+      "types": "./src/sales/autopilot.ts",
+      "default": "./src/sales/autopilot.ts"
+    },
+    "./sales/campaigns": {
+      "types": "./src/sales/campaigns.ts",
+      "default": "./src/sales/campaigns.ts"
+    },
     "./sales/approve": {
       "types": "./src/sales/approve.ts",
       "default": "./src/sales/approve.ts"
@@ -131,9 +143,17 @@
       "types": "./src/sales/failure.ts",
       "default": "./src/sales/failure.ts"
     },
+    "./sales/health": {
+      "types": "./src/sales/health.ts",
+      "default": "./src/sales/health.ts"
+    },
     "./sales/home": {
       "types": "./src/sales/home.ts",
       "default": "./src/sales/home.ts"
+    },
+    "./sales/links": {
+      "types": "./src/sales/links.ts",
+      "default": "./src/sales/links.ts"
     },
     "./sales/outreach": {
       "types": "./src/sales/outreach.ts",
@@ -146,6 +166,14 @@
     "./sales/signing": {
       "types": "./src/sales/signing.ts",
       "default": "./src/sales/signing.ts"
+    },
+    "./sales/tasks": {
+      "types": "./src/sales/tasks.ts",
+      "default": "./src/sales/tasks.ts"
+    },
+    "./sales/time": {
+      "types": "./src/sales/time.ts",
+      "default": "./src/sales/time.ts"
     },
     "./state/auth": {
       "types": "./src/state/auth.ts",

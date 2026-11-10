@@ -38,6 +38,7 @@ export const RPC_REQUIRED_SCOPES = {
   [SALES_WS_METHODS.getSnapshot]: AuthOrchestrationReadScope,
   [SALES_WS_METHODS.refresh]: AuthOrchestrationReadScope,
   [SALES_WS_METHODS.subscribe]: AuthOrchestrationReadScope,
+  [SALES_WS_METHODS.subscribeView]: AuthOrchestrationReadScope,
   [SALES_WS_METHODS.getQueueItem]: AuthOrchestrationReadScope,
   [SALES_WS_METHODS.listConversations]: AuthOrchestrationReadScope,
   [SALES_WS_METHODS.getConversation]: AuthOrchestrationReadScope,

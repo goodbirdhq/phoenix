@@ -30,6 +30,7 @@ const item = (activityId: string, contentHash: string, state = "awaiting"): Sale
   contentHash,
   state,
   approval: null,
+  paused: null,
   sendAt: null,
   goes: null,
   mailbox: { sticky: false, address: null, threadState: null },

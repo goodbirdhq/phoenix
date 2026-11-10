@@ -1,5 +1,7 @@
+import { emailStepLabel } from "@t3tools/client-runtime/sales/campaigns";
 import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
 import { intentLabel, sortConversations } from "@t3tools/client-runtime/sales/outreach";
+import { salesDateTime } from "@t3tools/client-runtime/sales/time";
 import {
   type EnvironmentId,
   type SalesConversation,
@@ -28,17 +30,6 @@ import {
 } from "./SalesDraftPanel";
 import { SalesRuns } from "./SalesRuns";
 import { useSalesListKeys } from "./useSalesListKeys";
-
-const dateTime = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-});
-const formatAt = (iso: string | null) => {
-  const ms = iso === null ? Number.NaN : Date.parse(iso);
-  return Number.isNaN(ms) ? "" : dateTime.format(ms);
-};
 
 const INTENT_VARIANT: Record<string, "success" | "warning" | "error" | "secondary" | "outline"> = {
   interested: "success",
@@ -196,7 +187,7 @@ function ConversationRow(props: {
           {item.latestReply?.preview ?? ""}
         </span>
         <span className="truncate text-xs text-muted-foreground">
-          {formatAt(item.latestReply?.receivedAt ?? null)}
+          {salesDateTime(item.latestReply?.receivedAt ?? null)}
           {item.hasOpenDraft
             ? " · answer drafted"
             : item.awaitingAnswer
@@ -439,8 +430,8 @@ function MessageItem({
       <p className="mb-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
         <span>{ours ? "Us" : message.kind === "reply" ? "Them" : message.kind}</span>
         {message.mailbox ? <span>{message.mailbox}</span> : null}
-        <span>{formatAt(message.at)}</span>
-        {message.step !== null ? <span>Email {message.step}</span> : null}
+        <span>{salesDateTime(message.at)}</span>
+        {message.step !== null ? <span>{emailStepLabel(message.step)}</span> : null}
         {message.status && message.status !== "sent" ? <span>{message.status}</span> : null}
         {message.bounced ? <span>bounced ({message.bounced})</span> : null}
         {message.classification ? <span>{intentLabel(message.classification.intent)}</span> : null}

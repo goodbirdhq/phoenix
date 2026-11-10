@@ -1371,6 +1371,10 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(SALES_WS_METHODS.subscribe, sales.subscribe, {
             "rpc.aggregate": "sales",
           }),
+        [SALES_WS_METHODS.subscribeView]: (input) =>
+          observeRpcStreamEffect(SALES_WS_METHODS.subscribeView, sales.subscribeView(input.view), {
+            "rpc.aggregate": "sales",
+          }),
         [SALES_WS_METHODS.getQueueItem]: (input) =>
           observeRpcEffect(SALES_WS_METHODS.getQueueItem, sales.getQueueItem(input.activityId), {
             "rpc.aggregate": "sales",

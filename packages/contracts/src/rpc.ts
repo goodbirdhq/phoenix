@@ -323,6 +323,8 @@ import {
   SalesQueueItemDetail,
   SalesSnapshot,
   SalesStreamEvent,
+  SalesView,
+  SalesViewName,
 } from "./sales.ts";
 
 export const WS_METHODS = {
@@ -1558,6 +1560,14 @@ const WsSalesSubscribeRpc = Rpc.make(SALES_WS_METHODS.subscribe, {
   stream: true,
 });
 
+/** One engine list a Sales area shows. The server polls it only while someone subscribes. */
+const WsSalesSubscribeViewRpc = Rpc.make(SALES_WS_METHODS.subscribeView, {
+  payload: Schema.Struct({ view: SalesViewName }),
+  success: SalesView,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 const SalesRpcError = Schema.Union([SalesActionError, EnvironmentAuthorizationError]);
 
 const WsSalesGetQueueItemRpc = Rpc.make(SALES_WS_METHODS.getQueueItem, {
@@ -1780,6 +1790,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSalesGetSnapshotRpc,
   WsSalesRefreshRpc,
   WsSalesSubscribeRpc,
+  WsSalesSubscribeViewRpc,
   WsSalesGetQueueItemRpc,
   WsSalesListConversationsRpc,
   WsSalesGetConversationRpc,
