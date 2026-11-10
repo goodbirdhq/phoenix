@@ -239,20 +239,28 @@ export function lookItemView(item: SalesLookItem): SalesLookItemView {
 }
 
 /**
- * The engine's day and zone, for the Home's "Updated" line, only when its zone is not the
- * viewer's: "today" means the engine's day, which then may not be the viewer's. Null otherwise.
+ * The engine's day, for the Home's "Updated" line, only when it is not the viewer's own date at
+ * the moment the summary was made: "today" then means the engine's day, not the viewer's. Null
+ * otherwise.
  */
 export function engineDayNote(summary: SalesSummary, viewerTimeZone: string): string | null {
   const { day, timezone } = summary;
-  if (day === null || timezone === null || timezone === viewerTimeZone) return null;
-  const ms = Date.parse(`${day}T00:00:00Z`);
-  if (Number.isNaN(ms)) return null;
-  const place = (timezone.split("/").at(-1) ?? timezone).replaceAll("_", " ");
+  const dayMs = day === null ? Number.NaN : Date.parse(`${day}T00:00:00Z`);
+  const generatedAt = Date.parse(summary.generatedAt);
+  if (Number.isNaN(dayMs) || Number.isNaN(generatedAt)) return null;
+  // en-CA writes a date as YYYY-MM-DD, the engine's form.
+  const viewerDay = new Intl.DateTimeFormat("en-CA", { timeZone: viewerTimeZone }).format(
+    generatedAt,
+  );
+  if (viewerDay === day) return null;
   const date = new Intl.DateTimeFormat(undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
     timeZone: "UTC",
-  }).format(ms);
-  return `Engine day ${date} (${place})`;
+  }).format(dayMs);
+  const place = timezone === null ? null : (timezone.split("/").at(-1) ?? timezone);
+  return place === null
+    ? `Engine day ${date}`
+    : `Engine day ${date} (${place.replaceAll("_", " ")})`;
 }

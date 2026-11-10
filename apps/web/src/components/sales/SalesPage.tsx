@@ -191,15 +191,20 @@ function SalesHomeContent({
   const navigate = useNavigate();
   const { environment } = useSearch({ from: "/sales" });
   const readAt = formatTime(snapshot.summaryReadAt);
-  const readAgo =
-    snapshot.summaryReadAt === null ? "" : formatRelativeTimeLabel(snapshot.summaryReadAt);
+  // "N min ago" stands still without fresh reads, so a stale summary says when it was read.
+  const updated =
+    snapshot.summaryReadAt === null
+      ? null
+      : offline
+        ? readAt
+        : formatRelativeTimeLabel(snapshot.summaryReadAt);
   const summary = snapshot.summary;
   return (
     <>
       <PageHeading
         title={home.headline}
         description={[
-          readAgo ? `Updated ${readAgo}` : null,
+          updated ? `Updated ${updated}` : null,
           summary ? engineDayNote(summary, viewerTimeZone) : null,
           offline ? "Offline" : null,
         ]

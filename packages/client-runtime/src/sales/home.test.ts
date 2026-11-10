@@ -134,6 +134,7 @@ describe("lookItemView", () => {
 });
 
 describe("engineDayNote", () => {
+  // 18:30 UTC: still Nov 9 in London and Los Angeles, already Nov 10 in Tokyo.
   const summary = (timezone: string | null) =>
     decodeSummary({
       generatedAt: "2026-11-09T18:30:00.000Z",
@@ -142,14 +143,15 @@ describe("engineDayNote", () => {
       dispatcher: quietDispatcher,
     });
 
-  it("stays quiet when the engine keeps the viewer's time zone", () => {
-    expect(engineDayNote(summary("Europe/London"), "Europe/London")).toBeNull();
+  it("stays quiet while the engine's day is the viewer's date, whatever its zone", () => {
+    expect(engineDayNote(summary("America/Los_Angeles"), "Europe/London")).toBeNull();
     expect(engineDayNote(summary(null), "Europe/London")).toBeNull();
   });
 
-  it("names the engine's day and place when its zone differs", () => {
-    expect(engineDayNote(summary("America/Los_Angeles"), "Europe/London")).toMatch(
+  it("names the engine's day and place when the viewer's date has moved on", () => {
+    expect(engineDayNote(summary("America/Los_Angeles"), "Asia/Tokyo")).toMatch(
       /^Engine day .*9.* \(Los Angeles\)$/u,
     );
+    expect(engineDayNote(summary(null), "Asia/Tokyo")).toMatch(/^Engine day .*9\D*$/u);
   });
 });
