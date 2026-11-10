@@ -501,38 +501,44 @@ export const SalesEngineFailureCode = Schema.Literals([
 export type SalesEngineFailureCode = typeof SalesEngineFailureCode.Type;
 
 /**
- * Why a sales request failed, as clients show it: one of the engine's codes, or one of these:
+ * Why a sales request failed, as clients show it. Each reason has one origin, except the few
+ * engine codes Phoenix also raises itself (`stale_hash`, `not_open`, `bad_request`) when it
+ * checks a card before dispatching.
+ *
+ * Phoenix refused before asking the engine:
  * - `not-configured`: no engine URL, or no token for this half of the API.
- * - `api-off` / `actions-off`: the engine has that half turned off.
- * - `unauthorised`: the engine refused the token.
- * - `unreachable`: the request did not complete.
- * - `failed`: an answer Phoenix could not read, or an engine URL it cannot use.
+ * - `bad-url`: an engine URL that is not http or https.
  * - `no-agents-project`, `agents-project-missing`, `no-target`, `dispatch-failed`: dispatch.
  *
- * Phoenix itself also uses a few engine codes (`stale_hash`, `not_open`, `bad_request`) when it
- * checks a card before dispatching; `origin` says who refused.
+ * No engine answer Phoenix could read:
+ * - `unreachable`: the request did not complete.
+ * - `unreadable-answer`: an HTTP error without the engine's body, or a body Phoenix could not
+ *   decode.
+ *
+ * The engine refused: `api-off` / `actions-off` (that half is turned off), `unauthorised` (it
+ * refused the token), or one of its own codes.
  */
 export const SalesActionFailureReason = Schema.Literals([
   "not-configured",
-  "api-off",
-  "actions-off",
-  "unauthorised",
-  "unreachable",
-  "failed",
+  "bad-url",
   "no-agents-project",
   "agents-project-missing",
   "no-target",
   "dispatch-failed",
+  "unreachable",
+  "unreadable-answer",
+  "api-off",
+  "actions-off",
+  "unauthorised",
   ...SalesEngineFailureCode.literals,
 ]);
 export type SalesActionFailureReason = typeof SalesActionFailureReason.Type;
 
 /**
  * Who a sales failure came from, which says whether the request may still have landed:
- * - `transport`: no engine answer Phoenix could read (unreachable, timed out, an HTTP error
- *   without the engine's body, a body it could not decode). It may have landed.
+ * - `transport`: no engine answer Phoenix could read. It may have landed.
  * - `engine`: the engine answered and refused, with one of its codes or a 401.
- * - `phoenix`: this server refused before asking the engine (settings, dispatch checks).
+ * - `phoenix`: this server refused before asking the engine.
  */
 export const SalesFailureOrigin = Schema.Literals(["transport", "engine", "phoenix"]);
 export type SalesFailureOrigin = typeof SalesFailureOrigin.Type;
@@ -556,7 +562,7 @@ export class SalesActionError extends Schema.TaggedError<SalesActionError>()("Sa
  * - `off`: the engine answered 503 `sales_api_off` (no read token set on its side).
  * - `unauthorised`: the engine refused the token (401).
  * - `unreachable`: the request did not complete (network, DNS, timeout).
- * - `failed`: any other answer, or a body the server could not read.
+ * - `failed`: any other answer, a body the server could not read, or a URL it cannot use.
  */
 export const SalesEngineStatus = Schema.Literals([
   "not-configured",

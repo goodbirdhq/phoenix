@@ -1,6 +1,7 @@
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { salesEngineKey, salesEngineRoot } from "./sales.ts";
+import { SalesActionError, salesEngineKey, salesEngineRoot } from "./sales.ts";
 
 describe("salesEngineRoot", () => {
   it("reads the origin and the API base as the same engine", () => {
@@ -48,5 +49,20 @@ describe("salesEngineKey", () => {
 
   it("keys text that is not a URL as itself", () => {
     expect(salesEngineKey("  Not A URL ")).toBe("not a url");
+  });
+});
+
+const decodeSalesActionError = Schema.decodeUnknownSync(SalesActionError);
+
+describe("SalesActionError", () => {
+  it("reads a failure from a server without origins as the transport's, which claims least", () => {
+    const error = decodeSalesActionError({
+      _tag: "SalesActionError",
+      reason: "not-configured",
+      message: "Not set up.",
+      currentHash: null,
+      state: null,
+    });
+    expect(error.origin).toBe("transport");
   });
 });

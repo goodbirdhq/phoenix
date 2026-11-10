@@ -66,10 +66,28 @@ const unauthorisedMessage = (half: Half) =>
     ? "The sales engine refused the read token. Check that it matches SALES_READ_TOKEN on the engine."
     : "The sales engine refused the action token. Check that it matches SALES_ACTION_TOKEN on the engine.";
 
-export const salesActionError = (
+const PHOENIX_REASONS = new Set<SalesActionFailureReason>([
+  "not-configured",
+  "bad-url",
+  "no-agents-project",
+  "agents-project-missing",
+  "no-target",
+  "dispatch-failed",
+]);
+
+/** Engine codes Phoenix also raises when it checks a card itself, before asking the engine. */
+type CheckedByPhoenix = Extract<SalesEngineFailureCode, "stale_hash" | "not_open" | "bad_request">;
+
+interface FailureExtra {
+  readonly message?: string;
+  readonly currentHash?: string | null;
+  readonly state?: string | null;
+}
+
+const failure = (
   origin: SalesFailureOrigin,
   reason: SalesActionFailureReason,
-  extra: { readonly message?: string; readonly currentHash?: string | null; state?: string | null },
+  extra: FailureExtra,
 ) =>
   new SalesActionError({
     origin,
@@ -78,6 +96,22 @@ export const salesActionError = (
     currentHash: extra.currentHash ?? null,
     state: extra.state ?? null,
   });
+
+/** A sales failure, from whoever raises its reason (see `SalesActionFailureReason`). */
+export const salesActionError = (reason: SalesActionFailureReason, extra: FailureExtra) =>
+  failure(
+    PHOENIX_REASONS.has(reason)
+      ? "phoenix"
+      : reason === "unreachable" || reason === "unreadable-answer"
+        ? "transport"
+        : "engine",
+    reason,
+    extra,
+  );
+
+/** Phoenix refusing with an engine code after checking a card itself; nothing was sent. */
+export const phoenixCheckFailure = (reason: CheckedByPhoenix, extra: FailureExtra) =>
+  failure("phoenix", reason, extra);
 
 const ENGINE_CODES = new Set<string>(SalesEngineFailureCode.literals);
 
@@ -101,20 +135,20 @@ function engineFailure(half: Half, httpStatus: number, body: unknown): SalesActi
     state: error.state ?? null,
   };
   if (httpStatus === 401) {
-    return salesActionError("engine", "unauthorised", { message: unauthorisedMessage(half) });
+    return salesActionError("unauthorised", { message: unauthorisedMessage(half) });
   }
-  if (code === "sales_api_off") return salesActionError("engine", "api-off", {});
-  if (code === "sales_actions_off") return salesActionError("engine", "actions-off", {});
+  if (code === "sales_api_off") return salesActionError("api-off", {});
+  if (code === "sales_actions_off") return salesActionError("actions-off", {});
   if (code !== undefined && code.length > 0) {
     const reason = ENGINE_CODES.has(code) ? (code as SalesEngineFailureCode) : "other";
-    return salesActionError("engine", reason, {
+    return salesActionError(reason, {
       ...extra,
       message:
         extra.message ?? DEFAULT_MESSAGES[reason] ?? `The sales engine refused that (${code}).`,
     });
   }
   // No code: a proxy's error page, or an engine too broken to say why.
-  return salesActionError("transport", "failed", {
+  return salesActionError("unreadable-answer", {
     message: `The sales engine answered HTTP ${httpStatus}.`,
   });
 }
@@ -133,14 +167,14 @@ const request = Effect.fn("SalesEngineApi.request")(function* <A>(
   const client = yield* HttpClient.HttpClient;
   const base = salesApiBaseUrl(config.baseUrl);
   const token = input.half === "read" ? config.readToken : config.actionToken;
-  if (config.baseUrl.length === 0) return yield* salesActionError("phoenix", "not-configured", {});
+  if (config.baseUrl.length === 0) return yield* salesActionError("not-configured", {});
   if (base === null) {
-    return yield* salesActionError("phoenix", "failed", {
+    return yield* salesActionError("bad-url", {
       message: "The sales engine URL must be an http or https URL.",
     });
   }
   if (token.length === 0) {
-    return yield* salesActionError("phoenix", "not-configured", {
+    return yield* salesActionError("not-configured", {
       message:
         input.half === "read"
           ? "Sales needs the engine's read token in Settings."
@@ -161,7 +195,7 @@ const request = Effect.fn("SalesEngineApi.request")(function* <A>(
   );
   const response = yield* client.execute(prepared).pipe(
     Effect.timeout(input.half === "read" ? READ_TIMEOUT : ACTION_TIMEOUT),
-    Effect.mapError(() => salesActionError("transport", "unreachable", {})),
+    Effect.mapError(() => salesActionError("unreachable", {})),
   );
   const json = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
   if (response.status < 200 || response.status >= 300) {
@@ -169,7 +203,7 @@ const request = Effect.fn("SalesEngineApi.request")(function* <A>(
   }
   return yield* input.decode(json).pipe(
     Effect.mapError(() =>
-      salesActionError("transport", "failed", {
+      salesActionError("unreadable-answer", {
         message: "The sales engine sent an answer Phoenix could not read.",
       }),
     ),

@@ -24,7 +24,8 @@ describe("approveRequestFailure", () => {
       { origin: "engine", reason: "unauthorised" },
       { origin: "engine", reason: "bad_request" },
       { origin: "phoenix", reason: "not-configured" },
-      { origin: "phoenix", reason: "failed" },
+      { origin: "phoenix", reason: "bad-url" },
+      { origin: "phoenix", reason: "stale_hash" },
     ] as const) {
       expect(approveRequestFailure(salesFailure(failure, "Refused."))).toEqual({
         unknown: false,
@@ -36,7 +37,7 @@ describe("approveRequestFailure", () => {
   it("calls the outcome unknown whenever the request may have landed", () => {
     for (const failure of [
       { origin: "transport", reason: "unreachable" },
-      { origin: "transport", reason: "failed" },
+      { origin: "transport", reason: "unreadable-answer" },
       { origin: "engine", reason: "budget" },
       { origin: "engine", reason: "other" },
       { origin: null, reason: null },

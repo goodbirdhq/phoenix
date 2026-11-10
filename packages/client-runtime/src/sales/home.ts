@@ -220,6 +220,6 @@ export function salesStatusNotice(snapshot: SalesSnapshot): SalesStatusNotice | 
     case "unreachable":
       return { title: "Can't reach the sales engine", description, action: "retry" };
     case "failed":
-      return { title: "The sales engine sent an error", description, action: "retry" };
+      return { title: "Could not read the sales engine", description, action: "retry" };
   }
 }

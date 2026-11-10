@@ -20,7 +20,11 @@ export interface SalesFailureText {
 }
 
 /** What to tell the person when a sales request fails. `message` is the server's detail. */
-function salesFailureText(reason: SalesActionFailureReason, message: string): SalesFailureText {
+function salesFailureText(
+  origin: SalesFailureOrigin,
+  reason: SalesActionFailureReason,
+  message: string,
+): SalesFailureText {
   const text = (title: string, description = message, reread = false) => ({
     title,
     description,
@@ -29,6 +33,8 @@ function salesFailureText(reason: SalesActionFailureReason, message: string): Sa
   switch (reason) {
     case "not-configured":
       return text("Not set up");
+    case "bad-url":
+      return text("The sales engine URL is not usable");
     case "api-off":
     case "actions-off":
       return text("The engine has this turned off");
@@ -36,12 +42,14 @@ function salesFailureText(reason: SalesActionFailureReason, message: string): Sa
       return text("The engine refused the token");
     case "unreachable":
       return text("Can't reach the sales engine");
+    case "unreadable-answer":
+      return text("Phoenix could not read the engine's answer");
     case "budget":
       return text("The engine ran out of requests", message, true);
-    case "failed":
-      return text("The sales engine sent an error");
     case "bad_request":
-      return text("The engine refused the request");
+      return text(
+        origin === "phoenix" ? "Phoenix refused the request" : "The engine refused the request",
+      );
     case "bad_key":
       return text("The engine refused this device's key");
     case "device_exists":
@@ -119,7 +127,7 @@ export function readSalesFailure(result: AtomCommandResult<unknown, unknown>): S
   const error = squashAtomCommandFailure(result);
   if (isSalesActionError(error)) {
     return {
-      ...salesFailureText(error.reason, error.message),
+      ...salesFailureText(error.origin, error.reason, error.message),
       origin: error.origin,
       reason: error.reason,
       currentHash: error.currentHash,
