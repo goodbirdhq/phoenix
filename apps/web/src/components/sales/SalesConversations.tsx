@@ -8,11 +8,10 @@ import {
   type SalesConversationMessage,
   safeSalesNote,
 } from "@t3tools/contracts";
-import { Link } from "@tanstack/react-router";
 import { RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { salesEnvironment, useDispatchedThreads, useSalesDevice } from "../../state/sales";
+import { salesEnvironment, useSalesDevice } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -25,6 +24,7 @@ import {
   type SalesDraftPanelHandle,
   type SalesDeviceView,
 } from "./SalesDraftPanel";
+import { SalesRuns } from "./SalesRuns";
 import { useSalesListKeys } from "./useSalesListKeys";
 
 const dateTime = new Intl.DateTimeFormat(undefined, {
@@ -94,7 +94,7 @@ export function SalesConversations(props: {
     next: () => move(1),
     previous: () => move(-1),
     approve: () => panel.current?.approve(),
-    edit: () => panel.current?.focusBody(),
+    edit: () => panel.current?.edit(),
   });
 
   if (list === null) {
@@ -171,10 +171,11 @@ function ConversationRow(props: {
     <li aria-selected={props.selected} className="aria-selected:bg-accent">
       <button
         type="button"
-        className="grid w-full gap-0.5 px-3 py-2 text-left"
+        // One shrinkable column, so long names and previews truncate instead of widening the row.
+        className="grid w-full grid-cols-[minmax(0,1fr)] gap-0.5 px-3 py-2 text-left"
         onClick={props.onSelect}
       >
-        <span className="flex items-center gap-1.5">
+        <span className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate text-sm">
             {item.contact.name ?? item.contact.email ?? "Unknown contact"}
             {item.contact.accountName ? (
@@ -185,10 +186,10 @@ function ConversationRow(props: {
             {intentLabel(intent)}
           </Badge>
         </span>
-        <span className="line-clamp-2 text-xs text-muted-foreground">
+        <span className="line-clamp-2 text-xs break-words text-muted-foreground">
           {item.latestReply?.preview ?? ""}
         </span>
-        <span className="text-xs text-muted-foreground">
+        <span className="truncate text-xs text-muted-foreground">
           {formatAt(item.latestReply?.receivedAt ?? null)}
           {item.hasOpenDraft
             ? " · answer drafted"
@@ -217,9 +218,6 @@ function ConversationDetailView({
     reportFailure: false,
   });
   const dispatch = useAtomCommand(salesEnvironment.dispatch, { reportFailure: false });
-  const contactThreads = useDispatchedThreads(environmentId, {
-    contactKey: conversation.contactKey,
-  });
   const [detail, setDetail] = useState<SalesConversationDetail | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [note, setNote] = useState("");
@@ -238,6 +236,14 @@ function ConversationDetailView({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const { onChanged } = props;
+  // A run that drafted an answer settles: read the conversation and the list once more.
+  const reread = useCallback(() => {
+    void onChanged();
+    void load();
+  }, [load, onChanged]);
+  const contactRuns = { contactKey: conversation.contactKey };
 
   const replyDraft =
     detail?.drafts.find((draft) => draft.kind === "reply") ??
@@ -272,113 +278,107 @@ function ConversationDetailView({
   };
 
   return (
-    <div className="grid min-h-0 grid-cols-1 xl:grid-cols-2">
-      <section
-        aria-label="History"
-        className="flex min-h-0 flex-col gap-3 overflow-y-auto border-b p-4 xl:border-r xl:border-b-0"
-      >
-        <h2 className="text-sm font-medium">
-          {conversation.contact.name ?? conversation.contact.email ?? "Conversation"}
-          {conversation.mailboxes.length > 0 ? (
-            <span className="font-normal text-muted-foreground">
-              {" "}
-              · {conversation.mailboxes.join(", ")}
-            </span>
-          ) : null}
-        </h2>
-        {conversation.latestReply?.classification?.summary ? (
-          <p className="text-xs text-muted-foreground">
-            {conversation.latestReply.classification.summary}
-          </p>
-        ) : null}
-        {detail === null ? (
-          failure ? (
-            <p className="text-sm text-muted-foreground">{failure}</p>
-          ) : (
-            <Spinner />
-          )
-        ) : (
-          <ol className="grid gap-3">
-            {detail.messages.map((message) => (
-              <MessageItem
-                key={`${message.direction}:${message.id}:${message.at ?? ""}`}
-                message={message}
-              />
-            ))}
-          </ol>
-        )}
-      </section>
-      <section aria-label="Our answer" className="flex min-h-0 flex-col">
-        {replyDraft ? (
-          <SalesDraftPanel
-            key={replyDraft.activityId}
-            ref={ref}
-            environmentId={environmentId}
-            activityId={replyDraft.activityId}
-            listedHash={replyDraft.contentHash}
-            canAct={props.canAct}
-            device={props.device}
-            approveLabel="Approve answer"
-            discardLabel="No reply needed"
-            // The draft is gone and its run did not start: the conversation's own plans take
-            // over once it is read again, and this shows why.
-            onDiscardedWithoutRun={setDispatchError}
-            onChanged={() => {
-              void props.onChanged();
-              void load();
-            }}
-          />
-        ) : (
-          <div className="grid gap-3 p-4">
-            <p className="text-sm text-muted-foreground">
-              {conversation.awaitingAnswer
-                ? "No answer is drafted yet."
-                : "Nothing waits on an answer here."}
-            </p>
-            {props.canAct && answer ? (
-              <form
-                className="grid gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void draftAnswer();
-                }}
-              >
-                <Label htmlFor={`sales-reply-note-${conversation.contactKey}`}>
-                  {answer.noteRequired ? "Note for the drafter" : "Note for the drafter (optional)"}
-                </Label>
-                <Textarea
-                  id={`sales-reply-note-${conversation.contactKey}`}
-                  size="sm"
-                  value={note}
-                  onChange={(event) => setNote(event.target.value)}
-                />
-                <div className="flex justify-end">
-                  <Button
-                    type="submit"
-                    size="xs"
-                    disabled={busy || (answer.noteRequired && safeSalesNote(note).length === 0)}
-                  >
-                    {busy ? "Starting…" : answer.title}
-                  </Button>
-                </div>
-                {dispatchError ? (
-                  <p className="text-xs text-destructive-foreground">{dispatchError}</p>
-                ) : null}
-              </form>
+    // One scroll, history then answer, until there is room for both side by side.
+    <div className="@container min-h-0 overflow-y-auto">
+      <div className="grid @5xl:h-full @5xl:grid-cols-2">
+        <section
+          aria-label="History"
+          className="flex flex-col gap-3 border-b p-4 @5xl:min-h-0 @5xl:overflow-y-auto @5xl:border-r @5xl:border-b-0"
+        >
+          <h2 className="text-sm font-medium break-words">
+            {conversation.contact.name ?? conversation.contact.email ?? "Conversation"}
+            {conversation.mailboxes.length > 0 ? (
+              <span className="font-normal text-muted-foreground">
+                {" "}
+                · {conversation.mailboxes.join(", ")}
+              </span>
             ) : null}
-            {contactThreads.map((thread) => (
-              <Link
-                key={thread.threadId}
-                to="/$environmentId/$threadId"
-                params={{ environmentId, threadId: thread.threadId }}
-                className="text-xs underline"
-              >
-                {thread.title}
-              </Link>
-            ))}
-          </div>
-        )}
-      </section>
+          </h2>
+          {conversation.latestReply?.classification?.summary ? (
+            <p className="text-xs text-muted-foreground">
+              {conversation.latestReply.classification.summary}
+            </p>
+          ) : null}
+          {detail === null ? (
+            failure ? (
+              <p className="text-sm text-muted-foreground">{failure}</p>
+            ) : (
+              <Spinner />
+            )
+          ) : (
+            <ol className="grid max-w-[70ch] gap-3">
+              {detail.messages.map((message) => (
+                <MessageItem
+                  key={`${message.direction}:${message.id}:${message.at ?? ""}`}
+                  message={message}
+                />
+              ))}
+            </ol>
+          )}
+        </section>
+        <section aria-label="Our answer" className="flex flex-col @5xl:min-h-0">
+          {replyDraft ? (
+            <SalesDraftPanel
+              key={replyDraft.activityId}
+              ref={ref}
+              environmentId={environmentId}
+              activityId={replyDraft.activityId}
+              listedHash={replyDraft.contentHash}
+              canAct={props.canAct}
+              device={props.device}
+              approveLabel="Approve answer"
+              discardLabel="No reply needed"
+              runSources={[{ activityId: replyDraft.activityId }, contactRuns]}
+              // The draft is gone and its run did not start: the conversation's own plans take
+              // over once it is read again, and this shows why.
+              onDiscardedWithoutRun={setDispatchError}
+              onChanged={reread}
+            />
+          ) : (
+            <div className="grid max-w-[70ch] content-start gap-4 p-4 @3xl:p-6">
+              <p className="text-sm text-muted-foreground">
+                {conversation.awaitingAnswer
+                  ? "No answer is drafted yet."
+                  : "Nothing waits on an answer here."}
+              </p>
+              {props.canAct && answer ? (
+                <form
+                  className="grid gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void draftAnswer();
+                  }}
+                >
+                  <Label htmlFor={`sales-reply-note-${conversation.contactKey}`}>
+                    {answer.noteRequired
+                      ? "Note for the drafter"
+                      : "Note for the drafter (optional)"}
+                  </Label>
+                  <Textarea
+                    id={`sales-reply-note-${conversation.contactKey}`}
+                    size="sm"
+                    value={note}
+                    onChange={(event) => setNote(event.target.value)}
+                  />
+                  <div className="flex justify-end">
+                    <Button
+                      type="submit"
+                      size="xs"
+                      disabled={busy || (answer.noteRequired && safeSalesNote(note).length === 0)}
+                    >
+                      {busy ? "Starting…" : answer.title}
+                    </Button>
+                  </div>
+                  {dispatchError ? (
+                    <p className="text-xs text-destructive-foreground">{dispatchError}</p>
+                  ) : null}
+                </form>
+              ) : null}
+              <SalesRuns environmentId={environmentId} sources={[contactRuns]} onSettled={reread} />
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

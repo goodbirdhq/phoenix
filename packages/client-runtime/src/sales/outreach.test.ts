@@ -1,7 +1,12 @@
 import { type SalesQueueItem, ThreadId, salesDispatchThreadPrefix } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { dispatchedThreads, listedVersionMoved, tickedForReview } from "./outreach.ts";
+import {
+  dispatchedThreads,
+  listedVersionMoved,
+  queueSummary,
+  tickedForReview,
+} from "./outreach.ts";
 
 const item = (activityId: string, contentHash: string, state = "awaiting"): SalesQueueItem => ({
   activityId,
@@ -76,11 +81,48 @@ describe("dispatchedThreads", () => {
   ]);
 
   it("finds only the threads started from that card or conversation", () => {
-    expect(dispatchedThreads(titles, salesDispatchThreadPrefix({ activityId: "act-1" }))).toEqual([
-      { threadId: "sales:card:act-1:t1", title: "Redraft for Ana" },
-    ]);
-    expect(dispatchedThreads(titles, salesDispatchThreadPrefix({ contactKey: "act-1" }))).toEqual([
-      { threadId: "sales:contact:act-1:t3", title: "Draft an answer to Ana" },
-    ]);
+    expect(dispatchedThreads(titles, [salesDispatchThreadPrefix({ activityId: "act-1" })])).toEqual(
+      [{ threadId: "sales:card:act-1:t1", title: "Redraft for Ana" }],
+    );
+    expect(dispatchedThreads(titles, [salesDispatchThreadPrefix({ contactKey: "act-1" })])).toEqual(
+      [{ threadId: "sales:contact:act-1:t3", title: "Draft an answer to Ana" }],
+    );
+  });
+
+  it("joins the runs of a reply card and its conversation", () => {
+    expect(
+      dispatchedThreads(titles, [
+        salesDispatchThreadPrefix({ activityId: "act-1" }),
+        salesDispatchThreadPrefix({ contactKey: "act-1" }),
+      ]).map((run) => run.title),
+    ).toEqual(["Redraft for Ana", "Draft an answer to Ana"]);
+  });
+});
+
+describe("queueSummary", () => {
+  it("says what the open cards wait on, review first", () => {
+    expect(
+      queueSummary([
+        { state: "approved", sendAt: "2026-11-10T09:00:00.000Z" },
+        { state: "awaiting", sendAt: null },
+        { state: "approved", sendAt: "2026-11-10T10:00:00.000Z" },
+        { state: "awaiting", sendAt: null },
+      ]),
+    ).toBe("2 to review · 2 scheduled");
+  });
+
+  it("names held, refused and unknown states, and an approval with no send time", () => {
+    expect(
+      queueSummary([
+        { state: "mystery", sendAt: null },
+        { state: "approved", sendAt: null },
+        { state: "held", sendAt: null },
+        { state: "refused", sendAt: null },
+      ]),
+    ).toBe("1 refused · 1 held · 1 approved · 1 mystery");
+  });
+
+  it("reads an empty list as nothing waiting", () => {
+    expect(queueSummary([])).toBe("Nothing waits");
   });
 });

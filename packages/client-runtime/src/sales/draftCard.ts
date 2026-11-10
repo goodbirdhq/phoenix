@@ -12,7 +12,7 @@ import type { AtomCommandResult } from "../state/runtime.ts";
 import type { ApproveOutcome } from "./approve.ts";
 import { checkSigning, type SigningDevice } from "./devices.ts";
 import { readSalesFailure, versionRefusalText } from "./failure.ts";
-import { listedVersionMoved } from "./outreach.ts";
+import { cardActions, listedVersionMoved } from "./outreach.ts";
 import { displayedDraft, type VerifiedVersion, verifyDisplayedVersion } from "./signing.ts";
 
 export interface DraftNotice {
@@ -27,6 +27,11 @@ export interface DraftCardState {
   /** The card as last read, or null before the first read lands. */
   readonly detail: SalesQueueItemDetail | null;
   readonly loadFailure: string | null;
+  /**
+   * Whether the card shows its inputs. Off, it shows the email as it will go. An unsaved edit
+   * keeps it on (see `isEditing`).
+   */
+  readonly editing: boolean;
   /** The person's unsaved edit; null while that field is unedited. */
   readonly subjectDraft: string | null;
   readonly bodyDraft: string | null;
@@ -70,9 +75,11 @@ export interface DraftCard {
   readonly load: () => Promise<void>;
   /** The list now shows this hash for the card; a move reads it again unless mid-edit. */
   readonly setListedHash: (listedHash: string | null) => void;
+  /** Shows the inputs, where the card's state allows an edit. */
+  readonly startEdit: () => void;
   readonly editSubject: (subject: string) => void;
   readonly editBody: (body: string) => void;
-  /** Drops the edit, and shows the engine's newer version if the list has one. */
+  /** Drops the edit and returns to the email, showing the engine's newer version if it has one. */
   readonly cancelEdit: () => void;
   readonly save: () => Promise<void>;
   /** Approves the version shown, after hashing that text again here. */
@@ -88,6 +95,9 @@ export interface DraftCard {
 
 export const isDirty = (state: DraftCardState) =>
   state.subjectDraft !== null || state.bodyDraft !== null;
+
+/** Whether the card shows inputs rather than the email: opened for an edit, or holding one. */
+export const isEditing = (state: DraftCardState) => state.editing || isDirty(state);
 
 /**
  * One draft card: read, edited in place, and acted on. What it shows comes from the card's hash
@@ -106,6 +116,7 @@ export function createDraftCard(
   let state: DraftCardState = {
     detail: null,
     loadFailure: null,
+    editing: false,
     subjectDraft: null,
     bodyDraft: null,
     notice: null,
@@ -124,7 +135,13 @@ export function createDraftCard(
   const load = async () => {
     const result = await commands().getQueueItem();
     if (result._tag === "Success") {
-      set({ detail: result.value, loadFailure: null, subjectDraft: null, bodyDraft: null });
+      set({
+        detail: result.value,
+        loadFailure: null,
+        editing: false,
+        subjectDraft: null,
+        bodyDraft: null,
+      });
     } else {
       set({ loadFailure: readSalesFailure(result).description });
     }
@@ -197,10 +214,15 @@ export function createDraftCard(
       }
     },
 
+    startEdit: () => {
+      const { detail, busy } = state;
+      if (detail === null || busy !== null || !cardActions(detail).edit) return;
+      set({ editing: true });
+    },
     editSubject: (subject) => set({ subjectDraft: subject }),
     editBody: (body) => set({ bodyDraft: body }),
     cancelEdit: () => {
-      set({ subjectDraft: null, bodyDraft: null, notice: null });
+      set({ editing: false, subjectDraft: null, bodyDraft: null, notice: null });
       // The engine moved on during the edit: show its version now.
       if (listedHash !== null && listedHash !== state.detail?.contentHash) void load();
     },

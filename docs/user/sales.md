@@ -57,8 +57,9 @@ Other actions:
   names each button. Some runs discard the draft first; the form says so. If such a run fails to
   start, the draft is already gone and Phoenix says why.
 
-The page links each run started from the draft, including after a restart, but not runs you
-archived. Keys: <kbd>J</kbd> and <kbd>K</kbd> move, <kbd>A</kbd> approves, <kbd>E</kbd> edits. The
+**Runs** lists each run started from the draft with its status, including after a restart, but
+not runs you archived. When one finishes, Phoenix reads the draft again so a new version shows.
+Keys: <kbd>J</kbd> and <kbd>K</kbd> move, <kbd>A</kbd> approves, <kbd>E</kbd> edits. The
 command palette offers the same actions.
 
 ## Answer replies

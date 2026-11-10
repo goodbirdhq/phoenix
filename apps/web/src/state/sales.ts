@@ -66,11 +66,15 @@ export function useSalesState(environmentId: EnvironmentId) {
   return useAtomValue(salesEnvironment.stateValueAtom(environmentId));
 }
 
-/** The threads dispatched from a card or a conversation, from the environment's read model. */
-export function useDispatchedThreads(environmentId: EnvironmentId, source: SalesDispatchSource) {
+/** The threads dispatched from cards or conversations, from the environment's read model. */
+export function useDispatchedThreads(
+  environmentId: EnvironmentId,
+  sources: ReadonlyArray<SalesDispatchSource>,
+) {
   const titles = useEnvironmentThreadTitles(environmentId);
-  const prefix = salesDispatchThreadPrefix(source);
-  return useMemo(() => dispatchedThreads(titles, prefix), [titles, prefix]);
+  // Prefixes are URI-encoded, so a space never occurs in one: joined, they key the memo.
+  const prefixes = sources.map(salesDispatchThreadPrefix).join(" ");
+  return useMemo(() => dispatchedThreads(titles, prefixes.split(" ")), [titles, prefixes]);
 }
 
 // --- Device keys ------------------------------------------------------------------------------
