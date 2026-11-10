@@ -163,6 +163,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as ScheduleService from "./schedule/ScheduleService.ts";
+import * as SalesDispatch from "./sales/SalesDispatch.ts";
 import * as SalesService from "./sales/SalesService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
@@ -683,6 +684,7 @@ const makeWsRpcLayer = (
       const usage = yield* UsageService.UsageService;
       const schedules = yield* ScheduleService.ScheduleService;
       const sales = yield* SalesService.SalesService;
+      const salesDispatch = yield* SalesDispatch.SalesDispatchService;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1367,6 +1369,52 @@ const makeWsRpcLayer = (
           }),
         [SALES_WS_METHODS.subscribe]: () =>
           observeRpcStreamEffect(SALES_WS_METHODS.subscribe, sales.subscribe, {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.getQueueItem]: (input) =>
+          observeRpcEffect(SALES_WS_METHODS.getQueueItem, sales.getQueueItem(input.activityId), {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.listConversations]: () =>
+          observeRpcEffect(SALES_WS_METHODS.listConversations, sales.listConversations, {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.getConversation]: (input) =>
+          observeRpcEffect(
+            SALES_WS_METHODS.getConversation,
+            sales.getConversation(input.contactKey),
+            { "rpc.aggregate": "sales" },
+          ),
+        [SALES_WS_METHODS.approve]: (input) =>
+          observeRpcEffect(SALES_WS_METHODS.approve, sales.approve(input), {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.unapprove]: (input) =>
+          observeRpcEffect(SALES_WS_METHODS.unapprove, sales.unapprove(input.activityId), {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.edit]: (input) =>
+          observeRpcEffect(SALES_WS_METHODS.edit, sales.edit(input), {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.discard]: (input) =>
+          observeRpcEffect(SALES_WS_METHODS.discard, sales.discard(input), {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.listDevices]: () =>
+          observeRpcEffect(SALES_WS_METHODS.listDevices, sales.listDevices, {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.enrolDevice]: (input) =>
+          observeRpcEffect(SALES_WS_METHODS.enrolDevice, sales.enrolDevice(input), {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.revokeDevice]: (input) =>
+          observeRpcEffect(SALES_WS_METHODS.revokeDevice, sales.revokeDevice(input.deviceId), {
+            "rpc.aggregate": "sales",
+          }),
+        [SALES_WS_METHODS.dispatch]: (input) =>
+          observeRpcEffect(SALES_WS_METHODS.dispatch, salesDispatch.dispatch(input), {
             "rpc.aggregate": "sales",
           }),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>

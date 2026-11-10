@@ -988,13 +988,18 @@ export type BitbucketSettings = typeof BitbucketSettings.Type;
 
 /**
  * The external sales engine this environment reads for the Sales area. The
- * read token lives in the server's secret store; settings and clients only see
- * a redaction marker when one is set. The Sales area stays hidden until both
- * are set.
+ * read and action tokens live in the server's secret store; settings and
+ * clients only see a redaction marker when one is set. The Sales area stays
+ * hidden until the URL and read token are set; actions need the action token,
+ * and dispatch needs the agents project (the Phoenix project whose checkout
+ * runs the sales workflows).
  */
 export const SalesEngineSettings = Schema.Struct({
   baseUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   readToken: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  actionToken: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  /** A ProjectId, or "" for none. */
+  agentsProjectId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
 });
 export type SalesEngineSettings = typeof SalesEngineSettings.Type;
 
@@ -1667,6 +1672,8 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       baseUrl: Schema.optionalKey(TrimmedString),
       readToken: Schema.optionalKey(TrimmedString),
+      actionToken: Schema.optionalKey(TrimmedString),
+      agentsProjectId: Schema.optionalKey(TrimmedString),
     }),
   ),
   providers: Schema.optionalKey(

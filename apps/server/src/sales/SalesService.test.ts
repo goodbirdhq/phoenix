@@ -8,7 +8,9 @@ import * as Scope from "effect/Scope";
 import * as Exit from "effect/Exit";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import type { SalesStreamEvent } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
+import { ProjectId, SalesActionError, type SalesStreamEvent, ThreadId } from "@t3tools/contracts";
 import {
   HttpClient,
   HttpClientError,
@@ -18,6 +20,8 @@ import {
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as SalesService from "./SalesService.ts";
+
+const isSalesActionError = Schema.is(SalesActionError);
 
 /** `GET /summary` as the engine's docs/sales-api.md shows it, plus a field v1 may add later. */
 const summaryFixture = {
@@ -91,16 +95,80 @@ const summaryFixture = {
   addedInALaterRelease: { anything: true },
 };
 
+/** One open card as `GET /queue` lists it. */
+const queueItemFixture = {
+  activityId: "act-1",
+  kind: "chase",
+  step: 2,
+  stepLabel: "Email 2",
+  contact: {
+    id: "contact-1",
+    name: "Ana",
+    email: "ana@brand.example",
+    accountName: "Brand",
+    timeZone: "Europe/London",
+    effectiveTimeZone: "Europe/London",
+    notionUrl: "https://www.notion.so/contact1",
+  },
+  campaign: "Fintech Q4",
+  subject: "Re: creator x fintech",
+  threaded: true,
+  bodyPreview: "Hey Ana, ...",
+  contentHash: "a".repeat(64),
+  state: "awaiting",
+  approval: null,
+  sendAt: null,
+  goes: null,
+  mailbox: { sticky: true, address: "gabe@trygoodbird.com", threadState: "open" },
+  refusal: null,
+  note: null,
+  check: null,
+  skip: null,
+  sendStatus: null,
+  notionUrl: "https://www.notion.so/act1",
+  slack: { channel: "C1", ts: "1.2" },
+  rowEditedAt: "2026-11-09T18:00:00.000Z",
+};
+const queueFixture = {
+  version: 1,
+  generatedAt: "2026-11-09T18:30:00.000Z",
+  timezone: "America/Los_Angeles",
+  items: [queueItemFixture],
+};
+
+const cardState = {
+  activityId: "act-1",
+  contentHash: "b".repeat(64),
+  state: "open",
+  approved: true,
+  approvedBy: "device:laptop-1",
+  sendAt: "2026-11-10T09:14:00.000Z",
+  goes: "Tue 10 Nov, 09:14 their time",
+  refusal: null,
+  note: null,
+};
+
 type Responder = (request: HttpClientRequest.HttpClientRequest) => Response | "network-error";
 
+const pathOf = (request: HttpClientRequest.HttpClientRequest) => new URL(request.url).pathname;
+/** The engine's views, answered from the fixtures by path. */
+const views: Responder = (request) =>
+  pathOf(request).endsWith("/queue") ? Response.json(queueFixture) : Response.json(summaryFixture);
+const summaryReads = (requests: ReadonlyArray<HttpClientRequest.HttpClientRequest>) =>
+  requests.filter((request) => pathOf(request).endsWith("/summary")).length;
+
 function makeLayer(input: {
-  readonly salesEngine?: { readonly baseUrl: string; readonly readToken: string };
+  readonly salesEngine?: {
+    readonly baseUrl: string;
+    readonly readToken: string;
+    readonly actionToken?: string;
+  };
   readonly respond?: Responder;
   /** Holds each answer back on the test clock, so overlapping reads really overlap. */
   readonly delay?: Duration.Input;
 }) {
   const requests: Array<HttpClientRequest.HttpClientRequest> = [];
-  let respond: Responder = input.respond ?? (() => Response.json(summaryFixture));
+  let respond: Responder = input.respond ?? views;
   const client = HttpClient.make((request) => {
     requests.push(request);
     const response = respond(request);
@@ -124,6 +192,7 @@ function makeLayer(input: {
         salesEngine: input.salesEngine ?? {
           baseUrl: "https://engine.example.com/",
           readToken: "read-token",
+          actionToken: "action-token",
         },
       }),
     ),
@@ -168,9 +237,15 @@ it.effect("polls the engine only while a client is subscribed", () => {
 
     const first = yield* subscribeInScope;
     const ready = yield* first.nextWith(isReady);
-    assert.strictEqual(requests.length, 1);
-    assert.strictEqual(requests[0]?.url, "https://engine.example.com/api/sales/v1/summary");
-    assert.strictEqual(requests[0]?.headers.authorization, "Bearer read-token");
+    // Each read asks for the summary and the queue, both on the read token.
+    assert.deepStrictEqual(requests.map((request) => request.url).toSorted(), [
+      "https://engine.example.com/api/sales/v1/queue",
+      "https://engine.example.com/api/sales/v1/summary",
+    ]);
+    for (const request of requests) {
+      assert.strictEqual(request.headers.authorization, "Bearer read-token");
+    }
+    assert.strictEqual(ready.snapshot.queue?.items[0]?.activityId, "act-1");
 
     // A second subscriber shares the one poller.
     const second = yield* subscribeInScope;
@@ -179,17 +254,17 @@ it.effect("polls the engine only while a client is subscribed", () => {
       (event) => event.snapshot.checkedAt !== ready.snapshot.checkedAt,
     );
     yield* second.nextWith((event) => event.snapshot.checkedAt === tick.snapshot.checkedAt);
-    assert.strictEqual(requests.length, 2);
+    assert.strictEqual(requests.length, 4);
 
     // The poller outlives the first subscriber and stops with the last.
     yield* Scope.close(first.scope, Exit.void);
     yield* TestClock.adjust(SalesService.SALES_POLL_INTERVAL);
     yield* second.nextWith((event) => event.snapshot.checkedAt !== tick.snapshot.checkedAt);
-    assert.strictEqual(requests.length, 3);
+    assert.strictEqual(requests.length, 6);
 
     yield* Scope.close(second.scope, Exit.void);
     yield* TestClock.adjust("10 minutes");
-    assert.strictEqual(requests.length, 3);
+    assert.strictEqual(requests.length, 6);
   }).pipe(Effect.provide(layer));
 });
 
@@ -222,6 +297,7 @@ it.effect("fills groups a smaller engine answer leaves out instead of failing", 
     assert.strictEqual(snapshot.status, "ready");
     assert.strictEqual(snapshot.summary?.drafts.awaiting.total, 0);
     assert.deepStrictEqual(snapshot.summary?.needsALook.items, []);
+    assert.deepStrictEqual(snapshot.queue?.items, []);
   }).pipe(Effect.provide(layer));
 });
 
@@ -254,6 +330,7 @@ it.effect("maps engine answers to statuses and keeps the last summary through th
       assert.strictEqual(snapshot.status, status);
       assert.isString(snapshot.message);
       assert.deepStrictEqual(snapshot.summary, ready.summary);
+      assert.deepStrictEqual(snapshot.queue, ready.queue);
       assert.strictEqual(snapshot.summaryReadAt, ready.summaryReadAt);
     }
   }).pipe(Effect.provide(layer));
@@ -305,14 +382,14 @@ it.effect("shares one engine request between overlapping reads", () => {
     }).pipe(Effect.forkChild);
     yield* TestClock.adjust("1 second");
     const [a, b] = yield* Fiber.join(overlapping);
-    assert.strictEqual(requests.length, 1);
+    assert.strictEqual(summaryReads(requests), 1);
     assert.deepStrictEqual(a, b);
 
     // A read after that one finished asks again.
     const later = yield* sales.refresh.pipe(Effect.forkChild);
     yield* TestClock.adjust("1 second");
     yield* Fiber.join(later);
-    assert.strictEqual(requests.length, 2);
+    assert.strictEqual(summaryReads(requests), 2);
   }).pipe(Effect.provide(layer));
 });
 
@@ -346,6 +423,273 @@ it.effect("drops the old engine's snapshot when the settings change with nobody 
     const snapshot = yield* sales.getSnapshot;
     assert.strictEqual(snapshot.summary, null);
     // Nothing was asked of either engine: nobody is watching.
-    assert.strictEqual(requests.length, 1);
+    assert.strictEqual(summaryReads(requests), 1);
+  }).pipe(Effect.provide(layer));
+});
+
+const failureOf = <A, E>(exit: Exit.Exit<A, E>) => {
+  assert.isTrue(Exit.isFailure(exit));
+  return Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;
+};
+
+it.effect("relays actions on the action token and returns the card as it stands", () => {
+  const bodies: Array<{ path: string; method: string; body: unknown }> = [];
+  const { layer, requests } = makeLayer({
+    respond: (request) => {
+      const body =
+        request.body._tag === "Uint8Array"
+          ? JSON.parse(new TextDecoder().decode(request.body.body))
+          : null;
+      bodies.push({ path: pathOf(request), method: request.method, body });
+      switch (pathOf(request)) {
+        case "/api/sales/v1/actions/unapprove":
+          return Response.json({ ok: true, ...cardState, approved: false, approvedBy: null });
+        case "/api/sales/v1/actions/edit":
+          return Response.json({ ok: true, approvalLapsed: true, ...cardState, approved: false });
+        case "/api/sales/v1/actions/discard":
+          return Response.json({ ok: true, ...cardState, state: "discarded", approved: false });
+        default:
+          return views(request);
+      }
+    },
+  });
+  return Effect.gen(function* () {
+    const sales = yield* SalesService.SalesService;
+    const unapproved = yield* sales.unapprove("act-1");
+    assert.strictEqual(unapproved.approved, false);
+    const edited = yield* sales.edit({
+      activityId: "act-1",
+      expectedHash: "a".repeat(64),
+      body: "Hey Ana,\n\nNew words.",
+    });
+    assert.isTrue(edited.approvalLapsed);
+    assert.strictEqual(edited.card.contentHash, cardState.contentHash);
+    const discarded = yield* sales.discard({ activityId: "act-1", expectedHash: "b".repeat(64) });
+    assert.strictEqual(discarded.state, "discarded");
+
+    for (const request of requests) {
+      assert.strictEqual(request.headers.authorization, "Bearer action-token");
+      assert.strictEqual(request.method, "POST");
+    }
+    assert.deepStrictEqual(bodies[1]?.body, {
+      activityId: "act-1",
+      expectedHash: "a".repeat(64),
+      body: "Hey Ana,\n\nNew words.",
+    });
+    // Nobody was watching, so no action read the queue again.
+    assert.strictEqual(summaryReads(requests), 0);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("maps every engine refusal to a typed reason", () => {
+  const { layer, setResponder } = makeLayer({});
+  return Effect.gen(function* () {
+    const sales = yield* SalesService.SalesService;
+    const cases: ReadonlyArray<readonly [Responder, string, string | null]> = [
+      [
+        () =>
+          Response.json(
+            { error: "stale_hash", message: "Moved on.", currentHash: "c".repeat(64) },
+            { status: 409 },
+          ),
+        "stale_hash",
+        "c".repeat(64),
+      ],
+      [
+        () =>
+          Response.json({ error: "not_open", message: "Sent.", state: "sent" }, { status: 409 }),
+        "not_open",
+        null,
+      ],
+      [
+        () =>
+          Response.json(
+            { error: "changed_in_notion", currentHash: "d".repeat(64) },
+            { status: 409 },
+          ),
+        "changed_in_notion",
+        "d".repeat(64),
+      ],
+      [
+        () =>
+          Response.json({ error: "notion_failed", currentHash: "e".repeat(64) }, { status: 502 }),
+        "notion_failed",
+        "e".repeat(64),
+      ],
+      [
+        () => Response.json({ error: "subject_not_editable" }, { status: 400 }),
+        "subject_not_editable",
+        null,
+      ],
+      [
+        () => Response.json({ error: "sales_actions_off", message: "off" }, { status: 503 }),
+        "actions-off",
+        null,
+      ],
+      [() => Response.json({ error: "budget", message: "Out." }, { status: 503 }), "budget", null],
+      [() => Response.json({ error: "unauthorised" }, { status: 401 }), "unauthorised", null],
+      [() => Response.json({ error: "a_reason_from_later" }, { status: 409 }), "other", null],
+      [() => new Response("Internal Server Error", { status: 500 }), "failed", null],
+      [() => "network-error", "unreachable", null],
+    ];
+    for (const [responder, reason, currentHash] of cases) {
+      setResponder(responder);
+      const error = failureOf(
+        yield* sales
+          .edit({ activityId: "act-1", expectedHash: "a".repeat(64), body: "x" })
+          .pipe(Effect.exit),
+      );
+      assert.isTrue(isSalesActionError(error));
+      if (isSalesActionError(error)) {
+        assert.strictEqual(error.reason, reason);
+        assert.strictEqual(error.currentHash, currentHash);
+        assert.isAbove(error.message.length, 0);
+        if (reason === "not_open") assert.strictEqual(error.state, "sent");
+      }
+    }
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("refuses actions without an action token and sends nothing", () => {
+  const { layer, requests } = makeLayer({
+    salesEngine: { baseUrl: "https://engine.example.com", readToken: "read-token" },
+  });
+  return Effect.gen(function* () {
+    const sales = yield* SalesService.SalesService;
+    const error = failureOf(yield* sales.unapprove("act-1").pipe(Effect.exit));
+    assert.isTrue(isSalesActionError(error));
+    assert.strictEqual(isSalesActionError(error) ? error.reason : null, "not-configured");
+    assert.strictEqual(requests.length, 0);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("relays signed approvals untouched and maps each result in order", () => {
+  const items = [
+    {
+      activityId: "act-1",
+      contentHash: "a".repeat(64),
+      deviceId: "laptop-1",
+      signedAt: "2026-11-10T09:14:03.120Z",
+      signature: "sig-1",
+    },
+    {
+      activityId: "act-2",
+      contentHash: "f".repeat(64),
+      deviceId: "laptop-1",
+      signedAt: "2026-11-10T09:14:03.200Z",
+      signature: "sig-2",
+    },
+    {
+      activityId: "act-3",
+      contentHash: "0".repeat(64),
+      deviceId: "laptop-1",
+      signedAt: "2026-11-10T09:14:03.300Z",
+      signature: "sig-3",
+    },
+  ];
+  let sent: unknown = null;
+  const { layer } = makeLayer({
+    respond: (request) => {
+      if (pathOf(request) !== "/api/sales/v1/actions/approve") return views(request);
+      sent =
+        request.body._tag === "Uint8Array"
+          ? JSON.parse(new TextDecoder().decode(request.body.body))
+          : null;
+      return Response.json({
+        results: [
+          { ok: true, already: false, ...cardState },
+          {
+            ok: false,
+            activityId: "act-2",
+            reason: "stale_hash",
+            message: "Moved on.",
+            currentHash: "9".repeat(64),
+          },
+          { ok: false, activityId: "act-3", reason: "a_reason_from_later", message: "New." },
+        ],
+        approved: 1,
+        failed: 2,
+      });
+    },
+  });
+  return Effect.gen(function* () {
+    const result = yield* (yield* SalesService.SalesService).approve({ items });
+    // The server forwards the client's signatures byte for byte.
+    assert.deepStrictEqual(sent, { items });
+    assert.deepStrictEqual(result.results, [
+      { ok: true, already: false, card: cardState },
+      {
+        ok: false,
+        activityId: "act-2",
+        reason: "stale_hash",
+        message: "Moved on.",
+        currentHash: "9".repeat(64),
+      },
+      { ok: false, activityId: "act-3", reason: "other", message: "New.", currentHash: null },
+    ]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("never reads a missing approval result as approved", () => {
+  const { layer } = makeLayer({
+    respond: (request) =>
+      pathOf(request) === "/api/sales/v1/actions/approve"
+        ? Response.json({ results: [], approved: 0, failed: 0 })
+        : views(request),
+  });
+  return Effect.gen(function* () {
+    const result = yield* (yield* SalesService.SalesService).approve({
+      items: [
+        {
+          activityId: "act-1",
+          contentHash: "a".repeat(64),
+          deviceId: "d",
+          signedAt: "2026-11-10T09:14:03.120Z",
+          signature: "s",
+        },
+      ],
+    });
+    assert.strictEqual(result.results[0]?.ok, false);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reads the queue again after an action while someone watches", () => {
+  const { layer, requests } = makeLayer({
+    respond: (request) =>
+      pathOf(request) === "/api/sales/v1/actions/unapprove"
+        ? Response.json({ ok: true, ...cardState, approved: false })
+        : views(request),
+  });
+  return Effect.gen(function* () {
+    const sales = yield* SalesService.SalesService;
+    const watcher = yield* subscribeInScope;
+    const ready = yield* watcher.nextWith(isReady);
+    assert.strictEqual(summaryReads(requests), 1);
+    assert.strictEqual(ready.snapshot.status, "ready");
+    // The action itself publishes nothing, so the next event is the read it set off.
+    yield* sales.unapprove("act-1");
+    yield* watcher.nextWith(() => true);
+    assert.strictEqual(summaryReads(requests), 2);
+    yield* Scope.close(watcher.scope, Exit.void);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps dispatches through engine reads and settings changes", () => {
+  const { layer } = makeLayer({});
+  return Effect.gen(function* () {
+    const sales = yield* SalesService.SalesService;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* sales.recordDispatch({
+      target: "act-1",
+      action: "redraft",
+      skill: "follow-up-drafting",
+      threadId: ThreadId.make("thread-1"),
+      projectId: ProjectId.make("project-1"),
+      title: "Redraft for Ana",
+      startedAt: "2026-11-10T09:00:00.000Z",
+    });
+    assert.strictEqual((yield* sales.refresh).dispatches.length, 1);
+    yield* settings.updateSettings({ salesEngine: { readToken: "the-new-token" } });
+    assert.strictEqual((yield* sales.getSnapshot).dispatches[0]?.threadId, "thread-1");
   }).pipe(Effect.provide(layer));
 });
