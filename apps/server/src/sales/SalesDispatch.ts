@@ -12,6 +12,7 @@ import {
   canStartProviderSession,
   fillSalesNote,
   safeSalesNote,
+  salesDispatchThreadPrefix,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
@@ -35,8 +36,9 @@ import * as SalesService from "./SalesService.ts";
  * Starts the threads the sales engine offers from a card or a conversation. The engine builds
  * each one whole (docs/internals/birdhouse.md, "Dispatch"): which workflow runs, its target and
  * the prompt's wording are its, and this only fills in the person's note. The thread runs in the
- * configured agents project. Nothing dispatched can approve: what a workflow writes waits for a
- * press like any other.
+ * configured agents project, and its id carries the card or conversation it came from
+ * (`salesDispatchThreadPrefix`), so the read model remembers the link. Nothing dispatched can
+ * approve: what a workflow writes waits for a press like any other.
  */
 
 /**
@@ -222,7 +224,7 @@ const make = Effect.gen(function* () {
     // send the person to the conversation to start again.
     const discarded = plan.discardFirst && plan.card !== null;
     if (discarded) yield* sales.discard(plan.card);
-    const threadId = ThreadId.make(yield* randomUUID);
+    const threadId = ThreadId.make(`${salesDispatchThreadPrefix(input)}${yield* randomUUID}`);
     yield* startThread(project, { threadId, prompt, title: plan.title }).pipe(
       Effect.mapError((error) =>
         discarded
@@ -233,13 +235,7 @@ const make = Effect.gen(function* () {
           : error,
       ),
     );
-    const record: SalesDispatch = {
-      target: "activityId" in input ? input.activityId : input.contactKey,
-      threadId,
-      title: plan.title,
-    };
-    yield* sales.recordDispatch(record);
-    return record;
+    return { threadId, title: plan.title } satisfies SalesDispatch;
   });
 
   return SalesDispatchService.of({ dispatch });

@@ -59,7 +59,7 @@ Other actions:
 - **Research** starts a research run for the draft's account.
 
 The engine decides which runs a draft offers and names each button. The page links each run it
-started. Keys: <kbd>J</kbd> and <kbd>K</kbd> move, <kbd>A</kbd>
+started, including after a restart. Keys: <kbd>J</kbd> and <kbd>K</kbd> move, <kbd>A</kbd>
 approves, <kbd>E</kbd> edits. The command palette offers the same actions.
 
 ## Answer replies

@@ -1,4 +1,10 @@
-import type { SalesConversation, SalesQueueItem } from "@t3tools/contracts";
+import {
+  type SalesConversation,
+  type SalesDispatch,
+  type SalesQueueItem,
+  type ThreadId,
+  salesDispatchThreadPrefix,
+} from "@t3tools/contracts";
 
 /** A list group of the Outreach page: one campaign's open cards, oldest first. */
 export interface SalesQueueGroup {
@@ -139,4 +145,18 @@ export function sortConversations(
   return [...items].sort(
     (left, right) => Number(right.awaitingAnswer) - Number(left.awaitingAnswer),
   );
+}
+
+/**
+ * The threads started from a card or a conversation, read from an environment's thread titles:
+ * each one's id begins with the target's prefix (`salesDispatchThreadPrefix`).
+ */
+export function dispatchedThreads(
+  titles: ReadonlyMap<ThreadId, string>,
+  target: { readonly activityId: string } | { readonly contactKey: string },
+): ReadonlyArray<SalesDispatch> {
+  const prefix = salesDispatchThreadPrefix(target);
+  return [...titles]
+    .filter(([threadId]) => threadId.startsWith(prefix))
+    .map(([threadId, title]) => ({ threadId, title }));
 }

@@ -49,4 +49,8 @@ whether it needs a note or discards the card first (`engine/docs/sales-api.md`,
 draft kind or prompt wording: it reads the plan again, checks the card is the
 version the person saw, fills in the note and starts the thread in the
 configured agents project. A new birdhouse workflow is an engine change only.
-Run records do not belong in Phoenix.
+The thread id carries the card or conversation it came from
+(`salesDispatchThreadPrefix` in `packages/contracts/src/sales.ts`), the way
+schedule threads carry their occurrence, so the link lives in the read model
+and survives restarts without a field of its own. Run records do not belong in
+Phoenix.

@@ -1,7 +1,7 @@
-import type { SalesQueueItem } from "@t3tools/contracts";
+import { type SalesQueueItem, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { listedVersionMoved, tickedForReview } from "./outreach.ts";
+import { dispatchedThreads, listedVersionMoved, tickedForReview } from "./outreach.ts";
 
 const item = (activityId: string, contentHash: string, state = "awaiting"): SalesQueueItem => ({
   activityId,
@@ -64,5 +64,33 @@ describe("listedVersionMoved", () => {
     expect(listedVersionMoved("h1", "H2", "h2")).toBe(false);
     expect(listedVersionMoved("h1", null, "h1")).toBe(false);
     expect(listedVersionMoved("h1", "h2", null)).toBe(false);
+  });
+});
+
+describe("dispatchedThreads", () => {
+  const titles = new Map([
+    [ThreadId.make("sales:card:act-1:t1"), "Redraft for Ana"],
+    [ThreadId.make("sales:card:act-10:t2"), "Redraft for Bo"],
+    [ThreadId.make("sales:contact:act-1:t3"), "Draft an answer to Ana"],
+    [ThreadId.make("thread-4"), "Unrelated"],
+  ]);
+
+  it("finds only the threads started from that card or conversation", () => {
+    expect(dispatchedThreads(titles, { activityId: "act-1" })).toEqual([
+      { threadId: "sales:card:act-1:t1", title: "Redraft for Ana" },
+    ]);
+    expect(dispatchedThreads(titles, { contactKey: "act-1" })).toEqual([
+      { threadId: "sales:contact:act-1:t3", title: "Draft an answer to Ana" },
+    ]);
+  });
+
+  it("encodes a key that holds a colon, so it cannot pass for another target", () => {
+    const threads = new Map([
+      [ThreadId.make("sales:card:a%3Ab:t1"), "From a:b"],
+      [ThreadId.make("sales:card:a:b:t2"), "From a"],
+    ]);
+    expect(dispatchedThreads(threads, { activityId: "a:b" })).toEqual([
+      { threadId: "sales:card:a%3Ab:t1", title: "From a:b" },
+    ]);
   });
 });

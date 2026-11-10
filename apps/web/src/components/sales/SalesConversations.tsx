@@ -9,11 +9,10 @@ import {
   safeSalesNote,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import * as Option from "effect/Option";
 import { RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { salesEnvironment, useSalesDevice, useSalesState } from "../../state/sales";
+import { salesEnvironment, useDispatchedThreads, useSalesDevice } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -218,9 +217,9 @@ function ConversationDetailView({
     reportFailure: false,
   });
   const dispatch = useAtomCommand(salesEnvironment.dispatch, { reportFailure: false });
-  const state = useSalesState(environmentId);
-  const dispatches = Option.getOrNull(state.snapshot)?.dispatches ?? [];
-  const contactThreads = dispatches.filter((entry) => entry.target === conversation.contactKey);
+  const contactThreads = useDispatchedThreads(environmentId, {
+    contactKey: conversation.contactKey,
+  });
   const [detail, setDetail] = useState<SalesConversationDetail | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [note, setNote] = useState("");
@@ -258,7 +257,7 @@ function ConversationDetailView({
           note,
         },
       });
-      // The started thread arrives in the snapshot's dispatches and is linked below.
+      // The started thread joins the read model and is linked below.
       if (result._tag === "Success") {
         setDispatchError(null);
         setNote("");
@@ -319,7 +318,6 @@ function ConversationDetailView({
             listedHash={replyDraft.contentHash}
             canAct={props.canAct}
             device={props.device}
-            dispatches={dispatches}
             approveLabel="Approve answer"
             discardLabel="No reply needed"
             // The answer is gone and its run did not start: the Draft an answer form takes over

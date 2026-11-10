@@ -517,13 +517,21 @@ export const SalesDispatchInput = Schema.Union([
 ]);
 export type SalesDispatchInput = typeof SalesDispatchInput.Type;
 
-/** A thread a dispatch started. `target` is the card's activityId or the contact's key. */
-export const SalesDispatch = Schema.Struct({
-  target: Schema.String,
-  threadId: ThreadId,
-  title: Schema.String,
-});
+/** A thread a dispatch started. */
+export const SalesDispatch = Schema.Struct({ threadId: ThreadId, title: Schema.String });
 export type SalesDispatch = typeof SalesDispatch.Type;
+
+/**
+ * The thread id prefix of every thread dispatched from one card or conversation. The target is
+ * part of the id, so the read model remembers it: the threads started from a target are the
+ * threads whose id starts with this. The key is URI-encoded, so it holds no `:`.
+ */
+export const salesDispatchThreadPrefix = (
+  target: { readonly activityId: string } | { readonly contactKey: string },
+) =>
+  "activityId" in target
+    ? `sales:card:${encodeURIComponent(target.activityId)}:`
+    : `sales:contact:${encodeURIComponent(target.contactKey)}:`;
 
 /**
  * The refusal codes the engine sends (`error` in its error body), spelled as it spells them. A
@@ -640,8 +648,6 @@ export const SalesSnapshot = Schema.Struct({
   summaryReadAt: Schema.NullOr(IsoDateTime),
   /** When the server last asked the engine, successfully or not. */
   checkedAt: Schema.NullOr(IsoDateTime),
-  /** Threads dispatched from Sales since the server started, newest first. Memory only. */
-  dispatches: Schema.Array(SalesDispatch).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type SalesSnapshot = typeof SalesSnapshot.Type;
 

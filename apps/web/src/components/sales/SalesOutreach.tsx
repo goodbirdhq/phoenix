@@ -6,13 +6,13 @@ import {
   stateLabel,
   tickedForReview,
 } from "@t3tools/client-runtime/sales/outreach";
-import type { EnvironmentId, SalesDispatch, SalesQueueItem } from "@t3tools/contracts";
+import type { EnvironmentId, SalesQueueItem } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { ExternalLinkIcon } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useSalesDevice, useSalesState } from "../../state/sales";
+import { useDispatchedThreads, useSalesDevice, useSalesState } from "../../state/sales";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -49,7 +49,6 @@ export function SalesOutreach(props: {
   const [checked, setChecked] = useState<ReadonlyMap<string, string>>(new Map());
   const [reviewing, setReviewing] = useState<ReadonlyArray<TickedDraft> | null>(null);
   const [outcomes, setOutcomes] = useState<ReadonlyArray<ApproveOutcome>>([]);
-  const dispatches = snapshot?.dispatches ?? [];
 
   const move = (delta: number) => {
     if (order.length === 0) return;
@@ -236,20 +235,13 @@ export function SalesOutreach(props: {
           listedHash={current.contentHash}
           canAct={canAct}
           device={device}
-          dispatches={dispatches}
           allowResearch
         />
       ) : (
         <div className="hidden md:block" />
       )}
 
-      {current ? (
-        <SalesContextPanel
-          item={current}
-          environmentId={environmentId}
-          dispatches={dispatches.filter((entry) => entry.target === current.activityId)}
-        />
-      ) : null}
+      {current ? <SalesContextPanel item={current} environmentId={environmentId} /> : null}
     </div>
   );
 }
@@ -383,9 +375,9 @@ const safeHttpUrl = (value: string | null) =>
 function SalesContextPanel(props: {
   readonly item: SalesQueueItem;
   readonly environmentId: EnvironmentId;
-  readonly dispatches: ReadonlyArray<SalesDispatch>;
 }) {
   const { item } = props;
+  const threads = useDispatchedThreads(props.environmentId, { activityId: item.activityId });
   const contactPage = safeHttpUrl(item.contact.notionUrl);
   const rowPage = safeHttpUrl(item.notionUrl);
   const linkedin = safeHttpUrl(item.contact.linkedinUrl);
@@ -426,15 +418,15 @@ function SalesContextPanel(props: {
         {item.campaign ? <p>Campaign: {item.campaign}</p> : null}
         {item.stepLabel ? <p>{item.stepLabel} to them</p> : null}
         {rowPage ? <ExternalLink href={rowPage}>Activity row in Notion</ExternalLink> : null}
-        {props.dispatches.length > 0 ? (
-          props.dispatches.map((dispatch) => (
+        {threads.length > 0 ? (
+          threads.map((thread) => (
             <Link
-              key={dispatch.threadId}
+              key={thread.threadId}
               to="/$environmentId/$threadId"
-              params={{ environmentId: props.environmentId, threadId: dispatch.threadId }}
+              params={{ environmentId: props.environmentId, threadId: thread.threadId }}
               className="underline"
             >
-              {dispatch.title}
+              {thread.title}
             </Link>
           ))
         ) : (

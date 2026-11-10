@@ -251,11 +251,7 @@ describe("draft card actions", () => {
   });
 
   it("links the thread a dispatch started and closes the redraft form", async () => {
-    const thread = {
-      target: "act-1",
-      threadId: ThreadId.make("thread-1"),
-      title: "Redraft for Ana",
-    };
+    const thread = { threadId: ThreadId.make("sales:card:act-1:t1"), title: "Redraft for Ana" };
     const sent: SalesDispatchInput[] = [];
     const { card } = setup({
       commands: {

@@ -10,6 +10,7 @@ import {
   type SalesDispatchPlans,
   type SalesQueueItemDetail,
   type ServerProvider,
+  salesDispatchThreadPrefix,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
@@ -198,7 +199,6 @@ function makeDispatchLayer(input: {
   const sales = Layer.mock(SalesService.SalesService)({
     getQueueItem: () => Effect.succeed(replyCard),
     getConversation: () => Effect.succeed(conversation),
-    recordDispatch: () => Effect.sync(() => void calls.push("record")),
     discard: (args) => {
       calls.push(`discard:${args.expectedHash}`);
       return Effect.succeed({
@@ -275,11 +275,11 @@ it.effect("discards the plan's card for the version shown, then starts its threa
   return Effect.gen(function* () {
     const dispatch = yield* SalesDispatch.SalesDispatchService;
     const result = yield* dispatch.dispatch(redraftReply);
-    assert.deepStrictEqual(calls, [`discard:${HASH}`, "bootstrap", "record"]);
+    assert.deepStrictEqual(calls, [`discard:${HASH}`, "bootstrap"]);
     assert.strictEqual(result.title, "Redraft for Ana");
-    assert.strictEqual(result.target, "act-reply");
     const command = commands[0];
     assert.strictEqual(command?.threadId, result.threadId);
+    assert.isTrue(result.threadId.startsWith(salesDispatchThreadPrefix(redraftReply)));
     assert.strictEqual(
       command?.message.text,
       "Run it.\nTarget: x\nNote from Gabriel:\nOffer Thursday.\n\nReport back.",
@@ -302,8 +302,8 @@ it.effect("starts a conversation's plan under the contact, discarding nothing", 
       note: "",
     } as const;
     const result = yield* dispatch.dispatch(input);
-    assert.deepStrictEqual(calls, ["bootstrap", "record"]);
-    assert.strictEqual(result.target, "contact-1");
+    assert.deepStrictEqual(calls, ["bootstrap"]);
+    assert.isTrue(result.threadId.startsWith("sales:contact:contact-1:"));
     assert.strictEqual(commands[0]?.message.text, "Run it.\nTarget: x\n\nReport back.");
   }).pipe(Effect.provide(layer));
 });

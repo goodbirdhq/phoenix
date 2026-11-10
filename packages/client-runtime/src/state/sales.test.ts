@@ -21,7 +21,6 @@ const snapshot: SalesSnapshot = {
   queue: null,
   summaryReadAt: "2026-11-10T09:00:01.000Z",
   checkedAt: "2026-11-10T09:00:01.000Z",
-  dispatches: [],
 };
 
 describe("applySalesRead", () => {

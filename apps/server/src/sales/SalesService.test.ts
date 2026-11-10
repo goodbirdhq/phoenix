@@ -10,7 +10,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
-import { SalesActionError, type SalesStreamEvent, ThreadId } from "@t3tools/contracts";
+import { SalesActionError, type SalesStreamEvent } from "@t3tools/contracts";
 import {
   HttpClient,
   HttpClientError,
@@ -718,22 +718,6 @@ it.effect("reads the queue again after an action while someone watches", () => {
     yield* watcher.nextWith(() => true);
     assert.strictEqual(summaryReads(requests), 2);
     yield* Scope.close(watcher.scope, Exit.void);
-  }).pipe(Effect.provide(layer));
-});
-
-it.effect("keeps dispatches through engine reads and settings changes", () => {
-  const { layer } = makeLayer({});
-  return Effect.gen(function* () {
-    const sales = yield* SalesService.SalesService;
-    const settings = yield* ServerSettings.ServerSettingsService;
-    yield* sales.recordDispatch({
-      target: "act-1",
-      threadId: ThreadId.make("thread-1"),
-      title: "Redraft for Ana",
-    });
-    assert.strictEqual((yield* sales.refresh).dispatches.length, 1);
-    yield* settings.updateSettings({ salesEngine: { readToken: "the-new-token" } });
-    assert.strictEqual((yield* sales.getSnapshot).dispatches[0]?.threadId, "thread-1");
   }).pipe(Effect.provide(layer));
 });
 
