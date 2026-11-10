@@ -183,8 +183,8 @@ export function SalesDraftPanel({
       ]);
       if (outcome === undefined) return;
       setNotice({
-        tone: outcome.ok ? "success" : outcome.stale ? "warning" : "error",
-        title: outcome.ok ? "Approved" : "Not approved",
+        tone: outcome.ok ? "success" : outcome.stale || outcome.unknown ? "warning" : "error",
+        title: outcome.ok ? "Approved" : outcome.unknown ? "Outcome unknown" : "Not approved",
         description: outcome.text,
       });
       await load();

@@ -13,6 +13,8 @@ export interface ApproveOutcome {
   readonly text: string;
   /** Set when the card moved on: re-show it, and never sign again without a new press. */
   readonly stale: boolean;
+  /** Set when the request may have landed: the engine's answer was lost, so say "unknown". */
+  readonly unknown: boolean;
 }
 
 /**
@@ -37,7 +39,13 @@ export function useApproveVersions(environmentId: EnvironmentId) {
       const blocked = blockedReason(key.engine);
       if (blocked !== null) {
         for (const version of chunk) {
-          outcomes.push({ activityId: version.activityId, ok: false, text: blocked, stale: false });
+          outcomes.push({
+            activityId: version.activityId,
+            ok: false,
+            text: blocked,
+            stale: false,
+            unknown: false,
+          });
         }
         continue;
       }
@@ -66,6 +74,7 @@ export function useApproveVersions(environmentId: EnvironmentId) {
             ok: false,
             text: outcome.text,
             stale: false,
+            unknown: outcome.unknown,
           });
         }
         continue;
@@ -82,12 +91,14 @@ export function useApproveVersions(environmentId: EnvironmentId) {
                     ? `Approved. Goes ${item.card.goes}.`
                     : "Approved.",
                 stale: false,
+                unknown: false,
               }
             : {
                 activityId: item.activityId,
                 ok: false,
                 text: approveFailureText(item.reason, item.message),
                 stale: item.reason === "stale_hash",
+                unknown: false,
               },
         );
       }

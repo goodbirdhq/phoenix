@@ -73,7 +73,7 @@ describe("approveRequestFailure", () => {
       unknown: false,
       text: "The engine refused the token.",
     });
-    for (const reason of ["unreachable", "failed", "other", null] as const) {
+    for (const reason of ["unreachable", "failed", "other", "budget", null] as const) {
       expect(approveRequestFailure(reason, "Timed out.").unknown).toBe(true);
     }
   });

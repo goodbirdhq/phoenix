@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { isElectron } from "../env";
+import { isHostedStaticApp } from "../hostedPairing";
 import { type EnvironmentPresentation, useEnvironments } from "./environments";
 import { salesDeviceBlockedReason, type SalesGuardEnvironment } from "./salesDeviceGuard";
 import { useAtomCommand } from "./use-atom-command";
@@ -170,6 +171,7 @@ export function useSalesDeviceGuard(): (engine: string) => string | null {
     (engine: string) =>
       salesDeviceBlockedReason({
         isDesktop: isElectron,
+        servedByPhoenixServer: !isElectron && !isHostedStaticApp(),
         engine,
         environments: guardEnvironments(latest.current),
       }),
@@ -186,6 +188,7 @@ export function useSalesDevice(environmentId: EnvironmentId, baseUrl: string, ca
   const { environments } = useEnvironments();
   const blocked = salesDeviceBlockedReason({
     isDesktop: isElectron,
+    servedByPhoenixServer: !isElectron && !isHostedStaticApp(),
     engine,
     environments: guardEnvironments(environments),
   });

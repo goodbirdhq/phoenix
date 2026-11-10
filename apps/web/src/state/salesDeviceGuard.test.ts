@@ -35,6 +35,7 @@ describe("salesDeviceBlockedReason", () => {
     expect(
       salesDeviceBlockedReason({
         isDesktop: false,
+        servedByPhoenixServer: false,
         engine: ENGINE,
         environments: [primary(""), bearer("remote", ENGINE)],
       }),
@@ -45,6 +46,7 @@ describe("salesDeviceBlockedReason", () => {
     expect(
       salesDeviceBlockedReason({
         isDesktop: false,
+        servedByPhoenixServer: false,
         engine: ENGINE,
         environments: [bearer("remote", ENGINE)],
       }),
@@ -59,6 +61,7 @@ describe("salesDeviceBlockedReason", () => {
       expect(
         salesDeviceBlockedReason({
           isDesktop: true,
+          servedByPhoenixServer: false,
           engine: ENGINE,
           environments: [local, bearer("remote", ENGINE)],
         }),
@@ -68,17 +71,45 @@ describe("salesDeviceBlockedReason", () => {
 
   it("blocks desktop while a local backend's settings are unknown", () => {
     expect(
-      salesDeviceBlockedReason({ isDesktop: true, engine: ENGINE, environments: [primary(null)] }),
+      salesDeviceBlockedReason({
+        isDesktop: true,
+        servedByPhoenixServer: false,
+        engine: ENGINE,
+        environments: [primary(null)],
+      }),
     ).not.toBeNull();
   });
 
-  it("lets desktop hold a key for an engine only remote environments read", () => {
+  it("lets desktop hold a key when no local backend has any engine configured", () => {
     expect(
       salesDeviceBlockedReason({
         isDesktop: true,
+        servedByPhoenixServer: false,
         engine: ENGINE,
-        environments: [primary("https://other-engine.example"), bearer("remote", ENGINE)],
+        environments: [primary(""), bearer("remote", ENGINE)],
       }),
     ).toBeNull();
+  });
+
+  it("blocks a web page a Phoenix server served even before its primary registers", () => {
+    expect(
+      salesDeviceBlockedReason({
+        isDesktop: false,
+        servedByPhoenixServer: true,
+        engine: ENGINE,
+        environments: [bearer("remote", ENGINE)],
+      }),
+    ).not.toBeNull();
+  });
+
+  it("blocks desktop when a local backend points at any engine, since URLs can differ", () => {
+    expect(
+      salesDeviceBlockedReason({
+        isDesktop: true,
+        servedByPhoenixServer: false,
+        engine: ENGINE,
+        environments: [primary("https://sales.example.com"), bearer("remote", ENGINE)],
+      }),
+    ).not.toBeNull();
   });
 });

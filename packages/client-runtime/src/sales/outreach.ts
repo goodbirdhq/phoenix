@@ -239,7 +239,7 @@ export function salesFailureText(
 /**
  * What a person is told about each draft in an approve request that failed as a whole. The
  * engine refused before approving anything for some reasons; for the rest (a timeout, a dropped
- * connection, an engine error) the request may have landed, so the outcome is unknown and the
+ * connection, an engine error, a request budget that ran out part-way) the request may have landed, so the outcome is unknown and the
  * page should read the queue again rather than claim nothing was approved.
  */
 export function approveRequestFailure(
@@ -251,7 +251,6 @@ export function approveRequestFailure(
     case "api-off":
     case "actions-off":
     case "unauthorised":
-    case "budget":
     case "bad_request":
       return { unknown: false, text: description ?? "The engine refused the request." };
     default:
