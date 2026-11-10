@@ -27,6 +27,7 @@ import {
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
+  salesEngineKey,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -57,7 +58,6 @@ import {
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
-import { salesApiBaseUrl } from "./sales/SalesEngineApi.ts";
 
 export { resolveSourceControlWriterModelSelection } from "@t3tools/shared/serverSettings";
 
@@ -194,8 +194,9 @@ function clearSalesEngineTokensOnUrlChange(
   next: ServerSettings,
   patch: ServerSettingsPatch,
 ): ServerSettings {
-  const normalise = (url: string) => salesApiBaseUrl(url) ?? url.trim();
-  if (normalise(current.salesEngine.baseUrl) === normalise(next.salesEngine.baseUrl)) return next;
+  if (salesEngineKey(current.salesEngine.baseUrl) === salesEngineKey(next.salesEngine.baseUrl)) {
+    return next;
+  }
   const supplied = (token: string | undefined) =>
     token !== undefined && token.length > 0 && token !== SECRET_REDACTED;
   return {

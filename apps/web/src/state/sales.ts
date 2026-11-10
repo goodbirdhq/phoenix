@@ -1,34 +1,31 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  salesEngineKey,
   thisDeviceState,
   type SalesDeviceKey,
   type SalesDeviceKeyStore,
+  type SigningDevice,
 } from "@t3tools/client-runtime/sales/devices";
-import { salesFailureText, type SalesFailureText } from "@t3tools/client-runtime/sales/outreach";
+import { signApproval, type VerifiedVersion } from "@t3tools/client-runtime/sales/signing";
+import { approveVersions } from "@t3tools/client-runtime/sales/approve";
 import {
-  type AtomCommandResult,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+  salesDeviceBlockedReason,
+  type SalesGuardEnvironment,
+  type SalesKeyPlatform,
+} from "@t3tools/client-runtime/sales/device-guard";
+import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
 import {
   canActOnSales,
   createSalesEnvironmentAtoms,
   isSalesConfigured,
 } from "@t3tools/client-runtime/state/sales";
-import {
-  type EnvironmentId,
-  SalesActionError,
-  type SalesActionFailureReason,
-  type SalesDevice,
-} from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
+import { type EnvironmentId, type SalesDevice, salesEngineKey } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { isElectron } from "../env";
+import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { isHostedStaticApp } from "../hostedPairing";
 import { type EnvironmentPresentation, useEnvironments } from "./environments";
-import { salesDeviceBlockedReason, type SalesGuardEnvironment } from "./salesDeviceGuard";
 import { useAtomCommand } from "./use-atom-command";
 
 export const salesEnvironment = createSalesEnvironmentAtoms(connectionAtomRuntime);
@@ -59,39 +56,6 @@ export function useSalesTarget(requested: string | undefined) {
 /** Subscribes the environment's Sales stream while mounted; the server polls only then. */
 export function useSalesState(environmentId: EnvironmentId) {
   return useAtomValue(salesEnvironment.stateValueAtom(environmentId));
-}
-
-const isSalesActionError = Schema.is(SalesActionError);
-
-export interface SalesFailure extends SalesFailureText {
-  /** The typed reason, or null when the request failed outside the engine's answers. */
-  readonly reason: SalesActionFailureReason | null;
-  /** The card's version now, when the engine said it moved on. */
-  readonly currentHash: string | null;
-  /** The card's state, when the failure names one (`discarded` after a failed reply redraft). */
-  readonly state: string | null;
-}
-
-/** A failed sales command as the person should read it. */
-export function readSalesFailure(result: AtomCommandResult<unknown, unknown>): SalesFailure | null {
-  if (result._tag === "Success") return null;
-  const error = squashAtomCommandFailure(result);
-  if (isSalesActionError(error)) {
-    return {
-      ...salesFailureText(error.reason, error.message),
-      reason: error.reason,
-      currentHash: error.currentHash,
-      state: error.state,
-    };
-  }
-  return {
-    title: "Something went wrong",
-    description: error instanceof Error ? error.message : "The request did not complete.",
-    reread: false,
-    reason: null,
-    currentHash: null,
-    state: null,
-  };
 }
 
 // --- Device keys ------------------------------------------------------------------------------
@@ -156,27 +120,46 @@ function guardEnvironments(
   }));
 }
 
+function keyPlatform(): SalesKeyPlatform {
+  return isElectron
+    ? { kind: "desktop", isLocalSecondary: isDesktopLocalConnectionTarget }
+    : { kind: "web", servedByPhoenixServer: !isHostedStaticApp() };
+}
+
 /**
- * Whether this client may enrol or sign with a key for an engine (`salesDeviceBlockedReason`).
- * The returned check reads the client's environments as they are at the call, so signing checks
+ * Whether this client may enrol or sign with a device key (`salesDeviceBlockedReason`). The
+ * returned check reads the client's environments as they are at the call, so signing checks
  * again right before it signs, not only when the page rendered.
  */
-export function useSalesDeviceGuard(): (engine: string) => string | null {
+export function useSalesDeviceGuard(): () => string | null {
   const { environments } = useEnvironments();
   const latest = useRef(environments);
   useEffect(() => {
     latest.current = environments;
   });
   return useCallback(
-    (engine: string) =>
-      salesDeviceBlockedReason({
-        isDesktop: isElectron,
-        servedByPhoenixServer: !isElectron && !isHostedStaticApp(),
-        engine,
-        environments: guardEnvironments(latest.current),
-      }),
+    () => salesDeviceBlockedReason(keyPlatform(), guardEnvironments(latest.current)),
     [],
   );
+}
+
+/**
+ * Signs verified versions with this device's key and sends them (`approveVersions`). The device
+ * is the one at the press; the device guard is read again before each batch.
+ */
+export function useApproveVersions(environmentId: EnvironmentId) {
+  const approve = useAtomCommand(salesEnvironment.approve, { reportFailure: false });
+  const refresh = useAtomCommand(salesEnvironment.refresh, { reportFailure: false });
+  const blockedReason = useSalesDeviceGuard();
+  return (device: SigningDevice, versions: ReadonlyArray<VerifiedVersion>) =>
+    approveVersions({
+      versions,
+      approve: (items) => approve({ environmentId, input: { items } }),
+      refresh: () => refresh({ environmentId, input: {} }),
+      device: () => ({ ...device, blocked: blockedReason() }),
+      sign: (key, version) =>
+        signApproval({ privateKey: key.privateKey, deviceId: key.deviceId, version }),
+    });
 }
 
 /**
@@ -186,12 +169,7 @@ export function useSalesDeviceGuard(): (engine: string) => string | null {
 export function useSalesDevice(environmentId: EnvironmentId, baseUrl: string, canAct: boolean) {
   const engine = salesEngineKey(baseUrl);
   const { environments } = useEnvironments();
-  const blocked = salesDeviceBlockedReason({
-    isDesktop: isElectron,
-    servedByPhoenixServer: !isElectron && !isHostedStaticApp(),
-    engine,
-    environments: guardEnvironments(environments),
-  });
+  const blocked = salesDeviceBlockedReason(keyPlatform(), guardEnvironments(environments));
   const listDevices = useAtomCommand(salesEnvironment.listDevices, { reportFailure: false });
   const [key, setKey] = useState<SalesDeviceKey | null | undefined>(undefined);
   const [devices, setDevices] = useState<ReadonlyArray<SalesDevice> | null>(null);
@@ -205,7 +183,7 @@ export function useSalesDevice(environmentId: EnvironmentId, baseUrl: string, ca
       setDevices(result.value.items);
       setError(null);
     } else {
-      setError(readSalesFailure(result)?.description ?? null);
+      setError(readSalesFailure(result).description);
     }
   }, [canAct, engine, environmentId, listDevices]);
 
@@ -223,7 +201,7 @@ export function useSalesDevice(environmentId: EnvironmentId, baseUrl: string, ca
     devices,
     error,
     state: thisDeviceState(key ?? null, canAct ? devices : null),
-    /** Set when this client must not enrol or sign for this engine; see `salesDeviceGuard`. */
+    /** Set when this client must not enrol or sign; see `salesDeviceBlockedReason`. */
     blocked,
     reload,
   };

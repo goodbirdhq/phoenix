@@ -22,7 +22,7 @@ half is stored as a `CryptoKey` in IndexedDB
 (`packages/client-runtime/src/sales/devices.ts`, `apps/web/src/state/sales.ts`).
 A key is only as safe as the code that holds it, so a key must never live in a
 client whose code a Phoenix server serves or can change. `salesDeviceBlockedReason`
-(`apps/web/src/state/salesDeviceGuard.ts`) refuses both enrolment and signing on
+(`packages/client-runtime/src/sales/deviceGuard.ts`) refuses both enrolment and signing on
 web whenever the client has a `PrimaryConnectionTarget` (a `phoenix` server
 served the page), and on desktop whenever a local backend (the primary or a
 `local:` one) reads the same engine, or has not reported its settings yet. Keys
@@ -38,7 +38,9 @@ version. A server that has been tampered with could show one text and pass on
 the hash of another. So the client computes the hash itself, from the hash
 inputs (`hashInput`) that it also renders, and refuses to sign when the result
 differs from the engine's hash or the engine names an algorithm it does not know
-(`verifyDisplayedVersion`). Traps that follow from this:
+(`verifyDisplayedVersion`). Only those functions make a `VerifiedVersion`, and only a
+`VerifiedVersion` can be signed (`approveVersions`), so the rule holds in client-runtime
+rather than in each view. Traps that follow from this:
 
 - **Decode the hash inputs untouched.** `SalesHashInput` uses plain strings with
   no trimming, so the text shown is byte for byte the text hashed.

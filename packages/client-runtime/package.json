@@ -111,13 +111,25 @@
       "types": "./src/schedules/index.ts",
       "default": "./src/schedules/index.ts"
     },
-    "./sales/approval": {
-      "types": "./src/sales/approval.ts",
-      "default": "./src/sales/approval.ts"
+    "./sales/approve": {
+      "types": "./src/sales/approve.ts",
+      "default": "./src/sales/approve.ts"
+    },
+    "./sales/device-guard": {
+      "types": "./src/sales/deviceGuard.ts",
+      "default": "./src/sales/deviceGuard.ts"
     },
     "./sales/devices": {
       "types": "./src/sales/devices.ts",
       "default": "./src/sales/devices.ts"
+    },
+    "./sales/draft-card": {
+      "types": "./src/sales/draftCard.ts",
+      "default": "./src/sales/draftCard.ts"
+    },
+    "./sales/failure": {
+      "types": "./src/sales/failure.ts",
+      "default": "./src/sales/failure.ts"
     },
     "./sales/home": {
       "types": "./src/sales/home.ts",
@@ -126,6 +138,10 @@
     "./sales/outreach": {
       "types": "./src/sales/outreach.ts",
       "default": "./src/sales/outreach.ts"
+    },
+    "./sales/signing": {
+      "types": "./src/sales/signing.ts",
+      "default": "./src/sales/signing.ts"
     },
     "./state/auth": {
       "types": "./src/state/auth.ts",

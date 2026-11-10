@@ -6,6 +6,7 @@ import {
   type ServerConfig,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -66,6 +67,43 @@ export function canActOnSales(config: ServerConfig | null | undefined): boolean 
   return isSalesConfigured(config) && (config?.settings.salesEngine.actionToken.length ?? 0) > 0;
 }
 
+/**
+ * The snapshot after a read that found nothing new (`sales-read`). The engine's summary is as of
+ * the previous summary read, so what it measured at that moment moves on by the time between the
+ * two reads: its `generatedAt` and the dispatcher ages. Everything else stands.
+ */
+export function applySalesRead(
+  snapshot: SalesSnapshot,
+  read: Extract<SalesStreamEvent, { readonly type: "sales-read" }>,
+): SalesSnapshot {
+  const elapsedMs =
+    snapshot.summaryReadAt === null || read.summaryReadAt === null
+      ? 0
+      : Math.max(0, Date.parse(read.summaryReadAt) - Date.parse(snapshot.summaryReadAt));
+  const summary = snapshot.summary;
+  const generatedAt = summary === null ? Number.NaN : Date.parse(summary.generatedAt);
+  const older = (age: number | null) => (age === null ? null : age + Math.round(elapsedMs / 1000));
+  return {
+    ...snapshot,
+    summaryReadAt: read.summaryReadAt,
+    checkedAt: read.checkedAt,
+    summary:
+      summary === null
+        ? null
+        : {
+            ...summary,
+            generatedAt: Number.isNaN(generatedAt)
+              ? summary.generatedAt
+              : DateTime.formatIso(DateTime.makeUnsafe(generatedAt + elapsedMs)),
+            dispatcher: {
+              ...summary.dispatcher,
+              pokeAgeSeconds: older(summary.dispatcher.pokeAgeSeconds),
+              tickAgeSeconds: older(summary.dispatcher.tickAgeSeconds),
+            },
+          },
+  };
+}
+
 const makeEnvironmentSalesState = Effect.fn("EnvironmentSalesState.make")(function* () {
   const supervisor = yield* EnvironmentSupervisor;
   const environmentId = supervisor.target.environmentId;
@@ -75,11 +113,14 @@ const makeEnvironmentSalesState = Effect.fn("EnvironmentSalesState.make")(functi
   });
 
   const applyEvent = (event: SalesStreamEvent) =>
-    SubscriptionRef.set(state, {
-      snapshot: Option.some(event.snapshot),
-      status: "live",
+    SubscriptionRef.update(state, (current) => ({
+      snapshot:
+        event.type === "sales-snapshot"
+          ? Option.some(event.snapshot)
+          : Option.map(current.snapshot, (snapshot) => applySalesRead(snapshot, event)),
+      status: "live" as const,
       error: Option.none(),
-    });
+    }));
 
   const subscribeSupportedSession = SubscriptionRef.changes(supervisor.session).pipe(
     Stream.switchMap(

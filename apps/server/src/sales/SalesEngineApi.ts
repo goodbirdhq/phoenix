@@ -4,7 +4,8 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import {
   SalesActionError,
   type SalesActionFailureReason,
-  SalesActionFailureReason as SalesActionFailureReasonSchema,
+  SalesEngineFailureCode,
+  type SalesFailureOrigin,
   SalesApproveFailureReason,
   type SalesApproveInput,
   type SalesApproveItemResult,
@@ -18,6 +19,8 @@ import {
   SalesQueue,
   SalesQueueItemDetail,
   SalesSummary,
+  SALES_API_PATH,
+  salesEngineRoot,
 } from "@t3tools/contracts";
 
 /**
@@ -30,7 +33,6 @@ import {
  * made on an enrolled device, which this module only carries.
  */
 
-const API_PATH = "/api/sales/v1";
 const READ_TIMEOUT = "15 seconds";
 /** Edit writes to Notion before it answers, which takes a few seconds and a few requests. */
 const ACTION_TIMEOUT = "45 seconds";
@@ -43,17 +45,11 @@ export interface SalesEngineConfig {
 
 type Half = "read" | "action";
 
-/**
- * The engine root a user enters, normalised to the API base. Accepts the origin with or
- * without the `/api/sales/v1` suffix and trailing slashes. Null when it is not an http(s) URL.
- */
-export function salesApiBaseUrl(baseUrl: string): string | null {
-  const trimmed = baseUrl.trim().replace(/\/+$/u, "");
-  if (!URL.canParse(trimmed)) return null;
-  const protocol = new URL(trimmed).protocol;
-  if (protocol !== "https:" && protocol !== "http:") return null;
-  return trimmed.endsWith(API_PATH) ? trimmed : `${trimmed}${API_PATH}`;
-}
+/** The API base for the URL a person entered; null when it is not an http(s) URL. */
+const salesApiBaseUrl = (baseUrl: string) => {
+  const root = salesEngineRoot(baseUrl);
+  return root === null ? null : `${root}${SALES_API_PATH}`;
+};
 
 const DEFAULT_MESSAGES: Partial<Record<SalesActionFailureReason, string>> = {
   "not-configured": "Sales actions need the engine URL and its action token in Settings.",
@@ -70,18 +66,54 @@ const unauthorisedMessage = (half: Half) =>
     ? "The sales engine refused the read token. Check that it matches SALES_READ_TOKEN on the engine."
     : "The sales engine refused the action token. Check that it matches SALES_ACTION_TOKEN on the engine.";
 
-export const salesActionError = (
+const PHOENIX_REASONS = new Set<SalesActionFailureReason>([
+  "not-configured",
+  "bad-url",
+  "no-agents-project",
+  "agents-project-missing",
+  "no-target",
+  "dispatch-failed",
+]);
+
+/** Engine codes Phoenix also raises when it checks a card itself, before asking the engine. */
+type CheckedByPhoenix = Extract<SalesEngineFailureCode, "stale_hash" | "not_open" | "bad_request">;
+
+interface FailureExtra {
+  readonly message?: string;
+  readonly currentHash?: string | null;
+  readonly state?: string | null;
+}
+
+const failure = (
+  origin: SalesFailureOrigin,
   reason: SalesActionFailureReason,
-  extra: { readonly message?: string; readonly currentHash?: string | null; state?: string | null },
+  extra: FailureExtra,
 ) =>
   new SalesActionError({
+    origin,
     reason,
     message: extra.message ?? DEFAULT_MESSAGES[reason] ?? "The sales engine refused that.",
     currentHash: extra.currentHash ?? null,
     state: extra.state ?? null,
   });
 
-const ENGINE_REASONS = new Set<string>(SalesActionFailureReasonSchema.literals);
+/** A sales failure, from whoever raises its reason (see `SalesActionFailureReason`). */
+export const salesActionError = (reason: SalesActionFailureReason, extra: FailureExtra) =>
+  failure(
+    PHOENIX_REASONS.has(reason)
+      ? "phoenix"
+      : reason === "unreachable" || reason === "unreadable-answer"
+        ? "transport"
+        : "engine",
+    reason,
+    extra,
+  );
+
+/** Phoenix refusing with an engine code after checking a card itself; nothing was sent. */
+export const phoenixCheckFailure = (reason: CheckedByPhoenix, extra: FailureExtra) =>
+  failure("phoenix", reason, extra);
+
+const ENGINE_CODES = new Set<string>(SalesEngineFailureCode.literals);
 
 /** The engine's `{ error, message, currentHash, state }`. Anything else reads as no body. */
 const ErrorBody = Schema.Struct({
@@ -107,18 +139,18 @@ function engineFailure(half: Half, httpStatus: number, body: unknown): SalesActi
   }
   if (code === "sales_api_off") return salesActionError("api-off", {});
   if (code === "sales_actions_off") return salesActionError("actions-off", {});
-  if (code === "budget") return salesActionError("budget", extra);
-  // Phoenix's own reasons are kebab-case, so an engine code can never collide with one.
-  if (code !== undefined && /^[a-z_]+$/u.test(code)) {
-    return salesActionError(
-      ENGINE_REASONS.has(code) ? (code as SalesActionFailureReason) : "other",
-      {
-        ...extra,
-        message: extra.message ?? `The sales engine refused that (${code}).`,
-      },
-    );
+  if (code !== undefined && code.length > 0) {
+    const reason = ENGINE_CODES.has(code) ? (code as SalesEngineFailureCode) : "other";
+    return salesActionError(reason, {
+      ...extra,
+      message:
+        extra.message ?? DEFAULT_MESSAGES[reason] ?? `The sales engine refused that (${code}).`,
+    });
   }
-  return salesActionError("failed", { message: `The sales engine answered HTTP ${httpStatus}.` });
+  // No code: a proxy's error page, or an engine too broken to say why.
+  return salesActionError("unreadable-answer", {
+    message: `The sales engine answered HTTP ${httpStatus}.`,
+  });
 }
 
 const request = Effect.fn("SalesEngineApi.request")(function* <A>(
@@ -137,7 +169,7 @@ const request = Effect.fn("SalesEngineApi.request")(function* <A>(
   const token = input.half === "read" ? config.readToken : config.actionToken;
   if (config.baseUrl.length === 0) return yield* salesActionError("not-configured", {});
   if (base === null) {
-    return yield* salesActionError("failed", {
+    return yield* salesActionError("bad-url", {
       message: "The sales engine URL must be an http or https URL.",
     });
   }
@@ -171,7 +203,7 @@ const request = Effect.fn("SalesEngineApi.request")(function* <A>(
   }
   return yield* input.decode(json).pipe(
     Effect.mapError(() =>
-      salesActionError("failed", {
+      salesActionError("unreadable-answer", {
         message: "The sales engine sent an answer Phoenix could not read.",
       }),
     ),

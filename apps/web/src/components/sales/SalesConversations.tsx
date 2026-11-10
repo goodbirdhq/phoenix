@@ -1,3 +1,4 @@
+import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
 import { intentLabel, sortConversations } from "@t3tools/client-runtime/sales/outreach";
 import type {
   EnvironmentId,
@@ -11,12 +12,7 @@ import * as Option from "effect/Option";
 import { RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import {
-  readSalesFailure,
-  salesEnvironment,
-  useSalesDevice,
-  useSalesState,
-} from "../../state/sales";
+import { salesEnvironment, useSalesDevice, useSalesState } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -76,7 +72,7 @@ export function SalesConversations(props: {
         setList(result.value);
         setFailure(null);
       } else {
-        setFailure(readSalesFailure(result)?.description ?? "Could not read conversations.");
+        setFailure(readSalesFailure(result).description);
       }
     } finally {
       setLoading(false);
@@ -235,7 +231,7 @@ function ConversationDetailView({
       input: { contactKey: conversation.contactKey },
     });
     if (result._tag === "Success") setDetail(result.value);
-    else setFailure(readSalesFailure(result)?.description ?? "Could not read this conversation.");
+    else setFailure(readSalesFailure(result).description);
   }, [conversation.contactKey, environmentId, getConversation]);
 
   useEffect(() => {
@@ -259,7 +255,7 @@ function ConversationDetailView({
         setDispatchError(null);
         setNote("");
       } else {
-        setDispatchError(readSalesFailure(result)?.description ?? "Could not start the run.");
+        setDispatchError(readSalesFailure(result).description);
       }
     } finally {
       setBusy(false);

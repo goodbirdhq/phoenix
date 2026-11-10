@@ -1,10 +1,15 @@
-import { displayedDraft, verifyReviewedVersion } from "@t3tools/client-runtime/sales/approval";
-import { thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
+import { displayedDraft } from "@t3tools/client-runtime/sales/signing";
+import {
+  type ApproveOutcome,
+  type ReviewedDraft,
+  reviewTickedDraft,
+} from "@t3tools/client-runtime/sales/approve";
+import { checkSigning } from "@t3tools/client-runtime/sales/devices";
 import { kindLabel } from "@t3tools/client-runtime/sales/outreach";
 import type { EnvironmentId, SalesQueueItem, SalesQueueItemDetail } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
 
-import { readSalesFailure, salesEnvironment } from "../../state/sales";
+import { salesEnvironment, useApproveVersions } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -18,8 +23,6 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Spinner } from "../ui/spinner";
-import type { ApproveOutcome } from "./salesApproval";
-import { useApproveVersions } from "./salesApproval";
 import type { SalesDeviceView } from "./SalesDraftPanel";
 
 /** A ticked row and the hash it had when the person ticked it. */
@@ -27,23 +30,6 @@ export interface TickedDraft {
   readonly row: SalesQueueItem;
   readonly tickedHash: string;
 }
-
-type Reviewed =
-  | { readonly status: "loading" }
-  | { readonly status: "unreadable"; readonly text: string }
-  | {
-      readonly status: "ready";
-      readonly detail: SalesQueueItemDetail;
-      readonly contentHash: string;
-    }
-  | { readonly status: "refused"; readonly text: string };
-
-const REFUSED_TEXT = {
-  changed: "It changed after you ticked it. Open it and read the new version.",
-  mismatch: "The text Phoenix received is not the version the engine reports. Open it again.",
-  algorithm: "The engine hashes drafts in a way this version of Phoenix does not know.",
-  "subject-lines": "Its subject has a line break. Open it and put the subject on one line.",
-} as const;
 
 /**
  * The review step of a batch approval. Each ticked draft is read again and shown in full, exactly
@@ -62,38 +48,24 @@ export function SalesBatchReview(props: {
   const { environmentId, drafts, device, onUntick } = props;
   const getQueueItem = useAtomCommand(salesEnvironment.getQueueItem, { reportFailure: false });
   const approveVersions = useApproveVersions(environmentId);
-  const [reviewed, setReviewed] = useState<ReadonlyMap<string, Reviewed>>(new Map());
+  const [reviewed, setReviewed] = useState<ReadonlyMap<string, ReviewedDraft>>(new Map());
   const [signing, setSigning] = useState(false);
 
   // Read when the step opens (the page holds `drafts` fixed while it is open): what the person
   // confirms is what was read here.
   useEffect(() => {
     let cancelled = false;
-    const settle = (activityId: string, value: Reviewed) => {
+    const settle = (activityId: string, value: ReviewedDraft) => {
       if (!cancelled) setReviewed((previous) => new Map(previous).set(activityId, value));
     };
     for (const { row, tickedHash } of drafts) {
-      void (async () => {
-        const result = await getQueueItem({ environmentId, input: { activityId: row.activityId } });
-        if (result._tag !== "Success") {
-          settle(row.activityId, {
-            status: "unreadable",
-            text: readSalesFailure(result)?.description ?? "Could not read it.",
-          });
-          return;
-        }
-        const verified = await verifyReviewedVersion(result.value, tickedHash);
-        if (verified.ok) {
-          settle(row.activityId, {
-            status: "ready",
-            detail: result.value,
-            contentHash: verified.contentHash,
-          });
-        } else {
-          settle(row.activityId, { status: "refused", text: REFUSED_TEXT[verified.reason] });
-          if (!cancelled) onUntick(row.activityId);
-        }
-      })();
+      void reviewTickedDraft(
+        () => getQueueItem({ environmentId, input: { activityId: row.activityId } }),
+        tickedHash,
+      ).then((reviewedDraft) => {
+        settle(row.activityId, reviewedDraft);
+        if (reviewedDraft.status === "refused" && !cancelled) onUntick(row.activityId);
+      });
     }
     return () => {
       cancelled = true;
@@ -102,21 +74,18 @@ export function SalesBatchReview(props: {
 
   const ready = drafts.flatMap(({ row }) => {
     const entry = reviewed.get(row.activityId);
-    return entry?.status === "ready"
-      ? [{ activityId: row.activityId, contentHash: entry.contentHash }]
-      : [];
+    return entry?.status === "ready" ? [entry.version] : [];
   });
   const loading = drafts.some(
     ({ row }) => (reviewed.get(row.activityId) ?? { status: "loading" }).status === "loading",
   );
-  const blocked = device.blocked;
-  const canSign = device.key !== null && device.state === "active" && blocked === null;
+  const { refusal } = checkSigning(device);
 
   const confirm = async () => {
-    if (device.key === null || !canSign || ready.length === 0) return;
+    if (refusal !== null || ready.length === 0) return;
     setSigning(true);
     try {
-      props.onDone(await approveVersions(device.key, ready));
+      props.onDone(await approveVersions(device, ready));
     } finally {
       setSigning(false);
     }
@@ -142,16 +111,16 @@ export function SalesBatchReview(props: {
           ))}
         </DialogPanel>
         <DialogFooter>
-          {canSign ? null : (
+          {refusal === null ? null : (
             <p className="flex-1 self-center text-xs text-muted-foreground">
-              {blocked ?? thisDeviceDescription(device.state, device.key)}
+              {refusal.description}
             </p>
           )}
           <Button variant="outline" disabled={signing} onClick={props.onClose}>
             Cancel
           </Button>
           <Button
-            disabled={!canSign || loading || signing || ready.length === 0}
+            disabled={refusal !== null || loading || signing || ready.length === 0}
             onClick={() => void confirm()}
           >
             {signing ? "Signing…" : `Approve ${ready.length}`}
@@ -162,7 +131,7 @@ export function SalesBatchReview(props: {
   );
 }
 
-function ReviewedDraft(props: { readonly row: SalesQueueItem; readonly reviewed: Reviewed }) {
+function ReviewedDraft(props: { readonly row: SalesQueueItem; readonly reviewed: ReviewedDraft }) {
   const { row, reviewed } = props;
   const who = row.contact.name ?? row.contact.email ?? "Unknown contact";
   return (

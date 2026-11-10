@@ -1,13 +1,21 @@
-import {
-  BearerConnectionTarget,
-  PrimaryConnectionTarget,
-} from "@t3tools/client-runtime/connection";
+import { BearerConnectionTarget, PrimaryConnectionTarget } from "../connection/index.ts";
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { salesDeviceBlockedReason } from "./salesDeviceGuard";
+import { salesDeviceBlockedReason, type SalesKeyPlatform } from "./deviceGuard.ts";
 
 const ENGINE = "https://engine.example";
+
+const web = (servedByPhoenixServer: boolean): SalesKeyPlatform => ({
+  kind: "web",
+  servedByPhoenixServer,
+});
+// As the desktop app tells its own `local:` backends from saved remotes.
+const desktop: SalesKeyPlatform = {
+  kind: "desktop",
+  isLocalSecondary: (target) =>
+    target._tag === "BearerConnectionTarget" && target.connectionId.startsWith("local:"),
+};
 
 const primary = (salesBaseUrl: string | null) => ({
   target: new PrimaryConnectionTarget({
@@ -33,24 +41,12 @@ describe("salesDeviceBlockedReason", () => {
     // The engine is read through a remote environment, but this page's code came from a
     // Phoenix server all the same.
     expect(
-      salesDeviceBlockedReason({
-        isDesktop: false,
-        servedByPhoenixServer: false,
-        engine: ENGINE,
-        environments: [primary(""), bearer("remote", ENGINE)],
-      }),
+      salesDeviceBlockedReason(web(false), [primary(""), bearer("remote", ENGINE)]),
     ).not.toBeNull();
   });
 
   it("lets the hosted web app, which has no primary, hold a key", () => {
-    expect(
-      salesDeviceBlockedReason({
-        isDesktop: false,
-        servedByPhoenixServer: false,
-        engine: ENGINE,
-        environments: [bearer("remote", ENGINE)],
-      }),
-    ).toBeNull();
+    expect(salesDeviceBlockedReason(web(false), [bearer("remote", ENGINE)])).toBeNull();
   });
 
   it("blocks desktop when one of its local backends reads this engine", () => {
@@ -58,58 +54,28 @@ describe("salesDeviceBlockedReason", () => {
       primary(`${ENGINE}/`),
       bearer("local:wsl:Ubuntu", "HTTPS://ENGINE.example"),
     ]) {
-      expect(
-        salesDeviceBlockedReason({
-          isDesktop: true,
-          servedByPhoenixServer: false,
-          engine: ENGINE,
-          environments: [local, bearer("remote", ENGINE)],
-        }),
-      ).not.toBeNull();
+      expect(salesDeviceBlockedReason(desktop, [local, bearer("remote", ENGINE)])).not.toBeNull();
     }
   });
 
   it("blocks desktop while a local backend's settings are unknown", () => {
-    expect(
-      salesDeviceBlockedReason({
-        isDesktop: true,
-        servedByPhoenixServer: false,
-        engine: ENGINE,
-        environments: [primary(null)],
-      }),
-    ).not.toBeNull();
+    expect(salesDeviceBlockedReason(desktop, [primary(null)])).not.toBeNull();
   });
 
   it("lets desktop hold a key when no local backend has any engine configured", () => {
-    expect(
-      salesDeviceBlockedReason({
-        isDesktop: true,
-        servedByPhoenixServer: false,
-        engine: ENGINE,
-        environments: [primary(""), bearer("remote", ENGINE)],
-      }),
-    ).toBeNull();
+    expect(salesDeviceBlockedReason(desktop, [primary(""), bearer("remote", ENGINE)])).toBeNull();
   });
 
   it("blocks a web page a Phoenix server served even before its primary registers", () => {
-    expect(
-      salesDeviceBlockedReason({
-        isDesktop: false,
-        servedByPhoenixServer: true,
-        engine: ENGINE,
-        environments: [bearer("remote", ENGINE)],
-      }),
-    ).not.toBeNull();
+    expect(salesDeviceBlockedReason(web(true), [bearer("remote", ENGINE)])).not.toBeNull();
   });
 
   it("blocks desktop when a local backend points at any engine, since URLs can differ", () => {
     expect(
-      salesDeviceBlockedReason({
-        isDesktop: true,
-        servedByPhoenixServer: false,
-        engine: ENGINE,
-        environments: [primary("https://sales.example.com"), bearer("remote", ENGINE)],
-      }),
+      salesDeviceBlockedReason(desktop, [
+        primary("https://sales.example.com"),
+        bearer("remote", ENGINE),
+      ]),
     ).not.toBeNull();
   });
 });

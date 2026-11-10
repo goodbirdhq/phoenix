@@ -1,7 +1,7 @@
 import type { SalesQueueItem } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { approveRequestFailure, listedVersionMoved, tickedForReview } from "./outreach.ts";
+import { listedVersionMoved, tickedForReview } from "./outreach.ts";
 
 const item = (activityId: string, contentHash: string, state = "awaiting"): SalesQueueItem => ({
   activityId,
@@ -64,17 +64,5 @@ describe("listedVersionMoved", () => {
     expect(listedVersionMoved("h1", "H2", "h2")).toBe(false);
     expect(listedVersionMoved("h1", null, "h1")).toBe(false);
     expect(listedVersionMoved("h1", "h2", null)).toBe(false);
-  });
-});
-
-describe("approveRequestFailure", () => {
-  it("says nothing was approved only when the engine refused before approving", () => {
-    expect(approveRequestFailure("unauthorised", "The engine refused the token.")).toEqual({
-      unknown: false,
-      text: "The engine refused the token.",
-    });
-    for (const reason of ["unreachable", "failed", "other", "budget", null] as const) {
-      expect(approveRequestFailure(reason, "Timed out.").unknown).toBe(true);
-    }
   });
 });

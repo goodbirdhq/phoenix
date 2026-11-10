@@ -118,6 +118,8 @@ it("refuses to redraft an approved draft or one without a note", () => {
     card("chase"),
   );
   assert.isTrue("_tag" in noNote && noNote.reason === "bad_request");
+  // Phoenix refused before asking the engine, so the client reads it as nothing sent.
+  assert.strictEqual("_tag" in noNote ? noNote.origin : null, "phoenix");
 });
 
 it("refuses to redraft a card that changed since the person saw it", () => {
@@ -127,6 +129,7 @@ it("refuses to redraft a card that changed since the person saw it", () => {
       card(kind),
     );
     assert.isTrue("_tag" in planned && planned.reason === "stale_hash");
+    assert.strictEqual("_tag" in planned ? planned.origin : null, "phoenix");
     assert.strictEqual("_tag" in planned ? planned.currentHash : null, "h");
   }
 });

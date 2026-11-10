@@ -1,4 +1,5 @@
-import { shortFingerprint } from "@t3tools/client-runtime/sales/approval";
+import { readSalesFailure } from "@t3tools/client-runtime/sales/failure";
+import { shortFingerprint } from "@t3tools/client-runtime/sales/signing";
 import { createDeviceKey, thisDeviceDescription } from "@t3tools/client-runtime/sales/devices";
 import type {
   EnvironmentId,
@@ -12,7 +13,6 @@ import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useProjects } from "../../state/entities";
 import type { EnvironmentPresentation } from "../../state/environments";
 import {
-  readSalesFailure,
   salesDeviceKeyStore,
   salesEnvironment,
   useSalesDevice,
@@ -273,7 +273,7 @@ function SalesDevicesSection({ environment }: { readonly environment: Environmen
 
   const enrol = async () => {
     // Checked again at the press: the client's environments may have changed since render.
-    const blockedNow = blockedReason(device.engine);
+    const blockedNow = blockedReason();
     if (blockedNow !== null) {
       setFailure({ title: "Enrol from another client", description: blockedNow });
       return;

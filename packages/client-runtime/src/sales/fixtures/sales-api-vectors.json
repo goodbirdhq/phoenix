@@ -1,0 +1,120 @@
+{
+  "about": "Conformance vectors for the sales API (docs/sales-api.md, 'Conformance vectors'). Every client that recomputes the content hash, the approve message or the key fingerprint must reproduce each 'expected' exactly. Computed once by the engine and pinned; the engine's tests assert these literals. If one ever has to change, the algorithm changed: change hashAlgorithm (HASH_ALGORITHM) or approvePrefix (APPROVE_PREFIX) with it.",
+  "hashAlgorithm": "sha256 hex of JSON.stringify([lowercased trimmed toAddress, subject.trim(), body, rowName.trim(), step, gmailThreadId ?? \"\", answers ?? \"\"])",
+  "approvePrefix": "birdhouse-approve:v1",
+  "contentHash": [
+    {
+      "name": "first email, no thread, no answers",
+      "input": {
+        "toAddress": "ana@brand.example",
+        "subject": "creator x fintech",
+        "body": "Hey Ana,\n\nQuick one.\n\nGabriel",
+        "rowName": "Draft email to Ana - Brand",
+        "step": 1,
+        "gmailThreadId": null,
+        "answers": null
+      },
+      "expected": "d3f16d123abff70d129be3c030c3f2d5dce64c4c29c9aa595508c1525ac9a029"
+    },
+    {
+      "name": "threaded chase, answers null",
+      "input": {
+        "toAddress": "ana@brand.example",
+        "subject": "Re: creator x fintech",
+        "body": "Hey Ana,\n\nFollowing up.\n\nGabriel",
+        "rowName": "Draft chase to Ana - Brand",
+        "step": 2,
+        "gmailThreadId": "18f3a9c2b7d4e601",
+        "answers": null
+      },
+      "expected": "3d736db3419fbeb93e3a72d07302b45a9679689a8e9fcad8b813e0acf641f45a"
+    },
+    {
+      "name": "reply with answers, mixed-case address with spaces",
+      "input": {
+        "toAddress": "  Emily.Chen@Firm.COM ",
+        "subject": "Re: intro",
+        "body": "Thanks Emily, Tuesday works.",
+        "rowName": "Draft reply to Emily Chen - Firm",
+        "step": 3,
+        "gmailThreadId": "18f3a9c2b7d4e602",
+        "answers": "18f3a9c2b7d4e6ff"
+      },
+      "expected": "bd4f7b0d1c05d582139464251cbe50e71308e9604f4aef26a284fbe443692d8c"
+    },
+    {
+      "name": "whitespace: subject and row name trimmed, body kept exactly",
+      "input": {
+        "toAddress": "sam@co.example",
+        "subject": "  hello there \t",
+        "body": "  Hi Sam,\n\n  indented line \n\n",
+        "rowName": " Draft email to Sam - Co  ",
+        "step": 1,
+        "gmailThreadId": null,
+        "answers": null
+      },
+      "expected": "6f207db787dc82c3f4685fc5cabeaedb73cddeed047e7f2ebdb5e7e893eedf35"
+    },
+    {
+      "name": "unicode and JSON escapes",
+      "input": {
+        "toAddress": "zoë@café.example",
+        "subject": "Café ☕ – “quotes” ",
+        "body": "Olá Zoë,\n\nTab:\there, quote: \" backslash: \\ emoji: 🚀\n\nGabriel",
+        "rowName": "Draft email to Zoë - Café",
+        "step": 1,
+        "gmailThreadId": null,
+        "answers": null
+      },
+      "expected": "d43b635a3ed539d5673e352715ad30c7198147e8739ad0d2657881620b1cdcb4"
+    }
+  ],
+  "approveMessage": [
+    {
+      "name": "approve message",
+      "input": {
+        "activityId": "2a8f3c1e-0b7d-4e5a-9c61-3d2f8b0a7e44",
+        "contentHash": "3d736db3419fbeb93e3a72d07302b45a9679689a8e9fcad8b813e0acf641f45a",
+        "signedAt": "2026-11-10T09:14:03.120Z"
+      },
+      "expected": "birdhouse-approve:v1\n2a8f3c1e-0b7d-4e5a-9c61-3d2f8b0a7e44\n3d736db3419fbeb93e3a72d07302b45a9679689a8e9fcad8b813e0acf641f45a\n2026-11-10T09:14:03.120Z"
+    },
+    {
+      "name": "approve message, other card",
+      "input": {
+        "activityId": "abc123",
+        "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "signedAt": "2026-01-02T03:04:05.000Z"
+      },
+      "expected": "birdhouse-approve:v1\nabc123\n0000000000000000000000000000000000000000000000000000000000000000\n2026-01-02T03:04:05.000Z"
+    }
+  ],
+  "fingerprint": [
+    {
+      "name": "P-256 public key 1",
+      "input": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "iSkSiBqDawtdSEwYC8N4YYhz9VeOzTxHAiS5Pt-WZA8",
+        "y": "OU0_TDKmcf9RLsau3uwho41HOEl3t4TyOf-ChHZY5qQ"
+      },
+      "expected": {
+        "fingerprint": "0166034b8f6729f38398ecb7f7e6fabbed35a35aec52ea591b8e23b59e31b5ad",
+        "fingerprintShort": "0166 034b 8f67 29f3"
+      }
+    },
+    {
+      "name": "P-256 public key 2",
+      "input": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "p3Yf889lGAg-0cevfnhL53rsei0zi_cbG-5k5uN3yQc",
+        "y": "dv4B5CxI_8zHXV8I5utMgsuGlaekq4V_bMFJCRuwpcg"
+      },
+      "expected": {
+        "fingerprint": "927e2d2ed405ff4e62daa5ee612b0e26fd952a217b458d34e44175b91d183b35",
+        "fingerprintShort": "927e 2d2e d405 ff4e"
+      }
+    }
+  ]
+}

@@ -25,7 +25,7 @@ import * as ThreadTurnBootstrap from "../orchestration/ThreadTurnBootstrap.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { salesActionError } from "./SalesEngineApi.ts";
+import { phoenixCheckFailure, salesActionError } from "./SalesEngineApi.ts";
 import * as SalesService from "./SalesService.ts";
 
 /**
@@ -164,7 +164,7 @@ export function planDispatch(
       }
       // The redraft rewrites what the person saw; a card that moved on since is shown again.
       if (input.expectedHash.toLowerCase() !== target.contentHash.toLowerCase()) {
-        return salesActionError("stale_hash", { currentHash: target.contentHash });
+        return phoenixCheckFailure("stale_hash", { currentHash: target.contentHash });
       }
       if (target.approved) {
         return salesActionError("dispatch-failed", {
@@ -174,7 +174,9 @@ export function planDispatch(
       const line = contactLine(contact);
       if (line === null) return noTarget("The engine has no Notion page for this contact.");
       if (input.note.trim().length === 0) {
-        return salesActionError("bad_request", { message: "Say what the new draft should do." });
+        return phoenixCheckFailure("bad_request", {
+          message: "Say what the new draft should do.",
+        });
       }
       return {
         plan: { skill, targetLines: [line], note: input.note },
@@ -343,7 +345,7 @@ const make = Effect.gen(function* () {
             })),
           );
     if ("state" in target && !OPEN_STATES.has(target.state)) {
-      return yield* salesActionError("not_open", {
+      return yield* phoenixCheckFailure("not_open", {
         message: "This draft is no longer open.",
         state: target.state,
       });

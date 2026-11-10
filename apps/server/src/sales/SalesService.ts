@@ -1,18 +1,13 @@
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
-import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpClient } from "effect/unstable/http";
 import type {
   SalesActionError,
@@ -33,8 +28,10 @@ import type {
   SalesSnapshot,
   SalesStreamEvent,
 } from "@t3tools/contracts";
+import { salesEngineRoot } from "@t3tools/contracts";
 
 import * as ServerSettings from "../serverSettings.ts";
+import * as PolledRead from "./PolledRead.ts";
 import * as SalesEngineApi from "./SalesEngineApi.ts";
 
 /** The engine suggests about a minute for `/summary` and `/queue`; nothing there changes faster. */
@@ -124,46 +121,59 @@ export class SalesService extends Context.Service<
   }
 >()("t3/sales/SalesService") {}
 
-/** The snapshot with every read time blanked: ours, and the engine's `generatedAt`. */
+/**
+ * The snapshot with everything that changes on every read blanked: our read times, the engine's
+ * `generatedAt`, and the dispatcher ages it measures from `generatedAt`.
+ */
 const withoutReadTimes = (snapshot: SalesSnapshot) => ({
   ...snapshot,
   summaryReadAt: null,
   checkedAt: null,
-  summary: snapshot.summary === null ? null : { ...snapshot.summary, generatedAt: "" },
+  summary:
+    snapshot.summary === null
+      ? null
+      : {
+          ...snapshot.summary,
+          generatedAt: "",
+          dispatcher: {
+            ...snapshot.summary.dispatcher,
+            pokeAgeSeconds: null,
+            tickAgeSeconds: null,
+          },
+        },
   queue: snapshot.queue === null ? null : { ...snapshot.queue, generatedAt: "" },
 });
 
 /**
- * Whether two snapshots say the same thing apart from when they were read. Subscribers are sent
- * a snapshot only when this changes, so a poll that finds nothing new sends nothing; a client
- * already watching keeps the read time of the last change, while `getSnapshot` has the latest.
+ * What subscribers are sent as the snapshot changes. A snapshot goes out only when it says
+ * something new; a read that found nothing new sends just its read times (`sales-read`), so
+ * "Updated" keeps meaning the last read without resending the whole snapshot every poll.
  */
-const sameSalesContent = (left: SalesSnapshot, right: SalesSnapshot) =>
-  Equal.equals(withoutReadTimes(left), withoutReadTimes(right));
+const salesStreamEvents = (snapshots: Stream.Stream<SalesSnapshot>) =>
+  snapshots.pipe(
+    Stream.mapAccum(
+      (): SalesSnapshot | null => null,
+      (sent, next): readonly [SalesSnapshot | null, ReadonlyArray<SalesStreamEvent>] => {
+        if (sent === null || !Equal.equals(withoutReadTimes(sent), withoutReadTimes(next))) {
+          return [next, [{ type: "sales-snapshot", snapshot: next }]];
+        }
+        if (sent.checkedAt === next.checkedAt && sent.summaryReadAt === next.summaryReadAt) {
+          return [sent, []];
+        }
+        return [
+          next,
+          [{ type: "sales-read", summaryReadAt: next.summaryReadAt, checkedAt: next.checkedAt }],
+        ];
+      },
+    ),
+  );
 
 const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
-  const serviceScope = yield* Effect.scope;
   const state = yield* SubscriptionRef.make<SalesSnapshot>({ ...EMPTY_SNAPSHOT, dispatches: [] });
   /** The engine the snapshot's summary came from, so a new URL or token drops the old one. */
   const lastConfigKey = yield* Ref.make<string | null>(null);
-  /** The read in flight and the engine it is reading, so a settings change can replace it. */
-  const inFlight = yield* Ref.make(
-    Option.none<{
-      readonly fiber: Fiber.Fiber<SalesSnapshot>;
-      readonly key: string;
-      readonly token: object;
-    }>(),
-  );
-  // Guards choosing or replacing the read. A read's own cleanup uses `inFlight` without it, so
-  // waiting on an interrupted read here cannot deadlock.
-  const readLock = yield* Semaphore.make(1);
-  const poller = yield* SynchronizedRef.make({
-    subscribers: 0,
-    fiber: Option.none<Fiber.Fiber<void>>(),
-  });
-
   const readConfig = serverSettings.getSettings.pipe(
     Effect.map((settings) => settings.salesEngine),
     Effect.catch((error) =>
@@ -191,7 +201,7 @@ const make = Effect.gen(function* () {
       if (!isConfigured(config)) {
         return yield* publish(EMPTY_SNAPSHOT);
       }
-      if (SalesEngineApi.salesApiBaseUrl(config.baseUrl) === null) {
+      if (salesEngineRoot(config.baseUrl) === null) {
         return yield* publish({
           ...EMPTY_SNAPSHOT,
           status: "failed",
@@ -232,54 +242,20 @@ const make = Effect.gen(function* () {
       });
     });
 
-  // The read runs in the service scope, so a caller that goes away does not cancel it for the
-  // others waiting on it. A read of a different engine (the settings changed while it ran) is
-  // interrupted and replaced rather than joined, so the old engine's answer never lands as the
-  // new one's.
-  const refresh = Effect.gen(function* () {
-    const config = yield* readConfig;
-    const key = configKey(config);
-    const fiber = yield* readLock.withPermits(1)(
-      Effect.gen(function* () {
-        const current = yield* Ref.get(inFlight);
-        if (Option.isSome(current) && current.value.key === key) {
-          return current.value.fiber;
-        }
-        if (Option.isSome(current)) {
-          yield* Fiber.interrupt(current.value.fiber);
-        }
-        const token = {};
-        // The read waits until its entry is recorded, so it can never finish (and clear the
-        // entry) before the entry exists.
-        const recorded = yield* Deferred.make<void>();
-        const next = yield* Deferred.await(recorded).pipe(
-          Effect.andThen(readEngine(config)),
-          // Clear only our own entry: a replaced read must not clear its replacement.
-          Effect.ensuring(
-            Ref.update(inFlight, (entry) =>
-              Option.isSome(entry) && entry.value.token === token ? Option.none() : entry,
-            ),
-          ),
-          Effect.forkIn(serviceScope),
-        );
-        yield* Ref.set(inFlight, Option.some({ fiber: next, key, token }));
-        yield* Deferred.succeed(recorded, undefined);
-        return next;
-      }),
-    );
-    return yield* Fiber.join(fiber);
-  });
-
-  // While anyone is watching, a settings change reads the new engine at once.
-  const refreshOnSettingsChange = serverSettings.streamChanges.pipe(
-    Stream.runForEach((settings) =>
-      Ref.get(lastConfigKey).pipe(
-        Effect.flatMap((key) =>
-          key === configKey(settings.salesEngine) ? Effect.void : refresh.pipe(Effect.asVoid),
-        ),
+  const engineRead = yield* PolledRead.make({
+    input: readConfig,
+    key: configKey,
+    read: readEngine,
+    interval: SALES_POLL_INTERVAL,
+    // While anyone is watching, a settings change reads the new engine at once. PolledRead only
+    // joins a read still in flight, so this filter is what skips a change that leaves the engine
+    // as last read (any other setting), which would otherwise read the engine again.
+    refreshWhen: serverSettings.streamChanges.pipe(
+      Stream.filterEffect((settings) =>
+        Ref.get(lastConfigKey).pipe(Effect.map((key) => key !== configKey(settings.salesEngine))),
       ),
     ),
-  );
+  });
 
   /**
    * The snapshot, unless the settings now name a different engine than the one it came from;
@@ -293,38 +269,11 @@ const make = Effect.gen(function* () {
     return yield* publish(EMPTY_SNAPSHOT);
   });
 
-  const pollLoop = Effect.all(
-    [
-      refresh.pipe(Effect.andThen(Effect.sleep(SALES_POLL_INTERVAL)), Effect.forever),
-      refreshOnSettingsChange,
-    ],
-    { concurrency: "unbounded", discard: true },
-  );
-
-  const attach = SynchronizedRef.updateEffect(poller, (current) =>
-    current.subscribers > 0
-      ? Effect.succeed({ ...current, subscribers: current.subscribers + 1 })
-      : currentSnapshot.pipe(
-          Effect.andThen(pollLoop.pipe(Effect.forkIn(serviceScope))),
-          Effect.map((fiber) => ({ subscribers: 1, fiber: Option.some(fiber) })),
-        ),
-  );
-  const detach = SynchronizedRef.updateEffect(poller, (current) =>
-    current.subscribers > 1
-      ? Effect.succeed({ ...current, subscribers: current.subscribers - 1 })
-      : Option.match(current.fiber, {
-          onNone: () => Effect.void,
-          onSome: Fiber.interrupt,
-        }).pipe(Effect.as({ subscribers: 0, fiber: Option.none<Fiber.Fiber<void>>() })),
-  );
-
-  const subscribe = Effect.acquireRelease(attach, () => detach).pipe(
-    Effect.as(
-      SubscriptionRef.changes(state).pipe(
-        Stream.changesWith(sameSalesContent),
-        Stream.map((snapshot): SalesStreamEvent => ({ type: "sales-snapshot", snapshot })),
-      ),
-    ),
+  // A new subscriber first drops a snapshot from an engine the settings no longer name, since
+  // the stream starts with the current snapshot.
+  const subscribe = currentSnapshot.pipe(
+    Effect.andThen(engineRead.watch),
+    Effect.as(SubscriptionRef.changes(state).pipe(salesStreamEvents)),
   );
 
   /** Runs one engine call against the current settings. */
@@ -342,19 +291,12 @@ const make = Effect.gen(function* () {
    * After an action changed a card, read the queue again so every watching client sees it. In
    * the background, and only while someone watches: the caller already has the card's new state.
    */
-  const refreshAfterAction = SynchronizedRef.get(poller).pipe(
-    Effect.flatMap((current) =>
-      current.subscribers > 0
-        ? refresh.pipe(Effect.forkIn(serviceScope), Effect.asVoid)
-        : Effect.void,
-    ),
-  );
   const changesCards = <A, E>(effect: Effect.Effect<A, E>) =>
-    effect.pipe(Effect.tap(() => refreshAfterAction));
+    effect.pipe(Effect.tap(() => engineRead.refreshIfWatched));
 
   return SalesService.of({
     getSnapshot: currentSnapshot,
-    refresh,
+    refresh: engineRead.refresh,
     subscribe,
     getQueueItem: (activityId) =>
       withEngine((config) => SalesEngineApi.readQueueItem(config, activityId)),

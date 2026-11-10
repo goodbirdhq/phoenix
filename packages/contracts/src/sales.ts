@@ -15,6 +15,30 @@ import { IsoDateTime, ProjectId, ThreadId } from "./baseSchemas.ts";
  * it reaches the wire.
  */
 
+/** Where the engine's API sits below the root a person enters. */
+export const SALES_API_PATH = "/api/sales/v1";
+
+/**
+ * The engine root a person entered: trimmed, without trailing slashes or the `/api/sales/v1`
+ * suffix, so the origin and the API base name the same engine. Null when it is not an http or
+ * https URL.
+ */
+export function salesEngineRoot(baseUrl: string): string | null {
+  let root = baseUrl.trim().replace(/\/+$/u, "");
+  if (root.endsWith(SALES_API_PATH))
+    root = root.slice(0, -SALES_API_PATH.length).replace(/\/+$/u, "");
+  if (!URL.canParse(root)) return null;
+  const protocol = new URL(root).protocol;
+  return protocol === "https:" || protocol === "http:" ? root : null;
+}
+
+/**
+ * Which engine a URL names, for comparing settings and keying device keys: the root, in lower
+ * case. Text that is not a URL keys as itself, trimmed and in lower case.
+ */
+export const salesEngineKey = (baseUrl: string) =>
+  (salesEngineRoot(baseUrl) ?? baseUrl.trim()).toLowerCase();
+
 const Count = Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0)));
 const NullableString = Schema.NullOr(Schema.String).pipe(
   Schema.withDecodingDefault(Effect.succeed(null)),
@@ -449,23 +473,12 @@ export const SalesDispatch = Schema.Struct({
 export type SalesDispatch = typeof SalesDispatch.Type;
 
 /**
- * Why a sales request failed, as clients show it. The engine's own reasons keep its spelling;
- * Phoenix's own are kebab-case:
- * - `not-configured`: no engine URL, or no token for this half of the API.
- * - `api-off` / `actions-off`: the engine has that half turned off.
- * - `unauthorised`, `unreachable`, `budget` (the engine ran out mid-call; read before retrying),
- *   `failed` (any other answer).
- * - `no-agents-project`, `agents-project-missing`, `no-target`, `dispatch-failed`: dispatch.
- * - `other`: an engine reason this build does not know; `message` is the engine's.
+ * The refusal codes the engine sends (`error` in its error body), spelled as it spells them. A
+ * code this build does not know reads as `other`, with the engine's message.
+ * `budget`: the engine ran out of requests mid-call; read before retrying.
  */
-export const SalesActionFailureReason = Schema.Literals([
-  "not-configured",
-  "api-off",
-  "actions-off",
-  "unauthorised",
-  "unreachable",
+export const SalesEngineFailureCode = Schema.Literals([
   "budget",
-  "failed",
   "bad_request",
   "bad_key",
   "device_exists",
@@ -483,15 +496,56 @@ export const SalesActionFailureReason = Schema.Literals([
   "body_too_long",
   "subject_required",
   "subject_not_editable",
+  "other",
+]);
+export type SalesEngineFailureCode = typeof SalesEngineFailureCode.Type;
+
+/**
+ * Why a sales request failed, as clients show it. Each reason has one origin, except the few
+ * engine codes Phoenix also raises itself (`stale_hash`, `not_open`, `bad_request`) when it
+ * checks a card before dispatching.
+ *
+ * Phoenix refused before asking the engine:
+ * - `not-configured`: no engine URL, or no token for this half of the API.
+ * - `bad-url`: an engine URL that is not http or https.
+ * - `no-agents-project`, `agents-project-missing`, `no-target`, `dispatch-failed`: dispatch.
+ *
+ * No engine answer Phoenix could read:
+ * - `unreachable`: the request did not complete.
+ * - `unreadable-answer`: an HTTP error without the engine's body, or a body Phoenix could not
+ *   decode.
+ *
+ * The engine refused: `api-off` / `actions-off` (that half is turned off), `unauthorised` (it
+ * refused the token), or one of its own codes.
+ */
+export const SalesActionFailureReason = Schema.Literals([
+  "not-configured",
+  "bad-url",
   "no-agents-project",
   "agents-project-missing",
   "no-target",
   "dispatch-failed",
-  "other",
+  "unreachable",
+  "unreadable-answer",
+  "api-off",
+  "actions-off",
+  "unauthorised",
+  ...SalesEngineFailureCode.literals,
 ]);
 export type SalesActionFailureReason = typeof SalesActionFailureReason.Type;
 
+/**
+ * Who a sales failure came from, which says whether the request may still have landed:
+ * - `transport`: no engine answer Phoenix could read. It may have landed.
+ * - `engine`: the engine answered and refused, with one of its codes or a 401.
+ * - `phoenix`: this server refused before asking the engine.
+ */
+export const SalesFailureOrigin = Schema.Literals(["transport", "engine", "phoenix"]);
+export type SalesFailureOrigin = typeof SalesFailureOrigin.Type;
+
 export class SalesActionError extends Schema.TaggedError<SalesActionError>()("SalesActionError", {
+  /** Servers before `origin` existed omit it; reading it as `transport` claims the least. */
+  origin: SalesFailureOrigin.pipe(Schema.withDecodingDefault(Effect.succeed("transport"))),
   reason: SalesActionFailureReason,
   message: Schema.String,
   /** Set when the card moved on (`stale_hash`, `changed_in_notion`, ...): its version now. */
@@ -508,7 +562,7 @@ export class SalesActionError extends Schema.TaggedError<SalesActionError>()("Sa
  * - `off`: the engine answered 503 `sales_api_off` (no read token set on its side).
  * - `unauthorised`: the engine refused the token (401).
  * - `unreachable`: the request did not complete (network, DNS, timeout).
- * - `failed`: any other answer, or a body the server could not read.
+ * - `failed`: any other answer, a body the server could not read, or a URL it cannot use.
  */
 export const SalesEngineStatus = Schema.Literals([
   "not-configured",
@@ -538,9 +592,18 @@ export const SalesSnapshot = Schema.Struct({
 });
 export type SalesSnapshot = typeof SalesSnapshot.Type;
 
-/** Each event replaces the client's snapshot. A union so later areas can be added. */
+/**
+ * - `sales-snapshot` replaces the client's snapshot.
+ * - `sales-read`: a read found nothing new. Only the read times moved; the summary's dispatcher
+ *   ages, measured at `summaryReadAt`, are older by the time between the two reads.
+ */
 export const SalesStreamEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("sales-snapshot"), snapshot: SalesSnapshot }),
+  Schema.Struct({
+    type: Schema.Literal("sales-read"),
+    summaryReadAt: Schema.NullOr(IsoDateTime),
+    checkedAt: Schema.NullOr(IsoDateTime),
+  }),
 ]);
 export type SalesStreamEvent = typeof SalesStreamEvent.Type;
 
