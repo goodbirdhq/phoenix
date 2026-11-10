@@ -9,7 +9,7 @@ import {
   type ScheduleStoredDefinition,
   type ServerProvider,
   ThreadId,
-  canStartProviderSession,
+  modelSelectionUnavailable,
 } from "@t3tools/contracts";
 import { buildScheduledWorktreeBranchName } from "@t3tools/shared/git";
 import * as DateTime from "effect/DateTime";
@@ -127,21 +127,6 @@ function localTriggerTitle(name: string, scheduledFor: string, timeZone: string)
   return `${name} — ${local}`;
 }
 
-function unavailableProvider(
-  providers: ReadonlyArray<ServerProvider>,
-  definition: ScheduleStoredDefinition,
-): "provider_unavailable" | "model_unavailable" | null {
-  const selected = providers.find(
-    ({ instanceId }) => instanceId === definition.execution.modelSelection.instanceId,
-  );
-  if (selected === undefined || !canStartProviderSession(selected)) {
-    return "provider_unavailable";
-  }
-  return selected.models.some(({ slug }) => slug === definition.execution.modelSelection.model)
-    ? null
-    : "model_unavailable";
-}
-
 export const makeScheduleReactor = Effect.fn("ScheduleReactor.make")(function* (
   port: ScheduleReactorPort,
 ): Effect.fn.Return<ScheduleReactorShape, never, import("effect/Scope").Scope> {
@@ -185,7 +170,10 @@ export const makeScheduleReactor = Effect.fn("ScheduleReactor.make")(function* (
       });
       return;
     }
-    const providerFailure = unavailableProvider(yield* port.readProviders, definition);
+    const providerFailure = modelSelectionUnavailable(
+      yield* port.readProviders,
+      definition.execution.modelSelection,
+    );
     if (providerFailure !== null) {
       yield* cleanupRecoveredThread;
       yield* port.recordOutcome({

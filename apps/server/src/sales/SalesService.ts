@@ -32,7 +32,7 @@ import type {
   SalesView,
   SalesViewName,
 } from "@t3tools/contracts";
-import { salesEngineRoot } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, salesEngineRoot } from "@t3tools/contracts";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as PolledRead from "./PolledRead.ts";
@@ -203,7 +203,7 @@ const make = Effect.gen(function* () {
       // No cause: a settings decode error can quote a hand-edited token.
       Effect.logWarning("failed to read the sales engine settings", {
         operation: error.operation,
-      }).pipe(Effect.as({ baseUrl: "", readToken: "", actionToken: "", agentsProjectId: "" })),
+      }).pipe(Effect.as(DEFAULT_SERVER_SETTINGS.salesEngine)),
     ),
   );
 

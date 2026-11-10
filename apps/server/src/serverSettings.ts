@@ -170,18 +170,24 @@ const SECTION_SECRET_FIELDS = (
 );
 type SecretSectionValues = Record<SecretSection, Record<string, string>>;
 
-/** Mutable copies of the secret-bearing sections, for the loops over SECTION_SECRET_FIELDS. */
+/** Mutable copies of the secret fields, for the loops over SECTION_SECRET_FIELDS. */
 const secretSectionValues = (settings: ServerSettings): SecretSectionValues => ({
-  bitbucket: { ...settings.bitbucket },
-  salesEngine: { ...settings.salesEngine },
+  bitbucket: {
+    accessToken: settings.bitbucket.accessToken,
+    apiToken: settings.bitbucket.apiToken,
+  },
+  salesEngine: {
+    readToken: settings.salesEngine.readToken,
+    actionToken: settings.salesEngine.actionToken,
+  },
 });
 const withSecretSectionValues = (
   settings: ServerSettings,
   sections: SecretSectionValues,
 ): ServerSettings => ({
   ...settings,
-  bitbucket: sections.bitbucket as ServerSettings["bitbucket"],
-  salesEngine: sections.salesEngine as ServerSettings["salesEngine"],
+  bitbucket: { ...settings.bitbucket, ...sections.bitbucket },
+  salesEngine: { ...settings.salesEngine, ...sections.salesEngine },
 });
 
 /**

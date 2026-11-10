@@ -2,6 +2,9 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, ThreadId } from "./baseSchemas.ts";
+import type { ModelSelection } from "./orchestration.ts";
+import { ProviderDriverKind } from "./providerInstance.ts";
+import { canStartProviderSession, type ServerProvider } from "./server.ts";
 
 /**
  * The Sales area reads one external sales engine. Phoenix stores none of this:
@@ -692,6 +695,24 @@ export const salesDispatchThreadPrefix = (source: SalesDispatchSource) =>
   "activityId" in source
     ? `sales:card:${encodeURIComponent(source.activityId)}:`
     : `sales:contact:${encodeURIComponent(source.contactKey)}:`;
+
+/**
+ * What a Sales run starts on when Settings chooses no agent: Claude Code on its default model,
+ * or null when no Claude Code instance can start. Sales never falls back to another provider.
+ */
+export const defaultSalesRunModel = (
+  providers: ReadonlyArray<ServerProvider>,
+): ModelSelection | null => {
+  const claude = providers.find(
+    (provider) =>
+      provider.driver === ProviderDriverKind.make("claudeAgent") &&
+      canStartProviderSession(provider),
+  );
+  const model = claude?.models.find((entry) => entry.isDefault === true) ?? claude?.models[0];
+  return claude === undefined || model === undefined
+    ? null
+    : { instanceId: claude.instanceId, model: model.slug };
+};
 
 /**
  * The refusal codes the engine sends (`error` in its error body), spelled as it spells them. A

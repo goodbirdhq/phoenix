@@ -1375,6 +1375,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         readToken: "sales-read",
         actionToken: "sales-action",
         agentsProjectId: "project-birdhouse",
+        runModelSelection: null,
       });
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       assert.notInclude(raw, "sales-read");

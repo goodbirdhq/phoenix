@@ -106,6 +106,15 @@ describe("ServerSettings default permissions", () => {
   });
 });
 
+describe("ServerSettings sales engine", () => {
+  it("decodes a section saved before Sales runs chose an agent", () => {
+    expect(
+      decodeServerSettings({ salesEngine: { agentsProjectId: "project-birdhouse" } }).salesEngine
+        .runModelSelection,
+    ).toBeNull();
+  });
+});
+
 describe("ServerSettings usage price overrides", () => {
   const prices = { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 };
 
