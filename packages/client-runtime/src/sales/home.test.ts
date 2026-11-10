@@ -104,6 +104,8 @@ describe("lookItemView", () => {
     who: null,
     subject: null,
     why: null,
+    activityId: null,
+    notionUrl: null,
     ...patch,
   });
 

@@ -4,8 +4,9 @@ import type { SalesAutopilotItem } from "@t3tools/contracts";
 const STATES = [
   { state: "failed", label: "Failed" },
   { state: "retrying", label: "Retrying" },
-  { state: "refused", label: "Refused, waiting for a press" },
-  { state: "held", label: "Held" },
+  { state: "refused", label: "Needs your approval" },
+  { state: "held", label: "Held by the engine" },
+  { state: "paused", label: "Paused" },
   { state: "sending", label: "Sending now" },
   { state: "scheduled", label: "Scheduled" },
   { state: "sent", label: "Sent" },

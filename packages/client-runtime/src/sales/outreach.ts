@@ -31,7 +31,7 @@ export const queueOrder = (groups: ReadonlyArray<SalesQueueGroup>) =>
   groups.flatMap((group) => group.items);
 
 /** What each card state counts as in the list header, in the order the header lists them. */
-const SUMMARY_WORDS = ["to review", "refused", "held", "scheduled", "approved"];
+const SUMMARY_WORDS = ["to review", "refused", "held", "paused", "scheduled", "approved"];
 
 const summaryWord = (item: Pick<SalesQueueItem, "state" | "sendAt">) => {
   switch (item.state) {
@@ -118,6 +118,8 @@ export function stateLabel(state: string): string {
       return "Approved";
     case "held":
       return "Held";
+    case "paused":
+      return "Paused";
     case "refused":
       return "Refused";
     case "sent":

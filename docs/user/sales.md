@@ -72,12 +72,14 @@ nobody has drafted an answer, the engine may offer a run that drafts one.
 ## See today's automated sends
 
 **Autopilot** lists what the engine sends today without a press, done and to come, grouped by
-state: failed, retrying, refused, held, sending, scheduled and sent. Each send shows who it's to,
-which email it is, the mailbox, and why it's held, refused or failed. Times are on your clock,
-with the contact's beside it when theirs reads differently. **Away until** marks a contact whose
-out-of-office covers today; the engine doesn't pause for it, so check whether the send should go.
-Turn on **Include approved by you** to see the drafts you approved as well. A refused send got a
-normal draft card, so you approve it from Outreach.
+state: failed, retrying, needs your approval, held by the engine, paused, sending, scheduled and
+sent. **Paused** is a chase someone held with **Hold these** in Slack; approving its card sends
+it. Each send shows who it's to, which email it is, the mailbox, and why it's held, refused or
+failed. Times are on your clock, with the contact's beside it when theirs reads differently.
+**Away until** marks a contact whose out-of-office covers today; the engine doesn't pause for it,
+so check whether the send should go. Turn on **Include approved by you** to see the drafts you
+approved as well. A send that needs your approval got a normal draft card, so you approve it from
+Outreach.
 
 ## Work the LinkedIn checklist
 
@@ -106,7 +108,7 @@ The headline counts what waits on you across the work areas; a reply whose answe
 counts once, as a draft waiting. Each area opens its page. The line below the areas covers
 mailboxes, today's cold sends, and the engine's dispatcher, and opens **Health**. Phoenix asks the
 engine about once a minute while Sales is open, and **Refresh** asks straight away. Each area page
-asks about once a minute while it's open.
+asks about once a minute while it's open, and Campaigns every five minutes.
 
 If the engine is off, refuses a token, or can't be reached, Sales says which. When it already had
 an answer, it keeps showing that answer, marked with the time it was read.

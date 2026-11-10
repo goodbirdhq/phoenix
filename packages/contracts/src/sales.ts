@@ -61,6 +61,9 @@ export const SalesLookItem = Schema.Struct({
   who: NullableString,
   subject: NullableString,
   why: NullableString,
+  /** The Activity row it is about, with its Notion page. Null for mail. */
+  activityId: NullableString,
+  notionUrl: NullableString,
 });
 export type SalesLookItem = typeof SalesLookItem.Type;
 
@@ -80,6 +83,7 @@ export const SalesSummary = Schema.Struct({
     }),
     approvedWaiting: Count,
     held: Count,
+    paused: Count,
     refused: Count,
   }),
   autopilotToday: group({
@@ -89,6 +93,7 @@ export const SalesSummary = Schema.Struct({
     failed: Count,
     scheduled: Count,
     held: Count,
+    paused: Count,
     refused: Count,
   }),
   linkedin: group({
@@ -133,6 +138,9 @@ const Text = Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("")));
 const nullable = <S extends Schema.Top>(schema: S) =>
   Schema.NullOr(schema).pipe(Schema.withDecodingDefault(Effect.succeed(null)));
 
+/** Who held a paused route chase (a Slack user id, or `phoenix`) and when; set while `paused`. */
+const SalesPause = nullable(Schema.Struct({ by: Text, at: NullableString }));
+
 /** `ContactRef`: who a card or conversation is about, as the engine last read the CRM. */
 export const SalesContactRef = Schema.Struct({
   id: Text,
@@ -143,7 +151,7 @@ export const SalesContactRef = Schema.Struct({
   effectiveTimeZone: NullableString,
   /** The Contact's Notion page. */
   notionUrl: NullableString,
-  /** Not in v1's ContactRef for drafts; read when the engine adds it. */
+  /** Their LinkedIn profile, when the engine has a LinkedIn task for them. */
   linkedinUrl: NullableString,
 });
 export type SalesContactRef = typeof SalesContactRef.Type;
@@ -165,7 +173,10 @@ export const SalesQueueItem = Schema.Struct({
   bodyPreview: Text,
   /** The card's current hash: exactly what an approval must be for. */
   contentHash: Schema.String,
-  /** `awaiting`, `approved`, `held`, `refused`; closed: `sent`, `discarded`, `withdrawn`, `failed`. */
+  /**
+   * `awaiting`, `approved`, `held` (by the engine), `paused` (a route chase someone held, which
+   * Resume gives back), `refused`; closed: `sent`, `discarded`, `withdrawn`, `failed`.
+   */
   state: Schema.String,
   approval: nullable(
     Schema.Struct({
@@ -175,6 +186,7 @@ export const SalesQueueItem = Schema.Struct({
       at: NullableString,
     }),
   ),
+  paused: SalesPause,
   sendAt: NullableString,
   /** The engine's words for when it goes. Display only. */
   goes: NullableString,
@@ -383,7 +395,10 @@ export type SalesOutOfOffice = typeof SalesOutOfOffice.Type;
 /** One send of today, done or to come, as `GET /autopilot/today` lists it. */
 export const SalesAutopilotItem = Schema.Struct({
   activityId: Schema.String,
-  /** Open enum: `sent`, `sending`, `retrying`, `failed`, `scheduled`, `held`, `refused`. */
+  /**
+   * Open enum: `sent`, `sending`, `retrying`, `failed`, `scheduled`, `held` (by the engine),
+   * `paused` (a route chase someone held, which Resume gives back), `refused`.
+   */
   state: Schema.String,
   /** When it went or was tried, its slot, or when it was held or refused. */
   at: NullableString,
@@ -397,6 +412,7 @@ export const SalesAutopilotItem = Schema.Struct({
   mailbox: NullableString,
   /** Why it is held, refused or failed. */
   reason: NullableString,
+  paused: SalesPause,
   outOfOffice: nullable(SalesOutOfOffice),
 });
 export type SalesAutopilotItem = typeof SalesAutopilotItem.Type;

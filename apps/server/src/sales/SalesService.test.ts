@@ -299,9 +299,58 @@ it.effect("decodes the contract's summary and drops fields it does not know", ()
     assert.strictEqual(summary?.needsALook.items[0]?.what, "bounce-unverified");
     assert.strictEqual(summary?.mailboxes.benched, 1);
     assert.strictEqual(summary?.dispatcher.paused, false);
+    // An engine from before Hold and Resume sends no paused counts.
+    assert.strictEqual(summary?.drafts.paused, 0);
+    assert.strictEqual(summary?.needsALook.items[0]?.notionUrl, null);
     assert.notProperty(summary ?? {}, "addedInALaterRelease");
     assert.notProperty(summary?.linkedin.budget ?? {}, "externalToday");
     assert.deepStrictEqual(yield* sales.getSnapshot, snapshot);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reads the paused sends and named needs-a-look of an engine with Hold", () => {
+  const { layer } = makeLayer({
+    respond: (request) =>
+      pathOf(request).endsWith("/summary")
+        ? Response.json({
+            ...summaryFixture,
+            drafts: { ...summaryFixture.drafts, paused: 2 },
+            autopilotToday: { ...summaryFixture.autopilotToday, paused: 1 },
+            needsALook: {
+              ...summaryFixture.needsALook,
+              items: [
+                {
+                  ...summaryFixture.needsALook.items[0],
+                  activityId: "act-9",
+                  notionUrl: "https://www.notion.so/act9",
+                },
+              ],
+            },
+          })
+        : Response.json({
+            version: 1,
+            generatedAt: "2026-11-09T18:30:00.000Z",
+            items: [
+              {
+                ...queueItemFixture,
+                state: "paused",
+                paused: { by: "phoenix", at: "2026-11-09T18:00:00.000Z" },
+              },
+            ],
+          }),
+  });
+  return Effect.gen(function* () {
+    const snapshot = yield* (yield* SalesService.SalesService).refresh;
+    assert.strictEqual(snapshot.summary?.drafts.paused, 2);
+    assert.strictEqual(snapshot.summary?.autopilotToday.paused, 1);
+    assert.deepInclude(snapshot.summary?.needsALook.items[0], {
+      activityId: "act-9",
+      notionUrl: "https://www.notion.so/act9",
+    });
+    assert.deepStrictEqual(snapshot.queue?.items[0]?.paused, {
+      by: "phoenix",
+      at: "2026-11-09T18:00:00.000Z",
+    });
   }).pipe(Effect.provide(layer));
 });
 
@@ -804,6 +853,14 @@ const viewFixtures: Record<string, unknown> = {
         },
         addedInALaterRelease: true,
       },
+      {
+        activityId: "act-3",
+        state: "paused",
+        at: "2026-11-09T22:00:00.000Z",
+        approval: "route",
+        contact: queueItemFixture.contact,
+        paused: { by: "U123", at: "2026-11-09T17:00:00.000Z" },
+      },
     ],
     spotChecks: null,
   },
@@ -914,7 +971,12 @@ it.effect("reads an area's list only while it is watched, and only that list", (
     assert.strictEqual(item?.approval, "route");
     assert.strictEqual(item?.contact.effectiveTimeZone, "Europe/London");
     assert.strictEqual(item?.outOfOffice?.returnOn, "2026-11-12");
+    assert.strictEqual(item?.paused, null);
     assert.notProperty(item ?? {}, "addedInALaterRelease");
+    assert.deepStrictEqual(ready.data?.items[1]?.paused, {
+      by: "U123",
+      at: "2026-11-09T17:00:00.000Z",
+    });
 
     yield* Scope.close(watcher.scope, Exit.void);
     yield* TestClock.adjust("10 minutes");

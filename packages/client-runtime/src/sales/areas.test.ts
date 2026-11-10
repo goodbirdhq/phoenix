@@ -29,28 +29,31 @@ describe("autopilotTimeline", () => {
     { state: "scheduled", approval: "press" },
     { state: "failed", approval: "route" },
     { state: "sent", approval: null },
-    { state: "paused-by-a-later-engine", approval: "route" },
+    { state: "paused", approval: "route" },
+    { state: "made-up-by-a-later-engine", approval: "route" },
   ]);
 
   it("shows automated sends only, and says how many pressed ones it left out", () => {
     const timeline = autopilotTimeline(items, false);
-    expect(timeline.groups.map((group) => [group.state, group.items.length])).toEqual([
-      ["failed", 1],
-      ["sent", 2],
-      ["other", 1],
+    expect(timeline.groups.map((group) => [group.label, group.items.length])).toEqual([
+      ["Failed", 1],
+      ["Paused", 1],
+      ["Sent", 2],
+      ["Other", 1],
     ]);
-    expect(timeline).toMatchObject({ shown: 4, pressedHidden: 1 });
+    expect(timeline).toMatchObject({ shown: 5, pressedHidden: 1 });
   });
 
   it("takes pressed sends in when asked", () => {
     const timeline = autopilotTimeline(items, true);
     expect(timeline.groups.map((group) => group.state)).toEqual([
       "failed",
+      "paused",
       "scheduled",
       "sent",
       "other",
     ]);
-    expect(timeline).toMatchObject({ shown: 5, pressedHidden: 0 });
+    expect(timeline).toMatchObject({ shown: 6, pressedHidden: 0 });
   });
 });
 

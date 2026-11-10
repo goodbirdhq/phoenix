@@ -33,6 +33,7 @@ export const detail = (overrides: Partial<SalesQueueItemDetail> = {}): SalesQueu
   contentHash: ENGINE_HASH,
   state: "awaiting",
   approval: null,
+  paused: null,
   sendAt: null,
   goes: null,
   mailbox: { sticky: true, address: "gabe@trygoodbird.com", threadState: "open" },
