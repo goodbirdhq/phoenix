@@ -216,17 +216,19 @@ const subscribeInScope = Effect.gen(function* () {
     Stream.runForEach((event) => Queue.offer(events, event)),
     Effect.forkIn(scope),
   );
-  const nextWith = (predicate: (event: SalesStreamEvent) => boolean) =>
+  /** The next snapshot event that matches, skipping every other event. */
+  const nextWith = (predicate: (event: SnapshotEvent) => boolean) =>
     Effect.gen(function* () {
       while (true) {
         const event = yield* Queue.take(events);
-        if (predicate(event)) return event;
+        if (event.type === "sales-snapshot" && predicate(event)) return event;
       }
     });
-  return { scope, nextWith };
+  return { scope, nextWith, next: Queue.take(events) };
 });
 
-const isReady = (event: SalesStreamEvent) => event.snapshot.status === "ready";
+type SnapshotEvent = Extract<SalesStreamEvent, { readonly type: "sales-snapshot" }>;
+const isReady = (event: SnapshotEvent) => event.snapshot.status === "ready";
 
 it.effect("polls the engine only while a client is subscribed", () => {
   // Each summary read reports one more sent today, so every tick changes what subscribers see.
@@ -719,7 +721,7 @@ it.effect("keeps dispatches through engine reads and settings changes", () => {
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("sends subscribers nothing when a poll finds nothing new", () => {
+it.effect("sends subscribers only the read time when a poll finds nothing new", () => {
   let changed = false;
   const { layer, requests } = makeLayer({
     respond: (request) =>
@@ -733,21 +735,36 @@ it.effect("sends subscribers nothing when a poll finds nothing new", () => {
         : Response.json({
             ...summaryFixture,
             generatedAt: `2026-11-09T18:3${summaryReads(requests)}:00.000Z`,
+            // Measured from `generatedAt`, so they change on every read too.
+            dispatcher: {
+              ...summaryFixture.dispatcher,
+              pokeAgeSeconds: 30 + summaryReads(requests),
+              tickAgeSeconds: 10 + summaryReads(requests),
+            },
           }),
   });
   return Effect.gen(function* () {
     const sales = yield* SalesService.SalesService;
     const watcher = yield* subscribeInScope;
-    yield* watcher.nextWith(isReady);
-    // A read that finds the same drafts updates the snapshot but sends nothing.
+    const ready = yield* watcher.nextWith(isReady);
+    // A later read that finds the same drafts sends only when it was read.
+    yield* TestClock.adjust("30 seconds");
     const same = yield* sales.refresh;
     assert.strictEqual(summaryReads(requests), 2);
     assert.strictEqual(same.queue?.items.length, 1);
-    // So the next event a subscriber gets is the read that changed something.
+    assert.notStrictEqual(same.checkedAt, ready.snapshot.checkedAt);
+    assert.deepStrictEqual(yield* watcher.next, {
+      type: "sales-read",
+      summaryReadAt: same.summaryReadAt,
+      checkedAt: same.checkedAt,
+    });
+    // A read with nothing new at the same moment sends nothing at all, so the next event a
+    // subscriber gets is the read that changed something.
+    yield* sales.refresh;
     changed = true;
     yield* sales.refresh;
-    const next = yield* watcher.nextWith(() => true);
-    assert.strictEqual(next.snapshot.queue?.items.length, 0);
+    const next = yield* watcher.next;
+    assert.strictEqual(next.type === "sales-snapshot" ? next.snapshot.queue?.items.length : -1, 0);
     yield* Scope.close(watcher.scope, Exit.void);
   }).pipe(Effect.provide(layer));
 });

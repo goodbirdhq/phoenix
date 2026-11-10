@@ -586,9 +586,18 @@ export const SalesSnapshot = Schema.Struct({
 });
 export type SalesSnapshot = typeof SalesSnapshot.Type;
 
-/** Each event replaces the client's snapshot. A union so later areas can be added. */
+/**
+ * - `sales-snapshot` replaces the client's snapshot.
+ * - `sales-read`: a read found nothing new. Only the read times moved; the summary's dispatcher
+ *   ages, measured at `summaryReadAt`, are older by the time between the two reads.
+ */
 export const SalesStreamEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("sales-snapshot"), snapshot: SalesSnapshot }),
+  Schema.Struct({
+    type: Schema.Literal("sales-read"),
+    summaryReadAt: Schema.NullOr(IsoDateTime),
+    checkedAt: Schema.NullOr(IsoDateTime),
+  }),
 ]);
 export type SalesStreamEvent = typeof SalesStreamEvent.Type;
 
