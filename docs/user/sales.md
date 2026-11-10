@@ -55,6 +55,13 @@ To approve several at once, tick them and choose **Approve**. Phoenix shows each
 full, exactly as it will go, and approves them when you confirm. A draft that changed after you
 ticked it is unticked and left for you to open; it's never approved from the old tick.
 
+Phoenix won't approve a draft with text you can't see as it will go: invisible characters, a line
+break in the subject, a long run of blank lines or spaces, or a pile of accent marks on one letter.
+It marks each one in the email, such as `⟨U+200B⟩`. Choose **Edit**, then **Remove hidden
+characters**, delete anything still marked, and save. A reply keeps its thread's subject, so a reply whose subject has hidden text
+can't be approved in Phoenix; reply outside Phoenix. Nor can a draft whose To address has
+characters outside plain ASCII; correct the contact and draft it again.
+
 Other actions:
 
 - **Withdraw approval** takes your approval back before the draft goes, for good: it goes only

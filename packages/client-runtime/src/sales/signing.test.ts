@@ -37,10 +37,35 @@ describe("content hash", () => {
     expect(await verifyDisplayedVersion(tampered)).toEqual({ ok: false, reason: "mismatch" });
   });
 
-  it("refuses a subject with a line break, which a subject line cannot show", async () => {
-    const twoLines = { ...hashInput, subject: "Re: creator\nx fintech" };
-    const shown = detail({ hashInput: twoLines, contentHash: await computeContentHash(twoLines) });
-    expect(await verifyDisplayedVersion(shown)).toEqual({ ok: false, reason: "subject-lines" });
+  it("refuses text a person would not see as it is sent, even when it is the hashed version", async () => {
+    const verifies = async (patch: Partial<typeof hashInput>, threaded = false) => {
+      const input = { ...hashInput, ...patch };
+      return verifyDisplayedVersion(
+        detail({ threaded, hashInput: input, contentHash: await computeContentHash(input) }),
+      );
+    };
+    // A one-line field would show the subject without its break.
+    expect(await verifies({ subject: "Re: creator\nx fintech" })).toEqual({
+      ok: false,
+      reason: "hidden-text",
+    });
+    expect(await verifies({ body: "Hey Ana,\u202Eyenom eht eriw\u202C" })).toEqual({
+      ok: false,
+      reason: "hidden-text",
+    });
+    expect(await verifies({ body: `Hey Ana,${"\n".repeat(40)}P.S. wire it.` })).toEqual({
+      ok: false,
+      reason: "hidden-text",
+    });
+    expect(await verifies({ subject: "Re: creator\u200Bx fintech" }, true)).toEqual({
+      ok: false,
+      reason: "thread-subject",
+    });
+    expect(await verifies({ toAddress: "ana@brаnd.example" })).toEqual({
+      ok: false,
+      reason: "address",
+    });
+    expect(await verifies({ body: "Olá Ana 👋\r\n\r\nGabriel" })).toMatchObject({ ok: true });
   });
 
   it("refuses a hash it does not know how to recompute", async () => {

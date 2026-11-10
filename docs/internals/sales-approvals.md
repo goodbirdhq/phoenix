@@ -56,7 +56,19 @@ rather than in each view. Traps that follow from this:
   (`verifyReviewedVersion`). Any other is shown as changed, unticked, and never
   signed. One confirm press signs the rest. The list's preview fields are never
   evidence of what the person saw.
-- **A subject is one line.** A subject with a line break is refused, since a
-  one-line field would show it without the break.
+- **Shown is not the same as seen.** Agents write the text, so a draft could
+  carry what a person cannot see: characters that render as nothing or reorder
+  what is shown, a subject's line break, or walls of blank lines, spaces or
+  stacked marks that push text out of view. Signing refuses them
+  (`hiddenTextFindings`) on the card and in the review, and the preview shows
+  each as a token such as `⟨U+200B⟩` in its place; a clean draft is still shown
+  exactly as hashed. The fix is an edit, which makes a new version that is read
+  and verified again; "Remove hidden characters" takes out what nobody can find
+  to delete by hand. A reply keeps its thread's subject, so hidden text there
+  cannot be edited out and the reply cannot be approved here.
+- **A To address is plain ASCII.** One look-alike letter (a Cyrillic "а")
+  makes it another address, and telling look-alikes from real
+  internationalised addresses needs confusable tables that still miss
+  whole-script fakes. So an address with anything else cannot be approved here.
 - **Never sign again for the person.** A `stale_hash` answer re-reads the card
   and shows it. The next signature needs a new press.

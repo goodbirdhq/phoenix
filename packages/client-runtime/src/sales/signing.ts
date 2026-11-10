@@ -6,6 +6,8 @@ import type {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
+import { hiddenTextFindings } from "./hiddenText.ts";
+
 /**
  * Signing approvals on this device. The server never holds a device key and never signs: the
  * key is made here, non-extractable, and every approval is signed here over the version this
@@ -88,10 +90,20 @@ export interface VerifiedVersion {
  * Why a version may not be signed:
  * - `algorithm`: the engine hashes some other way.
  * - `mismatch`: the shown text is not the hashed version.
- * - `subject-lines`: the subject has a line break, which a subject line cannot show.
+ * - `address`: the To address is not plain ASCII, so it may not be the address it looks like.
+ * - `thread-subject`: a reply's subject, which is its thread's and cannot be edited, has text
+ *   that would not show (`hiddenTextFindings`).
+ * - `hidden-text`: the subject or body has text that would not show, such as an invisible
+ *   character, a line break in the subject or a wall of blank lines.
  * - `changed`: not the version the person ticked.
  */
-export type VersionRefusal = "algorithm" | "mismatch" | "subject-lines" | "changed";
+export type VersionRefusal =
+  | "algorithm"
+  | "mismatch"
+  | "address"
+  | "thread-subject"
+  | "hidden-text"
+  | "changed";
 
 export type VersionCheck =
   | { readonly ok: true; readonly version: VerifiedVersion }
@@ -101,17 +113,23 @@ export type VersionCheck =
  * Whether this client may sign for the draft as shown: the engine names the hash this client
  * knows, and hashing the displayed text gives the engine's `contentHash`. A mismatch means the
  * card moved on between reads, or something between here and the engine changed one side:
- * either way, read it again rather than sign. A subject with a line break is refused, since a
- * one-line field would show it without the break and the person would not see what is hashed.
+ * either way, read it again rather than sign. A draft with text a person would not see as it is
+ * sent (`hiddenTextFindings`) is refused too: the shown text is the hashed text, but the person
+ * did not read all of it.
  */
 export async function verifyDisplayedVersion(
   detail: SalesQueueItemDetail,
   subtle: SubtleCrypto = globalThis.crypto.subtle,
 ): Promise<VersionCheck> {
   if (detail.hashAlgorithm !== SALES_HASH_ALGORITHM) return { ok: false, reason: "algorithm" };
-  if (/[\r\n]/u.test(detail.hashInput.subject)) return { ok: false, reason: "subject-lines" };
   const contentHash = await computeContentHash(detail.hashInput, subtle);
   if (contentHash !== detail.contentHash.toLowerCase()) return { ok: false, reason: "mismatch" };
+  const findings = hiddenTextFindings(displayedDraft(detail));
+  if (findings.some((finding) => finding.field === "to")) return { ok: false, reason: "address" };
+  if (detail.threaded && findings.some((finding) => finding.field === "subject")) {
+    return { ok: false, reason: "thread-subject" };
+  }
+  if (findings.length > 0) return { ok: false, reason: "hidden-text" };
   return { ok: true, version: { activityId: detail.activityId, contentHash } as VerifiedVersion };
 }
 

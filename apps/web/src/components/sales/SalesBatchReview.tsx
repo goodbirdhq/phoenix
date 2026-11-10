@@ -5,9 +5,10 @@ import {
   reviewTickedDraft,
 } from "@t3tools/client-runtime/sales/approve";
 import { checkSigning } from "@t3tools/client-runtime/sales/devices";
+import { type DraftField, hiddenTextFindings } from "@t3tools/client-runtime/sales/hidden-text";
 import { kindLabel } from "@t3tools/client-runtime/sales/outreach";
 import type { EnvironmentId, SalesQueueItem, SalesQueueItemDetail } from "@t3tools/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { salesEnvironment, useApproveVersions } from "../../state/sales";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -23,6 +24,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Spinner } from "../ui/spinner";
+import { SalesMarkedText } from "./SalesMarkedText";
 import type { SalesDeviceView } from "./SalesDraftPanel";
 
 /** A ticked row and the hash it had when the person ticked it. */
@@ -148,7 +150,11 @@ function ReviewedDraft(props: { readonly row: SalesQueueItem; readonly reviewed:
         {reviewed.status === "loading" ? <Spinner /> : null}
         {reviewed.status === "ready" ? <Badge variant="success">Ready</Badge> : null}
         {reviewed.status === "refused" ? (
-          <Badge variant="warning">Changed · not signed</Badge>
+          <Badge variant="warning">
+            {reviewed.reason === "changed" || reviewed.reason === "mismatch"
+              ? "Changed · not signed"
+              : "Not signed"}
+          </Badge>
         ) : null}
         {reviewed.status === "unreadable" ? (
           <Badge variant="error">Not read · not signed</Badge>
@@ -157,28 +163,44 @@ function ReviewedDraft(props: { readonly row: SalesQueueItem; readonly reviewed:
       {reviewed.status === "ready" ? (
         <ShownDraft detail={reviewed.detail} />
       ) : reviewed.status === "loading" ? null : (
-        <p className="text-xs text-muted-foreground">{reviewed.text}</p>
+        <>
+          <p className="text-xs text-muted-foreground">{reviewed.text}</p>
+          {reviewed.status === "refused" && reviewed.marked !== null ? (
+            <ShownDraft detail={reviewed.marked} />
+          ) : null}
+        </>
       )}
     </section>
   );
 }
 
-/** The hash inputs as they are, white space and all, never cut. */
+/**
+ * The hash inputs as they are, white space and all, never cut. Text that would not show as sent
+ * is marked in place, which only a draft refused for it has.
+ */
 function ShownDraft({ detail }: { readonly detail: SalesQueueItemDetail }) {
   const shown = displayedDraft(detail);
+  const findings = useMemo(() => hiddenTextFindings(displayedDraft(detail)), [detail]);
+  const inField = (field: DraftField) => findings.filter((finding) => finding.field === field);
   return (
     <dl className="grid gap-1.5 text-sm">
       <div className="flex gap-2">
         <dt className="w-16 shrink-0 text-muted-foreground">To</dt>
-        <dd className="min-w-0 break-all whitespace-pre-wrap">{shown.to}</dd>
+        <dd className="min-w-0 break-all whitespace-pre-wrap">
+          <SalesMarkedText text={shown.to} findings={inField("to")} />
+        </dd>
       </div>
       <div className="flex gap-2">
         <dt className="w-16 shrink-0 text-muted-foreground">Subject</dt>
-        <dd className="min-w-0 break-words whitespace-pre-wrap">{shown.subject}</dd>
+        <dd className="min-w-0 break-words whitespace-pre-wrap">
+          <SalesMarkedText text={shown.subject} findings={inField("subject")} />
+        </dd>
       </div>
       <div className="grid gap-1">
         <dt className="text-muted-foreground">Body</dt>
-        <dd className="rounded-md border p-2 break-words whitespace-pre-wrap">{shown.body}</dd>
+        <dd className="rounded-md border p-2 break-words whitespace-pre-wrap">
+          <SalesMarkedText text={shown.body} findings={inField("body")} />
+        </dd>
       </div>
     </dl>
   );
