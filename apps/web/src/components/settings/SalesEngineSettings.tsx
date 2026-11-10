@@ -273,7 +273,7 @@ function SalesDevicesSection({ environment }: { readonly environment: Environmen
 
   const enrol = async () => {
     // Checked again at the press: the client's environments may have changed since render.
-    const blockedNow = blockedReason(device.engine);
+    const blockedNow = blockedReason();
     if (blockedNow !== null) {
       setFailure({ title: "Enrol from another client", description: blockedNow });
       return;

@@ -1,8 +1,7 @@
-import type { SalesDevice, SalesQueueItemDetail } from "@t3tools/contracts";
+import type { SalesDevice } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  SALES_HASH_ALGORITHM,
   approvalMessage,
   computeContentHash,
   deviceIdFor,
@@ -14,53 +13,7 @@ import {
   verifyReviewedVersion,
 } from "./approval.ts";
 import { createDeviceKey, thisDeviceState } from "./devices.ts";
-import vectors from "./fixtures/sales-api-vectors.json" with { type: "json" };
-
-// A threaded chase from the engine's conformance vectors (see conformance.test.ts).
-const chaseVector = vectors.contentHash.find(
-  (vector) => vector.name === "threaded chase, answers null",
-)!;
-const hashInput = chaseVector.input;
-const ENGINE_HASH = chaseVector.expected;
-
-const detail = (overrides: Partial<SalesQueueItemDetail> = {}): SalesQueueItemDetail => ({
-  activityId: "act-1",
-  kind: "chase",
-  step: 2,
-  stepLabel: "Email 2",
-  contact: {
-    id: "c1",
-    name: "Ana",
-    email: "ana@brand.example",
-    accountName: "Brand",
-    timeZone: null,
-    effectiveTimeZone: "America/Los_Angeles",
-    notionUrl: "https://www.notion.so/c1",
-    linkedinUrl: null,
-  },
-  campaign: null,
-  subject: "Re: creator x fintech",
-  threaded: true,
-  bodyPreview: "Hey Ana, Thanks for the note",
-  contentHash: ENGINE_HASH,
-  state: "awaiting",
-  approval: null,
-  sendAt: null,
-  goes: null,
-  mailbox: { sticky: true, address: "gabe@trygoodbird.com", threadState: "open" },
-  refusal: null,
-  note: null,
-  check: null,
-  skip: null,
-  sendStatus: null,
-  notionUrl: "https://www.notion.so/act1",
-  rowEditedAt: null,
-  body: hashInput.body,
-  rowName: hashInput.rowName,
-  hashInput,
-  hashAlgorithm: SALES_HASH_ALGORITHM,
-  ...overrides,
-});
+import { ENGINE_HASH, detail, hashInput } from "./fixtures/queueItemDetail.ts";
 
 const fromBase64Url = (value: string) =>
   Uint8Array.from(atob(value.replace(/-/gu, "+").replace(/_/gu, "/")), (char) =>
@@ -69,7 +22,10 @@ const fromBase64Url = (value: string) =>
 
 describe("content hash", () => {
   it("lets a client sign only the version it shows", async () => {
-    expect(await verifyDisplayedVersion(detail())).toEqual({ ok: true, contentHash: ENGINE_HASH });
+    expect(await verifyDisplayedVersion(detail())).toEqual({
+      ok: true,
+      version: { activityId: "act-1", contentHash: ENGINE_HASH },
+    });
     // What the screen shows is the hash inputs, not the preview fields.
     expect(displayedDraft(detail()).body).toBe(hashInput.body);
   });
@@ -97,7 +53,7 @@ describe("batch approval", () => {
   it("signs a reviewed draft only when it is the version the person ticked", async () => {
     expect(await verifyReviewedVersion(detail(), ENGINE_HASH.toUpperCase())).toEqual({
       ok: true,
-      contentHash: ENGINE_HASH,
+      version: { activityId: "act-1", contentHash: ENGINE_HASH },
     });
   });
 
@@ -127,11 +83,12 @@ describe("signing", () => {
     const pair = await generateDeviceKey();
     await expect(crypto.subtle.exportKey("jwk", pair.privateKey)).rejects.toThrow();
 
+    const check = await verifyDisplayedVersion(detail());
+    if (!check.ok) throw new Error("The fixture should verify.");
     const signed = await signApproval({
       privateKey: pair.privateKey,
       deviceId: "laptop-3f2a",
-      activityId: "act-1",
-      contentHash: ENGINE_HASH,
+      version: check.version,
       signedAt: "2026-11-10T09:14:03.120Z",
     });
     expect(signed).toMatchObject({

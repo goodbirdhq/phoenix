@@ -18,7 +18,7 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { Kbd } from "../ui/kbd";
-import type { ApproveOutcome } from "./salesApproval";
+import type { ApproveOutcome } from "@t3tools/client-runtime/sales/approve";
 import { SalesBatchReview, type TickedDraft } from "./SalesBatchReview";
 import { SalesDraftPanel, type SalesDraftPanelHandle } from "./SalesDraftPanel";
 import { setSalesPaletteCommands } from "./salesPaletteCommands";

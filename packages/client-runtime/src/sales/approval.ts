@@ -71,8 +71,21 @@ export function displayedDraft(detail: SalesQueueItemDetail) {
   };
 }
 
-export type VerifiedVersion =
-  | { readonly ok: true; readonly contentHash: string }
+declare const verified: unique symbol;
+
+/**
+ * One version of one draft that this client hashed itself from the text it shows. Only
+ * `verifyDisplayedVersion` and `verifyReviewedVersion` make one, and only one of these can be
+ * signed (`approveVersions`), so nothing signs a version nobody verified.
+ */
+export interface VerifiedVersion {
+  readonly activityId: string;
+  readonly contentHash: string;
+  readonly [verified]: true;
+}
+
+export type VersionCheck =
+  | { readonly ok: true; readonly version: VerifiedVersion }
   | {
       readonly ok: false;
       /**
@@ -94,13 +107,12 @@ export type VerifiedVersion =
 export async function verifyDisplayedVersion(
   detail: SalesQueueItemDetail,
   subtle: SubtleCrypto = globalThis.crypto.subtle,
-): Promise<VerifiedVersion> {
+): Promise<VersionCheck> {
   if (detail.hashAlgorithm !== SALES_HASH_ALGORITHM) return { ok: false, reason: "algorithm" };
   if (/[\r\n]/u.test(detail.hashInput.subject)) return { ok: false, reason: "subject-lines" };
   const contentHash = await computeContentHash(detail.hashInput, subtle);
-  return contentHash === detail.contentHash.toLowerCase()
-    ? { ok: true, contentHash }
-    : { ok: false, reason: "mismatch" };
+  if (contentHash !== detail.contentHash.toLowerCase()) return { ok: false, reason: "mismatch" };
+  return { ok: true, version: { activityId: detail.activityId, contentHash } as VerifiedVersion };
 }
 
 /**
@@ -113,11 +125,11 @@ export async function verifyReviewedVersion(
   detail: SalesQueueItemDetail,
   tickedHash: string,
   subtle: SubtleCrypto = globalThis.crypto.subtle,
-): Promise<VerifiedVersion> {
-  const verified = await verifyDisplayedVersion(detail, subtle);
-  if (!verified.ok) return verified;
-  return verified.contentHash === tickedHash.toLowerCase()
-    ? verified
+): Promise<VersionCheck> {
+  const check = await verifyDisplayedVersion(detail, subtle);
+  if (!check.ok) return check;
+  return check.version.contentHash === tickedHash.toLowerCase()
+    ? check
     : { ok: false, reason: "changed" };
 }
 
@@ -128,22 +140,22 @@ export async function verifyReviewedVersion(
 export async function signApproval(input: {
   readonly privateKey: CryptoKey;
   readonly deviceId: string;
-  readonly activityId: string;
-  readonly contentHash: string;
+  readonly version: VerifiedVersion;
   readonly signedAt?: string;
   readonly subtle?: SubtleCrypto;
 }): Promise<SalesSignedApproval> {
   const subtle = input.subtle ?? globalThis.crypto.subtle;
+  const { activityId, contentHash } = input.version;
   const signedAt = input.signedAt ?? DateTime.formatIso(DateTime.nowUnsafe());
   const signature = await subtle.sign(
     { name: "ECDSA", hash: "SHA-256" },
     input.privateKey,
-    encoder.encode(approvalMessage(input.activityId, input.contentHash, signedAt)),
+    encoder.encode(approvalMessage(activityId, contentHash, signedAt)),
   );
   // WebCrypto's ECDSA signature is IEEE P1363 (r then s, 64 bytes), which the engine expects.
   return {
-    activityId: input.activityId,
-    contentHash: input.contentHash,
+    activityId,
+    contentHash,
     deviceId: input.deviceId,
     signedAt,
     signature: toBase64Url(signature),

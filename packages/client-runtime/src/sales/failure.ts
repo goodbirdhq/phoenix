@@ -18,10 +18,7 @@ export interface SalesFailureText {
 }
 
 /** What to tell the person when a sales request fails. `message` is the server's detail. */
-export function salesFailureText(
-  reason: SalesActionFailureReason,
-  message: string,
-): SalesFailureText {
+function salesFailureText(reason: SalesActionFailureReason, message: string): SalesFailureText {
   const text = (title: string, description = message, reread = false) => ({
     title,
     description,

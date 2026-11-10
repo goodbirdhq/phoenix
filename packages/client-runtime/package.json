@@ -115,9 +115,21 @@
       "types": "./src/sales/approval.ts",
       "default": "./src/sales/approval.ts"
     },
+    "./sales/approve": {
+      "types": "./src/sales/approve.ts",
+      "default": "./src/sales/approve.ts"
+    },
+    "./sales/device-guard": {
+      "types": "./src/sales/deviceGuard.ts",
+      "default": "./src/sales/deviceGuard.ts"
+    },
     "./sales/devices": {
       "types": "./src/sales/devices.ts",
       "default": "./src/sales/devices.ts"
+    },
+    "./sales/draft-card": {
+      "types": "./src/sales/draftCard.ts",
+      "default": "./src/sales/draftCard.ts"
     },
     "./sales/failure": {
       "types": "./src/sales/failure.ts",
