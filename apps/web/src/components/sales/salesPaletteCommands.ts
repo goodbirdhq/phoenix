@@ -5,7 +5,8 @@ export interface SalesPaletteCommand {
   readonly id: string;
   readonly title: string;
   readonly keywords: ReadonlyArray<string>;
-  readonly shortcut?: string;
+  /** The key label shown beside it; null when the command is unbound. */
+  readonly shortcut?: string | null;
   readonly run: () => void;
 }
 

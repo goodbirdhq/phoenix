@@ -64,6 +64,16 @@ describe("KeybindingsSettings.logic", () => {
     ).toEqual(expected);
   });
 
+  it("lists the Sales list keys with their defaults and readable labels", () => {
+    const rows = buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, "sales");
+    expect(rows.map((row) => [commandLabel(row.command), row.key, row.when])).toEqual(
+      expect.arrayContaining([
+        ["Sales: Next Item", "j", "salesListOpen"],
+        ["Sales: Approve Selected Draft", "a", "salesListOpen"],
+      ]),
+    );
+  });
+
   it("builds searchable rows with readable key and when values", () => {
     const rows = buildKeybindingRows(
       [

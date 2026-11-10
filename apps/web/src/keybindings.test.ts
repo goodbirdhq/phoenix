@@ -1448,3 +1448,31 @@ describe("Usage shortcuts", () => {
     );
   });
 });
+
+describe("Sales shortcuts", () => {
+  it.each([
+    ["j", "sales.next"],
+    ["k", "sales.previous"],
+    ["a", "sales.approve"],
+    ["e", "sales.edit"],
+  ] as const)("binds %s to %s only on a Sales list", (key, command) => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Linux",
+        context: { salesListOpen: true },
+      }),
+      command,
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Linux",
+      }),
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key, altKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Linux",
+        context: { salesListOpen: true },
+      }),
+    );
+  });
+});
